@@ -62,7 +62,7 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Critério**: Dev confirma que PRD reflete a intenção e é implementável
 - **Se rejeitado**: Processo termina (pode reiniciar com nova hipótese)
 
-### Fase 2: Planning — 1 step
+### Fase 2: Planning — 3 steps
 
 #### ft.plan.01.task_list — Criar Task List
 - **Input**: PRD seção 5 (User Stories)
@@ -70,6 +70,27 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Template**: `process/fast_track/templates/template_task_list.md`
 - **Symbiota**: ft_coach
 - **Critério**: Cada User Story tem pelo menos 1 task, todas priorizadas e estimadas
+
+#### ft.plan.02.tech_stack — Propor Tech Stack *(primeiro ciclo apenas)*
+- **Input**: PRD + TASK_LIST
+- **Output**: `project/docs/tech_stack.md`
+- **Symbiota**: forge_coder
+- **Gate**: aprovação do stakeholder (ft_manager apresenta, stakeholder revisa e aprova)
+- **Critério**: stack aprovada pelo stakeholder; dúvidas respondidas; decision log preenchido
+- **Conteúdo**: linguagem/runtime, framework, persistência, libs-chave, ferramentas de dev, alternativas descartadas, dúvidas para o stakeholder
+
+#### ft.plan.03.diagrams — Gerar Diagramas Técnicos *(primeiro ciclo; revisado se estrutura mudar)*
+- **Input**: PRD + TASK_LIST + tech_stack.md aprovada
+- **Output**: `project/docs/diagrams/` (4 arquivos Mermaid)
+- **Symbiota**: forge_coder
+- **Critério**: diagramas derivados do PRD, sem especulação; escopo limitado ao ciclo atual
+
+| Diagrama | Arquivo | Formato Mermaid |
+|----------|---------|-----------------|
+| Classes | `diagrams/class.md` | `classDiagram` |
+| Componentes | `diagrams/components.md` | `flowchart TD` |
+| Banco de Dados | `diagrams/database.md` | `erDiagram` |
+| Arquitetura | `diagrams/architecture.md` | `flowchart TD` |
 
 ### Fase 3: TDD — 3 steps (loop por task)
 

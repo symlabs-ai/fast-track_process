@@ -70,7 +70,7 @@ phases:
 
   - id: ft_plan
     title: "Planning"
-    narrative: "Derivar task list das User Stories do PRD"
+    narrative: "Derivar task list e diagramas técnicos do PRD"
     steps:
       - id: ft.plan.01.task_list
         title: "Criar Task List"
@@ -79,6 +79,27 @@ phases:
         outputs: ["project/docs/TASK_LIST.md"]
         template: "process/fast_track/templates/template_task_list.md"
         symbiote: ft_coach
+
+      - id: ft.plan.02.tech_stack
+        title: "Propor Tech Stack"
+        narrative: "forge_coder analisa PRD e propõe stack técnica inicial; ft_manager apresenta ao stakeholder para alinhamento"
+        inputs: ["project/docs/PRD.md", "project/docs/TASK_LIST.md"]
+        outputs: ["project/docs/tech_stack.md"]
+        symbiote: forge_coder
+        gate: stakeholder_approval
+        frequency: "apenas no primeiro ciclo"
+
+      - id: ft.plan.03.diagrams
+        title: "Gerar Diagramas Técnicos"
+        narrative: "Produzir diagramas mínimos de classe, componentes, banco de dados e arquitetura em Mermaid, baseados no PRD e na stack aprovada"
+        inputs: ["project/docs/PRD.md", "project/docs/TASK_LIST.md", "project/docs/tech_stack.md"]
+        outputs:
+          - "project/docs/diagrams/class.md"
+          - "project/docs/diagrams/components.md"
+          - "project/docs/diagrams/database.md"
+          - "project/docs/diagrams/architecture.md"
+        symbiote: forge_coder
+        frequency: "uma vez no primeiro ciclo; revisado em ciclos subsequentes se houver mudança estrutural"
 
   - id: ft_tdd
     title: "TDD — Test Driven Development"
@@ -266,8 +287,29 @@ flow:
       - all_tasks_have_priority
       - all_tasks_have_size
       - min_1_p0_task
-    on_pass: ft_tdd_01
+    on_pass: ft_plan_02
     on_fail: ft_plan_01
+
+  - id: ft_plan_02
+    type: step
+    step_ref: ft_plan.ft.plan.02.tech_stack
+    next: ft_manager_apresenta_stack
+    condition: "first_cycle_only"
+
+  - id: ft_manager_apresenta_stack
+    type: stakeholder_review
+    orchestrator: ft_manager
+    action: "Apresentar proposta de tech stack ao stakeholder; coletar ajustes e aprovação"
+    branches:
+      - when: "approved"
+        goto: ft_plan_03
+      - when: "adjustments_requested"
+        goto: ft_plan_02
+
+  - id: ft_plan_03
+    type: step
+    step_ref: ft_plan.ft.plan.03.diagrams
+    next: ft_tdd_01
 
   # --- Loop: TDD + Delivery por task ---
 

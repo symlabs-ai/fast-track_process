@@ -47,11 +47,19 @@ flowchart TD
     GO -- rejected --> END_REJ([❌ Encerrado])
     GO -- approved --> PLAN
 
-    subgraph PLAN["📝 Fase 2: Planning — ft_coach"]
-        TL[ft.plan.01\ntask list]
+    subgraph PLAN["📝 Fase 2: Planning"]
+        TL["ft.plan.01\ntask list\n[ft_coach]"]
         TL --> VAL_TL{ft_manager\nvalida task list}
         VAL_TL -- falhou --> TL
-        VAL_TL -- ok --> LOOP_START
+        VAL_TL -- ok --> STACK
+
+        STACK["ft.plan.02\ntech stack\n[forge_coder]"]
+        STACK --> SK_REV{stakeholder\nrevisa stack}
+        SK_REV -- ajustes --> STACK
+        SK_REV -- aprovado --> DIAG
+
+        DIAG["ft.plan.03\ndiagramas\n[forge_coder]\nclass · components\ndatabase · architecture"]
+        DIAG --> LOOP_START
     end
 
     note_hyper["ℹ️ Em hyper-mode\nTASK_LIST já gerada\nft_coach pula ft.plan.01"]

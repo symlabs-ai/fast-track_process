@@ -4,7 +4,7 @@
 
 ## O que é
 
-ForgeProcess: **14 steps, 3 symbiotas, 1 PRD**.
+ForgeProcess: **15 steps, 3 symbiotas, 1 PRD**.
 Para solo dev + AI. Sem BDD Gherkin, sem sprints formais, sem roadmap separado.
 
 `ft_manager` orquestra tudo. `ft_coach` e `forge_coder` executam quando delegados.
@@ -43,7 +43,8 @@ LOOP[
   [ft_manager valida entrega]
   -> more_tasks? -> LOOP / done? -> EXIT
 ]
-  -> ft.e2e.01.cli_validation (GATE)
+  -> ft.smoke.01.cli_run (GATE — processo real, PTY real, sem mocks, output documentado)
+  -> ft.e2e.01.cli_validation (GATE — unit + smoke)
   -> [ft_manager decide modo]
      interactive: apresenta ao stakeholder -> feedback / MVP / autonomous
      autonomous:  valida internamente -> prossegue até MVP -> apresenta stakeholder
@@ -67,6 +68,7 @@ LOOP[
 | ft.delivery.01.implement | forge_coder | ft_manager |
 | ft.delivery.02.self_review | forge_coder | ft_manager |
 | ft.delivery.03.commit | forge_coder | ft_manager |
+| ft.smoke.01.cli_run | forge_coder | ft_manager |
 | ft.e2e.01.cli_validation | forge_coder | ft_manager |
 | ft.feedback.01.retro_note | ft_coach | ft_manager |
 
@@ -84,12 +86,14 @@ LOOP[
 
 ## Regras Críticas
 
-1. **E2E CLI gate é obrigatório** — Ciclo não fecha sem `tests/e2e/cycle-XX/run-all.sh` passando.
-2. **TDD Red-Green** — Teste falhando antes de código. Sempre.
-3. **PRD é fonte única** — Sem documentos satélite.
-4. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
-5. **ft_manager valida tudo** — Nenhuma fase avança sem checkpoint de validação passar.
-6. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
+1. **Smoke gate é obrigatório** — Ciclo não avança sem produto real executado e output documentado.
+2. **E2E CLI gate é obrigatório** — Ciclo não fecha sem `run-all.sh` passando (unit + smoke).
+3. **`mvp_status: demonstravel` exige smoke PASSOU** — nunca declarar com base em unit tests.
+4. **TDD Red-Green** — Teste falhando antes de código. Sempre.
+5. **PRD é fonte única** — Sem documentos satélite.
+6. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
+7. **ft_manager valida tudo** — Nenhuma fase avança sem checkpoint de validação passar.
+8. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
 
 ## Stakeholder Mode
 

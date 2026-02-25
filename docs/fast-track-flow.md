@@ -94,10 +94,20 @@ flowchart TD
         MORE -- sim --> LOOP_START
     end
 
-    MORE -- não --> E2E
+    MORE -- não --> SMOKE
 
-    subgraph E2E_GATE["🔒 Fase 5: E2E Gate — forge_coder"]
-        E2E[ft.e2e.01\ncli validation]
+    subgraph SMOKE_GATE["🔥 Fase 5a: Smoke Gate — forge_coder"]
+        SMOKE[ft.smoke.01\ncli run]
+        SMOKE_R["📄 smoke-cycle-XX.md\noutput real documentado"]
+        VAL_SMOKE{smoke\nPASSOUU?}
+        SMOKE --> SMOKE_R --> VAL_SMOKE
+        VAL_SMOKE -- TRAVOU --> SMOKE
+    end
+
+    VAL_SMOKE -- PASSOU --> E2E
+
+    subgraph E2E_GATE["🔒 Fase 5b: E2E Gate — forge_coder"]
+        E2E[ft.e2e.01\ncli validation\nunit + smoke]
         VAL_E2E{E2E\npassou?}
         E2E --> VAL_E2E
         VAL_E2E -- falhou --> E2E

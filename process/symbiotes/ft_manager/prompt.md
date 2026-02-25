@@ -263,12 +263,34 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
 3. Repetir até todas as tasks P0 estarem `done`.
 4. Ao concluir: apresentar resumo da fase ao dev antes de avançar para E2E.
 
-### 4. E2E Gate
+### 4. Smoke Gate (ft.smoke.01.cli_run)
+
+> ⚠️ Executado **antes** do E2E Gate. O ciclo não avança sem smoke passando.
+
+1. Instruir `forge_coder` a executar `ft.smoke.01.cli_run`.
+2. **Validar resultados**:
+   - [ ] `project/docs/smoke-cycle-XX.md` foi gerado
+   - [ ] Processo subiu sem erro
+   - [ ] Input foi injetado via PTY real (não simulado)
+   - [ ] Output real está documentado literalmente no report
+   - [ ] Status no report: `PASSOU ✅` (não `TRAVOU ❌`)
+   - [ ] Nenhum freeze ou hang detectado
+
+   Se falhar: **não avançar para E2E**. Reportar ao forge_coder. Corrigir e re-executar smoke.
+
+3. Com smoke passando: avançar para E2E Gate.
+
+> ⚠️ **Regra de mvp_status**: `mvp_status: demonstravel` só pode ser gravado em `ft_state.yml`
+> após smoke PASSAR e `smoke-cycle-XX.md` existir com output real documentado.
+> Declarar produto demonstrável com base apenas em unit tests é **inválido**.
+
+### 5. E2E Gate
 
 1. Instruir `forge_coder` a executar `ft.e2e.01.cli_validation`.
 2. **Validar resultados**:
    - [ ] `tests/e2e/cycle-XX/run-all.sh` executou com exit code 0
-   - [ ] Zero testes falharam
+   - [ ] `tests/unit/` — zero falhas
+   - [ ] `tests/smoke/` — zero falhas
    - [ ] Artefatos criados em `tests/e2e/cycle-XX/`
 
    Se falhar: o ciclo **não fecha**. Reportar falhas ao forge_coder. Corrigir e revalidar.

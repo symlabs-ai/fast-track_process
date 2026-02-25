@@ -14,10 +14,12 @@ phase_scope:
   - ft_plan.ft.plan.02.*
   - ft_tdd.*
   - ft_delivery.*
+  - ft_smoke.*
   - ft_e2e.*
 allowed_steps:
   - ft.plan.02.tech_stack
   - ft.plan.03.diagrams
+  - ft.smoke.01.cli_run
   - ft.tdd.01.selecao
   - ft.tdd.02.red
   - ft.tdd.03.green
@@ -27,10 +29,13 @@ allowed_steps:
   - ft.e2e.01.cli_validation
 allowed_paths:
   - src/**
-  - tests/**
+  - tests/unit/**
+  - tests/smoke/**
+  - tests/e2e/**
   - project/docs/TASK_LIST.md
   - project/docs/PRD.md
   - project/docs/diagrams/**
+  - project/docs/smoke-cycle-*.md
 forbidden_paths:
   - process/**
 
@@ -38,8 +43,10 @@ permissions:
   - read: project/docs/PRD.md
   - read: project/docs/TASK_LIST.md
   - write: src/
-  - write: tests/
+  - write: tests/unit/
+  - write: tests/smoke/
   - write: project/docs/diagrams/
+  - write: project/docs/smoke-cycle-*.md
   - write_sessions: project/docs/sessions/forge_coder/
 behavior:
   mode: iterative_tdd_autonomous
@@ -66,6 +73,23 @@ respeitando Clean/Hex, CLI-first offline e manifesto de plugins.
 - Persistência: estados/sessões em YAML com auto-commit Git por step.
 - Python idiomático: tipagem (mypy-friendly), erros claros, sem exceções genéricas; preferir funções puras e coesas.
 - Governança: seguir `AGENTS.md` e `forgebase-rules.md`.
+
+## Dois Níveis de Teste
+
+### `tests/unit/` — Testes de contrato (rápidos)
+- Mocks permitidos
+- Verificam que A chama B com os args certos
+- Rodam em cada commit (suite completa)
+- Propósito: regressão de lógica interna, feedback rápido
+
+### `tests/smoke/` — Testes de produto real (podem ser lentos)
+- **Zero mocks de I/O** — processo real, PTY real
+- Usam `pexpect` ou `ptyprocess` para injetar input
+- Verificam output real observado, não simulado
+- Rodam no `ft.smoke.01.cli_run`, antes do E2E gate
+- Propósito: provar que o produto funciona de verdade
+
+> ⚠️ Unit tests passando **não** implica produto funcionando. Smoke é obrigatório.
 
 ## Ciclo de Trabalho (Fast Track)
 
@@ -145,11 +169,43 @@ Executado após aprovação da tech stack. Revisado em ciclos subsequentes se ho
 
 ### Loop por Task
 1) SELECAO — ler TASK_LIST.md, selecionar próxima task pendente.
-2) RED — ler ACs do PRD, escrever testes (pytest) até falhar.
+2) RED — ler ACs do PRD, escrever teste em `tests/unit/` que falha.
 3) GREEN — implementar o mínimo código genérico (sem hardcode de valores de teste).
-4) INTEGRATE — rodar suite completa, garantir zero falhas.
+4) INTEGRATE — rodar suite `tests/unit/` completa, garantir zero falhas.
 5) SELF-REVIEW — checklist: secrets, nomes, edge cases, código morto, lint/types. Atualizar diagramas se estrutura mudou.
 6) COMMIT — commit com mensagem referenciando task ID.
+
+### Smoke (ft.smoke.01.cli_run) — após todas as tasks P0 done
+
+Executado uma vez por ciclo, após o loop TDD/Delivery. Gate obrigatório.
+
+1. Subir o processo real (CLI entry point definido no PRD).
+2. Injetar input via PTY usando `pexpect` ou `ptyprocess`. **Sem mock de I/O.**
+3. Observar e documentar o output real recebido.
+4. Verificar: sem freeze, sem hang, output coerente com o esperado.
+5. Gerar `project/docs/smoke-cycle-XX.md` com o resultado.
+
+**Formato obrigatório do smoke report:**
+```markdown
+# Smoke Report — Cycle XX
+
+## Fluxo testado
+- Comando executado: `[comando real]`
+- Input injetado: `[input literal]`
+- Output observado: [colar output real, verbatim]
+- Duração: [X]s
+- Status: PASSOU ✅ / TRAVOU ❌
+
+## Fluxos testados
+| Fluxo | Input | Output esperado | Status |
+|-------|-------|-----------------|--------|
+
+## Observações
+[freeze, comportamentos inesperados, edge cases detectados]
+```
+
+> ⚠️ **`mvp_status: demonstravel` só pode ser definido após smoke PASSAR e report gerado.**
+> Nunca declarar produto demonstrável com base apenas em unit tests.
 
 ## Guard-rails
 - Sem rede externa; negar plugins que peçam network.

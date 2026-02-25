@@ -157,16 +157,35 @@ phases:
         outputs: ["commit no branch"]
         symbiote: forge_coder
 
+  - id: ft_smoke
+    title: "Smoke — Validação Real do Produto"
+    narrative: "Agente executa o produto real, injeta input e documenta output observado. Sem mocks. Gate antes do E2E formal."
+    steps:
+      - id: ft.smoke.01.cli_run
+        title: "Smoke CLI Run"
+        narrative: "Subir o processo real, injetar input via PTY e verificar output sem mocks de I/O"
+        inputs: ["src/", "tests/smoke/"]
+        outputs: ["project/docs/smoke-cycle-XX.md com output real documentado"]
+        gate: true
+        symbiote: forge_coder
+        checklist:
+          - "Processo sobe sem erro"
+          - "Input injetado via PTY (pexpect ou ptyprocess) — sem simulação"
+          - "Output observado documentado literalmente (não inferido)"
+          - "Nenhum freeze ou hang detectado no fluxo crítico"
+          - "Resultado explícito: PASSOU ou TRAVOU"
+
   - id: ft_e2e
     title: "E2E — CLI Validation Gate"
-    narrative: "Gate obrigatório: validação end-to-end via CLI"
+    narrative: "Gate obrigatório: validação end-to-end via CLI. Exige unit tests E smoke passando."
     steps:
       - id: ft.e2e.01.cli_validation
         title: "E2E CLI Validation"
         narrative: "Executar validação E2E CLI-first. Gate obrigatório para encerrar ciclo."
-        inputs: ["src/", "tests/"]
+        inputs: ["src/", "tests/unit/", "tests/smoke/"]
         outputs: ["tests/e2e/cycle-XX/ com resultados"]
         gate: true
+        requires: ["ft.smoke.01.cli_run"]
         symbiote: forge_coder
 
   - id: ft_feedback
@@ -365,7 +384,15 @@ flow:
         - when: "more_tasks"
           goto: ft_tdd_01
         - when: "done"
-          goto: ft_e2e_01
+          goto: ft_smoke_01
+
+  # --- Smoke Gate ---
+
+  - id: ft_smoke_01
+    type: step
+    step_ref: ft_smoke.ft.smoke.01.cli_run
+    gate: true
+    next: ft_e2e_01
 
   # --- E2E Gate ---
 

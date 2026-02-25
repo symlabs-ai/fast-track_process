@@ -1,0 +1,451 @@
+# ForgeProcess Fast Track
+# Solo dev + AI — 12 steps em 6 fases
+
+id: forgeprocess_fast_track
+version: "0.1.0"
+title: "ForgeProcess — Fast Track"
+description: >
+  ForgeProcess para solo dev + AI.
+  12 steps, gates obrigatórios: PRD validado, TDD Red-Green, E2E CLI gate.
+
+target_profile:
+  team_size: 1
+  ai_symbiota: true
+  stakeholders: optional   # acionado pelo ft_manager ao final de cada ciclo (interactive) ou no MVP (autonomous)
+
+project_layout:
+  required_dirs:
+    - "process/"
+    - "process/fast_track/"
+    - "project/"
+    - "project/docs/"
+    - "src/"
+    - "tests/"
+  required_files:
+    - "process/fast_track/FAST_TRACK_PROCESS.yml"
+    - "process/fast_track/state/ft_state.yml"
+
+getting_started:
+  message: |
+    Fast Track — Solo Dev + AI
+
+    12 steps, valor > cerimônia.
+    Comece pela hipótese, termine com E2E passando.
+  first_file:
+    template: "process/fast_track/templates/template_prd.md"
+    destination: "project/docs/PRD.md"
+    description: "PRD consolidado — ponto de partida"
+  first_command: "symforge fast-track start"
+
+# ============================================================
+# Phases & Steps (inline, sem sub_phase files)
+# ============================================================
+
+phases:
+  - id: ft_mdd
+    title: "MDD — Market Driven Development (comprimido)"
+    narrative: "Captura hipótese, redige PRD consolidado e valida go/no-go"
+    steps:
+      - id: ft.mdd.01.hipotese
+        title: "Capturar Hipótese"
+        narrative: "Registrar contexto, sinal de mercado e oportunidade"
+        inputs: ["conversa com dev/stakeholder"]
+        outputs: ["seções 1-2 do PRD preenchidas"]
+        symbiote: ft_coach
+
+      - id: ft.mdd.02.prd
+        title: "Redigir PRD"
+        narrative: "Completar PRD com user stories, ACs, restrições e riscos"
+        inputs: ["hipótese validada"]
+        outputs: ["project/docs/PRD.md completo"]
+        template: "process/fast_track/templates/template_prd.md"
+        symbiote: ft_coach
+
+      - id: ft.mdd.03.validacao
+        title: "Validar PRD"
+        narrative: "Revisar PRD, decidir aprovado ou rejeitado"
+        inputs: ["project/docs/PRD.md"]
+        outputs: ["decisão: approved | rejected"]
+        symbiote: ft_coach
+
+  - id: ft_plan
+    title: "Planning"
+    narrative: "Derivar task list das User Stories do PRD"
+    steps:
+      - id: ft.plan.01.task_list
+        title: "Criar Task List"
+        narrative: "Quebrar User Stories em tasks priorizadas e estimadas"
+        inputs: ["project/docs/PRD.md (seção 5)"]
+        outputs: ["project/docs/TASK_LIST.md"]
+        template: "process/fast_track/templates/template_task_list.md"
+        symbiote: ft_coach
+
+  - id: ft_tdd
+    title: "TDD — Test Driven Development"
+    narrative: "Ciclo Red-Green por task selecionada"
+    steps:
+      - id: ft.tdd.01.selecao
+        title: "Selecionar Task"
+        narrative: "Escolher próxima task pendente do TASK_LIST.md"
+        inputs: ["project/docs/TASK_LIST.md"]
+        outputs: ["task selecionada, status -> in_progress"]
+        symbiote: forge_coder
+
+      - id: ft.tdd.02.red
+        title: "Red — Escrever Teste"
+        narrative: "Escrever teste que falha para a task selecionada"
+        inputs: ["task selecionada", "ACs da User Story"]
+        outputs: ["tests/ com teste falhando"]
+        symbiote: forge_coder
+
+      - id: ft.tdd.03.green
+        title: "Green — Implementar"
+        narrative: "Implementar código mínimo para teste passar"
+        inputs: ["teste falhando"]
+        outputs: ["src/ com implementação", "teste passando"]
+        symbiote: forge_coder
+
+  - id: ft_delivery
+    title: "Delivery"
+    narrative: "Integrar, revisar e commitar"
+    steps:
+      - id: ft.delivery.01.implement
+        title: "Integrar e Rodar Suite"
+        narrative: "Garantir que toda a suite de testes passa após integração"
+        inputs: ["código implementado"]
+        outputs: ["suite completa passando"]
+        symbiote: forge_coder
+
+      - id: ft.delivery.02.self_review
+        title: "Self-Review"
+        narrative: "Revisar código com checklist: segurança, legibilidade, edge cases"
+        inputs: ["diff do código"]
+        outputs: ["issues encontradas corrigidas"]
+        symbiote: forge_coder
+        checklist:
+          - "Sem secrets ou dados sensíveis no código"
+          - "Nomes claros e consistentes"
+          - "Edge cases cobertos por testes"
+          - "Sem código morto ou debug prints"
+          - "Lint e type check passando"
+
+      - id: ft.delivery.03.commit
+        title: "Commit"
+        narrative: "Commit com mensagem padronizada referenciando task ID"
+        inputs: ["código revisado"]
+        outputs: ["commit no branch"]
+        symbiote: forge_coder
+
+  - id: ft_e2e
+    title: "E2E — CLI Validation Gate"
+    narrative: "Gate obrigatório: validação end-to-end via CLI"
+    steps:
+      - id: ft.e2e.01.cli_validation
+        title: "E2E CLI Validation"
+        narrative: "Executar validação E2E CLI-first. Gate obrigatório para encerrar ciclo."
+        inputs: ["src/", "tests/"]
+        outputs: ["tests/e2e/cycle-XX/ com resultados"]
+        gate: true
+        symbiote: forge_coder
+
+  - id: ft_feedback
+    title: "Feedback"
+    narrative: "Registrar aprendizados do ciclo"
+    steps:
+      - id: ft.feedback.01.retro_note
+        title: "Retro Note"
+        narrative: "Registrar o que funcionou, o que não funcionou e foco do próximo ciclo"
+        inputs: ["ciclo completo"]
+        outputs: ["project/docs/retro-cycle-XX.md"]
+        template: "process/fast_track/templates/template_retro_note.md"
+        symbiote: ft_coach
+
+# ============================================================
+# Flow
+# ============================================================
+
+flow:
+  - id: start
+    type: start
+    next: ft_mdd_01
+
+  - id: ft_mdd_01
+    type: step
+    step_ref: ft_mdd.ft.mdd.01.hipotese
+    next: ft_mdd_02
+
+  - id: ft_mdd_02
+    type: step
+    step_ref: ft_mdd.ft.mdd.02.prd
+    next: ft_mdd_03
+
+  - id: ft_mdd_03
+    type: step
+    step_ref: ft_mdd.ft.mdd.03.validacao
+    next: ft_manager_valida_prd
+
+  - id: ft_manager_valida_prd
+    type: validation
+    orchestrator: ft_manager
+    criteria:
+      - sections_1_9_filled
+      - min_2_user_stories
+      - acs_given_when_then
+      - decision_log_has_entries
+    on_pass: decisao_validacao
+    on_fail: ft_mdd_02
+
+  - id: decisao_validacao
+    type: decision
+    decision:
+      question: "O PRD foi aprovado?"
+      decider:
+        type: hil
+        actor: ft_manager   # ft_manager valida critérios; dev/stakeholder confirma go/no-go
+      branches:
+        - when: "approved"
+          goto: ft_plan_01
+        - when: "rejected"
+          goto: end_rejeitado
+
+  - id: ft_plan_01
+    type: step
+    step_ref: ft_plan.ft.plan.01.task_list
+    next: ft_manager_valida_task_list
+
+  - id: ft_manager_valida_task_list
+    type: validation
+    orchestrator: ft_manager
+    criteria:
+      - all_us_have_tasks
+      - all_tasks_have_priority
+      - all_tasks_have_size
+      - min_1_p0_task
+    on_pass: ft_tdd_01
+    on_fail: ft_plan_01
+
+  # --- Loop: TDD + Delivery por task ---
+
+  - id: ft_tdd_01
+    type: step
+    step_ref: ft_tdd.ft.tdd.01.selecao
+    next: ft_tdd_02
+
+  - id: ft_tdd_02
+    type: step
+    step_ref: ft_tdd.ft.tdd.02.red
+    next: ft_tdd_03
+
+  - id: ft_tdd_03
+    type: step
+    step_ref: ft_tdd.ft.tdd.03.green
+    next: ft_delivery_01
+
+  - id: ft_delivery_01
+    type: step
+    step_ref: ft_delivery.ft.delivery.01.implement
+    next: ft_delivery_02
+
+  - id: ft_delivery_02
+    type: step
+    step_ref: ft_delivery.ft.delivery.02.self_review
+    next: ft_delivery_03
+
+  - id: ft_delivery_03
+    type: step
+    step_ref: ft_delivery.ft.delivery.03.commit
+    next: ft_manager_valida_entrega
+
+  - id: ft_manager_valida_entrega
+    type: validation
+    orchestrator: ft_manager
+    criteria:
+      - commit_message_references_task_id
+      - suite_zero_failures
+      - self_review_checklist_done
+      - task_marked_done_in_task_list
+    on_pass: decisao_mais_tasks
+    on_fail: ft_delivery_02
+
+  - id: decisao_mais_tasks
+    type: decision
+    decision:
+      question: "Há mais tasks pendentes no TASK_LIST.md?"
+      decider:
+        type: auto
+        check: "project/docs/TASK_LIST.md has pending tasks"
+      branches:
+        - when: "more_tasks"
+          goto: ft_tdd_01
+        - when: "done"
+          goto: ft_e2e_01
+
+  # --- E2E Gate ---
+
+  - id: ft_e2e_01
+    type: step
+    step_ref: ft_e2e.ft.e2e.01.cli_validation
+    gate: true
+    next: decisao_stakeholder_ciclo
+
+  # --- Decisão de Ciclo (ft_manager) ---
+
+  - id: decisao_stakeholder_ciclo
+    type: decision
+    orchestrator: ft_manager
+    decision:
+      question: "Apresentar ciclo ao stakeholder ou prosseguir em modo autônomo?"
+      decider:
+        type: state
+        check: "process/fast_track/state/ft_state.yml#stakeholder_mode"
+      branches:
+        - when: "interactive"
+          goto: ft_manager_apresenta_stakeholder
+        - when: "autonomous"
+          goto: ft_feedback_01
+
+  - id: ft_manager_apresenta_stakeholder
+    type: stakeholder_review
+    orchestrator: ft_manager
+    action: present_cycle_results
+    branches:
+      - when: "approved_new_cycle"
+        goto: ft_feedback_01
+      - when: "approved_mvp_done"
+        goto: ft_manager_mvp_entregue
+      - when: "continue_without_validation"
+        goto: ft_manager_set_autonomous
+      - when: "changes_requested"
+        goto: ft_feedback_01
+
+  - id: ft_manager_set_autonomous
+    type: state_update
+    orchestrator: ft_manager
+    action: "set stakeholder_mode: autonomous in ft_state.yml"
+    next: ft_feedback_01
+
+  - id: ft_manager_mvp_entregue
+    type: stakeholder_review
+    orchestrator: ft_manager
+    action: present_mvp_final_report
+    next: ft_feedback_01_final
+
+  - id: ft_feedback_01_final
+    type: step
+    step_ref: ft_feedback.ft.feedback.01.retro_note
+    next: end_completo
+
+  # --- Feedback (ciclo normal) ---
+
+  - id: ft_feedback_01
+    type: step
+    step_ref: ft_feedback.ft.feedback.01.retro_note
+    next: decisao_continuar
+
+  - id: decisao_continuar
+    type: decision
+    decision:
+      question: "Iniciar novo ciclo ou encerrar?"
+      decider:
+        type: hil
+        actor: ft_manager   # ft_manager decide com base no estado e modo; aciona stakeholder se necessário
+      branches:
+        - when: "continue"
+          goto: ft_plan_01
+        - when: "complete"
+          goto: end_completo
+
+  # --- End nodes ---
+
+  - id: end_completo
+    type: end
+
+  - id: end_rejeitado
+    type: end
+
+# ============================================================
+# Artifacts
+# ============================================================
+
+artifacts:
+  - id: prd
+    path: "project/docs/PRD.md"
+    phase: ft_mdd
+    description: "PRD consolidado (hipótese + visão + modelo + user stories)"
+
+  - id: task_list
+    path: "project/docs/TASK_LIST.md"
+    phase: ft_plan
+    description: "Task list derivada das User Stories"
+
+  - id: source_code
+    path: "src/"
+    phase: ft_tdd
+    description: "Código fonte implementado"
+
+  - id: tests
+    path: "tests/"
+    phase: ft_tdd
+    description: "Testes automatizados"
+
+  - id: retro_note
+    path: "project/docs/retro-cycle-XX.md"
+    phase: ft_feedback
+    description: "Retrospectiva do ciclo"
+
+# ============================================================
+# Symbiotas
+# ============================================================
+
+symbiotes:
+  - name: ft_manager
+    role: "Orquestra o processo completo, valida entregas e é o ponto de contato com o stakeholder"
+    prompt_file: "process/symbiotes/ft_manager/prompt.md"
+    capabilities:
+      - orquestrar_processo
+      - validar_artefatos
+      - delegar_ft_coach
+      - delegar_forge_coder
+      - interagir_stakeholder
+      - modo_autonomo
+    can_decide: true
+
+  - name: ft_coach
+    role: "Conduz MDD comprimido (PRD) e planning (task list) — delegado pelo ft_manager"
+    prompt_file: "process/symbiotes/ft_coach/prompt.md"
+    capabilities:
+      - conduzir_hipotese
+      - redigir_prd
+      - validar_prd
+      - criar_task_list
+    can_decide: false
+
+  - name: forge_coder
+    role: "Implementa TDD e delivery — orquestrado pelo ft_manager"
+    prompt_file: "process/symbiotes/forge_coder/prompt.md"
+    capabilities:
+      - selecionar_task
+      - escrever_testes
+      - implementar_codigo
+      - self_review
+      - commit
+      - e2e_validation
+    can_decide: false
+
+# ============================================================
+# Quality Metrics
+# ============================================================
+
+quality_metrics:
+  - name: e2e_cli_gate
+    target: "tests/e2e/cycle-XX/ criado e run-all.sh executado com sucesso"
+    description: "Gate obrigatório: E2E CLI-first deve passar antes de encerrar ciclo"
+    mandatory: true
+
+  - name: tdd_coverage
+    target: ">= 1 teste por task implementada"
+    description: "Cada task deve ter pelo menos um teste automatizado"
+
+  - name: prd_completeness
+    target: "Seções 1-5 do PRD preenchidas antes de iniciar planning"
+    description: "PRD deve cobrir hipótese, visão, modelo, métricas e user stories"

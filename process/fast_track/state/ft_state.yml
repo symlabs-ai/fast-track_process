@@ -1,0 +1,27 @@
+# Fast Track — Estado do Processo
+# Estado do processo Fast Track
+
+process_variant: fast_track
+version: "0.1.0"
+
+orchestrator: ft_manager
+stakeholder_mode: interactive  # interactive | autonomous
+mvp_delivered: false
+
+current_phase: ft_mdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback
+current_cycle: cycle-01      # ex.: cycle-01
+
+last_completed_step: null    # ex.: ft.mdd.01.hipotese
+next_recommended_step: ft.mdd.01.hipotese
+
+completed_steps: []          # lista de step IDs concluídos
+
+blocked: false
+blocked_reason: null
+
+# Métricas simplificadas
+metricas:
+  tokens_consumidos: 0
+  horas_consumidas: 0
+  data_inicio: null
+  ciclos_completos: 0

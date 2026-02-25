@@ -1,0 +1,24 @@
+Setup rápido dos utilitários de git/pre-commit usados no ForgeBase
+
+Arquivos incluídos (em git-dev.zip):
+- pre-commit-config.yaml: define hooks (trailing whitespace, EOF fixer, check-added-large-files, check-yaml) e ruff com --fix usando scripts/ruff.toml.
+- ruff.toml: configuração de lint (linhas 88, regras E/F/I/B/UP/C4/SIM/RET/N, ignores compatíveis com Black).
+- install_precommit.sh: script para instalar deps de dev, registrar hooks e rodar baseline.
+- dev-requirements.txt: dependências mínimas para rodar os hooks (pre-commit, ruff).
+
+Passo a passo para usar em outro projeto:
+1) Copie os arquivos do git-dev.zip para o projeto (ex.: scripts/ ou raiz).
+2) Crie/ative o virtualenv do projeto.
+3) Instale deps de hook:
+   pip install -r dev-requirements.txt
+4) Instale hooks de pre-commit:
+   pre-commit install --config pre-commit-config.yaml
+   # ou rode o script:
+   bash install_precommit.sh
+5) Rode baseline nos arquivos existentes:
+   pre-commit run --config pre-commit-config.yaml --all-files
+
+Observações:
+- Ajuste caminhos se colocar os arquivos em outro diretório (update do --config).
+- Ruff já roda com autofix; revise mudanças antes de commitar.
+- Se quiser mais ferramentas (pytest, mypy, import-linter, deptry), veja dev-requiremnts.txt neste repo principal.

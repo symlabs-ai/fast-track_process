@@ -1,0 +1,101 @@
+# Fast Track — Diagrama de Fluxo
+
+```mermaid
+flowchart TD
+    START([🚀 Início]) --> GIT
+
+    subgraph INIT["⚙️ Inicialização — ft_manager"]
+        GIT{Remote aponta\npara template?}
+        GIT -- Sim --> RECONFIG[Solicitar nova URL\nReconfigurar origin]
+        GIT -- Não / já correto --> STATE
+        RECONFIG --> STATE
+        STATE[Ler ft_state.yml]
+    end
+
+    STATE -- projeto novo --> MDD
+    STATE -- em andamento --> RESUME([Retomar step\npendente])
+
+    subgraph MDD["📋 Fase 1: MDD — ft_coach"]
+        H[ft.mdd.01\nhipótese]
+        H --> PRD[ft.mdd.02\nredigir PRD]
+        PRD --> VAL_PRD{ft_manager\nvalida PRD}
+        VAL_PRD -- falhou --> PRD
+        VAL_PRD -- ok --> VALPRD2[ft.mdd.03\nvalidar PRD]
+        VALPRD2 --> GO{go / no-go}
+    end
+
+    GO -- rejected --> END_REJ([❌ Encerrado])
+    GO -- approved --> PLAN
+
+    subgraph PLAN["📝 Fase 2: Planning — ft_coach"]
+        TL[ft.plan.01\ntask list]
+        TL --> VAL_TL{ft_manager\nvalida task list}
+        VAL_TL -- falhou --> TL
+        VAL_TL -- ok --> LOOP_START
+    end
+
+    subgraph LOOP["🔁 Loop por Task"]
+        LOOP_START([próxima task])
+
+        subgraph TDD["🧪 Fase 3: TDD — forge_coder"]
+            SEL[ft.tdd.01\nselecionar task]
+            RED[ft.tdd.02\nred — escrever teste]
+            GREEN[ft.tdd.03\ngreen — implementar]
+            SEL --> RED --> GREEN
+        end
+
+        subgraph DELIVERY["📦 Fase 4: Delivery — forge_coder"]
+            IMPL[ft.delivery.01\nintegrar + suite]
+            REVIEW[ft.delivery.02\nself-review]
+            COMMIT[ft.delivery.03\ncommit]
+            IMPL --> REVIEW --> COMMIT
+        end
+
+        VAL_ENT{ft_manager\nvalida entrega}
+        MORE{tasks\npendentes?}
+
+        LOOP_START --> SEL
+        GREEN --> IMPL
+        COMMIT --> VAL_ENT
+        VAL_ENT -- falhou --> REVIEW
+        VAL_ENT -- ok --> MORE
+        MORE -- sim --> LOOP_START
+    end
+
+    MORE -- não --> E2E
+
+    subgraph E2E_GATE["🔒 Fase 5: E2E Gate — forge_coder"]
+        E2E[ft.e2e.01\ncli validation]
+        VAL_E2E{E2E\npassou?}
+        E2E --> VAL_E2E
+        VAL_E2E -- falhou --> E2E
+    end
+
+    VAL_E2E -- ok --> MODO
+
+    subgraph FEEDBACK["📊 Fase 6: Feedback — ft_coach"]
+        RETRO[ft.feedback.01\nretro note]
+    end
+
+    subgraph STAKEHOLDER["👥 Decisão de Ciclo — ft_manager"]
+        MODO{stakeholder\nmode?}
+        MODO -- interactive --> APRESENTA[Apresentar E2E\nao stakeholder]
+        MODO -- autonomous --> RETRO
+
+        APRESENTA --> SK_DEC{decisão}
+        SK_DEC -- novo ciclo --> RETRO
+        SK_DEC -- MVP concluído --> MVP_OK
+        SK_DEC -- continue sem validação --> SET_AUTO[set autonomous]
+        SET_AUTO --> RETRO
+    end
+
+    RETRO --> CONTINUAR{continuar?}
+    CONTINUAR -- novo ciclo --> PLAN
+    CONTINUAR -- encerrar --> MVP_OK
+
+    MVP_OK{autonomous\ne MVP pronto?}
+    MVP_OK -- sim --> MVP_FINAL[Apresentar\nMVP final ao stakeholder]
+    MVP_OK -- não --> END_OK
+
+    MVP_FINAL --> END_OK([✅ Projeto concluído])
+```

@@ -12,17 +12,37 @@ flowchart TD
         STATE[Ler ft_state.yml]
     end
 
-    STATE -- projeto novo --> MDD
+    STATE -- projeto novo --> MDD_MODE
     STATE -- em andamento --> RESUME([Retomar step\npendente])
 
-    subgraph MDD["📋 Fase 1: MDD — ft_coach"]
+    MDD_MODE{PRD abrangente\nentregue?}
+    MDD_MODE -- não --> MDD
+    MDD_MODE -- sim --> HYPER
+
+    subgraph HYPER["⚡ Hyper-Mode MDD — ft_coach"]
+        HY1[Absorver PRD\ndo stakeholder]
+        HY2[Gerar PRD.md\n+ TASK_LIST.md]
+        HY3[Gerar questionário\nde alinhamento]
+        HY4{Stakeholder\nresponde}
+        HY5[Incorporar respostas\nfinalizar artefatos]
+        HY1 --> HY2 --> HY3 --> HY4 --> HY5
+    end
+
+    HY3 -. "🔍 Pontos Ambíguos\n🕳️ Lacunas\n💡 Sugestões" .-> HY4
+
+    subgraph MDD["📋 Fase 1: MDD normal — ft_coach"]
         H[ft.mdd.01\nhipótese]
         H --> PRD[ft.mdd.02\nredigir PRD]
-        PRD --> VAL_PRD{ft_manager\nvalida PRD}
-        VAL_PRD -- falhou --> PRD
-        VAL_PRD -- ok --> VALPRD2[ft.mdd.03\nvalidar PRD]
-        VALPRD2 --> GO{go / no-go}
+        PRD --> VALPRD2[ft.mdd.03\nvalidar PRD]
     end
+
+    HY5 --> VAL_PRD
+    VALPRD2 --> VAL_PRD
+
+    VAL_PRD{ft_manager\nvalida PRD}
+    VAL_PRD -- falhou --> PRD
+    VAL_PRD -- falhou hyper --> HY5
+    VAL_PRD -- ok --> GO{go / no-go}
 
     GO -- rejected --> END_REJ([❌ Encerrado])
     GO -- approved --> PLAN
@@ -33,6 +53,10 @@ flowchart TD
         VAL_TL -- falhou --> TL
         VAL_TL -- ok --> LOOP_START
     end
+
+    note_hyper["ℹ️ Em hyper-mode\nTASK_LIST já gerada\nft_coach pula ft.plan.01"]
+    HYPER -.-> note_hyper
+    note_hyper -.-> PLAN
 
     subgraph LOOP["🔁 Loop por Task"]
         LOOP_START([próxima task])

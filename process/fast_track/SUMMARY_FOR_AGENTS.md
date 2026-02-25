@@ -14,6 +14,14 @@ Para solo dev + AI. Sem BDD Gherkin, sem sprints formais, sem roadmap separado.
 ```
 [ft_manager inicia]
   |
+  +--> stakeholder entregou PRD? --> SIM --> [hyper-mode]
+  |                                            ft_coach absorve PRD
+  |                                            gera PRD.md + TASK_LIST + questionário
+  |                                            stakeholder responde questionário
+  |                                            ft_coach incorpora respostas
+  |                                            --> ft_manager valida PRD --> go/no-go
+  |
+  +--> NÃO --> [normal-mode]
   v
 ft.mdd.01.hipotese -> ft.mdd.02.prd -> ft.mdd.03.validacao
   |                              [ft_manager valida PRD]

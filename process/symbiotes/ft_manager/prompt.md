@@ -100,9 +100,23 @@ Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_stat
 
 2. Ler `process/fast_track/state/ft_state.yml`.
 3. Se `current_phase: null` (projeto novo):
-   - Apresentar: "Novo projeto. Vou conduzir o processo Fast Track. Começando pela descoberta."
-   - Atualizar state: `stakeholder_mode: interactive`, `current_phase: ft_mdd`.
-   - Acionar `ft_coach` para `ft.mdd.01.hipotese`.
+   - **Detectar se o stakeholder entregou um PRD abrangente**:
+     - Verificar se existe arquivo em `project/docs/` com conteúdo substantivo de produto
+       (user stories, requisitos, visão, etc.) — ou se o stakeholder colou um documento na conversa.
+     - Se sim → ativar **hyper-mode**:
+       ```
+       📄 PRD detectado. Ativando hyper-mode.
+          ft_coach vai processar o documento, gerar todos os artefatos e
+          produzir um questionário de alinhamento para você.
+       ```
+       Atualizar state: `mdd_mode: hyper`, `current_phase: ft_mdd`.
+       Delegar ao `ft_coach` em hyper-mode, passando o documento como entrada.
+     - Se não → modo normal:
+       ```
+       Novo projeto. Iniciando descoberta.
+       ```
+       Atualizar state: `mdd_mode: normal`, `current_phase: ft_mdd`.
+       Acionar `ft_coach` para `ft.mdd.01.hipotese`.
 4. Se já há estado:
    - Informar: "Retomando de [next_recommended_step]. Último step: [last_completed_step]."
    - Continuar a partir do step pendente.

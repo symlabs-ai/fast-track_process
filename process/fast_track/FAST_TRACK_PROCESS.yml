@@ -167,7 +167,52 @@ phases:
 flow:
   - id: start
     type: start
-    next: ft_mdd_01
+    next: decisao_mdd_mode
+
+  - id: decisao_mdd_mode
+    type: decision
+    orchestrator: ft_manager
+    decision:
+      question: "Stakeholder forneceu PRD abrangente de entrada?"
+      decider:
+        type: auto
+        check: "project/docs/ has substantive product document OR stakeholder pasted PRD in conversation"
+      branches:
+        - when: "hyper"
+          goto: ft_mdd_hyper
+        - when: "normal"
+          goto: ft_mdd_01
+
+  # --- Hyper-Mode MDD ---
+
+  - id: ft_mdd_hyper
+    type: step
+    title: "Hyper-Mode — Absorção e geração de artefatos"
+    narrative: "ft_coach lê PRD do stakeholder, gera PRD.md, TASK_LIST.md e questionário de alinhamento"
+    inputs: ["PRD fornecido pelo stakeholder"]
+    outputs:
+      - "project/docs/PRD.md"
+      - "project/docs/TASK_LIST.md"
+      - "project/docs/hyper_questionnaire.md"
+    symbiote: ft_coach
+    mode: hyper
+    next: ft_hyper_questionnaire
+
+  - id: ft_hyper_questionnaire
+    type: stakeholder_review
+    orchestrator: ft_manager
+    action: "Stakeholder responde questionário (pontos ambíguos, lacunas, sugestões)"
+    next: ft_hyper_incorporate
+
+  - id: ft_hyper_incorporate
+    type: step
+    title: "Hyper-Mode — Incorporar respostas e finalizar artefatos"
+    narrative: "ft_coach incorpora respostas, remove inferências pendentes, atualiza PRD e TASK_LIST"
+    symbiote: ft_coach
+    mode: hyper
+    next: ft_manager_valida_prd
+
+  # --- Normal MDD ---
 
   - id: ft_mdd_01
     type: step
@@ -372,6 +417,12 @@ artifacts:
     path: "project/docs/PRD.md"
     phase: ft_mdd
     description: "PRD consolidado (hipótese + visão + modelo + user stories)"
+
+  - id: hyper_questionnaire
+    path: "project/docs/hyper_questionnaire.md"
+    phase: ft_mdd
+    mode: hyper
+    description: "Questionário de alinhamento gerado pelo ft_coach em hyper-mode"
 
   - id: task_list
     path: "project/docs/TASK_LIST.md"

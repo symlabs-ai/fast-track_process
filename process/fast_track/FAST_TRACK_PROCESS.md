@@ -17,6 +17,27 @@
 
 ---
 
+## Modos de MDD
+
+### `normal` (padrão)
+Discovery conduzido por conversa: ft_coach pergunta, dev responde, hipótese → PRD → validação → task list.
+
+### `hyper`
+Ativado quando o **stakeholder entrega um PRD abrangente de entrada**.
+ft_coach consome o documento e, em um único pass:
+1. Produz `project/docs/PRD.md` completo (mapeando para o template, inferindo seções ausentes)
+2. Produz `project/docs/TASK_LIST.md`
+3. Gera `project/docs/hyper_questionnaire.md` com três seções:
+   - **🔍 Pontos Ambíguos** — onde o PRD é vago ou interpretável de mais de uma forma
+   - **🕳️ Lacunas** — informações necessárias para implementação que estão ausentes
+   - **💡 Sugestões de Melhoria** — melhorias identificadas para o produto ou implementação
+
+O stakeholder responde → ft_coach incorpora → artefatos finalizados → segue para validação normal.
+
+Template: `process/fast_track/templates/template_hyper_questionnaire.md`
+
+---
+
 ## Fases e Steps
 
 ### Fase 1: MDD (comprimido) — 3 steps

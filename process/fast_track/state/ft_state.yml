@@ -6,6 +6,7 @@ version: "0.1.0"
 
 orchestrator: ft_manager
 stakeholder_mode: interactive  # interactive | autonomous
+mdd_mode: normal               # normal | hyper
 mvp_delivered: false
 
 current_phase: ft_mdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback

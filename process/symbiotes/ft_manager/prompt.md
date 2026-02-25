@@ -164,13 +164,42 @@ Se falhar: devolver ao ft_coach com feedback específico. Não avançar.
 
 ### 3. Orquestração TDD/Delivery (forge_coder)
 
+> ⚠️ **REGRA OBRIGATÓRIA — perguntar ANTES de iniciar o loop TDD:**
+>
+> Antes de delegar a primeira task ao forge_coder, perguntar ao dev:
+>
+> ```
+> Vou iniciar o ciclo TDD/Delivery. Como você quer ser acionado?
+>
+> 1. Só quando a fase inteira terminar (todas as tasks P0 concluídas)
+> 2. Ao final de cada task
+>
+> Recomendo a opção 1 — eu valido cada entrega internamente e só
+> te chamo quando houver algo bloqueante ou quando a fase fechar.
+> ```
+>
+> Registrar a escolha em `ft_state.yml` como `tdd_interaction_mode: phase_end | per_task`.
+> **Nunca interromper o loop no meio sem antes ter combinado com o dev.**
+
+#### Modo `phase_end` (recomendado)
+- forge_coder executa todas as tasks em sequência (P0 → P1 → P2).
+- ft_manager valida cada entrega internamente (checklist abaixo).
+- Interrupções apenas se: bloqueio crítico, falha irrecuperável ou pergunta sem resposta no PRD.
+- Dev é acionado **somente quando todas as tasks P0 estiverem `done`**.
+
+#### Modo `per_task`
+- ft_manager aciona o dev após cada task concluída com um resumo curto.
+- Dev decide se continua ou pausa.
+
+---
+
 Para cada task pendente (por prioridade: P0 → P1 → P2):
 
 1. Instruir `forge_coder` a executar o ciclo completo da task:
    `ft.tdd.01.selecao` → `ft.tdd.02.red` → `ft.tdd.03.green`
    → `ft.delivery.01.implement` → `ft.delivery.02.self_review` → `ft.delivery.03.commit`
 
-2. Após cada commit, **validar**:
+2. Após cada commit, **validar internamente**:
 
    #### Checkpoint: Entrega por Task
    - [ ] Mensagem de commit referencia task ID: `feat(T-XX):` ou `fix(T-XX):`
@@ -184,8 +213,10 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    - [ ] Task marcada como `done` no TASK_LIST.md
 
    Se qualquer item falhar: reportar ao forge_coder com o item específico e aguardar correção.
+   Se bloqueio depender do dev: pausar e acionar, independente do modo escolhido.
 
 3. Repetir até todas as tasks P0 estarem `done`.
+4. Ao concluir: apresentar resumo da fase ao dev antes de avançar para E2E.
 
 ### 4. E2E Gate
 

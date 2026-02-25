@@ -123,10 +123,28 @@ Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_stat
 
 ### 2. Delegação de Discovery (ft_coach)
 
+> ⚠️ **REGRA OBRIGATÓRIA — verificar ANTES de qualquer delegação:**
+>
+> O stakeholder entregou um documento de produto abrangente (PRD, spec, briefing, documento com user stories/requisitos)?
+> - **SIM** → ativar **hyper-mode**: `mdd_mode: hyper` no state. Delegar ao `ft_coach` em modo hyper (`ft.mdd.hyper`). **Não iniciar o fluxo normal.**
+> - **NÃO** → fluxo normal abaixo.
+>
+> Sinais de PRD abrangente: documento colado na conversa, arquivo em `project/docs/` com conteúdo substantivo de produto, briefing com user stories ou requisitos.
+> Em caso de dúvida: perguntar "Você tem um PRD ou documento de produto para compartilhar antes de começarmos?"
+
+#### Fluxo normal (mdd_mode: normal)
+
 Acionar `ft_coach` para conduzir:
 - `ft.mdd.01.hipotese` → `ft.mdd.02.prd` → `ft.mdd.03.validacao` → `ft.plan.01.task_list`
 
-Quando ft_coach sinalizar conclusão, **validar** antes de avançar:
+#### Fluxo hyper (mdd_mode: hyper)
+
+Acionar `ft_coach` em modo hyper com o documento fornecido:
+- `ft.mdd.hyper` (absorção + geração de artefatos + questionário) → aguardar respostas → incorporar
+
+**O questionário de alinhamento é obrigatório mesmo quando o PRD parece completo.** Nunca pular.
+
+Quando ft_coach sinalizar conclusão (em qualquer modo), **validar** antes de avançar:
 
 #### Checkpoint: PRD (`ft.mdd.02.prd`)
 - [ ] Seções 1-9 preenchidas

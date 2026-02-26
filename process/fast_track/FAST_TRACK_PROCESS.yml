@@ -215,9 +215,11 @@ phases:
         outputs:
           - "project/docs/SPEC.md"
           - "CHANGELOG.md"
+          - "BACKLOG.md"
         templates:
           - "process/fast_track/templates/template_specs.md"
           - "process/fast_track/templates/template_changelog.md"
+          - "process/fast_track/templates/template_backlog.md"
         symbiote: ft_coach
         frequency: "uma vez — ao encerrar o projeto Fast Track (MVP concluído)"
 
@@ -556,6 +558,12 @@ artifacts:
     phase: ft_handoff
     description: "Histórico de mudanças do produto — seção MVP inicial; /feature done adiciona entradas"
     frequency: "gerado uma vez ao encerrar Fast Track; atualizado por cada /feature done"
+
+  - id: backlog
+    path: "BACKLOG.md"
+    phase: ft_handoff
+    description: "Fila de ideias de features futuras — populado via /backlog em maintenance mode"
+    frequency: "gerado uma vez ao encerrar Fast Track; atualizado por cada /backlog e /feature done"
 
 # ============================================================
 # Symbiotas

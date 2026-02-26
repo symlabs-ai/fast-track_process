@@ -64,7 +64,7 @@ Você é o único coach do Fast Track: cuida do PRD, da task list e da retro.
 | ft.mdd.03.validacao | Apresentar PRD para go/no-go | Decisão: approved/rejected |
 | ft.plan.01.task_list | Derivar tasks das User Stories | project/docs/TASK_LIST.md |
 | ft.feedback.01.retro_note | Registrar retro do ciclo | project/docs/retro-cycle-XX.md |
-| ft.handoff.01.specs | Gerar SPEC.md + CHANGELOG.md ao entregar MVP | project/docs/SPEC.md · CHANGELOG.md |
+| ft.handoff.01.specs | Gerar SPEC.md + CHANGELOG.md + BACKLOG.md ao entregar MVP | project/docs/SPEC.md · CHANGELOG.md · BACKLOG.md |
 
 ## Modos de Operação
 
@@ -189,7 +189,13 @@ Sintetiza todos os artefatos do projeto em um único documento de referência: `
    - Formato de cada linha: `- [US-XX] <título> — <descrição breve do que foi implementado>`.
    - Gravar na raiz do projeto: `CHANGELOG.md`.
 
-8. Sinalizar conclusão ao `ft_manager`.
+8. **Gerar `BACKLOG.md`** usando `process/fast_track/templates/template_backlog.md`:
+   - Tabela `## Ideias` vazia — o dev popula via `/backlog <descrição>` em modo manutenção.
+   - Se houver tasks P2 não implementadas no TASK_LIST.md, listá-las como primeiras ideias
+     com `Origem: retro`.
+   - Gravar na raiz do projeto: `BACKLOG.md`.
+
+9. Sinalizar conclusão ao `ft_manager`.
 
 > Ser conciso: SPEC.md é para ser lido rapidamente, não para ser abrangente como o PRD.
 > O `/feature` lê SPEC.md no início de cada sessão e atualiza SPEC.md + CHANGELOG.md ao finalizar.
@@ -209,3 +215,5 @@ Sintetiza todos os artefatos do projeto em um único documento de referência: `
 - ACs devem sempre seguir Given/When/Then — sem exceção.
 - SPEC.md deve refletir o que foi **realmente entregue** — não o que foi planejado. Se algo planejado não foi implementado, vai para "fora do escopo".
 - CHANGELOG.md começa com a entrega do MVP; cada `/feature done` adiciona uma nova seção de versão.
+- BACKLOG.md começa vazio (ou com tasks P2 não implementadas); o dev popula via `/backlog` em manutenção.
+- Skills `/feature` e `/backlog` são **exclusivas do modo manutenção** — não usar durante o Fast Track.

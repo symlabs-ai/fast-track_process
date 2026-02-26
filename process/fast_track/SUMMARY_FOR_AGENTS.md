@@ -87,6 +87,7 @@ LOOP[
 | Retro | project/docs/retro-cycle-XX.md | ft.feedback.01.retro_note |
 | SPEC | project/docs/SPEC.md | ft.handoff.01.specs |
 | Changelog | CHANGELOG.md | ft.handoff.01.specs |
+| Backlog | BACKLOG.md | ft.handoff.01.specs |
 
 ## Regras Críticas
 
@@ -110,7 +111,11 @@ Campo `stakeholder_mode` em `ft_state.yml`:
 ## Modo Manutenção
 
 Após `ft.handoff.01.specs`, `maintenance_mode: true` no state.
-Evolução do projeto via `/feature <descrição>` — agente lê `project/docs/SPEC.md` como contexto.
+Skills disponíveis **apenas em maintenance mode**:
+- `/backlog <ideia>` — registrar ideia futura em `BACKLOG.md`
+- `/feature <descrição>` — implementar feature (lê SPEC.md; atualiza SPEC.md + CHANGELOG.md)
+
+⛔ `/feature` e `/backlog` são rejeitadas pelo ft_manager durante o Fast Track.
 
 ## Estado
 

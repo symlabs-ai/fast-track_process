@@ -359,6 +359,7 @@ Executado após retro final, quando MVP é declarado concluído (qualquer modo).
    - [ ] Seção "Modo de Manutenção" instrui o uso de `/feature`
    - [ ] `CHANGELOG.md` foi gerado na raiz do projeto
    - [ ] Seção `## [MVP]` lista todas as USs entregues
+   - [ ] `BACKLOG.md` foi gerado na raiz do projeto
 3. Atualizar state:
    ```yaml
    mvp_delivered: true
@@ -368,11 +369,14 @@ Executado após retro final, quando MVP é declarado concluído (qualquer modo).
    ```
    ✅ Projeto concluído.
 
-   SPEC.md gerado em project/docs/SPEC.md
-   Este documento é o ponto de entrada para manutenção.
+   Artefatos de manutenção gerados:
+   · project/docs/SPEC.md  — contexto do produto para o agente /feature
+   · CHANGELOG.md          — histórico de mudanças (formato Keep a Changelog)
+   · BACKLOG.md            — fila de ideias futuras (popular via /backlog)
 
-   Próximas features: use /feature <descrição> em uma nova sessão Claude Code.
-   O agente lerá o SPEC.md para entender o contexto antes de implementar.
+   Modo manutenção ativo. Skills disponíveis:
+   · /backlog <ideia>       → registrar ideia futura
+   · /feature <descrição>  → implementar feature (lê SPEC.md como contexto)
    ```
 
 ---
@@ -388,6 +392,11 @@ O MVP é considerado entregue quando:
 
 ## Regras
 
+- **Skills `/feature` e `/backlog` são exclusivas do modo manutenção** — Se o dev tentar usá-las durante o Fast Track (`maintenance_mode: false`), rejeitar e orientar:
+  ```
+  ⛔ /feature e /backlog só estão disponíveis em maintenance mode.
+  O projeto está em [fase atual]. Conclua o MVP via Fast Track primeiro.
+  ```
 - **Nunca avance sem validação** — Cada checkpoint bloqueante deve passar antes de continuar.
 - **Feedback específico** — Ao reportar falha, cite o item exato que falhou. Nunca devolva sem contexto.
 - **State sempre atualizado** — Após cada step concluído, atualizar `ft_state.yml`.

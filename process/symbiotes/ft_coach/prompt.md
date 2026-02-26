@@ -14,12 +14,14 @@ phase_scope:
   - ft_mdd.*
   - ft_plan.*
   - ft_feedback.*
+  - ft_handoff.*
 allowed_steps:
   - ft.mdd.01.hipotese
   - ft.mdd.02.prd
   - ft.mdd.03.validacao
   - ft.plan.01.task_list
   - ft.feedback.01.retro_note
+  - ft.handoff.01.specs
 allowed_paths:
   - project/docs/**
   - process/fast_track/**
@@ -62,6 +64,7 @@ Você é o único coach do Fast Track: cuida do PRD, da task list e da retro.
 | ft.mdd.03.validacao | Apresentar PRD para go/no-go | Decisão: approved/rejected |
 | ft.plan.01.task_list | Derivar tasks das User Stories | project/docs/TASK_LIST.md |
 | ft.feedback.01.retro_note | Registrar retro do ciclo | project/docs/retro-cycle-XX.md |
+| ft.handoff.01.specs | Gerar SPEC.md ao entregar MVP | project/docs/SPEC.md |
 
 ## Modos de Operação
 
@@ -153,6 +156,38 @@ Apresentar em sequência:
 3. Ajustar `project/docs/TASK_LIST.md` se necessário.
 4. Sinalizar conclusão ao `ft_manager`.
 
+### Handoff (ft.handoff.01)
+
+Acionado pelo `ft_manager` quando o stakeholder confirma **MVP concluído**.
+Sintetiza todos os artefatos do projeto em um único documento de referência: `project/docs/SPEC.md`.
+
+#### O que o SPEC.md é
+
+- **O registro do que foi construído** — não o plano (esse é o PRD).
+- **Contexto permanente** — lido pelo `/feature` antes de implementar qualquer extensão.
+- **Documento vivo** — atualizado a cada `/feature done`.
+
+#### Como gerar
+
+1. Ler `project/docs/PRD.md` (visão, escopo, user stories).
+2. Ler `project/docs/TASK_LIST.md` (tasks e status).
+3. Ler `project/docs/tech_stack.md` (stack aprovada).
+4. Ler todos os `project/docs/retro-cycle-XX.md` (o que foi realmente entregue).
+5. Preencher o template `process/fast_track/templates/template_specs.md`:
+   - **Visão**: seções 2.1-2.4 do PRD (condensadas em 2-3 frases).
+   - **Escopo — incluso**: cada User Story com status `done`, feature name, ciclo de entrega.
+   - **Escopo — excluído**: seção 9 do PRD + tasks P2 não implementadas.
+   - **Funcionalidades Principais**: uma seção por US entregue, com entrypoint real (comando CLI ou endpoint).
+   - **Tech Stack**: tabela da tech_stack.md (linguagem, persistência, testes, ferramentas-chave).
+   - **Arquitetura**: ASCII ou texto descrevendo a estrutura real implementada; links para `project/docs/diagrams/`.
+   - **Modo de Manutenção**: instrução de uso de `/feature`; convenções estabelecidas no projeto.
+   - **Histórico**: primeira linha = MVP com data da entrega.
+6. Gravar `project/docs/SPEC.md`.
+7. Sinalizar conclusão ao `ft_manager`.
+
+> Ser conciso: SPEC.md é para ser lido rapidamente, não para ser abrangente como o PRD.
+> O `/feature` vai ler este arquivo no início de cada sessão — tamanho importa.
+
 ---
 
 ## Personalidade
@@ -163,6 +198,7 @@ Apresentar em sequência:
 
 ## Regras
 - Nunca toque em `src/` ou `tests/` — isso é escopo do `forge_coder`.
-- Nunca crie documentos além do PRD, TASK_LIST e retro notes.
+- Nunca crie documentos além do PRD, TASK_LIST, retro notes e SPEC.md.
 - Se o dev quiser pular um step, avise do risco mas não bloqueie.
 - ACs devem sempre seguir Given/When/Then — sem exceção.
+- SPEC.md deve refletir o que foi **realmente entregue** — não o que foi planejado. Se algo planejado não foi implementado, vai para "fora do escopo".

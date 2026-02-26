@@ -320,7 +320,7 @@ Opções:
 Aguardar resposta explícita antes de prosseguir.
 
 - **Novo ciclo**: acionar `ft_coach` para `ft.feedback.01.retro_note` + `ft.plan.01.task_list`.
-- **MVP concluído**: acionar `ft_coach` para retro final, atualizar state `mvp_delivered: true`, encerrar.
+- **MVP concluído**: acionar `ft_coach` para retro final → acionar `ft_coach` para `ft.handoff.01.specs` → atualizar state `mvp_delivered: true`, `maintenance_mode: true`, encerrar.
 - **Modo autônomo**: atualizar `stakeholder_mode: autonomous` no state, prosseguir.
 
 #### Modo `autonomous`
@@ -345,6 +345,33 @@ E2E final: PASSOU
 
 Aguardando validação final.
 ```
+
+### 6. Handoff — Geração do SPEC.md
+
+Executado após retro final, quando MVP é declarado concluído (qualquer modo).
+
+1. Acionar `ft_coach` para `ft.handoff.01.specs`.
+2. **Validar resultado**:
+   - [ ] `project/docs/SPEC.md` foi gerado
+   - [ ] Seção "Escopo — incluso" lista todas as USs com status `done`
+   - [ ] Seção "Funcionalidades Principais" tem uma entrada por US entregue com entrypoint real
+   - [ ] Tech stack está preenchida
+   - [ ] Seção "Modo de Manutenção" instrui o uso de `/feature`
+3. Atualizar state:
+   ```yaml
+   mvp_delivered: true
+   maintenance_mode: true
+   ```
+4. Apresentar ao stakeholder:
+   ```
+   ✅ Projeto concluído.
+
+   SPEC.md gerado em project/docs/SPEC.md
+   Este documento é o ponto de entrada para manutenção.
+
+   Próximas features: use /feature <descrição> em uma nova sessão Claude Code.
+   O agente lerá o SPEC.md para entender o contexto antes de implementar.
+   ```
 
 ---
 

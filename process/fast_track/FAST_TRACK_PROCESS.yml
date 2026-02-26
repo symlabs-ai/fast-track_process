@@ -200,6 +200,23 @@ phases:
         template: "process/fast_track/templates/template_retro_note.md"
         symbiote: ft_coach
 
+  - id: ft_handoff
+    title: "Handoff — Modo Manutenção"
+    narrative: "Sintetizar artefatos do MVP em SPEC.md. Ativado uma única vez, ao encerrar o projeto Fast Track."
+    steps:
+      - id: ft.handoff.01.specs
+        title: "Gerar SPEC.md"
+        narrative: "Sintetizar PRD, task list, tech stack e retro notes em documento de referência para manutenção via /feature"
+        inputs:
+          - "project/docs/PRD.md"
+          - "project/docs/TASK_LIST.md"
+          - "project/docs/tech_stack.md"
+          - "project/docs/retro-cycle-*.md"
+        outputs: ["project/docs/SPEC.md"]
+        template: "process/fast_track/templates/template_specs.md"
+        symbiote: ft_coach
+        frequency: "uma vez — ao encerrar o projeto Fast Track (MVP concluído)"
+
 # ============================================================
 # Flow
 # ============================================================
@@ -447,6 +464,17 @@ flow:
   - id: ft_feedback_01_final
     type: step
     step_ref: ft_feedback.ft.feedback.01.retro_note
+    next: ft_handoff_01
+
+  - id: ft_handoff_01
+    type: step
+    step_ref: ft_handoff.ft.handoff.01.specs
+    next: ft_manager_handoff_completo
+
+  - id: ft_manager_handoff_completo
+    type: state_update
+    orchestrator: ft_manager
+    action: "set mvp_delivered: true, maintenance_mode: true in ft_state.yml"
     next: end_completo
 
   # --- Feedback (ciclo normal) ---
@@ -513,6 +541,12 @@ artifacts:
     phase: ft_feedback
     description: "Retrospectiva do ciclo"
 
+  - id: spec
+    path: "project/docs/SPEC.md"
+    phase: ft_handoff
+    description: "Especificação macro do produto entregue — ponto de entrada para manutenção via /feature"
+    frequency: "gerado uma vez ao encerrar Fast Track; atualizado por cada /feature done"
+
 # ============================================================
 # Symbiotas
 # ============================================================
@@ -531,13 +565,14 @@ symbiotes:
     can_decide: true
 
   - name: ft_coach
-    role: "Conduz MDD comprimido (PRD) e planning (task list) — delegado pelo ft_manager"
+    role: "Conduz MDD comprimido (PRD), planning (task list), retro e handoff (SPEC.md) — delegado pelo ft_manager"
     prompt_file: "process/symbiotes/ft_coach/prompt.md"
     capabilities:
       - conduzir_hipotese
       - redigir_prd
       - validar_prd
       - criar_task_list
+      - gerar_specs
     can_decide: false
 
   - name: forge_coder

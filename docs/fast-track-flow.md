@@ -137,7 +137,19 @@ flowchart TD
 
     MVP_OK{autonomous\ne MVP pronto?}
     MVP_OK -- sim --> MVP_FINAL[Apresentar\nMVP final ao stakeholder]
-    MVP_OK -- não --> END_OK
+    MVP_OK -- não --> HANDOFF
 
-    MVP_FINAL --> END_OK([✅ Projeto concluído])
+    MVP_FINAL --> HANDOFF
+
+    subgraph HANDOFF_PHASE["📄 Fase 7: Handoff — ft_coach"]
+        HANDOFF[ft.handoff.01\ngerar SPEC.md]
+        HANDOFF_VAL{SPEC.md\nválido?}
+        HANDOFF --> HANDOFF_VAL
+        HANDOFF_VAL -- falhou --> HANDOFF
+    end
+
+    HANDOFF_VAL -- ok --> SET_MAINT[set maintenance_mode: true]
+    SET_MAINT --> END_OK([✅ Projeto concluído\nmaintenance_mode ativo])
+
+    END_OK -. "🔧 Manutenção via\n/feature descrição" .-> FEATURE_NOTE["📝 /feature lê SPEC.md\nantes de implementar\natualiza SPEC.md\nao finalizar"]
 ```

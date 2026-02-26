@@ -160,6 +160,24 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 > **Decisão final**: Iniciar novo ciclo (volta para ft.plan.01) ou encerrar.
 
+### Fase 7: Handoff — 1 step *(executado uma única vez, ao encerrar o projeto)*
+
+#### ft.handoff.01.specs — Gerar SPEC.md
+
+- **Gatilho**: stakeholder confirma "MVP concluído"
+- **Input**: PRD.md + TASK_LIST.md + tech_stack.md + todos os retro-cycle-XX.md
+- **Output**: `project/docs/SPEC.md`
+- **Template**: `process/fast_track/templates/template_specs.md`
+- **Symbiota**: ft_coach
+- **Critério**: SPEC.md cobre visão, escopo entregue, funcionalidades com entrypoints reais, tech stack e instruções de manutenção via `/feature`
+
+**O que é o SPEC.md:**
+- Registro do que foi construído (não o plano — esse é o PRD)
+- Contexto permanente lido pelo `/feature` antes de implementar extensões
+- Documento vivo: atualizado a cada `/feature done`
+
+**Após geração:** `maintenance_mode: true` é gravado no state. O projeto passa a ser evoluído via `/feature`, que lê o SPEC.md como contexto.
+
 ---
 
 ## Regras
@@ -191,6 +209,17 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 **`interactive`** (padrão): ao final de cada ciclo, ft_manager apresenta os resultados E2E ao stakeholder e aguarda decisão (novo ciclo, ajustes ou MVP concluído).
 
 **`autonomous`**: ativado quando o stakeholder diz "continue sem validação". ft_manager roda todos os ciclos sem interrupção, valida internamente, e aciona o stakeholder apenas na entrega final do MVP.
+
+### Modo `maintenance`
+
+Ativado após `ft.handoff.01.specs` ser concluído (`maintenance_mode: true` no state).
+O projeto saiu do Fast Track e é evoluído via `/feature`:
+
+```
+/feature <descrição da nova feature>
+```
+
+O agente `/feature` lê `project/docs/SPEC.md` para entender o contexto e atualiza o SPEC.md ao finalizar (`/feature done`).
 
 ---
 

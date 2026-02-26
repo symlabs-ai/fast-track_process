@@ -11,6 +11,7 @@ tdd_interaction_mode: phase_end  # phase_end | per_task
 mvp_status: null                 # null | demonstravel | entregue
                                  # demonstravel só após smoke-cycle-XX.md gerado com PASSOU
 mvp_delivered: false
+maintenance_mode: false      # true após ft.handoff.01.specs concluído; /feature é o fluxo após isso
 
 current_phase: ft_mdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback
 current_cycle: cycle-01      # ex.: cycle-01

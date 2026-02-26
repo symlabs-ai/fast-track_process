@@ -4,7 +4,7 @@
 
 ## O que é
 
-ForgeProcess: **15 steps, 3 symbiotas, 1 PRD**.
+ForgeProcess: **16 steps, 3 symbiotas, 1 PRD → 1 SPEC**.
 Para solo dev + AI. Sem BDD Gherkin, sem sprints formais, sem roadmap separado.
 
 `ft_manager` orquestra tudo. `ft_coach` e `forge_coder` executam quando delegados.
@@ -49,10 +49,11 @@ LOOP[
      interactive: apresenta ao stakeholder -> feedback / MVP / autonomous
      autonomous:  valida internamente -> prossegue até MVP -> apresenta stakeholder
   -> ft.feedback.01.retro_note
-  -> continue? -> ft.plan.01 / complete? -> END
+  -> continue? -> ft.plan.01
+  -> complete? -> ft.handoff.01.specs (gerar SPEC.md) -> END [maintenance_mode: true]
 ```
 
-## Step IDs (12 total)
+## Step IDs (16 total)
 
 | ID | Executor | Orquestrado por |
 |----|----------|-----------------|
@@ -71,6 +72,7 @@ LOOP[
 | ft.smoke.01.cli_run | forge_coder | ft_manager |
 | ft.e2e.01.cli_validation | forge_coder | ft_manager |
 | ft.feedback.01.retro_note | ft_coach | ft_manager |
+| ft.handoff.01.specs | ft_coach | ft_manager |
 
 ## Artefatos
 
@@ -83,6 +85,7 @@ LOOP[
 | Código | src/ | ft.tdd.03.green |
 | Testes | tests/ | ft.tdd.02.red |
 | Retro | project/docs/retro-cycle-XX.md | ft.feedback.01.retro_note |
+| SPEC | project/docs/SPEC.md | ft.handoff.01.specs |
 
 ## Regras Críticas
 
@@ -94,12 +97,19 @@ LOOP[
 6. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
 7. **ft_manager valida tudo** — Nenhuma fase avança sem checkpoint de validação passar.
 8. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
+9. **SPEC.md é obrigatório ao encerrar** — MVP concluído sem SPEC.md gerado não está realmente encerrado.
+10. **SPEC.md reflete o entregue, não o planejado** — features não implementadas vão para "fora do escopo".
 
 ## Stakeholder Mode
 
 Campo `stakeholder_mode` em `ft_state.yml`:
 - `interactive`: stakeholder vê E2E ao fim de cada ciclo
 - `autonomous`: stakeholder só vê na entrega final do MVP
+
+## Modo Manutenção
+
+Após `ft.handoff.01.specs`, `maintenance_mode: true` no state.
+Evolução do projeto via `/feature <descrição>` — agente lê `project/docs/SPEC.md` como contexto.
 
 ## Estado
 

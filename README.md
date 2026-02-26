@@ -1,8 +1,8 @@
 # ForgeProcess — Fast Track
 
-> Processo ágil para solo dev + AI. 12 steps, 6 fases, valor > cerimônia.
+> Processo ágil para solo dev + AI. 16 steps, 7 fases, valor > cerimônia.
 
-**3 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode**
+**3 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode** · **Maintenance mode**
 
 ---
 
@@ -47,6 +47,29 @@ git push -u origin main
 ---
 
 ## Changelog
+
+### [v0.2.0] — 2026-02-26
+
+#### Added
+- **ft.handoff.01.specs** — nova fase Handoff (Fase 7), executada uma única vez ao encerrar o projeto.
+  ft_coach sintetiza PRD, task list, tech stack e retro notes em `project/docs/SPEC.md`.
+- **SPEC.md**: documento de referência do produto entregue. Contém visão, escopo entregue,
+  funcionalidades com entrypoints reais, tech stack e instruções de manutenção via `/feature`.
+  Diferente do PRD (plano), o SPEC.md registra o que foi **realmente construído**.
+- **Maintenance mode**: após geração do SPEC.md, `maintenance_mode: true` é gravado no state.
+  O projeto passa a ser evoluído via `/feature`, que lê o SPEC.md como contexto antes de implementar
+  e o atualiza a cada `/feature done`.
+- **template_specs.md**: template para o SPEC.md com seções de visão, escopo, funcionalidades,
+  tech stack, arquitetura, convenções do projeto e histórico de mudanças.
+- **Campo `maintenance_mode`** em `ft_state.yml`.
+- **Diagrama de fluxo** atualizado com fase Handoff e nota de integração com `/feature`.
+
+#### Changed
+- Step count: 15 → 16.
+- ft_coach: escopo expandido para incluir `ft.handoff.01.specs` e geração do SPEC.md.
+- ft_manager: fluxo de "MVP concluído" agora inclui disparo do handoff antes de encerrar.
+
+---
 
 ### [v0.1.4] — 2026-02-25
 

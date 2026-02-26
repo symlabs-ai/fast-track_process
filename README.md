@@ -71,6 +71,38 @@ git push -u origin main
 
 ---
 
+### [v0.1.6] — 2026-02-25
+
+#### Added
+- **Smoke Gate** (`ft.smoke.01.cli_run`) — nova fase 5a obrigatória entre o loop TDD e o E2E gate.
+  forge_coder sobe o produto real, injeta input via PTY (pexpect/ptyprocess, sem mocks de I/O) e
+  documenta o output verbatim em `project/docs/smoke-cycle-XX.md`. Ciclo não avança se smoke falhar.
+- **Separação `tests/unit/` e `tests/smoke/`** — testes unitários (mocks, rápidos, por commit) e
+  smoke (processo real, PTY, por ciclo) em diretórios distintos com propósitos explícitos.
+- **Campo `mvp_status`** em `ft_state.yml`: `null | demonstravel | entregue`.
+  `demonstravel` só pode ser declarado após smoke passar e `smoke-cycle-XX.md` existir com output
+  real. Declarar com base apenas em unit tests é inválido.
+- **Seção "Validação real"** no `template_retro_note.md`: campo obrigatório com comando executado,
+  input injetado, output observado (verbatim), detecção de freeze e status PASSOU/TRAVOU.
+
+---
+
+### [v0.1.5] — 2026-02-25
+
+#### Added
+- **ft.plan.02.tech_stack** — forge_coder propõe stack técnica (linguagem, framework, persistência,
+  libs, ferramentas, alternativas descartadas) e ft_manager apresenta ao stakeholder para aprovação.
+  Executado apenas no primeiro ciclo. Output: `project/docs/tech_stack.md`.
+- **ft.plan.03.diagrams** — forge_coder gera 4 diagramas Mermaid após stack aprovada:
+  `class.md`, `components.md`, `database.md`, `architecture.md` em `project/docs/diagrams/`.
+- **TDD interaction mode** — ft_manager pergunta upfront, antes de iniciar o loop, como o dev quer
+  ser acionado: `phase_end` (só quando todas as tasks P0 concluírem) ou `per_task` (após cada task).
+  Escolha persiste em `ft_state.yml` como `tdd_interaction_mode`.
+- **Status header obrigatório** em toda mensagem do ft_manager: bloco `━━━` com fase atual, step,
+  progresso N/total (%), entregas da etapa e próximo step. Regra inviolável.
+
+---
+
 ### [v0.1.4] — 2026-02-25
 
 #### Fixed

@@ -64,7 +64,7 @@ Você é o único coach do Fast Track: cuida do PRD, da task list e da retro.
 | ft.mdd.03.validacao | Apresentar PRD para go/no-go | Decisão: approved/rejected |
 | ft.plan.01.task_list | Derivar tasks das User Stories | project/docs/TASK_LIST.md |
 | ft.feedback.01.retro_note | Registrar retro do ciclo | project/docs/retro-cycle-XX.md |
-| ft.handoff.01.specs | Gerar SPEC.md ao entregar MVP | project/docs/SPEC.md |
+| ft.handoff.01.specs | Gerar SPEC.md + CHANGELOG.md ao entregar MVP | project/docs/SPEC.md · CHANGELOG.md |
 
 ## Modos de Operação
 
@@ -183,10 +183,16 @@ Sintetiza todos os artefatos do projeto em um único documento de referência: `
    - **Modo de Manutenção**: instrução de uso de `/feature`; convenções estabelecidas no projeto.
    - **Histórico**: primeira linha = MVP com data da entrega.
 6. Gravar `project/docs/SPEC.md`.
-7. Sinalizar conclusão ao `ft_manager`.
+
+7. **Gerar `CHANGELOG.md`** usando `process/fast_track/templates/template_changelog.md`:
+   - Seção `## [MVP] — <data>`: uma linha por User Story entregue (fonte: tasks `done` no TASK_LIST.md).
+   - Formato de cada linha: `- [US-XX] <título> — <descrição breve do que foi implementado>`.
+   - Gravar na raiz do projeto: `CHANGELOG.md`.
+
+8. Sinalizar conclusão ao `ft_manager`.
 
 > Ser conciso: SPEC.md é para ser lido rapidamente, não para ser abrangente como o PRD.
-> O `/feature` vai ler este arquivo no início de cada sessão — tamanho importa.
+> O `/feature` lê SPEC.md no início de cada sessão e atualiza SPEC.md + CHANGELOG.md ao finalizar.
 
 ---
 
@@ -202,3 +208,4 @@ Sintetiza todos os artefatos do projeto em um único documento de referência: `
 - Se o dev quiser pular um step, avise do risco mas não bloqueie.
 - ACs devem sempre seguir Given/When/Then — sem exceção.
 - SPEC.md deve refletir o que foi **realmente entregue** — não o que foi planejado. Se algo planejado não foi implementado, vai para "fora do escopo".
+- CHANGELOG.md começa com a entrega do MVP; cada `/feature done` adiciona uma nova seção de versão.

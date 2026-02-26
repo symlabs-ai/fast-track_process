@@ -102,9 +102,4 @@ Ao finalizar uma feature (`/feature done`), SPEC.md é atualizado automaticament
 
 ---
 
-## Histórico de Mudanças
-
-| Versão | Data | Feature | Session |
-|--------|------|---------|---------|
-| MVP | [YYYY-MM-DD] | Entrega inicial | — |
-<!-- /feature done adiciona entradas aqui -->
+> Histórico de mudanças: `CHANGELOG.md`

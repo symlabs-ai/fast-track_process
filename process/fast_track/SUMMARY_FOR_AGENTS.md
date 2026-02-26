@@ -86,6 +86,7 @@ LOOP[
 | Testes | tests/ | ft.tdd.02.red |
 | Retro | project/docs/retro-cycle-XX.md | ft.feedback.01.retro_note |
 | SPEC | project/docs/SPEC.md | ft.handoff.01.specs |
+| Changelog | CHANGELOG.md | ft.handoff.01.specs |
 
 ## Regras Críticas
 

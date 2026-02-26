@@ -212,8 +212,12 @@ phases:
           - "project/docs/TASK_LIST.md"
           - "project/docs/tech_stack.md"
           - "project/docs/retro-cycle-*.md"
-        outputs: ["project/docs/SPEC.md"]
-        template: "process/fast_track/templates/template_specs.md"
+        outputs:
+          - "project/docs/SPEC.md"
+          - "CHANGELOG.md"
+        templates:
+          - "process/fast_track/templates/template_specs.md"
+          - "process/fast_track/templates/template_changelog.md"
         symbiote: ft_coach
         frequency: "uma vez — ao encerrar o projeto Fast Track (MVP concluído)"
 
@@ -545,6 +549,12 @@ artifacts:
     path: "project/docs/SPEC.md"
     phase: ft_handoff
     description: "Especificação macro do produto entregue — ponto de entrada para manutenção via /feature"
+    frequency: "gerado uma vez ao encerrar Fast Track; atualizado por cada /feature done"
+
+  - id: changelog
+    path: "CHANGELOG.md"
+    phase: ft_handoff
+    description: "Histórico de mudanças do produto — seção MVP inicial; /feature done adiciona entradas"
     frequency: "gerado uma vez ao encerrar Fast Track; atualizado por cada /feature done"
 
 # ============================================================

@@ -166,8 +166,8 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 - **Gatilho**: stakeholder confirma "MVP concluído"
 - **Input**: PRD.md + TASK_LIST.md + tech_stack.md + todos os retro-cycle-XX.md
-- **Output**: `project/docs/SPEC.md`
-- **Template**: `process/fast_track/templates/template_specs.md`
+- **Outputs**: `project/docs/SPEC.md` · `CHANGELOG.md`
+- **Templates**: `template_specs.md` · `template_changelog.md`
 - **Symbiota**: ft_coach
 - **Critério**: SPEC.md cobre visão, escopo entregue, funcionalidades com entrypoints reais, tech stack e instruções de manutenção via `/feature`
 
@@ -176,7 +176,12 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - Contexto permanente lido pelo `/feature` antes de implementar extensões
 - Documento vivo: atualizado a cada `/feature done`
 
-**Após geração:** `maintenance_mode: true` é gravado no state. O projeto passa a ser evoluído via `/feature`, que lê o SPEC.md como contexto.
+**O que é o CHANGELOG.md:**
+- Histórico de mudanças do produto, iniciado com seção `## [MVP]`
+- Cada `/feature done` adiciona uma nova seção de versão
+- Formato compatível com Keep a Changelog
+
+**Após geração:** `maintenance_mode: true` é gravado no state. O projeto passa a ser evoluído via `/feature`, que lê SPEC.md como contexto e atualiza SPEC.md + CHANGELOG.md a cada entrega.
 
 ---
 

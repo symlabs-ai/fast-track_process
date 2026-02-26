@@ -357,6 +357,8 @@ Executado após retro final, quando MVP é declarado concluído (qualquer modo).
    - [ ] Seção "Funcionalidades Principais" tem uma entrada por US entregue com entrypoint real
    - [ ] Tech stack está preenchida
    - [ ] Seção "Modo de Manutenção" instrui o uso de `/feature`
+   - [ ] `CHANGELOG.md` foi gerado na raiz do projeto
+   - [ ] Seção `## [MVP]` lista todas as USs entregues
 3. Atualizar state:
    ```yaml
    mvp_delivered: true

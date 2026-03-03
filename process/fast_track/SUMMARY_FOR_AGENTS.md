@@ -78,12 +78,15 @@ LOOP[
 
 | Artefato | Path | Criado em |
 |----------|------|-----------|
+| Hipótese | project/docs/hipotese.md | ft.mdd.01.hipotese |
 | PRD | project/docs/PRD.md | ft.mdd.02.prd |
 | Task List | project/docs/TASK_LIST.md | ft.plan.01.task_list |
 | Tech Stack | project/docs/tech_stack.md | ft.plan.02.tech_stack |
 | Diagramas | project/docs/diagrams/ | ft.plan.03.diagrams |
 | Código | src/ | ft.tdd.03.green |
 | Testes | tests/ | ft.tdd.02.red |
+| ForgePulse Spec | forgepulse.value_tracks.yml | ft.plan.02.tech_stack |
+| Pulse Snapshot | artifacts/pulse_snapshot.json | ft.smoke.01.cli_run |
 | Retro | project/docs/retro-cycle-XX.md | ft.feedback.01.retro_note |
 | SPEC | project/docs/SPEC.md | ft.handoff.01.specs |
 | Changelog | CHANGELOG.md | ft.handoff.01.specs |
@@ -101,6 +104,8 @@ LOOP[
 8. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
 9. **SPEC.md é obrigatório ao encerrar** — MVP concluído sem SPEC.md gerado não está realmente encerrado.
 10. **SPEC.md reflete o entregue, não o planejado** — features não implementadas vão para "fora do escopo".
+11. **Value Tracks são obrigatórios** — PRD deve ter 2-5 Value Tracks com KPIs. Cada US mapeada para pelo menos 1 track.
+12. **Observabilidade via ForgeBase Pulse** — todo UseCase passa por `UseCaseRunner`. Smoke gate gera `pulse_snapshot.json` com `mapping_source: "spec"`. Nunca inventar telemetria própria.
 
 ## Stakeholder Mode
 

@@ -32,7 +32,8 @@ flowchart TD
 
     subgraph MDD["📋 Fase 1: MDD normal — ft_coach"]
         H[ft.mdd.01\nhipótese]
-        H --> PRD[ft.mdd.02\nredigir PRD]
+        H_DOC["📄 hipotese.md"]
+        H --> H_DOC --> PRD[ft.mdd.02\nredigir PRD]
         PRD --> VALPRD2[ft.mdd.03\nvalidar PRD]
     end
 

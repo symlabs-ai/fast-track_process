@@ -1,12 +1,12 @@
 # ForgeProcess Fast Track
-# Solo dev + AI — 12 steps em 6 fases
+# Solo dev + AI — 16 steps em 7 fases
 
 id: forgeprocess_fast_track
-version: "0.1.0"
+version: "0.3.0"
 title: "ForgeProcess — Fast Track"
 description: >
   ForgeProcess para solo dev + AI.
-  12 steps, gates obrigatórios: PRD validado, TDD Red-Green, E2E CLI gate.
+  16 steps, 7 fases. Gates obrigatórios: PRD validado, TDD Red-Green, Smoke, E2E CLI.
 
 target_profile:
   team_size: 1
@@ -21,6 +21,7 @@ project_layout:
     - "project/docs/"
     - "src/"
     - "tests/"
+    - "artifacts/"
   required_files:
     - "process/fast_track/FAST_TRACK_PROCESS.yml"
     - "process/fast_track/state/ft_state.yml"
@@ -48,15 +49,16 @@ phases:
     steps:
       - id: ft.mdd.01.hipotese
         title: "Capturar Hipótese"
-        narrative: "Registrar contexto, sinal de mercado e oportunidade"
+        narrative: "Registrar contexto, sinal de mercado e oportunidade em arquivo próprio antes de evoluir para PRD"
         inputs: ["conversa com dev/stakeholder"]
-        outputs: ["seções 1-2 do PRD preenchidas"]
+        outputs: ["project/docs/hipotese.md"]
+        template: "process/fast_track/templates/template_hipotese.md"
         symbiote: ft_coach
 
       - id: ft.mdd.02.prd
         title: "Redigir PRD"
         narrative: "Completar PRD com user stories, ACs, restrições e riscos"
-        inputs: ["hipótese validada"]
+        inputs: ["project/docs/hipotese.md"]
         outputs: ["project/docs/PRD.md completo"]
         template: "process/fast_track/templates/template_prd.md"
         symbiote: ft_coach
@@ -88,6 +90,13 @@ phases:
         symbiote: forge_coder
         gate: stakeholder_approval
         frequency: "apenas no primeiro ciclo"
+        mandatory_stack:
+          - name: ForgeBase
+            condition: always
+            guides: "docs/integrations/forgebase_guides/"
+          - name: Forge_LLM
+            condition: "PRD contém features que acessem LLMs"
+            guides: "docs/integrations/forge_llm_guides/"
 
       - id: ft.plan.03.diagrams
         title: "Gerar Diagramas Técnicos"
@@ -163,9 +172,9 @@ phases:
     steps:
       - id: ft.smoke.01.cli_run
         title: "Smoke CLI Run"
-        narrative: "Subir o processo real, injetar input via PTY e verificar output sem mocks de I/O"
-        inputs: ["src/", "tests/smoke/"]
-        outputs: ["project/docs/smoke-cycle-XX.md com output real documentado"]
+        narrative: "Subir o processo real, injetar input via PTY, verificar output sem mocks de I/O e gerar pulse evidence"
+        inputs: ["src/", "tests/smoke/", "forgepulse.value_tracks.yml"]
+        outputs: ["project/docs/smoke-cycle-XX.md com output real documentado", "artifacts/pulse_snapshot.json"]
         gate: true
         symbiote: forge_coder
         checklist:
@@ -516,6 +525,11 @@ flow:
 # ============================================================
 
 artifacts:
+  - id: hipotese
+    path: "project/docs/hipotese.md"
+    phase: ft_mdd
+    description: "Hipótese estruturada — registrada antes de evoluir para PRD"
+
   - id: prd
     path: "project/docs/PRD.md"
     phase: ft_mdd
@@ -531,6 +545,16 @@ artifacts:
     path: "project/docs/TASK_LIST.md"
     phase: ft_plan
     description: "Task list derivada das User Stories"
+
+  - id: forgepulse_spec
+    path: "forgepulse.value_tracks.yml"
+    phase: ft_plan
+    description: "Mapeamento UseCase → Value Track / Support Track para ForgeBase Pulse"
+
+  - id: pulse_snapshot
+    path: "artifacts/pulse_snapshot.json"
+    phase: ft_smoke
+    description: "Evidência de observabilidade gerada via ForgeBase Pulse no smoke gate"
 
   - id: source_code
     path: "src/"

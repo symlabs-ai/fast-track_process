@@ -1,6 +1,6 @@
 # ForgeProcess — Fast Track
 
-> Solo dev + AI. 12 steps, 6 fases. Valor > cerimônia.
+> Solo dev + AI. 16 steps, 7 fases. Valor > cerimônia.
 
 ---
 
@@ -44,16 +44,17 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 #### ft.mdd.01.hipotese — Capturar Hipótese
 - **Input**: Conversa com dev
-- **Output**: Seções 1-2 do PRD preenchidas (Hipótese + Visão)
+- **Output**: `project/docs/hipotese.md` (inclui Value Tracks candidatos)
+- **Template**: `process/fast_track/templates/template_hipotese.md`
 - **Symbiota**: ft_coach
-- **Critério**: Contexto, sinal de mercado e oportunidade claros
+- **Critério**: Contexto, sinal de mercado e oportunidade claros; 2-5 Value Tracks candidatos identificados; hipótese registrada em arquivo próprio antes de evoluir para PRD
 
 #### ft.mdd.02.prd — Redigir PRD
-- **Input**: Hipótese capturada
+- **Input**: `project/docs/hipotese.md` (hipótese confirmada)
 - **Output**: PRD completo (`project/docs/PRD.md`)
 - **Template**: `process/fast_track/templates/template_prd.md`
 - **Symbiota**: ft_coach
-- **Critério**: Seções 1-9 preenchidas, pelo menos 2 User Stories com ACs
+- **Critério**: Seções 1-10 preenchidas, pelo menos 2 User Stories com ACs, Value Tracks formalizados com KPIs, cada US mapeada para pelo menos 1 track
 
 #### ft.mdd.03.validacao — Validar PRD
 - **Input**: PRD completo
@@ -77,6 +78,7 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Symbiota**: forge_coder
 - **Gate**: aprovação do stakeholder (ft_manager apresenta, stakeholder revisa e aprova)
 - **Critério**: stack aprovada pelo stakeholder; dúvidas respondidas; decision log preenchido
+- **Base obrigatória**: sempre propor **ForgeBase** como base arquitetural; sempre propor **Forge_LLM** quando o PRD contiver features que acessem LLMs
 - **Conteúdo**: linguagem/runtime, framework, persistência, libs-chave, ferramentas de dev, alternativas descartadas, dúvidas para o stakeholder
 
 #### ft.plan.03.diagrams — Gerar Diagramas Técnicos *(primeiro ciclo; revisado se estrutura mudar)*
@@ -138,9 +140,26 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Critério**: Mensagem referencia task ID (ex: `feat(T-01): implement user login`)
 
 > **Loop**: Após commit, se há tasks pendentes -> volta para ft.tdd.01.selecao.
-> Quando todas as tasks estiverem done -> avança para E2E.
+> Quando todas as tasks estiverem done -> avança para Smoke Gate.
 
-### Fase 5: E2E Gate — 1 step
+### Fase 5a: Smoke Gate — 1 step
+
+#### ft.smoke.01.cli_run — Smoke CLI Run
+- **Input**: `src/`, `tests/smoke/`, `forgepulse.value_tracks.yml`
+- **Output**: `project/docs/smoke-cycle-XX.md` + `artifacts/pulse_snapshot.json`
+- **Symbiota**: forge_coder
+- **GATE OBRIGATÓRIO**: Ciclo não avança sem smoke passando
+- **Checklist**:
+  - Processo sobe sem erro
+  - Input injetado via PTY (pexpect ou ptyprocess) — sem simulação
+  - Output observado documentado literalmente
+  - Nenhum freeze ou hang detectado
+  - `pulse_snapshot.json` gerado via ForgeBase Pulse com `mapping_source: "spec"` e agregação por `value_track`
+  - Resultado explícito: PASSOU ou TRAVOU
+
+> ⚠️ `mvp_status: demonstravel` só pode ser gravado após smoke PASSAR com output real + pulse evidence documentados.
+
+### Fase 5b: E2E Gate — 1 step
 
 #### ft.e2e.01.cli_validation — E2E CLI Validation
 - **Input**: `src/`, `tests/`
@@ -187,7 +206,7 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 ## Regras
 
-1. **PRD é a fonte única de verdade** — Toda decisão de produto está no PRD. Não há documentos separados de visão, hipótese, ADR ou backlog.
+1. **PRD é a fonte única de verdade** — Toda decisão de produto está no PRD. A exceção é `hipotese.md`, que registra a hipótese antes do PRD existir e é absorvido por ele. Não há documentos separados de visão, ADR ou backlog.
 
 2. **TDD Red-Green é obrigatório** — Nenhum código de produção sem teste falhando primeiro. Sem exceções.
 
@@ -230,12 +249,9 @@ O agente `/feature` lê `project/docs/SPEC.md` para entender o contexto e atuali
 
 ## Getting Started
 
-1. Copie o template PRD:
-   ```bash
-   cp process/fast_track/templates/template_prd.md project/docs/PRD.md
-   ```
+1. Inicie com `ft.mdd.01.hipotese` — descreva sua ideia para o ft_coach.
 
-2. Inicie com `ft.mdd.01.hipotese` — descreva sua ideia para o ft_coach.
+2. O ft_coach registra a hipótese em `project/docs/hipotese.md` (template: `process/fast_track/templates/template_hipotese.md`).
 
 3. O processo guia você até o E2E gate passando.
 

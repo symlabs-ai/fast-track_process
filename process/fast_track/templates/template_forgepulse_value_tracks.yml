@@ -1,0 +1,31 @@
+# ForgeBase Pulse — Value Tracks Spec
+# Mapeamento UseCase → Track para o processo Fast Track
+#
+# Regras:
+# - UseCases sob value_tracks: recebem track_type="value" automaticamente no runtime
+# - UseCases sob support_tracks: recebem track_type="support" automaticamente no runtime
+# - track_type NUNCA é um campo no YAML — é derivado pela estrutura
+# - supports: é obrigatório em support tracks (referencia value tracks existentes)
+# - Este arquivo é a fonte única de mapeamento (não espalhar em outros docs)
+
+schema_version: "0.2"
+
+value_tracks:
+  # exemplo_track:
+  #   usecases:
+  #     - ExemploUseCase
+  #   subtracks:
+  #     sub_nome: [ExemploUseCase]
+  #   description: "Descrição do fluxo de valor"
+  #   tags:
+  #     domain: exemplo
+
+# support_tracks:
+  # exemplo_resilience:
+  #   supports: [exemplo_track]
+  #   usecases:
+  #     - ExemploResilienceUseCase
+  #   description: "Descrição do fluxo de suporte"
+  #   tags:
+  #     domain: exemplo
+  #     tier: infra

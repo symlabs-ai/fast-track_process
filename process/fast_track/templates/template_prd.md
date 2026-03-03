@@ -113,3 +113,38 @@
 
 - <!-- Item explicitamente excluído do MVP -->
 - <!-- Item explicitamente excluído do MVP -->
+
+---
+
+## 10. Value Tracks & Support Tracks
+
+> Fluxos de negócio mensuráveis que o cliente executa repetidamente.
+> Mapeados para ForgeBase Pulse via `forgepulse.value_tracks.yml`.
+
+### Value Tracks (2-5 para o MVP)
+
+| Track ID | Descrição | Done = | KPIs |
+|----------|-----------|--------|------|
+| <!-- ex: fiscal_issuance --> | <!-- Emissão fiscal end-to-end --> | <!-- XML autorizado na SEFAZ ou contingência válida --> | <!-- success_rate, p95_duration_ms --> |
+| <!-- ex: sale_checkout --> | <!-- Fluxo de venda completo --> | <!-- Venda registrada + pagamento confirmado --> | <!-- error_rate, p95_duration_ms --> |
+
+### Support Tracks (1-3, quando aplicável)
+
+| Track ID | Sustenta | Descrição | KPIs |
+|----------|----------|-----------|------|
+| <!-- ex: fiscal_resilience --> | <!-- fiscal_issuance --> | <!-- Contingência e recuperação fiscal --> | <!-- time_to_contingency_ms, recovery_time_ms --> |
+
+### Mapeamento US → Track
+
+| User Story | Value Track | Subtrack (opcional) |
+|------------|-------------|---------------------|
+| US-01 | <!-- track_id --> | <!-- subtrack --> |
+| US-02 | <!-- track_id --> | <!-- subtrack --> |
+
+### Contrato de Observabilidade
+
+- **Métricas por execução**: count, duration, success, error
+- **Eventos mínimos**: start, finish, error
+- **Edges observáveis** (quando usados): LLM / HTTP / DB
+- **Disciplina de tags**: proibido alta cardinalidade (ex: user_id como tag)
+- **Implementação**: toda execução passa por `forge_base.pulse.UseCaseRunner` — nunca chamar `use_case.execute()` direto nos entrypoints

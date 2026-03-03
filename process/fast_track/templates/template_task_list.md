@@ -8,11 +8,11 @@
 
 ## Tasks
 
-| ID | Task | From US | Priority | Size | Status |
-|----|------|---------|----------|------|--------|
-| T-01 | <!-- Descrição da task --> | US-01 | P0 | S | pending |
-| T-02 | <!-- Descrição da task --> | US-01 | P0 | M | pending |
-| T-03 | <!-- Descrição da task --> | US-02 | P1 | S | pending |
+| ID | Task | From US | Value Track | Priority | Size | Status |
+|----|------|---------|-------------|----------|------|--------|
+| T-01 | <!-- Descrição da task --> | US-01 | <!-- track_id --> | P0 | S | pending |
+| T-02 | <!-- Descrição da task --> | US-01 | <!-- track_id --> | P0 | M | pending |
+| T-03 | <!-- Descrição da task --> | US-02 | <!-- track_id --> | P1 | S | pending |
 
 ### Legenda
 

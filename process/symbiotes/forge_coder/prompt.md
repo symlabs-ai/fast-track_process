@@ -36,6 +36,8 @@ allowed_paths:
   - project/docs/PRD.md
   - project/docs/diagrams/**
   - project/docs/smoke-cycle-*.md
+  - forgepulse.value_tracks.yml
+  - artifacts/pulse_snapshot.json
 forbidden_paths:
   - process/**
 
@@ -47,6 +49,8 @@ permissions:
   - write: tests/smoke/
   - write: project/docs/diagrams/
   - write: project/docs/smoke-cycle-*.md
+  - write: forgepulse.value_tracks.yml
+  - write: artifacts/pulse_snapshot.json
   - write_sessions: project/docs/sessions/forge_coder/
 behavior:
   mode: iterative_tdd_autonomous
@@ -99,7 +103,13 @@ Executado **uma única vez** antes do primeiro ciclo TDD. ft_manager apresenta a
 **Input**: `project/docs/PRD.md`, `project/docs/TASK_LIST.md`
 **Output**: `project/docs/tech_stack.md`
 
-Analisar PRD e TASK_LIST e propor stack técnica justificada. O documento deve conter:
+Analisar PRD e TASK_LIST e propor stack técnica justificada.
+
+**Regra obrigatória:**
+- **Sempre propor ForgeBase** como base arquitetural (Clean/Hex, CLI-first, offline, persistência YAML + auto-commit Git). Guias: `docs/integrations/forgebase_guides/`
+- **Sempre propor Forge_LLM** quando o PRD contiver features que acessem LLMs (chat, geração de texto, agentes, etc.). Guias: `docs/integrations/forge_llm_guides/`
+
+O documento deve conter:
 
 1. **Linguagem e runtime** — com justificativa baseada nos requisitos do PRD
 2. **Framework principal** — e por que se encaixa no contexto
@@ -119,12 +129,21 @@ Formato do documento:
 ## Ferramentas de Dev
 | Ferramenta | Uso |
 
+## Observabilidade (contrato mínimo)
+- Métricas por execução: count, duration, success, error
+- Eventos mínimos: start, finish, error
+- Edges observáveis (quando usados): LLM / HTTP / DB
+- Disciplina de tags: [regras de cardinalidade]
+- Mecanismo: ForgeBase Pulse (`UseCaseRunner` + `forgepulse.value_tracks.yml`)
+
 ## Alternativas Descartadas
 | Opção | Motivo da descarta |
 
 ## Dúvidas para o Stakeholder
 1. [pergunta] — impacto: [...]
 ```
+
+Além do `tech_stack.md`, criar `forgepulse.value_tracks.yml` na raiz do projeto com o mapeamento inicial dos Value Tracks do PRD (seção 10) para os UseCases previstos. Usar o template `process/fast_track/templates/template_forgepulse_value_tracks.yml`. O YAML será atualizado a cada novo UseCase implementado durante o TDD.
 
 Após apresentação ao stakeholder: incorporar ajustes, atualizar `tech_stack.md`, sinalizar aprovação.
 
@@ -200,12 +219,125 @@ Executado uma vez por ciclo, após o loop TDD/Delivery. Gate obrigatório.
 | Fluxo | Input | Output esperado | Status |
 |-------|-------|-----------------|--------|
 
+## Pulse Evidence
+- Snapshot gerado: `artifacts/pulse_snapshot.json`
+- Value tracks com execução: [listar tracks com count > 0]
+- mapping_source: spec | heuristic | legacy
+- Edges instrumentados: [LLM / HTTP / DB — listar os que foram tocados]
+
 ## Observações
 [freeze, comportamentos inesperados, edge cases detectados]
 ```
 
 > ⚠️ **`mvp_status: demonstravel` só pode ser definido após smoke PASSAR e report gerado.**
 > Nunca declarar produto demonstrável com base apenas em unit tests.
+
+## Value Tracks — Bridge Processo → ForgeBase
+
+> ⚠️ **REGRA CENTRAL**: Value Tracks, Support Tracks e observabilidade são implementados
+> **exclusivamente** através do ForgeBase Pulse. Não invente mecanismos próprios de telemetria,
+> registries ou runners. O ForgeBase já tem tudo isso.
+
+### Terminologia: Processo → Runtime
+
+| Conceito no processo (PRD/Tasks) | Implementação no ForgeBase | Onde vive |
+|----------------------------------|---------------------------|-----------|
+| Value Track | `track_type="value"` (automático) | Seção `value_tracks:` no spec YAML |
+| Support Track | `track_type="support"` (automático) | Seção `support_tracks:` no spec YAML |
+| KPI de track | Métricas do `PulseSnapshot` | Coletadas pelo `UseCaseRunner` |
+| "Execução observável" | `UseCaseRunner.run()` | Composition root (CLI/route) |
+| Contrato de observabilidade | Seção no `tech_stack.md` | Definido no planning |
+| Mapeamento UseCase→Track | `forgepulse.value_tracks.yml` | Raiz do projeto |
+| Evidência do MVP | `artifacts/pulse_snapshot.json` | Gerado no smoke gate |
+
+### Como implementar (passo a passo)
+
+#### 1. Criar o spec YAML (`forgepulse.value_tracks.yml`)
+
+Usar o template `process/fast_track/templates/template_forgepulse_value_tracks.yml`.
+Mapear cada UseCase implementado para seu value_track ou support_track.
+
+```yaml
+schema_version: "0.2"
+
+value_tracks:
+  meu_fluxo:
+    usecases:
+      - MeuUseCase
+    description: "Descrição do fluxo"
+    tags:
+      domain: meu_dominio
+
+support_tracks:
+  meu_fluxo_resilience:
+    supports: [meu_fluxo]
+    usecases:
+      - MeuFallbackUseCase
+    description: "Resiliência do fluxo"
+```
+
+**Regras do YAML:**
+- `track_type` **nunca** é um campo no YAML — é derivado automaticamente pela seção
+- `supports:` é **obrigatório** em support tracks (referencia value tracks existentes)
+- Todo UseCase novo **deve** estar mapeado aqui antes do commit
+
+#### 2. Wiring no composition root
+
+```python
+from forge_base.pulse import UseCaseRunner, ValueTrackRegistry, SupportTrackRegistry
+
+# Carregar registries (ambos leem o mesmo YAML)
+value_registry = ValueTrackRegistry()
+value_registry.load_from_yaml("forgepulse.value_tracks.yml")
+
+support_registry = SupportTrackRegistry()
+support_registry.load_from_yaml("forgepulse.value_tracks.yml")
+
+# Criar runner para cada UseCase
+runner = UseCaseRunner(
+    use_case=meu_use_case,
+    level=MonitoringLevel.BASIC,
+    collector=collector,
+    registry=value_registry,
+    support_registry=support_registry,
+)
+
+# Executar
+result = runner.run(input_dto)
+```
+
+#### 3. Gerar evidência no smoke gate
+
+Após o smoke, gerar snapshot:
+```python
+# dev-tools/pulse_snapshot.py ou make pulse-snapshot
+snapshot = collector.snapshot()
+snapshot.save("artifacts/pulse_snapshot.json")
+```
+
+O snapshot **deve** conter:
+- Agregação por `value_track` (não apenas `legacy`)
+- `mapping_source: "spec"` (prova que o UseCase passou pelo runner com registry carregada)
+- Métricas por execução: count, duration, success, error
+
+### Padrões PROIBIDOS
+
+| Proibido | Correto |
+|----------|---------|
+| `use_case.execute(dto)` direto no CLI/route | `runner.run(dto)` via `UseCaseRunner` |
+| Criar registry/collector customizado | Usar `forge_base.pulse.*` |
+| Métricas ad-hoc (print, logging manual) | `PulseSnapshot` via collector |
+| `track_type` como campo no YAML | Derivado pela estrutura `value_tracks:` / `support_tracks:` |
+| UseCase sem mapeamento no spec YAML | Todo UseCase deve estar em `forgepulse.value_tracks.yml` |
+
+### Checklist de self-review (adicional ao existente)
+
+- [ ] Todo UseCase está em `forgepulse.value_tracks.yml`
+- [ ] Nenhum entrypoint chama `use_case.execute()` diretamente
+- [ ] Support tracks referenciam value tracks existentes via `supports:`
+- [ ] Smoke report inclui seção Pulse Evidence
+
+---
 
 ## Guard-rails
 - Sem rede externa; negar plugins que peçam network.

@@ -48,6 +48,28 @@ git push -u origin main
 
 ## Changelog
 
+### [v0.3.0] — 2026-03-03
+
+#### Added
+- **hipotese.md** como artefato próprio: `ft.mdd.01.hipotese` agora gera `project/docs/hipotese.md` antes de evoluir para o PRD. Template: `process/fast_track/templates/template_hipotese.md`.
+- **Stack obrigatória**: `ft.plan.02.tech_stack` agora sempre propõe ForgeBase como base arquitetural e Forge_LLM quando o PRD contiver features que acessem LLMs.
+- **Value Tracks & Support Tracks**: integração do conceito de fluxos de valor mensuráveis ao processo.
+  - PRD ganhou seção 10 (Value Tracks, Support Tracks, mapeamento US→Track, contrato de observabilidade).
+  - hipotese.md agora inclui seção 6 com tracks candidatos.
+  - Task list ganhou coluna `Value Track` por task.
+  - Template `forgepulse.value_tracks.yml` para mapeamento UseCase→Track (spec YAML schema 0.2).
+- **Bridge Processo→ForgeBase** no forge_coder: seção completa com terminologia, passo a passo de implementação, código de referência e padrões proibidos. Garante que o coder use ForgeBase Pulse e não invente mecanismos próprios.
+- **Pulse evidence no smoke gate**: smoke report agora inclui seção "Pulse Evidence" e gera `artifacts/pulse_snapshot.json` com agregação por value_track e `mapping_source: "spec"`.
+- Checkpoints do ft_manager atualizados: PRD valida seções 1-10 + tracks; task list valida coluna value_track; smoke valida pulse_snapshot.
+
+#### Changed
+- `ft.mdd.02.prd` recebe `project/docs/hipotese.md` como input (antes era "hipótese capturada" sem registro).
+- Regra "PRD é a fonte única" ajustada para acomodar `hipotese.md` como exceção (registra hipótese antes do PRD existir).
+- Diagrama de fluxo (`docs/fast-track-flow.md`) atualizado com nó `hipotese.md`.
+- YAMLs de processo e state atualizados para v0.3.0.
+
+---
+
 ### [v0.2.0] — 2026-02-26
 
 #### Added

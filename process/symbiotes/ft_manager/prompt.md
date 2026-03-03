@@ -180,7 +180,7 @@ Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_stat
 #### Fluxo normal (mdd_mode: normal)
 
 Acionar `ft_coach` para conduzir:
-- `ft.mdd.01.hipotese` → `ft.mdd.02.prd` → `ft.mdd.03.validacao` → `ft.plan.01.task_list`
+- `ft.mdd.01.hipotese` (gera `project/docs/hipotese.md`) → `ft.mdd.02.prd` → `ft.mdd.03.validacao` → `ft.plan.01.task_list`
 
 #### Fluxo hyper (mdd_mode: hyper)
 
@@ -192,10 +192,12 @@ Acionar `ft_coach` em modo hyper com o documento fornecido:
 Quando ft_coach sinalizar conclusão (em qualquer modo), **validar** antes de avançar:
 
 #### Checkpoint: PRD (`ft.mdd.02.prd`)
-- [ ] Seções 1-9 preenchidas
+- [ ] Seções 1-10 preenchidas
 - [ ] ≥ 2 User Stories na seção 5
 - [ ] Cada US tem ACs no formato Given/When/Then
 - [ ] Seção 7 (Decision Log) tem pelo menos 1 entrada
+- [ ] Seção 10: 2-5 Value Tracks com KPIs definidos
+- [ ] Cada US mapeada para pelo menos 1 value_track (tabela US → Track)
 
 Se falhar: devolver ao ft_coach com feedback específico. Não avançar.
 
@@ -203,6 +205,7 @@ Se falhar: devolver ao ft_coach com feedback específico. Não avançar.
 - [ ] Cada US do PRD tem ≥ 1 task correspondente
 - [ ] Todas as tasks têm Priority (P0/P1/P2)
 - [ ] Todas as tasks têm Size (XS/S/M/L)
+- [ ] Todas as tasks têm Value Track associado
 - [ ] Existe pelo menos 1 task P0
 
 Se falhar: devolver ao ft_coach com feedback específico. Não avançar.
@@ -275,6 +278,9 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    - [ ] Output real está documentado literalmente no report
    - [ ] Status no report: `PASSOU ✅` (não `TRAVOU ❌`)
    - [ ] Nenhum freeze ou hang detectado
+   - [ ] `artifacts/pulse_snapshot.json` gerado via ForgeBase Pulse
+   - [ ] Snapshot contém agregação por `value_track` (não apenas `legacy`)
+   - [ ] Snapshot contém `mapping_source: "spec"` (prova que UseCases passaram pelo runner com registry)
 
    Se falhar: **não avançar para E2E**. Reportar ao forge_coder. Corrigir e re-executar smoke.
 

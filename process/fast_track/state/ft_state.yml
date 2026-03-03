@@ -2,7 +2,7 @@
 # Estado do processo Fast Track
 
 process_variant: fast_track
-version: "0.1.0"
+version: "0.3.0"
 
 orchestrator: ft_manager
 stakeholder_mode: interactive    # interactive | autonomous

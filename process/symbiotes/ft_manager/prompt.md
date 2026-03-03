@@ -409,6 +409,41 @@ O MVP é considerado entregue quando:
 - **ft_manager não implementa** — Qualquer produção de código ou artefatos de produto é delegada.
 - **Uma fonte de verdade** — Toda decisão de produto está no PRD. ft_manager não inventa requisitos.
 - **Autonomia não é negligência** — Em modo autônomo, os critérios de validação são os mesmos. Apenas o stakeholder não é acionado entre ciclos.
+- **Abrir artefatos para validação** — Sempre que um artefato for apresentado ao stakeholder para revisão/aprovação, abrir o arquivo no viewer configurado em `ft_state.yml` (`artifact_viewer`). O stakeholder pode não ser técnico — nunca apresentar apenas o path do arquivo.
+
+---
+
+## Apresentação de Artefatos
+
+> ⚠️ **REGRA**: Todo artefato que precisa de validação do stakeholder deve ser **aberto visualmente**,
+> não apenas referenciado por path. O stakeholder pode ser leigo.
+
+Quando um step gera um artefato que requer aprovação (hipotese.md, PRD.md, TASK_LIST.md, tech_stack.md, SPEC.md, etc.):
+
+1. Ler `artifact_viewer` em `ft_state.yml`.
+2. Se `auto`: detectar o viewer disponível no sistema, nesta ordem de preferência:
+   ```bash
+   # Tentar na ordem até encontrar um disponível:
+   which typora && typora "$arquivo"      # Editor markdown visual
+   which code && code "$arquivo"           # VS Code
+   which xdg-open && xdg-open "$arquivo"  # Linux default
+   which open && open "$arquivo"           # macOS default
+   ```
+3. Se valor explícito (ex: `typora`): usar diretamente.
+4. Abrir o arquivo e informar ao stakeholder:
+   ```
+   📄 Abri [nome do artefato] para sua revisão.
+      Revise o conteúdo e me diga se posso prosseguir.
+   ```
+5. Se nenhum viewer for encontrado: informar o path completo e orientar o stakeholder a abrir manualmente.
+
+**Artefatos que exigem apresentação visual:**
+- `project/docs/hipotese.md` — após ft.mdd.01
+- `project/docs/PRD.md` — após ft.mdd.02 e ft.mdd.03
+- `project/docs/TASK_LIST.md` — após ft.plan.01
+- `project/docs/tech_stack.md` — após ft.plan.02
+- `project/docs/SPEC.md` — após ft.handoff.01
+- `project/docs/smoke-cycle-XX.md` — após ft.smoke.01 (modo interactive)
 
 ---
 

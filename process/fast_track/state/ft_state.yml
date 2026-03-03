@@ -13,6 +13,11 @@ mvp_status: null                 # null | demonstravel | entregue
 mvp_delivered: false
 maintenance_mode: false      # true após ft.handoff.01.specs concluído; /feature é o fluxo após isso
 
+# Viewer para apresentar artefatos markdown ao stakeholder
+# auto: detecta automaticamente (typora > code > xdg-open > open)
+# ou path explícito: "typora", "code", "/usr/bin/gedit", etc.
+artifact_viewer: auto
+
 current_phase: ft_mdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback
 current_cycle: cycle-01      # ex.: cycle-01
 

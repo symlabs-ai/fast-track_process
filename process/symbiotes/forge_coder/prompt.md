@@ -155,30 +155,91 @@ Executado após aprovação da tech stack. Revisado em ciclos subsequentes se ho
 **Input**: `project/docs/PRD.md`, `project/docs/TASK_LIST.md`, `project/docs/tech_stack.md`
 **Output**: `project/docs/diagrams/` com 4 arquivos Mermaid
 
+> ⚠️ **REGRA**: Os diagramas devem evidenciar que o projeto **estende ForgeBase**, mostrando as
+> classes-base do framework como ponto de partida. Não reinventar a arquitetura — estender.
+> Mostrar as bases relevantes, não as entranhas do framework.
+
+#### Classes-base ForgeBase (referência para diagramas)
+
+| Camada | Classe-base | Import | Você estende para... |
+|--------|-------------|--------|----------------------|
+| Domain | `EntityBase` | `forgebase.domain` | Entidades com identidade |
+| Domain | `ValueObjectBase` | `forgebase.domain` | Objetos imutáveis por valor |
+| Application | `UseCaseBase` | `forgebase.application` | Cada UseCase do projeto |
+| Application | `PortBase` | `forgebase.application` | Interfaces/contratos |
+| Application | `DTOBase` | `forgebase.application` | Input/Output de UseCases |
+| Infrastructure | `RepositoryBase[T]` | `forgebase.infrastructure.repository` | Persistência de entidades |
+| Adapters | `AdapterBase` | `forgebase.adapters` | Integrações externas |
+| Adapters | `CLIAdapter` | `forgebase.adapters.cli` | Entry point CLI |
+| Observability | `UseCaseRunner` | `forge_base.pulse` | Execução observável |
+
 #### 1. Diagrama de Classes (`project/docs/diagrams/class.md`)
-- Entidades do domínio extraídas do PRD (user stories, dados mencionados)
+- Mostrar as **classes-base do ForgeBase** como classes pai (estereótipo `«forgebase»`)
+- Entidades do projeto estendem `EntityBase` ou `ValueObjectBase`
+- UseCases do projeto estendem `UseCaseBase`
+- Ports estendem `PortBase`
+- Repositórios estendem `RepositoryBase[T]`
 - Atributos principais e relacionamentos (associação, composição, herança)
 - Escopo: apenas entidades dentro do ciclo atual
 - Formato: `classDiagram`
 
+Exemplo de como representar:
+```mermaid
+classDiagram
+    class EntityBase["«forgebase» EntityBase"] {
+        +id: str
+    }
+    class UseCaseBase["«forgebase» UseCaseBase"] {
+        +execute()*
+    }
+    class RepositoryBase~T~["«forgebase» RepositoryBase~T~"] {
+        +save(entity)
+        +find_by_id(id)
+    }
+
+    class Order {
+        +customer_id: str
+        +total: Money
+        +add_item(item)
+    }
+    class CreateOrderUseCase {
+        +execute(input: CreateOrderInput)
+    }
+    class OrderRepository {
+        +save(order: Order)
+        +find_by_id(id) Order
+    }
+
+    EntityBase <|-- Order
+    UseCaseBase <|-- CreateOrderUseCase
+    RepositoryBase~Order~ <|-- OrderRepository
+    CreateOrderUseCase --> OrderRepository
+```
+
 #### 2. Diagrama de Componentes (`project/docs/diagrams/components.md`)
-- Módulos do sistema e suas dependências
-- Mapeado para as camadas ForgeBase: `domain`, `application`, `infrastructure`, `adapters`
+- Módulos do sistema organizados nas **4 camadas ForgeBase**: `domain`, `application`, `infrastructure`, `adapters`
+- Mostrar ForgeBase como fundação (bloco base) com as camadas do projeto acima
 - Interfaces/ports entre camadas
+- `UseCaseRunner` (forge_base.pulse) como wrapper de execução na camada de adapters
 - Formato: `flowchart TD`
 
 #### 3. Diagrama de Banco de Dados (`project/docs/diagrams/database.md`)
 - Entidades persistidas e seus campos principais
+- Indicar qual `RepositoryBase[T]` implementa a persistência de cada entidade
 - Relacionamentos (1:1, 1:N, N:M)
 - Apenas tabelas/coleções necessárias para as tasks do ciclo
 - Formato: `erDiagram`
 
 #### 4. Diagrama de Arquitetura (`project/docs/diagrams/architecture.md`)
-- Visão de alto nível: camadas, adapters externos, fluxo de dados
-- Entradas (CLI, API, eventos) → application → domain → infrastructure → storage
+- Visão de alto nível mostrando ForgeBase como fundação
+- Camadas do projeto sobre as camadas ForgeBase
+- Fluxo: CLI/API → `CLIAdapter` → `UseCaseRunner` → `UseCaseBase` → Domain → `RepositoryBase` → Storage
+- ForgeBase Pulse como camada transversal de observabilidade
 - Formato: `flowchart TD`
 
 **Regras dos diagramas:**
+- **Evidenciar ForgeBase** — sempre mostrar de quais classes-base o projeto herda. Usar estereótipo `«forgebase»` para distinguir.
+- **Não poluir** — mostrar apenas as classes-base relevantes (as da tabela acima), não as entranhas do framework.
 - Mínimos — representar apenas o que está no escopo do ciclo atual. Sem especulação.
 - Derivados do PRD — nenhuma entidade ou componente inventado.
 - Atualizados no `ft.delivery.02.self_review` se a implementação revelar mudança estrutural.
@@ -336,6 +397,20 @@ O snapshot **deve** conter:
 - [ ] Nenhum entrypoint chama `use_case.execute()` diretamente
 - [ ] Support tracks referenciam value tracks existentes via `supports:`
 - [ ] Smoke report inclui seção Pulse Evidence
+
+---
+
+## Apresentação de Artefatos
+
+Ao gerar `tech_stack.md` ou `smoke-cycle-XX.md` que precisam de validação do stakeholder,
+**abrir o arquivo no viewer do sistema** (ler `artifact_viewer` de `ft_state.yml`):
+
+```bash
+which typora && typora "$arquivo" ||
+which code && code "$arquivo" ||
+which xdg-open && xdg-open "$arquivo" ||
+which open && open "$arquivo"
+```
 
 ---
 

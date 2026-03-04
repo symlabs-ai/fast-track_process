@@ -59,7 +59,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 - **fase atual**: nome da fase em andamento (ex: `Planning`, `TDD · cycle-01`)
 - **step atual**: ID + título do step em execução (ex: `ft.plan.02 · tech_stack`)
 - **N steps concluídos**: contar `completed_steps` em `ft_state.yml`
-- **total**: total de steps do ciclo (15 steps padrão; ajustar se ciclos subsequentes pularem steps de primeiro ciclo ou se acceptance gate for skipped)
+- **total**: total de steps do ciclo (16 steps padrão; ajustar se ciclos subsequentes pularem steps de primeiro ciclo ou se acceptance gate for skipped)
 - **% concluído**: N / total × 100, arredondado
 - **Entregas desta etapa**: artefatos definidos no step atual no `FAST_TRACK_PROCESS.yml`
 - **Próximo**: `next_recommended_step` do `ft_state.yml`
@@ -69,7 +69,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  📍 Planning › ft.plan.02 · Tech Stack
- ✅ 5 / 15 steps — 33%
+ ✅ 5 / 16 steps — 31%
  📦 project/docs/tech_stack.md
  🔜 ft.plan.03 · Diagramas
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -78,7 +78,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  📍 TDD · cycle-01 › ft.tdd.02 · Red (T-03)
- ✅ 8 / 15 steps — 53%  |  tasks: 2 / 7 done
+ ✅ 8 / 16 steps — 50%  |  tasks: 2 / 7 done
  📦 tests/ com teste falhando para T-03
  🔜 ft.tdd.03 · Green
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -508,9 +508,31 @@ Aguardando validação final.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-### 7. Handoff — Geração do SPEC.md
+### 7. Auditoria ForgeBase (GATE obrigatório)
 
-Executado após retro final, quando MVP é declarado concluído (qualquer modo).
+Executado após retro final, **antes do handoff**. Gate obrigatório — MVP não é entregue sem auditoria passando.
+
+1. Instruir `forge_coder` a executar `ft.audit.01.forgebase`.
+
+2. **Validar resultados**:
+   - [ ] Todo UseCase executado via `UseCaseRunner.run()`, nunca `.execute()` direto
+   - [ ] `forgepulse.value_tracks.yml` completo — todo UseCase mapeado
+   - [ ] Support Tracks com `supports:` correto
+   - [ ] `artifacts/pulse_snapshot.json` com `mapping_source: "spec"` e agregação por value_track
+   - [ ] Métricas Pulse presentes: count, duration, success, error
+   - [ ] **Logging auditado**: sem `print()`, logs estruturados, níveis corretos, sem dados sensíveis, sem logs excessivos em loops, mensagens descritivas
+   - [ ] Arquitetura Clean/Hex: domínio puro, ports como abstrações, sem dependências circulares
+   - [ ] `project/docs/forgebase-audit.md` gerado com todos os itens ✅ PASS
+
+   Se falhar: **não avançar para Handoff**. forge_coder corrige e re-executa.
+
+   > ⚠️ **Logging é o ponto mais crítico** — historicamente é onde a qualidade mais cai. Inspecionar diretamente o código: buscar `print(`, `f"error`, `logger.info("Error`, mensagens genéricas. Não confiar apenas no report do forge_coder.
+
+3. Com auditoria passando: seguir para Handoff.
+
+### 8. Handoff — Geração do SPEC.md
+
+Executado após auditoria ForgeBase, quando MVP é declarado concluído (qualquer modo).
 
 1. Acionar `ft_coach` para `ft.handoff.01.specs`.
 2. **Validar resultado**:

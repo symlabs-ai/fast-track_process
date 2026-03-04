@@ -1,6 +1,6 @@
 # ForgeProcess — Fast Track
 
-> Processo ágil para solo dev + AI. 17 steps, 8 fases, valor > cerimônia.
+> Processo ágil para solo dev + AI. 18 steps, 9 fases, valor > cerimônia.
 
 **3 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode** · **Maintenance mode**
 

@@ -4,7 +4,7 @@
 
 ## O que é
 
-ForgeProcess: **17 steps, 3 symbiotas, 1 PRD → 1 SPEC**.
+ForgeProcess: **18 steps, 3 symbiotas, 1 PRD → 1 SPEC**.
 Para solo dev + AI. Sem BDD Gherkin, sem sprints formais, sem roadmap separado.
 
 `ft_manager` orquestra tudo. `ft_coach` e `forge_coder` executam quando delegados.
@@ -51,10 +51,11 @@ LOOP[
      autonomous:  valida internamente -> prossegue até MVP -> apresenta stakeholder
   -> ft.feedback.01.retro_note
   -> continue? -> ft.plan.01
-  -> complete? -> ft.handoff.01.specs (gerar SPEC.md) -> END [maintenance_mode: true]
+  -> complete? -> ft.audit.01.forgebase (GATE — auditoria Pulse, logging, Clean/Hex)
+  -> ft.handoff.01.specs (gerar SPEC.md) -> END [maintenance_mode: true]
 ```
 
-## Step IDs (17 total)
+## Step IDs (18 total)
 
 | ID | Executor | Orquestrado por |
 |----|----------|-----------------|
@@ -74,6 +75,7 @@ LOOP[
 | ft.e2e.01.cli_validation | forge_coder | ft_manager |
 | ft.acceptance.01.interface_validation | forge_coder | ft_manager |
 | ft.feedback.01.retro_note | ft_coach | ft_manager |
+| ft.audit.01.forgebase | forge_coder | ft_manager |
 | ft.handoff.01.specs | ft_coach | ft_manager |
 
 ## Artefatos
@@ -92,6 +94,7 @@ LOOP[
 | Acceptance Report | project/docs/acceptance-cycle-XX.md | ft.acceptance.01.interface_validation |
 | Acceptance Tests | tests/acceptance/cycle-XX/ | ft.acceptance.01.interface_validation |
 | Retro | project/docs/retro-cycle-XX.md | ft.feedback.01.retro_note |
+| ForgeBase Audit | project/docs/forgebase-audit.md | ft.audit.01.forgebase |
 | SPEC | project/docs/SPEC.md | ft.handoff.01.specs |
 | Changelog | CHANGELOG.md | ft.handoff.01.specs |
 | Backlog | BACKLOG.md | ft.handoff.01.specs |
@@ -117,6 +120,7 @@ LOOP[
 17. **Decisão de ciclo é contextual, não genérica** — ft_manager analisa critérios de MVP antes de oferecer opções. Se tasks P0 pendentes ou interface não entregue (quando `interface_type` != `cli_only`), recomenda novo ciclo. "Encerrar MVP" só é opção primária quando critérios estão atendidos.
 18. **Progresso visível** — forge_coder exibe progress report ao iniciar/concluir cada task. ft_manager exibe resumo de ciclo com tasks por prioridade ao concluir fase TDD/Delivery.
 19. **Acceptance tests devem ser reais** — Testes que fazem grep em arquivos, verificam existência de arquivos ou passam sem servidor rodando NÃO são testes de aceitação válidos. O ft_manager DEVE inspecionar o código dos testes para confirmar interação real (HTTP requests, Playwright, Chrome automation).
+20. **Auditoria ForgeBase é obrigatória antes do handoff** — Verificar UseCaseRunner wiring, Value/Support Tracks completos, qualidade de logging (sem print, logs estruturados, níveis corretos, sem dados sensíveis), Pulse snapshot com mapping_source: "spec", e aderência Clean/Hex. MVP não é entregue sem auditoria passando.
 
 ## Stakeholder Mode
 

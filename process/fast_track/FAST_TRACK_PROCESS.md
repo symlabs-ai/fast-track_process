@@ -1,6 +1,6 @@
 # ForgeProcess — Fast Track
 
-> Solo dev + AI. 17 steps, 8 fases. Valor > cerimônia.
+> Solo dev + AI. 18 steps, 9 fases. Valor > cerimônia.
 
 ---
 
@@ -232,7 +232,56 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 > Se o MVP está claramente incompleto (tasks P0 pendentes, interface não entregue quando `interface_type` != `cli_only`),
 > recomenda novo ciclo. "Encerrar MVP" só é oferecido como opção primária quando todos os critérios são atendidos.
 
-### Fase 8: Handoff — 1 step *(executado uma única vez, ao encerrar o projeto)*
+### Fase 8: Auditoria ForgeBase — 1 step *(executado uma vez, antes do handoff)*
+
+> Gate obrigatório — auditoria consolidada de ForgeBase, observabilidade, Value/Support Tracks e qualidade de logging antes de declarar o MVP entregue.
+
+#### ft.audit.01.forgebase — Auditoria ForgeBase
+
+- **Gatilho**: stakeholder confirmou "MVP concluído", antes do handoff
+- **Input**: `src/`, `forgepulse.value_tracks.yml`, `artifacts/pulse_snapshot.json`, PRD (Value Tracks/KPIs)
+- **Output**: `project/docs/forgebase-audit.md`
+- **Template**: `process/fast_track/templates/template_forgebase_audit.md`
+- **Symbiota**: forge_coder
+- **GATE**: Obrigatório — MVP não é entregue sem auditoria passando
+
+**Checklist (5 grupos, 20+ itens):**
+
+**1. UseCaseRunner Wiring:**
+- Todo UseCase é executado via `UseCaseRunner.run()`, nunca `.execute()` direto
+- Composition root (CLI/routes) usa runner para todos os endpoints
+- Nenhum UseCase "escapa" do runner
+
+**2. Value Tracks & Support Tracks:**
+- `forgepulse.value_tracks.yml` existe e está completo
+- Todo UseCase implementado está mapeado em pelo menos 1 track
+- Support Tracks têm `supports:` referenciando value tracks existentes
+- Descrições são claras e refletem o domínio
+- Sem `track_type` como campo no YAML (derivado pela seção)
+
+**3. Observabilidade (Pulse):**
+- `artifacts/pulse_snapshot.json` gerado com `mapping_source: "spec"`
+- Snapshot agrega por `value_track` (não apenas `legacy`)
+- Métricas por execução: count, duration, success, error
+- Eventos mínimos: start, finish, error
+- Contrato de observabilidade do tech_stack.md atendido
+
+**4. Logging:**
+- Sem `print()` em código de produção
+- Logs estruturados (não strings concatenadas: `f"error: {e}"` → `logger.error("msg", exc_info=True)`)
+- Níveis corretos: DEBUG detalhe, INFO fluxo, WARNING degradação, ERROR falhas
+- Sem dados sensíveis nos logs (tokens, passwords, PII)
+- Sem logs excessivos em loops (log uma vez com contagem, não N vezes)
+- Mensagens descritivas (não "error occurred" ou "something went wrong")
+- Logger configurado por módulo (`logging.getLogger(__name__)`)
+
+**5. Arquitetura Clean/Hex:**
+- Domínio puro: sem I/O, sem imports de infrastructure/adapters
+- Ports definidos como abstrações (ABC ou Protocol)
+- Adapters implementam ports, não ao contrário
+- Nenhuma dependência circular entre camadas
+
+### Fase 9: Handoff — 1 step *(executado uma única vez, ao encerrar o projeto)*
 
 #### ft.handoff.01.specs — Gerar SPEC.md
 

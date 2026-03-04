@@ -150,11 +150,21 @@ flowchart TD
 
     MVP_OK{autonomous\ne MVP pronto?}
     MVP_OK -- sim --> MVP_FINAL[Apresentar\nMVP final ao stakeholder]
-    MVP_OK -- não --> HANDOFF
+    MVP_OK -- não --> AUDIT
 
-    MVP_FINAL --> HANDOFF
+    MVP_FINAL --> AUDIT
 
-    subgraph HANDOFF_PHASE["📄 Fase 8: Handoff — ft_coach"]
+    subgraph AUDIT_PHASE["🔍 Fase 8: Auditoria ForgeBase — forge_coder"]
+        AUDIT[ft.audit.01\nForgeBase audit]
+        AUDIT_ITEMS["UseCaseRunner wiring\nValue/Support Tracks\nPulse snapshot\nLogging quality\nClean/Hex"]
+        VAL_AUDIT{auditoria\npassou?}
+        AUDIT --> AUDIT_ITEMS --> VAL_AUDIT
+        VAL_AUDIT -- falhou --> AUDIT
+    end
+
+    VAL_AUDIT -- ok --> HANDOFF
+
+    subgraph HANDOFF_PHASE["📄 Fase 9: Handoff — ft_coach"]
         HANDOFF[ft.handoff.01\ngerar SPEC.md]
         HANDOFF_VAL{SPEC.md\nválido?}
         HANDOFF --> HANDOFF_VAL

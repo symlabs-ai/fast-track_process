@@ -17,6 +17,7 @@ phase_scope:
   - ft_smoke.*
   - ft_e2e.*
   - ft_acceptance.*
+  - ft_audit.*
 allowed_steps:
   - ft.plan.02.tech_stack
   - ft.plan.03.diagrams
@@ -29,6 +30,7 @@ allowed_steps:
   - ft.delivery.03.commit
   - ft.e2e.01.cli_validation
   - ft.acceptance.01.interface_validation
+  - ft.audit.01.forgebase
 allowed_paths:
   - src/**
   - tests/unit/**
@@ -42,6 +44,7 @@ allowed_paths:
   - project/docs/acceptance-cycle-*.md
   - forgepulse.value_tracks.yml
   - artifacts/pulse_snapshot.json
+  - project/docs/forgebase-audit.md
 forbidden_paths:
   - process/**
 
@@ -448,6 +451,59 @@ Executado uma vez por ciclo, após o loop TDD/Delivery. Gate obrigatório.
 4. Para **UI**: o teste deve abrir a página no browser, interagir com elementos (clicar, preencher, navegar) e verificar o resultado visual.
 5. Para **API**: o teste deve fazer requests HTTP reais (GET/POST/PUT/DELETE) e verificar responses.
 6. Para **Mixed**: ambos os tipos acima, conforme os ACs de cada US.
+
+## Auditoria ForgeBase (ft.audit.01.forgebase)
+
+> ⚠️ Gate obrigatório antes do handoff. Auditoria consolidada — não é um check por task, é uma revisão final do MVP inteiro.
+
+**Input**: `src/`, `forgepulse.value_tracks.yml`, `artifacts/pulse_snapshot.json`, PRD
+**Output**: `project/docs/forgebase-audit.md`
+**Template**: `process/fast_track/templates/template_forgebase_audit.md`
+
+**Passos:**
+
+1. **UseCaseRunner Wiring** — varrer `src/` e composition root:
+   - Listar todos os UseCases implementados
+   - Para cada um, verificar se é invocado via `UseCaseRunner.run()` (nunca `.execute()` direto)
+   - Verificar que nenhum UseCase escapa do runner no composition root (CLI/routes)
+
+2. **Value Tracks & Support Tracks** — verificar `forgepulse.value_tracks.yml`:
+   - Todo UseCase implementado está mapeado em pelo menos 1 track
+   - Support Tracks têm `supports:` referenciando value tracks existentes
+   - Sem `track_type` como campo explícito no YAML
+   - Descrições claras e alinhadas com o domínio do PRD
+
+3. **Observabilidade (Pulse)** — verificar `artifacts/pulse_snapshot.json`:
+   - Existe e contém `mapping_source: "spec"`
+   - Agrega por `value_track` (não apenas `legacy`)
+   - Métricas por execução: count, duration, success, error
+   - Eventos mínimos: start, finish, error
+
+4. **Logging** — varrer todo `src/` com atenção especial:
+   - ⛔ `print()` em código de produção → DEVE ser removido
+   - ⛔ Strings concatenadas: `f"error: {e}"` → usar `logger.error("msg", exc_info=True)`
+   - ⛔ Níveis errados: `logger.info("Error...")` ou `logger.debug` para erros reais
+   - ⛔ Dados sensíveis nos logs: tokens, passwords, PII
+   - ⛔ Logs dentro de loops sem controle: log N vezes o mesmo → log 1 vez com contagem
+   - ⛔ Mensagens genéricas: "error occurred", "something went wrong" → descrever o que falhou
+   - ✅ Logger por módulo: `logger = logging.getLogger(__name__)`
+   - ✅ Níveis corretos: DEBUG detalhe, INFO fluxo, WARNING degradação, ERROR falhas
+   - ✅ Structured logging quando possível
+
+5. **Arquitetura Clean/Hex** — varrer imports e dependências:
+   - Domínio puro: sem I/O, sem imports de infrastructure/adapters
+   - Ports definidos como abstrações (ABC ou Protocol)
+   - Adapters implementam ports, não ao contrário
+   - Sem dependência circular entre camadas
+
+6. **Gerar report** — preencher `project/docs/forgebase-audit.md` com o template.
+   - Cada item: ✅ PASS / ❌ FAIL com detalhes
+   - Se FAIL: descrever o problema e a correção necessária
+
+7. **Corrigir issues** — se houver FAILs:
+   - Corrigir os problemas encontrados
+   - Re-rodar a auditoria
+   - Só sinalizar conclusão quando todos os itens passarem
 
 ## Value Tracks — Bridge Processo → ForgeBase
 

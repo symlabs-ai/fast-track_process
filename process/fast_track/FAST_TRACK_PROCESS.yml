@@ -1,12 +1,12 @@
 # ForgeProcess Fast Track
-# Solo dev + AI — 17 steps em 8 fases
+# Solo dev + AI — 18 steps em 9 fases
 
 id: forgeprocess_fast_track
 version: "0.4.2"
 title: "ForgeProcess — Fast Track"
 description: >
   ForgeProcess para solo dev + AI.
-  17 steps, 8 fases. Gates obrigatórios: PRD validado, TDD Red-Green, Smoke, E2E CLI, Acceptance (condicional).
+  18 steps, 9 fases. Gates obrigatórios: PRD validado, TDD Red-Green, Smoke, E2E CLI, Acceptance (condicional).
 
 target_profile:
   team_size: 1
@@ -30,7 +30,7 @@ getting_started:
   message: |
     Fast Track — Solo Dev + AI
 
-    17 steps, valor > cerimônia.
+    18 steps, valor > cerimônia.
     Comece pela hipótese, termine com E2E passando.
   first_file:
     template: "process/fast_track/templates/template_prd.md"
@@ -246,6 +246,51 @@ phases:
         outputs: ["project/docs/retro-cycle-XX.md"]
         template: "process/fast_track/templates/template_retro_note.md"
         symbiote: ft_coach
+
+  - id: ft_audit
+    title: "Auditoria ForgeBase"
+    narrative: "Auditoria consolidada de ForgeBase, observabilidade, Value/Support Tracks e logging antes de declarar MVP entregue."
+    steps:
+      - id: ft.audit.01.forgebase
+        title: "Auditoria ForgeBase"
+        narrative: "Verificar wiring UseCaseRunner, completude de Value/Support Tracks, qualidade de logging e aderência Clean/Hex"
+        inputs:
+          - "src/"
+          - "forgepulse.value_tracks.yml"
+          - "artifacts/pulse_snapshot.json"
+          - "project/docs/PRD.md"
+        outputs:
+          - "project/docs/forgebase-audit.md"
+        template: "process/fast_track/templates/template_forgebase_audit.md"
+        symbiote: forge_coder
+        gate: true
+        checklist:
+          usecase_runner:
+            - "Todo UseCase executado via UseCaseRunner.run(), nunca .execute() direto"
+            - "Composition root usa runner para todos os endpoints"
+            - "Nenhum UseCase escapa do runner"
+          value_support_tracks:
+            - "forgepulse.value_tracks.yml existe e completo"
+            - "Todo UseCase mapeado em pelo menos 1 track"
+            - "Support Tracks têm supports: referenciando value tracks"
+            - "Sem track_type como campo no YAML"
+          observability:
+            - "pulse_snapshot.json com mapping_source: spec"
+            - "Snapshot agrega por value_track (não apenas legacy)"
+            - "Métricas: count, duration, success, error"
+            - "Eventos: start, finish, error"
+          logging:
+            - "Sem print() em produção"
+            - "Logs estruturados (não strings concatenadas)"
+            - "Níveis corretos: DEBUG/INFO/WARNING/ERROR"
+            - "Sem dados sensíveis nos logs"
+            - "Sem logs excessivos em loops"
+            - "Mensagens descritivas"
+            - "Logger por módulo (getLogger(__name__))"
+          architecture:
+            - "Domínio puro: sem I/O, sem imports de infra/adapters"
+            - "Ports como abstrações (ABC/Protocol)"
+            - "Sem dependência circular entre camadas"
 
   - id: ft_handoff
     title: "Handoff — Modo Manutenção"
@@ -538,6 +583,14 @@ flow:
   - id: ft_feedback_01_final
     type: step
     step_ref: ft_feedback.ft.feedback.01.retro_note
+    next: ft_audit_01
+
+  # --- Auditoria ForgeBase ---
+
+  - id: ft_audit_01
+    type: step
+    step_ref: ft_audit.ft.audit.01.forgebase
+    gate: true
     next: ft_handoff_01
 
   - id: ft_handoff_01
@@ -569,7 +622,7 @@ flow:
         - when: "continue"
           goto: ft_plan_01
         - when: "complete"
-          goto: end_completo
+          goto: ft_audit_01
 
   # --- End nodes ---
 
@@ -653,6 +706,12 @@ artifacts:
     phase: ft_acceptance
     description: "Report de aceitação com mapeamento AC→Teste contra interface real"
     condition: "interface_type != cli_only"
+
+  - id: forgebase_audit
+    path: "project/docs/forgebase-audit.md"
+    phase: ft_audit
+    description: "Auditoria consolidada de ForgeBase: UseCaseRunner, Value/Support Tracks, Pulse, logging, Clean/Hex"
+    template: "process/fast_track/templates/template_forgebase_audit.md"
 
 # ============================================================
 # Symbiotas

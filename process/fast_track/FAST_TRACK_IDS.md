@@ -42,7 +42,11 @@
 
 - `ft.feedback.01.retro_note`
 
-## 7. Handoff — Modo Manutenção
+## 7. Auditoria ForgeBase *(obrigatório antes do handoff)*
+
+- `ft.audit.01.forgebase`
+
+## 8. Handoff — Modo Manutenção
 
 - `ft.handoff.01.specs`
 
@@ -68,4 +72,5 @@
 | 14 | `ft.e2e.01.cli_validation` | E2E | Rodar E2E CLI gate (unit + smoke) |
 | 15 | `ft.acceptance.01.interface_validation` | Acceptance | Validar ACs contra interface real (condicional) |
 | 16 | `ft.feedback.01.retro_note` | Feedback | Registrar retro do ciclo |
-| 17 | `ft.handoff.01.specs` | Handoff | Gerar SPEC.md + CHANGELOG.md + BACKLOG.md |
+| 17 | `ft.audit.01.forgebase` | Auditoria | Auditar ForgeBase, Pulse, logging, Clean/Hex |
+| 18 | `ft.handoff.01.specs` | Handoff | Gerar SPEC.md + CHANGELOG.md + BACKLOG.md |

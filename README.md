@@ -2,7 +2,7 @@
 
 > Processo ágil para solo dev + AI. 18 steps, 9 fases, valor > cerimônia.
 
-**3 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode** · **Maintenance mode**
+**4 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode** · **Maintenance mode**
 
 ---
 
@@ -16,7 +16,8 @@ Define um fluxo completo — do insight à entrega — com rigor (TDD, E2E gate)
 
 | Symbiota | Papel |
 |----------|-------|
-| `ft_manager` | Orquestra o processo, valida entregas e interage com o stakeholder |
+| `ft_manager` | Orquestra o processo, delega validações ao gatekeeper e interage com o stakeholder |
+| `ft_gatekeeper` | Valida stage gates (PASS/BLOCK) — determinístico, sem interpretação criativa |
 | `ft_coach` | Conduz MDD, planning e feedback |
 | `forge_coder` | Executa TDD, delivery e E2E |
 

@@ -14,7 +14,7 @@
 - E2E CLI gate (obrigatório para fechar ciclo)
 - Rastreabilidade (User Story -> Task -> Teste -> Código)
 - Acceptance gate condicional (interface real quando != CLI-only)
-- 3 symbiotas (ft_manager orquestra; ft_coach + forge_coder executam)
+- 4 symbiotas (ft_manager orquestra; ft_gatekeeper valida gates; ft_coach + forge_coder executam)
 
 ---
 
@@ -326,7 +326,8 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 | Symbiota | Papel | Responsabilidade |
 |----------|-------|------------------|
-| `ft_manager` | Orquestrador | Gerencia o fluxo completo, valida entregas, aciona o stakeholder |
+| `ft_manager` | Orquestrador | Gerencia o fluxo completo, delega validações ao gatekeeper, aciona o stakeholder |
+| `ft_gatekeeper` | Validador de Gates | Verifica condições binárias nos stage gates (PASS/BLOCK), independente do orquestrador |
 | `ft_coach` | Executor — Discovery | PRD, task list, retro (delegado pelo ft_manager) |
 | `forge_coder` | Executor — Código | Testes, implementação, review, commit, E2E (orquestrado pelo ft_manager) |
 

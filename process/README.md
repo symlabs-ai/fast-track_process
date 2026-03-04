@@ -1,7 +1,7 @@
 # ForgeProcess
 
 Processo de desenvolvimento para solo dev + AI.
-18 steps, 9 fases, 3 symbiotas. Valor > cerimônia.
+18 steps, 9 fases, 4 symbiotas. Valor > cerimônia.
 
 ## Estrutura
 
@@ -21,6 +21,8 @@ process/
 │       ├── template_task_list.md      # Task list
 │       └── template_retro_note.md     # Retro note
 └── symbiotes/
+    ├── ft_gatekeeper/
+    │   └── prompt.md                  # Gatekeeper: stage gate validation (PASS/BLOCK)
     ├── ft_coach/
     │   └── prompt.md                  # Coach: MDD, planning, feedback
     └── forge_coder/

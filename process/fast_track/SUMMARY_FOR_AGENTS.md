@@ -4,10 +4,10 @@
 
 ## O que é
 
-ForgeProcess: **18 steps, 3 symbiotas, 1 PRD → 1 SPEC**.
+ForgeProcess: **18 steps, 4 symbiotas, 1 PRD → 1 SPEC**.
 Para solo dev + AI. Sem BDD Gherkin, sem sprints formais, sem roadmap separado.
 
-`ft_manager` orquestra tudo. `ft_coach` e `forge_coder` executam quando delegados.
+`ft_manager` orquestra tudo. `ft_gatekeeper` valida gates (PASS/BLOCK). `ft_coach` e `forge_coder` executam quando delegados.
 
 ## Flow
 
@@ -24,11 +24,11 @@ Para solo dev + AI. Sem BDD Gherkin, sem sprints formais, sem roadmap separado.
   +--> NÃO --> [normal-mode]
   v
 ft.mdd.01.hipotese -> ft.mdd.02.prd -> ft.mdd.03.validacao
-  |                              [ft_manager valida PRD]
+  |                              [ft_gatekeeper: gate.prd]
   | rejected -> END                          |
   v                                    approved
 ft.plan.01.task_list
-  [ft_manager valida task list]
+  [ft_gatekeeper: gate.task_list → stakeholder aprova prioridades]
   |
   v
 ft.plan.02.tech_stack (forge_coder propõe) → stakeholder revisa/aprova
@@ -40,7 +40,7 @@ ft.plan.03.diagrams (class / components / database / architecture)
 LOOP[
   ft.tdd.01.selecao -> ft.tdd.02.red -> ft.tdd.03.green (suite completa obrigatória)
   -> ft.delivery.01.self_review (expandido, 10 itens) -> ft.delivery.02.refactor -> ft.delivery.03.commit
-  [ft_manager valida entrega + cobertura >= 85%]
+  [ft_gatekeeper: gate.delivery — cobertura >= 85%]
   -> more_tasks? -> LOOP / done? -> EXIT
 ]
   -> ft.smoke.01.cli_run (GATE — processo real, PTY real, sem mocks, output documentado)
@@ -109,7 +109,7 @@ LOOP[
 5. **TDD Red-Green** — Teste falhando antes de código. Sempre. Suite completa verde no green.
 6. **PRD é fonte única** — Sem documentos satélite.
 7. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
-8. **ft_manager valida tudo** — Nenhuma fase avança sem checkpoint de validação passar.
+8. **ft_gatekeeper valida gates** — Cada checkpoint delega ao ft_gatekeeper (PASS/BLOCK). ft_manager não valida internamente — o gatekeeper é o validador independente.
 9. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
 10. **SPEC.md é obrigatório ao encerrar** — MVP concluído sem SPEC.md gerado não está realmente encerrado.
 11. **SPEC.md reflete o entregue, não o planejado** — features não implementadas vão para "fora do escopo".
@@ -123,6 +123,10 @@ LOOP[
 19. **Acceptance tests devem ser reais** — Testes que fazem grep em arquivos, verificam existência de arquivos ou passam sem servidor rodando NÃO são testes de aceitação válidos. O ft_manager DEVE inspecionar o código dos testes para confirmar interação real (HTTP requests, Playwright, Chrome automation).
 20. **Execução final do acceptance gate no ambiente do cliente** — Testes de dev são válidos durante desenvolvimento, mas a execução final que vale para o report deve usar build de produção + ambiente do cliente. UI tests com Playwright headed (browser visível). PWA exige HTTPS. 100% dos ACs cobertos nesta execução.
 21. **Auditoria ForgeBase é obrigatória antes do handoff** — Verificar UseCaseRunner wiring, Value/Support Tracks completos, qualidade de logging (sem print, logs estruturados, níveis corretos, sem dados sensíveis), Pulse snapshot com mapping_source: "spec", e aderência Clean/Hex. MVP não é entregue sem auditoria passando.
+22. **Sequência de gates é inviolável** — Smoke → E2E CLI → Acceptance (condicional) → Feedback. Nenhum gate pode ser pulado. ft_manager DEVE verificar `completed_steps` antes de avançar. Se forge_coder sinalizar conclusão e o próximo gate não foi executado, BLOQUEAR.
+23. **Skip de tasks requer aprovação** — Tasks P0 nunca podem ser puladas. Tasks P1 derivadas de features centrais do PRD não podem ser puladas sem aprovação do stakeholder. Todo skip registrado no TASK_LIST.md com motivo e quem aprovou.
+24. **Prioridades da task list requerem aprovação do stakeholder** — Após gate.task_list PASS, ft_manager apresenta prioridades ao stakeholder. Features centrais do PRD (visão, proposta de valor) devem ser P0. Stakeholder aprova ou ajusta antes de avançar.
+25. **ft_gatekeeper é independente** — Separação de responsabilidades: ft_manager orquestra, ft_gatekeeper bloqueia. O mesmo agente que orquestra não valida os gates.
 
 ## Stakeholder Mode
 
@@ -142,5 +146,5 @@ Skills disponíveis **apenas em maintenance mode**:
 ## Estado
 
 Arquivo: `process/fast_track/state/ft_state.yml`
-Campo chave: `next_recommended_step`
+Campo chave: `next_step` (determinístico — o próximo step obrigatório, não uma sugestão)
 Novos campos: `min_coverage`, `desired_coverage`, `commit_strategy`, `interface_type`

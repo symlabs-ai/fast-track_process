@@ -387,11 +387,8 @@ flow:
   - id: ft_manager_valida_prd
     type: validation
     orchestrator: ft_manager
-    criteria:
-      - sections_1_9_filled
-      - min_2_user_stories
-      - acs_given_when_then
-      - decision_log_has_entries
+    validator: ft_gatekeeper
+    gate_id: gate.prd
     on_pass: decisao_validacao
     on_fail: ft_mdd_02
 
@@ -416,13 +413,20 @@ flow:
   - id: ft_manager_valida_task_list
     type: validation
     orchestrator: ft_manager
-    criteria:
-      - all_us_have_tasks
-      - all_tasks_have_priority
-      - all_tasks_have_size
-      - min_1_p0_task
-    on_pass: ft_plan_02
+    validator: ft_gatekeeper
+    gate_id: gate.task_list
+    on_pass: ft_stakeholder_aprova_prioridades
     on_fail: ft_plan_01
+
+  - id: ft_stakeholder_aprova_prioridades
+    type: stakeholder_review
+    orchestrator: ft_manager
+    action: "Apresentar prioridades da task list ao stakeholder para aprovação. Features centrais do PRD devem ser P0."
+    branches:
+      - when: "approved"
+        goto: ft_plan_02
+      - when: "adjustments_requested"
+        goto: ft_plan_01
 
   - id: ft_plan_02
     type: step
@@ -480,13 +484,8 @@ flow:
   - id: ft_manager_valida_entrega
     type: validation
     orchestrator: ft_manager
-    criteria:
-      - commit_message_references_task_id
-      - suite_zero_failures
-      - self_review_checklist_done
-      - coverage_min_85_percent
-      - refactor_applied_or_documented
-      - task_marked_done_in_task_list
+    validator: ft_gatekeeper
+    gate_id: gate.delivery
     on_pass: decisao_mais_tasks
     on_fail: ft_delivery_01
 
@@ -745,6 +744,20 @@ symbiotes:
       - validar_prd
       - criar_task_list
       - gerar_specs
+    can_decide: false
+
+  - name: ft_gatekeeper
+    role: "Validador determinístico de stage gates — PASS ou BLOCK, sem interpretação criativa"
+    prompt_file: "process/symbiotes/ft_gatekeeper/prompt.md"
+    capabilities:
+      - validar_gate_prd
+      - validar_gate_task_list
+      - validar_gate_delivery
+      - validar_gate_smoke
+      - validar_gate_e2e
+      - validar_gate_acceptance
+      - validar_gate_audit
+      - validar_gate_handoff
     can_decide: false
 
   - name: forge_coder

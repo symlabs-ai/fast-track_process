@@ -16,7 +16,7 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
    - Atualizar `ft_state.yml`: `current_phase: ft_mdd`, `current_cycle: cycle-01`.
    - Delegar ao `ft_coach`: iniciar `ft.mdd.01.hipotese`.
 3. **Se projeto em andamento**:
-   - Informar: "Retomando de [next_recommended_step]. Último step: [last_completed_step]."
+   - Informar: "Retomando de [next_step]. Último step: [last_completed_step]."
    - Continuar o fluxo a partir dali, delegando ao symbiota correto.
 
 > **Regra**: Nunca ficar parado esperando. Leu o estado → age.
@@ -25,6 +25,7 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
 
 - Prompts dos symbiotas:
   - `process/symbiotes/ft_manager/prompt.md` ← **ponto de entrada**
+  - `process/symbiotes/ft_gatekeeper/prompt.md`
   - `process/symbiotes/ft_coach/prompt.md`
   - `process/symbiotes/forge_coder/prompt.md`
 - Processo e estado:
@@ -40,7 +41,8 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
 
 | Symbiota | Papel | Prompt |
 |----------|-------|--------|
-| `ft_manager` | Orquestrador — gerencia o processo completo, valida entregas e interage com o stakeholder | `process/symbiotes/ft_manager/prompt.md` |
+| `ft_manager` | Orquestrador — gerencia o processo completo, delega validações ao gatekeeper e interage com o stakeholder | `process/symbiotes/ft_manager/prompt.md` |
+| `ft_gatekeeper` | Validador determinístico de stage gates — PASS ou BLOCK, sem interpretação criativa | `process/symbiotes/ft_gatekeeper/prompt.md` |
 | `ft_coach` | MDD, Planning, Feedback — conduzido pelo ft_manager | `process/symbiotes/ft_coach/prompt.md` |
 | `forge_coder` | TDD, Delivery, E2E — orquestrado pelo ft_manager | `process/symbiotes/forge_coder/prompt.md` |
 

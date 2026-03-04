@@ -2,7 +2,7 @@
 # Estado do processo Fast Track
 
 process_variant: fast_track
-version: "0.3.1"
+version: "0.4.0"
 
 orchestrator: ft_manager
 stakeholder_mode: interactive    # interactive | autonomous
@@ -12,6 +12,12 @@ mvp_status: null                 # null | demonstravel | entregue
                                  # demonstravel só após smoke-cycle-XX.md gerado com PASSOU
 mvp_delivered: false
 maintenance_mode: false      # true após ft.handoff.01.specs concluído; /feature é o fluxo após isso
+
+# Quality & Strategy
+min_coverage: 85             # cobertura mínima de testes (%) nos arquivos alterados
+desired_coverage: 90         # cobertura desejável (%)
+commit_strategy: per_task    # per_task | squash_cycle (> 5 tasks, ft_manager decide)
+interface_type: cli_only     # cli_only | api | ui | mixed — definido no ft.plan.02.tech_stack
 
 # Viewer para apresentar artefatos markdown ao stakeholder
 # auto: detecta automaticamente (typora > code > xdg-open > open)

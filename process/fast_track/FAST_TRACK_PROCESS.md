@@ -1,6 +1,6 @@
 # ForgeProcess — Fast Track
 
-> Solo dev + AI. 16 steps, 7 fases. Valor > cerimônia.
+> Solo dev + AI. 17 steps, 8 fases. Valor > cerimônia.
 
 ---
 
@@ -13,6 +13,7 @@
 - TDD Red-Green (teste primeiro, sempre)
 - E2E CLI gate (obrigatório para fechar ciclo)
 - Rastreabilidade (User Story -> Task -> Teste -> Código)
+- Acceptance gate condicional (interface real quando != CLI-only)
 - 3 symbiotas (ft_manager orquestra; ft_coach + forge_coder executam)
 
 ---
@@ -80,6 +81,11 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Critério**: stack aprovada pelo stakeholder; dúvidas respondidas; decision log preenchido
 - **Base obrigatória**: sempre propor **ForgeBase** como base arquitetural; sempre propor **Forge_LLM** quando o PRD contiver features que acessem LLMs
 - **Conteúdo**: linguagem/runtime, framework, persistência, libs-chave, ferramentas de dev, alternativas descartadas, dúvidas para o stakeholder
+- **UI Design System** *(condicional — quando `interface_type` != `cli_only`)*:
+  - Propor design system com justificativa (ex: Material Design / M3, Fluent, Ant Design, Chakra, shadcn/ui, Carbon, Tailwind UI)
+  - Apresentar 2-3 alternativas com prós/contras para o stakeholder decidir
+  - Registrar escolha no `tech_stack.md` na seção "UI Design System"
+  - Definir `interface_type` no `ft_state.yml` neste step
 
 #### ft.plan.03.diagrams — Gerar Diagramas Técnicos *(primeiro ciclo; revisado se estrutura mudar)*
 - **Input**: PRD + TASK_LIST + tech_stack.md aprovada
@@ -112,32 +118,46 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Input**: Teste falhando
 - **Output**: Código em `src/` que faz o teste passar
 - **Symbiota**: forge_coder
-- **Critério**: Teste passa, sem quebrar testes existentes
+- **Critério**: Teste passa, sem quebrar testes existentes. **Suite completa de testes passa** (não apenas o teste da task atual).
 
 ### Fase 4: Delivery — 3 steps (por task)
 
-#### ft.delivery.01.implement — Integrar e Rodar Suite
-- **Input**: Código implementado
-- **Output**: Suite completa de testes passando
-- **Symbiota**: forge_coder
-- **Critério**: Zero falhas na suite completa
-
-#### ft.delivery.02.self_review — Self-Review
+#### ft.delivery.01.self_review — Self-Review (expandido)
 - **Input**: Diff do código
 - **Output**: Issues corrigidas
 - **Symbiota**: forge_coder
-- **Checklist**:
+- **Checklist** (10 itens, 3 grupos):
+
+  **Segurança & Higiene:**
   - Sem secrets ou dados sensíveis
-  - Nomes claros e consistentes
-  - Edge cases cobertos
   - Sem código morto ou debug prints
   - Lint e type check passando
+
+  **Qualidade de Código:**
+  - Nomes claros e consistentes
+  - Edge cases cobertos por testes
+  - Cobertura de testes >= 85% nos arquivos alterados (desejável 90%)
+
+  **Arquitetura (Clean/Hex + ForgeBase):**
+  - Domínio puro: sem I/O, sem imports de infrastructure/adapters
+  - UseCases passam por `UseCaseRunner` (nunca `.execute()` direto)
+  - Todo UseCase novo está mapeado em `forgepulse.value_tracks.yml`
+  - Diagramas atualizados se estrutura mudou (class/components/database/architecture)
+
+#### ft.delivery.02.refactor — Refactor
+- **Input**: Issues identificadas no self-review + diff
+- **Output**: Código refatorado, suite verde
+- **Symbiota**: forge_coder
+- **Critério**: Refactoring aplicado OU "nenhum refactoring necessário" documentado. Suite continua verde.
 
 #### ft.delivery.03.commit — Commit
 - **Input**: Código revisado
 - **Output**: Commit no branch
 - **Symbiota**: forge_coder
 - **Critério**: Mensagem referencia task ID (ex: `feat(T-01): implement user login`)
+- **Estratégia**:
+  - **Default**: 1 commit por task
+  - **Ciclos longos (> 5 tasks)**: ft_manager pode instruir squash ao final do ciclo antes do smoke. Convenção: `feat(cycle-XX): summary`
 
 > **Loop**: Após commit, se há tasks pendentes -> volta para ft.tdd.01.selecao.
 > Quando todas as tasks estiverem done -> avança para Smoke Gate.
@@ -168,6 +188,29 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Critério**: `run-all.sh` executa com sucesso
 - **GATE OBRIGATÓRIO**: Ciclo não pode ser encerrado sem E2E passando
 
+### Fase 5c: Acceptance — Validação de Interface *(condicional)* — 1 step
+
+> Gate condicional — executado apenas quando `interface_type` != `cli_only` no `ft_state.yml`.
+> Se produto é CLI-only, E2E CLI já cobre → skip com nota.
+
+#### ft.acceptance.01.interface_validation — Acceptance Test
+- **Input**: PRD (seção 5 — ACs), `src/`, interface do produto (CLI/API/UI)
+- **Output**: `project/docs/acceptance-cycle-XX.md` + `tests/acceptance/cycle-XX/`
+- **Template**: `process/fast_track/templates/template_acceptance_report.md`
+- **Symbiota**: forge_coder
+- **GATE**: Obrigatório quando `interface_type` != `cli_only`
+- **Mapeamento AC → Teste**:
+  - Cada AC do PRD (Given/When/Then) gera pelo menos 1 teste de aceitação
+  - Testes organizados por US → AC, com rastreabilidade explícita
+  - Todos os Value Tracks devem ter pelo menos 1 fluxo testado pela interface
+
+| Interface | Ferramenta | Diretório |
+|-----------|-----------|-----------|
+| CLI | Shell scripts (existente) | `tests/e2e/` (coberto pelo E2E gate) |
+| API (REST/GraphQL) | pytest + httpx/requests | `tests/acceptance/` |
+| UI (Web) | Playwright ou Chrome automation | `tests/acceptance/` |
+| UI (Desktop) | Playwright (Electron) ou pyautogui | `tests/acceptance/` |
+
 ### Fase 6: Feedback — 1 step
 
 #### ft.feedback.01.retro_note — Retro Note
@@ -179,7 +222,7 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 > **Decisão final**: Iniciar novo ciclo (volta para ft.plan.01) ou encerrar.
 
-### Fase 7: Handoff — 1 step *(executado uma única vez, ao encerrar o projeto)*
+### Fase 8: Handoff — 1 step *(executado uma única vez, ao encerrar o projeto)*
 
 #### ft.handoff.01.specs — Gerar SPEC.md
 

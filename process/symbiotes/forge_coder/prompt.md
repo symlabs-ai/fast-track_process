@@ -16,6 +16,7 @@ phase_scope:
   - ft_delivery.*
   - ft_smoke.*
   - ft_e2e.*
+  - ft_acceptance.*
 allowed_steps:
   - ft.plan.02.tech_stack
   - ft.plan.03.diagrams
@@ -23,19 +24,22 @@ allowed_steps:
   - ft.tdd.01.selecao
   - ft.tdd.02.red
   - ft.tdd.03.green
-  - ft.delivery.01.implement
-  - ft.delivery.02.self_review
+  - ft.delivery.01.self_review
+  - ft.delivery.02.refactor
   - ft.delivery.03.commit
   - ft.e2e.01.cli_validation
+  - ft.acceptance.01.interface_validation
 allowed_paths:
   - src/**
   - tests/unit/**
   - tests/smoke/**
   - tests/e2e/**
+  - tests/acceptance/**
   - project/docs/TASK_LIST.md
   - project/docs/PRD.md
   - project/docs/diagrams/**
   - project/docs/smoke-cycle-*.md
+  - project/docs/acceptance-cycle-*.md
   - forgepulse.value_tracks.yml
   - artifacts/pulse_snapshot.json
 forbidden_paths:
@@ -49,6 +53,8 @@ permissions:
   - write: tests/smoke/
   - write: project/docs/diagrams/
   - write: project/docs/smoke-cycle-*.md
+  - write: project/docs/acceptance-cycle-*.md
+  - write: tests/acceptance/
   - write: forgepulse.value_tracks.yml
   - write: artifacts/pulse_snapshot.json
   - write_sessions: project/docs/sessions/forge_coder/
@@ -116,8 +122,9 @@ O documento deve conter:
 3. **Persistência** — storage escolhido e modelo de dados previsto
 4. **Bibliotecas-chave** — apenas as diretamente necessárias para as tasks P0
 5. **Ferramentas de dev** — testes, lint, type check, pre-commit
-6. **Alternativas consideradas** — o que foi descartado e por quê (Decision Log)
-7. **Dúvidas para o stakeholder** — pontos que dependem de decisão de negócio ou preferência
+6. **UI Design System** *(condicional — quando o produto tem UI)* — ver seção abaixo
+7. **Alternativas consideradas** — o que foi descartado e por quê (Decision Log)
+8. **Dúvidas para o stakeholder** — pontos que dependem de decisão de negócio ou preferência
 
 Formato do documento:
 ```markdown
@@ -136,12 +143,46 @@ Formato do documento:
 - Disciplina de tags: [regras de cardinalidade]
 - Mecanismo: ForgeBase Pulse (`UseCaseRunner` + `forgepulse.value_tracks.yml`)
 
+## UI Design System *(quando interface_type != cli_only)*
+| Opção | Prós | Contras |
+| Design system escolhido: [nome] |
+
 ## Alternativas Descartadas
 | Opção | Motivo da descarta |
 
 ## Dúvidas para o Stakeholder
 1. [pergunta] — impacto: [...]
 ```
+
+#### UI Design System *(condicional)*
+
+Quando o PRD indica que o produto terá interface gráfica (web, mobile, desktop — qualquer coisa além de CLI puro):
+
+1. **Identificar o tipo de interface** a partir do PRD e definir `interface_type` no `ft_state.yml`:
+   - `cli_only` — sem UI, pular esta seção
+   - `api` — API REST/GraphQL sem frontend próprio
+   - `ui` — frontend web, mobile ou desktop
+   - `mixed` — API + frontend
+
+2. **Propor 2-3 design systems** com prós/contras, considerando:
+   - Ecossistema do framework escolhido (React → M3/MUI, shadcn/ui, Ant Design; Vue → Vuetify, Element Plus; etc.)
+   - Maturidade, documentação e comunidade
+   - Customizabilidade vs opinião do framework
+   - Acessibilidade (WCAG) out-of-the-box
+
+   **Exemplos de design systems por contexto:**
+   | Contexto | Opções recomendadas |
+   |----------|-------------------|
+   | Web React | Material Design 3 (MUI), shadcn/ui, Ant Design, Chakra UI |
+   | Web Vue | Vuetify (Material), Element Plus, Naive UI |
+   | Web Angular | Angular Material (M3), PrimeNG, Taiga UI |
+   | Web genérico/CSS | Tailwind UI, Carbon (IBM), Fluent UI |
+   | Mobile React Native | React Native Paper (M3), NativeBase, Tamagui |
+   | Desktop Electron | Fluent UI, Photon, Mica |
+
+3. **Apresentar ao stakeholder** como parte da revisão de tech stack — a escolha do design system é uma decisão com impacto visual que o stakeholder deve aprovar.
+
+4. **Registrar** no `tech_stack.md` na seção "UI Design System" com a escolha e justificativa.
 
 Além do `tech_stack.md`, criar `forgepulse.value_tracks.yml` na raiz do projeto com o mapeamento inicial dos Value Tracks do PRD (seção 10) para os UseCases previstos. Usar o template `process/fast_track/templates/template_forgepulse_value_tracks.yml`. O YAML será atualizado a cada novo UseCase implementado durante o TDD.
 
@@ -250,10 +291,13 @@ classDiagram
 ### Loop por Task
 1) SELECAO — ler TASK_LIST.md, selecionar próxima task pendente.
 2) RED — ler ACs do PRD, escrever teste em `tests/unit/` que falha.
-3) GREEN — implementar o mínimo código genérico (sem hardcode de valores de teste).
-4) INTEGRATE — rodar suite `tests/unit/` completa, garantir zero falhas.
-5) SELF-REVIEW — checklist: secrets, nomes, edge cases, código morto, lint/types. Atualizar diagramas se estrutura mudou.
-6) COMMIT — commit com mensagem referenciando task ID.
+3) GREEN — implementar o mínimo código genérico (sem hardcode de valores de teste). **Rodar suite completa** — não apenas o teste da task.
+4) SELF-REVIEW — checklist expandido (10 itens, 3 grupos):
+   **Segurança & Higiene:** secrets, código morto, lint/types.
+   **Qualidade de Código:** nomes, edge cases, cobertura >= 85% (`pytest --cov` nos arquivos alterados).
+   **Arquitetura:** domínio puro, UseCaseRunner, mapeamento no YAML, diagramas se estrutura mudou.
+5) REFACTOR — aplicar refactoring se self-review identificou oportunidades. Se nada a refatorar, documentar "nenhum refactoring necessário". Garantir suite verde após refactor.
+6) COMMIT — commit com mensagem referenciando task ID. Se ciclo longo (> 5 tasks) e ft_manager instruiu squash: usar convenção `feat(cycle-XX): summary`.
 
 ### Smoke (ft.smoke.01.cli_run) — após todas as tasks P0 done
 
@@ -292,6 +336,36 @@ Executado uma vez por ciclo, após o loop TDD/Delivery. Gate obrigatório.
 
 > ⚠️ **`mvp_status: demonstravel` só pode ser definido após smoke PASSAR e report gerado.**
 > Nunca declarar produto demonstrável com base apenas em unit tests.
+
+### Acceptance (ft.acceptance.01.interface_validation) — condicional
+
+> ⚠️ Executado **após E2E**, **antes do Feedback**. Condicional — só executa se `interface_type` != `cli_only`.
+
+**Input**: PRD (seção 5 — ACs), `src/`, interface do produto
+**Output**: `project/docs/acceptance-cycle-XX.md` + `tests/acceptance/cycle-XX/`
+**Template**: `process/fast_track/templates/template_acceptance_report.md`
+
+**Estratégia por tipo de interface:**
+
+| Interface | Ferramenta | Diretório |
+|-----------|-----------|-----------|
+| CLI | Skip — coberto pelo E2E gate | `tests/e2e/` |
+| API (REST/GraphQL) | pytest + httpx/requests | `tests/acceptance/` |
+| UI (Web) | Playwright ou Chrome automation | `tests/acceptance/` |
+| UI (Desktop) | Playwright (Electron) ou pyautogui | `tests/acceptance/` |
+
+**Passos:**
+1. Ler seção 5 do PRD — listar todos os ACs (Given/When/Then) por User Story.
+2. Para cada AC, criar pelo menos 1 teste de aceitação contra a interface real (sem mocks).
+3. Verificar que todos os Value Tracks têm pelo menos 1 fluxo testado pela interface.
+4. Rodar todos os testes de aceitação.
+5. Gerar `project/docs/acceptance-cycle-XX.md` usando o template, com mapeamento US→AC→Teste.
+
+**Regras:**
+- Testes de aceitação **não usam mocks** — testam contra a interface real (servidor rodando, UI renderizada).
+- Rastreabilidade explícita: cada teste referencia o AC e a US correspondente.
+- 100% dos ACs devem ter pelo menos 1 teste. Sem exceções.
+- Se um AC não pode ser testado pela interface (ex: comportamento interno), documentar o motivo e testar via alternativa.
 
 ## Value Tracks — Bridge Processo → ForgeBase
 

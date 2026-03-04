@@ -1,6 +1,6 @@
 # Fast Track — Quick Start
 
-> Solo dev + AI. 12 steps. Valor > cerimônia.
+> Solo dev + AI. 17 steps. Valor > cerimônia.
 
 ## Como começar
 

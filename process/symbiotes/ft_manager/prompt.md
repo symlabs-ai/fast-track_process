@@ -59,7 +59,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 - **fase atual**: nome da fase em andamento (ex: `Planning`, `TDD · cycle-01`)
 - **step atual**: ID + título do step em execução (ex: `ft.plan.02 · tech_stack`)
 - **N steps concluídos**: contar `completed_steps` em `ft_state.yml`
-- **total**: total de steps do ciclo (14 steps padrão; ajustar se ciclos subsequentes pularem steps de primeiro ciclo)
+- **total**: total de steps do ciclo (15 steps padrão; ajustar se ciclos subsequentes pularem steps de primeiro ciclo ou se acceptance gate for skipped)
 - **% concluído**: N / total × 100, arredondado
 - **Entregas desta etapa**: artefatos definidos no step atual no `FAST_TRACK_PROCESS.yml`
 - **Próximo**: `next_recommended_step` do `ft_state.yml`
@@ -69,7 +69,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  📍 Planning › ft.plan.02 · Tech Stack
- ✅ 5 / 14 steps — 36%
+ ✅ 5 / 15 steps — 33%
  📦 project/docs/tech_stack.md
  🔜 ft.plan.03 · Diagramas
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -78,7 +78,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  📍 TDD · cycle-01 › ft.tdd.02 · Red (T-03)
- ✅ 8 / 14 steps — 57%  |  tasks: 2 / 7 done
+ ✅ 8 / 15 steps — 53%  |  tasks: 2 / 7 done
  📦 tests/ com teste falhando para T-03
  🔜 ft.tdd.03 · Green
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -210,6 +210,18 @@ Se falhar: devolver ao ft_coach com feedback específico. Não avançar.
 
 Se falhar: devolver ao ft_coach com feedback específico. Não avançar.
 
+#### Checkpoint: Tech Stack (`ft.plan.02.tech_stack`)
+Após forge_coder gerar `tech_stack.md`, validar antes de apresentar ao stakeholder:
+- [ ] Stack proposta inclui ForgeBase como base arquitetural
+- [ ] Forge_LLM proposta se PRD contiver features que acessem LLMs
+- [ ] Seção "Alternativas Descartadas" preenchida
+- [ ] Seção "Dúvidas para o Stakeholder" listada (mesmo que vazia)
+- [ ] Se produto tem UI (`interface_type` != `cli_only`):
+  - [ ] Seção "UI Design System" presente com 2-3 opções e prós/contras
+  - [ ] `interface_type` definido no `ft_state.yml`
+
+Se falhar: devolver ao forge_coder com feedback específico.
+
 ### 3. Orquestração TDD/Delivery (forge_coder)
 
 > ⚠️ **REGRA OBRIGATÓRIA — perguntar ANTES de iniciar o loop TDD:**
@@ -244,20 +256,30 @@ Se falhar: devolver ao ft_coach com feedback específico. Não avançar.
 Para cada task pendente (por prioridade: P0 → P1 → P2):
 
 1. Instruir `forge_coder` a executar o ciclo completo da task:
-   `ft.tdd.01.selecao` → `ft.tdd.02.red` → `ft.tdd.03.green`
-   → `ft.delivery.01.implement` → `ft.delivery.02.self_review` → `ft.delivery.03.commit`
+   `ft.tdd.01.selecao` → `ft.tdd.02.red` → `ft.tdd.03.green` (suite completa obrigatória)
+   → `ft.delivery.01.self_review` → `ft.delivery.02.refactor` → `ft.delivery.03.commit`
 
 2. Após cada commit, **validar internamente**:
 
    #### Checkpoint: Entrega por Task
    - [ ] Mensagem de commit referencia task ID: `feat(T-XX):` ou `fix(T-XX):`
    - [ ] `pytest` rodou com 0 falhas (suite completa)
-   - [ ] Self-review checklist completo:
+   - [ ] Cobertura >= 85% nos arquivos da task (validar com `--cov`)
+   - [ ] Self-review checklist expandido completo (10 itens, 3 grupos):
+     **Segurança & Higiene:**
      - Sem secrets ou dados sensíveis
-     - Nomes claros e consistentes
-     - Edge cases cobertos por testes
      - Sem código morto ou debug prints
      - Lint e type check passando
+     **Qualidade de Código:**
+     - Nomes claros e consistentes
+     - Edge cases cobertos por testes
+     - Cobertura >= 85% (desejável 90%)
+     **Arquitetura (Clean/Hex + ForgeBase):**
+     - Domínio puro: sem I/O, sem imports de infrastructure/adapters
+     - UseCases passam por `UseCaseRunner` (nunca `.execute()` direto)
+     - Todo UseCase novo mapeado em `forgepulse.value_tracks.yml`
+     - Se houve mudança estrutural, diagramas foram atualizados
+   - [ ] Refactor aplicado OU "nenhum refactoring necessário" documentado
    - [ ] Task marcada como `done` no TASK_LIST.md
 
    Se qualquer item falhar: reportar ao forge_coder com o item específico e aguardar correção.
@@ -301,9 +323,37 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
 
    Se falhar: o ciclo **não fecha**. Reportar falhas ao forge_coder. Corrigir e revalidar.
 
-3. Com E2E passando: seguir para Feedback + decisão de ciclo.
+3. Com E2E passando: verificar se acceptance gate é necessário.
 
-### 5. Interface com Stakeholder
+### 5b. Acceptance Gate (condicional)
+
+> ⚠️ Executado **após** o E2E Gate, **antes** do Feedback. Condicional — só executa se `interface_type` != `cli_only` no `ft_state.yml`.
+
+1. Verificar `interface_type` em `ft_state.yml`.
+   - Se `cli_only`: skip com nota "Acceptance gate skipped — CLI-only, coberto pelo E2E gate." Avançar para Feedback.
+   - Se `api`, `ui` ou `mixed`: executar acceptance.
+
+2. Instruir `forge_coder` a executar `ft.acceptance.01.interface_validation`.
+
+3. **Validar resultados**:
+   - [ ] Cada AC do PRD tem pelo menos 1 teste de aceitação
+   - [ ] Todos os Value Tracks têm pelo menos 1 fluxo testado
+   - [ ] Todos os testes passaram
+   - [ ] `project/docs/acceptance-cycle-XX.md` gerado com mapeamento completo
+   - [ ] 100% dos ACs cobertos (sem exceções)
+
+   Se falhar: **não avançar para Feedback**. Reportar ao forge_coder. Corrigir e re-executar.
+
+4. Com acceptance passando (ou skipped): seguir para Feedback + decisão de ciclo.
+
+### 5c. Commit Strategy (ciclos longos)
+
+Ao final do loop TDD/Delivery, se o ciclo teve > 5 tasks:
+- Avaliar se squash é apropriado (coerência do histórico).
+- Se sim: instruir forge_coder a fazer squash antes do smoke. Convenção: `feat(cycle-XX): summary`.
+- Atualizar `commit_strategy` em `ft_state.yml` se a decisão mudar entre ciclos.
+
+### 6. Interface com Stakeholder
 
 #### Modo `interactive`
 
@@ -352,7 +402,7 @@ E2E final: PASSOU
 Aguardando validação final.
 ```
 
-### 6. Handoff — Geração do SPEC.md
+### 7. Handoff — Geração do SPEC.md
 
 Executado após retro final, quando MVP é declarado concluído (qualquer modo).
 

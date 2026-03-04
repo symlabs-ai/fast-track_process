@@ -1,12 +1,12 @@
 # ForgeProcess Fast Track
-# Solo dev + AI — 16 steps em 7 fases
+# Solo dev + AI — 17 steps em 8 fases
 
 id: forgeprocess_fast_track
-version: "0.3.1"
+version: "0.4.0"
 title: "ForgeProcess — Fast Track"
 description: >
   ForgeProcess para solo dev + AI.
-  16 steps, 7 fases. Gates obrigatórios: PRD validado, TDD Red-Green, Smoke, E2E CLI.
+  17 steps, 8 fases. Gates obrigatórios: PRD validado, TDD Red-Green, Smoke, E2E CLI, Acceptance (condicional).
 
 target_profile:
   team_size: 1
@@ -30,7 +30,7 @@ getting_started:
   message: |
     Fast Track — Solo Dev + AI
 
-    12 steps, valor > cerimônia.
+    17 steps, valor > cerimônia.
     Comece pela hipótese, termine com E2E passando.
   first_file:
     template: "process/fast_track/templates/template_prd.md"
@@ -97,6 +97,12 @@ phases:
           - name: Forge_LLM
             condition: "PRD contém features que acessem LLMs"
             guides: "docs/integrations/forge_llm_guides/"
+        ui_design_system:
+          condition: "interface_type != cli_only"
+          action: "Propor 2-3 opções de design system com prós/contras; stakeholder decide"
+          examples: ["Material Design / M3", "Fluent UI", "Ant Design", "Chakra UI", "shadcn/ui", "Carbon", "Tailwind UI"]
+          output_section: "UI Design System em tech_stack.md"
+          side_effect: "Definir interface_type em ft_state.yml"
 
       - id: ft.plan.03.diagrams
         title: "Gerar Diagramas Técnicos"
@@ -130,34 +136,42 @@ phases:
 
       - id: ft.tdd.03.green
         title: "Green — Implementar"
-        narrative: "Implementar código mínimo para teste passar"
+        narrative: "Implementar código mínimo para teste passar; garantir suite completa verde"
         inputs: ["teste falhando"]
-        outputs: ["src/ com implementação", "teste passando"]
+        outputs: ["src/ com implementação", "teste passando", "suite completa verde"]
         symbiote: forge_coder
 
   - id: ft_delivery
     title: "Delivery"
-    narrative: "Integrar, revisar e commitar"
+    narrative: "Revisar, refatorar e commitar"
     steps:
-      - id: ft.delivery.01.implement
-        title: "Integrar e Rodar Suite"
-        narrative: "Garantir que toda a suite de testes passa após integração"
-        inputs: ["código implementado"]
-        outputs: ["suite completa passando"]
-        symbiote: forge_coder
-
-      - id: ft.delivery.02.self_review
-        title: "Self-Review"
-        narrative: "Revisar código com checklist: segurança, legibilidade, edge cases"
+      - id: ft.delivery.01.self_review
+        title: "Self-Review (expandido)"
+        narrative: "Revisar código com checklist expandido: segurança, qualidade, arquitetura Clean/Hex + ForgeBase"
         inputs: ["diff do código"]
         outputs: ["issues encontradas corrigidas"]
         symbiote: forge_coder
         checklist:
-          - "Sem secrets ou dados sensíveis no código"
-          - "Nomes claros e consistentes"
-          - "Edge cases cobertos por testes"
-          - "Sem código morto ou debug prints"
-          - "Lint e type check passando"
+          security_hygiene:
+            - "Sem secrets ou dados sensíveis no código"
+            - "Sem código morto ou debug prints"
+            - "Lint e type check passando"
+          code_quality:
+            - "Nomes claros e consistentes"
+            - "Edge cases cobertos por testes"
+            - "Cobertura de testes >= 85% nos arquivos alterados (desejável 90%)"
+          architecture:
+            - "Domínio puro: sem I/O, sem imports de infrastructure/adapters"
+            - "UseCases passam por UseCaseRunner (nunca .execute() direto)"
+            - "Todo UseCase novo está mapeado em forgepulse.value_tracks.yml"
+            - "Diagramas atualizados se estrutura mudou (class/components/database/architecture)"
+
+      - id: ft.delivery.02.refactor
+        title: "Refactor"
+        narrative: "Aplicar refactoring se self-review identificou oportunidades; no-op documentado se nada a refatorar"
+        inputs: ["issues do self-review", "diff"]
+        outputs: ["código refatorado", "suite verde"]
+        symbiote: forge_coder
 
       - id: ft.delivery.03.commit
         title: "Commit"
@@ -165,6 +179,10 @@ phases:
         inputs: ["código revisado"]
         outputs: ["commit no branch"]
         symbiote: forge_coder
+        commit_strategy:
+          default: "per_task"
+          long_cycles: "squash_cycle (> 5 tasks, instruído pelo ft_manager)"
+          squash_convention: "feat(cycle-XX): summary"
 
   - id: ft_smoke
     title: "Smoke — Validação Real do Produto"
@@ -196,6 +214,26 @@ phases:
         gate: true
         requires: ["ft.smoke.01.cli_run"]
         symbiote: forge_coder
+
+  - id: ft_acceptance
+    title: "Acceptance — Validação de Interface"
+    narrative: "Gate condicional: validação de ACs contra a interface real (API/UI). Skip se cli_only."
+    condition: "interface_type != cli_only"
+    steps:
+      - id: ft.acceptance.01.interface_validation
+        title: "Acceptance Test — Interface Validation"
+        narrative: "Mapear cada AC do PRD para teste de aceitação contra a interface real. Gerar report com rastreabilidade US→AC→Teste."
+        inputs: ["project/docs/PRD.md (seção 5 — ACs)", "src/", "interface do produto"]
+        outputs: ["project/docs/acceptance-cycle-XX.md", "tests/acceptance/cycle-XX/"]
+        template: "process/fast_track/templates/template_acceptance_report.md"
+        gate: true
+        condition: "interface_type != cli_only"
+        symbiote: forge_coder
+        strategy_by_interface:
+          api: "pytest + httpx/requests → tests/acceptance/"
+          ui_web: "Playwright ou Chrome automation → tests/acceptance/"
+          ui_desktop: "Playwright (Electron) ou pyautogui → tests/acceptance/"
+          cli: "skip — coberto pelo E2E gate"
 
   - id: ft_feedback
     title: "Feedback"
@@ -381,12 +419,12 @@ flow:
 
   - id: ft_delivery_01
     type: step
-    step_ref: ft_delivery.ft.delivery.01.implement
+    step_ref: ft_delivery.ft.delivery.01.self_review
     next: ft_delivery_02
 
   - id: ft_delivery_02
     type: step
-    step_ref: ft_delivery.ft.delivery.02.self_review
+    step_ref: ft_delivery.ft.delivery.02.refactor
     next: ft_delivery_03
 
   - id: ft_delivery_03
@@ -401,9 +439,11 @@ flow:
       - commit_message_references_task_id
       - suite_zero_failures
       - self_review_checklist_done
+      - coverage_min_85_percent
+      - refactor_applied_or_documented
       - task_marked_done_in_task_list
     on_pass: decisao_mais_tasks
-    on_fail: ft_delivery_02
+    on_fail: ft_delivery_01
 
   - id: decisao_mais_tasks
     type: decision
@@ -431,6 +471,25 @@ flow:
   - id: ft_e2e_01
     type: step
     step_ref: ft_e2e.ft.e2e.01.cli_validation
+    gate: true
+    next: decisao_acceptance
+
+  - id: decisao_acceptance
+    type: decision
+    decision:
+      question: "Produto tem interface além de CLI?"
+      decider:
+        type: state
+        check: "process/fast_track/state/ft_state.yml#interface_type"
+      branches:
+        - when: "cli_only"
+          goto: decisao_stakeholder_ciclo
+        - when: "api|ui|mixed"
+          goto: ft_acceptance_01
+
+  - id: ft_acceptance_01
+    type: step
+    step_ref: ft_acceptance.ft.acceptance.01.interface_validation
     gate: true
     next: decisao_stakeholder_ciclo
 
@@ -589,6 +648,12 @@ artifacts:
     description: "Fila de ideias de features futuras — populado via /backlog em maintenance mode"
     frequency: "gerado uma vez ao encerrar Fast Track; atualizado por cada /backlog e /feature done"
 
+  - id: acceptance_report
+    path: "project/docs/acceptance-cycle-XX.md"
+    phase: ft_acceptance
+    description: "Report de aceitação com mapeamento AC→Teste contra interface real"
+    condition: "interface_type != cli_only"
+
 # ============================================================
 # Symbiotas
 # ============================================================
@@ -625,8 +690,10 @@ symbiotes:
       - escrever_testes
       - implementar_codigo
       - self_review
+      - refactor
       - commit
       - e2e_validation
+      - acceptance_validation
     can_decide: false
 
 # ============================================================
@@ -642,6 +709,17 @@ quality_metrics:
   - name: tdd_coverage
     target: ">= 1 teste por task implementada"
     description: "Cada task deve ter pelo menos um teste automatizado"
+
+  - name: test_coverage
+    target: ">= 85% nos arquivos alterados (desejável 90%)"
+    description: "Cobertura mínima validada com --cov no self-review"
+    mandatory: true
+
+  - name: acceptance_gate
+    target: "100% dos ACs do PRD cobertos por testes de aceitação contra interface real"
+    description: "Gate condicional: obrigatório quando interface_type != cli_only"
+    mandatory: true
+    condition: "interface_type != cli_only"
 
   - name: prd_completeness
     target: "Seções 1-5 do PRD preenchidas antes de iniciar planning"

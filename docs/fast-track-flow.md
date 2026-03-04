@@ -73,22 +73,22 @@ flowchart TD
         subgraph TDD["🧪 Fase 3: TDD — forge_coder"]
             SEL[ft.tdd.01\nselecionar task]
             RED[ft.tdd.02\nred — escrever teste]
-            GREEN[ft.tdd.03\ngreen — implementar]
+            GREEN[ft.tdd.03\ngreen — implementar\n+ suite completa]
             SEL --> RED --> GREEN
         end
 
         subgraph DELIVERY["📦 Fase 4: Delivery — forge_coder"]
-            IMPL[ft.delivery.01\nintegrar + suite]
-            REVIEW[ft.delivery.02\nself-review]
+            REVIEW[ft.delivery.01\nself-review\n10 itens · 3 grupos]
+            REFACTOR[ft.delivery.02\nrefactor]
             COMMIT[ft.delivery.03\ncommit]
-            IMPL --> REVIEW --> COMMIT
+            REVIEW --> REFACTOR --> COMMIT
         end
 
-        VAL_ENT{ft_manager\nvalida entrega}
+        VAL_ENT{ft_manager\nvalida entrega\n+ cov >= 85%}
         MORE{tasks\npendentes?}
 
         LOOP_START --> SEL
-        GREEN --> IMPL
+        GREEN --> REVIEW
         COMMIT --> VAL_ENT
         VAL_ENT -- falhou --> REVIEW
         VAL_ENT -- ok --> MORE
@@ -114,7 +114,19 @@ flowchart TD
         VAL_E2E -- falhou --> E2E
     end
 
-    VAL_E2E -- ok --> MODO
+    VAL_E2E -- ok --> ACCEPT_DEC
+
+    subgraph ACCEPTANCE_GATE["🎯 Fase 5c: Acceptance Gate — forge_coder"]
+        ACCEPT_DEC{interface_type\n!= cli_only?}
+        ACCEPT_DEC -- cli_only\nskip --> MODO
+        ACCEPT_DEC -- api/ui/mixed --> ACCEPT
+        ACCEPT[ft.acceptance.01\ninterface validation\nACs × interface real]
+        ACCEPT_R["📄 acceptance-cycle-XX.md\nmapeamento US→AC→Teste"]
+        VAL_ACCEPT{acceptance\npassou?}
+        ACCEPT --> ACCEPT_R --> VAL_ACCEPT
+        VAL_ACCEPT -- falhou --> ACCEPT
+        VAL_ACCEPT -- ok --> MODO
+    end
 
     subgraph FEEDBACK["📊 Fase 6: Feedback — ft_coach"]
         RETRO[ft.feedback.01\nretro note]
@@ -142,7 +154,7 @@ flowchart TD
 
     MVP_FINAL --> HANDOFF
 
-    subgraph HANDOFF_PHASE["📄 Fase 7: Handoff — ft_coach"]
+    subgraph HANDOFF_PHASE["📄 Fase 8: Handoff — ft_coach"]
         HANDOFF[ft.handoff.01\ngerar SPEC.md]
         HANDOFF_VAL{SPEC.md\nválido?}
         HANDOFF --> HANDOFF_VAL

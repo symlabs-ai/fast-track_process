@@ -4,7 +4,7 @@
 
 ## O que é
 
-ForgeProcess: **16 steps, 3 symbiotas, 1 PRD → 1 SPEC**.
+ForgeProcess: **17 steps, 3 symbiotas, 1 PRD → 1 SPEC**.
 Para solo dev + AI. Sem BDD Gherkin, sem sprints formais, sem roadmap separado.
 
 `ft_manager` orquestra tudo. `ft_coach` e `forge_coder` executam quando delegados.
@@ -38,13 +38,14 @@ ft.plan.03.diagrams (class / components / database / architecture)
   |
   v
 LOOP[
-  ft.tdd.01.selecao -> ft.tdd.02.red -> ft.tdd.03.green
-  -> ft.delivery.01.implement -> ft.delivery.02.self_review -> ft.delivery.03.commit
-  [ft_manager valida entrega]
+  ft.tdd.01.selecao -> ft.tdd.02.red -> ft.tdd.03.green (suite completa obrigatória)
+  -> ft.delivery.01.self_review (expandido, 10 itens) -> ft.delivery.02.refactor -> ft.delivery.03.commit
+  [ft_manager valida entrega + cobertura >= 85%]
   -> more_tasks? -> LOOP / done? -> EXIT
 ]
   -> ft.smoke.01.cli_run (GATE — processo real, PTY real, sem mocks, output documentado)
   -> ft.e2e.01.cli_validation (GATE — unit + smoke)
+  -> interface_type != cli_only? -> ft.acceptance.01.interface_validation (GATE — ACs × interface real)
   -> [ft_manager decide modo]
      interactive: apresenta ao stakeholder -> feedback / MVP / autonomous
      autonomous:  valida internamente -> prossegue até MVP -> apresenta stakeholder
@@ -53,7 +54,7 @@ LOOP[
   -> complete? -> ft.handoff.01.specs (gerar SPEC.md) -> END [maintenance_mode: true]
 ```
 
-## Step IDs (16 total)
+## Step IDs (17 total)
 
 | ID | Executor | Orquestrado por |
 |----|----------|-----------------|
@@ -66,11 +67,12 @@ LOOP[
 | ft.tdd.01.selecao | forge_coder | ft_manager |
 | ft.tdd.02.red | forge_coder | ft_manager |
 | ft.tdd.03.green | forge_coder | ft_manager |
-| ft.delivery.01.implement | forge_coder | ft_manager |
-| ft.delivery.02.self_review | forge_coder | ft_manager |
+| ft.delivery.01.self_review | forge_coder | ft_manager |
+| ft.delivery.02.refactor | forge_coder | ft_manager |
 | ft.delivery.03.commit | forge_coder | ft_manager |
 | ft.smoke.01.cli_run | forge_coder | ft_manager |
 | ft.e2e.01.cli_validation | forge_coder | ft_manager |
+| ft.acceptance.01.interface_validation | forge_coder | ft_manager |
 | ft.feedback.01.retro_note | ft_coach | ft_manager |
 | ft.handoff.01.specs | ft_coach | ft_manager |
 
@@ -87,6 +89,8 @@ LOOP[
 | Testes | tests/ | ft.tdd.02.red |
 | ForgePulse Spec | forgepulse.value_tracks.yml | ft.plan.02.tech_stack |
 | Pulse Snapshot | artifacts/pulse_snapshot.json | ft.smoke.01.cli_run |
+| Acceptance Report | project/docs/acceptance-cycle-XX.md | ft.acceptance.01.interface_validation |
+| Acceptance Tests | tests/acceptance/cycle-XX/ | ft.acceptance.01.interface_validation |
 | Retro | project/docs/retro-cycle-XX.md | ft.feedback.01.retro_note |
 | SPEC | project/docs/SPEC.md | ft.handoff.01.specs |
 | Changelog | CHANGELOG.md | ft.handoff.01.specs |
@@ -96,16 +100,20 @@ LOOP[
 
 1. **Smoke gate é obrigatório** — Ciclo não avança sem produto real executado e output documentado.
 2. **E2E CLI gate é obrigatório** — Ciclo não fecha sem `run-all.sh` passando (unit + smoke).
-3. **`mvp_status: demonstravel` exige smoke PASSOU** — nunca declarar com base em unit tests.
-4. **TDD Red-Green** — Teste falhando antes de código. Sempre.
-5. **PRD é fonte única** — Sem documentos satélite.
-6. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
-7. **ft_manager valida tudo** — Nenhuma fase avança sem checkpoint de validação passar.
-8. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
-9. **SPEC.md é obrigatório ao encerrar** — MVP concluído sem SPEC.md gerado não está realmente encerrado.
-10. **SPEC.md reflete o entregue, não o planejado** — features não implementadas vão para "fora do escopo".
-11. **Value Tracks são obrigatórios** — PRD deve ter 2-5 Value Tracks com KPIs. Cada US mapeada para pelo menos 1 track.
-12. **Observabilidade via ForgeBase Pulse** — todo UseCase passa por `UseCaseRunner`. Smoke gate gera `pulse_snapshot.json` com `mapping_source: "spec"`. Nunca inventar telemetria própria.
+3. **Acceptance gate é condicional** — Obrigatório quando `interface_type` != `cli_only`. Cada AC do PRD testado contra a interface real.
+4. **`mvp_status: demonstravel` exige smoke PASSOU** — nunca declarar com base em unit tests.
+5. **TDD Red-Green** — Teste falhando antes de código. Sempre. Suite completa verde no green.
+6. **PRD é fonte única** — Sem documentos satélite.
+7. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
+8. **ft_manager valida tudo** — Nenhuma fase avança sem checkpoint de validação passar.
+9. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
+10. **SPEC.md é obrigatório ao encerrar** — MVP concluído sem SPEC.md gerado não está realmente encerrado.
+11. **SPEC.md reflete o entregue, não o planejado** — features não implementadas vão para "fora do escopo".
+12. **Value Tracks são obrigatórios** — PRD deve ter 2-5 Value Tracks com KPIs. Cada US mapeada para pelo menos 1 track.
+13. **Observabilidade via ForgeBase Pulse** — todo UseCase passa por `UseCaseRunner`. Smoke gate gera `pulse_snapshot.json` com `mapping_source: "spec"`. Nunca inventar telemetria própria.
+14. **Cobertura mínima 85%** — Arquivos alterados devem ter >= 85% de cobertura (desejável 90%). Validado no self-review com `--cov`.
+15. **Self-review expandido** — 10 itens em 3 grupos: segurança/higiene, qualidade de código, arquitetura Clean/Hex + ForgeBase.
+16. **Refactor é step formal** — Após self-review, antes do commit. No-op documentado se nada a refatorar.
 
 ## Stakeholder Mode
 
@@ -126,3 +134,4 @@ Skills disponíveis **apenas em maintenance mode**:
 
 Arquivo: `process/fast_track/state/ft_state.yml`
 Campo chave: `next_recommended_step`
+Novos campos: `min_coverage`, `desired_coverage`, `commit_strategy`, `interface_type`

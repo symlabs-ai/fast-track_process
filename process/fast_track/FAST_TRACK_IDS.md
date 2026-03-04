@@ -22,8 +22,8 @@
 
 ## 4. Delivery
 
-- `ft.delivery.01.implement`
-- `ft.delivery.02.self_review`
+- `ft.delivery.01.self_review`
+- `ft.delivery.02.refactor`
 - `ft.delivery.03.commit`
 
 ## 5a. Smoke — Validação Real do Produto
@@ -33,6 +33,10 @@
 ## 5b. E2E — Validation Gate
 
 - `ft.e2e.01.cli_validation`
+
+## 5c. Acceptance — Validação de Interface *(condicional)*
+
+- `ft.acceptance.01.interface_validation`
 
 ## 6. Feedback
 
@@ -56,11 +60,12 @@
 | 6 | `ft.plan.03.diagrams` | Planning | Gerar diagramas técnicos (Mermaid) |
 | 7 | `ft.tdd.01.selecao` | TDD | Selecionar próxima task |
 | 8 | `ft.tdd.02.red` | TDD | Escrever teste que falha |
-| 9 | `ft.tdd.03.green` | TDD | Implementar até teste passar |
-| 10 | `ft.delivery.01.implement` | Delivery | Integrar código e rodar suite |
-| 11 | `ft.delivery.02.self_review` | Delivery | Self-review com checklist |
-| 12 | `ft.delivery.03.commit` | Delivery | Commit com mensagem padronizada |
+| 9 | `ft.tdd.03.green` | TDD | Implementar até teste passar + suite completa verde |
+| 10 | `ft.delivery.01.self_review` | Delivery | Self-review expandido (10 itens, 3 grupos) |
+| 11 | `ft.delivery.02.refactor` | Delivery | Refactor se necessário, suite verde |
+| 12 | `ft.delivery.03.commit` | Delivery | Commit com mensagem padronizada + strategy |
 | 13 | `ft.smoke.01.cli_run` | Smoke | Executar produto real via PTY + pulse evidence |
 | 14 | `ft.e2e.01.cli_validation` | E2E | Rodar E2E CLI gate (unit + smoke) |
-| 15 | `ft.feedback.01.retro_note` | Feedback | Registrar retro do ciclo |
-| 16 | `ft.handoff.01.specs` | Handoff | Gerar SPEC.md + CHANGELOG.md + BACKLOG.md |
+| 15 | `ft.acceptance.01.interface_validation` | Acceptance | Validar ACs contra interface real (condicional) |
+| 16 | `ft.feedback.01.retro_note` | Feedback | Registrar retro do ciclo |
+| 17 | `ft.handoff.01.specs` | Handoff | Gerar SPEC.md + CHANGELOG.md + BACKLOG.md |

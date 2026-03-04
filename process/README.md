@@ -1,7 +1,7 @@
 # ForgeProcess
 
 Processo de desenvolvimento para solo dev + AI.
-12 steps, 6 fases, 2 symbiotas. Valor > cerimônia.
+17 steps, 8 fases, 3 symbiotas. Valor > cerimônia.
 
 ## Estrutura
 

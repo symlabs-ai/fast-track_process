@@ -1,6 +1,6 @@
 # ForgeProcess — Fast Track
 
-> Processo ágil para solo dev + AI. 16 steps, 7 fases, valor > cerimônia.
+> Processo ágil para solo dev + AI. 17 steps, 8 fases, valor > cerimônia.
 
 **3 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode** · **Maintenance mode**
 
@@ -47,6 +47,35 @@ git push -u origin main
 ---
 
 ## Changelog
+
+### [v0.4.0] — 2026-03-04
+
+#### Added
+- **Acceptance Gate** (`ft.acceptance.01.interface_validation`) — nova fase 5c condicional após E2E.
+  Valida ACs do PRD contra a interface real (API/UI). Condicional: skip se `interface_type: cli_only`.
+  Estratégia por tipo de interface: httpx/requests para API, Playwright/Chrome para UI.
+  Template: `process/fast_track/templates/template_acceptance_report.md`.
+- **Refactor step** (`ft.delivery.02.refactor`) — step formal do TDD "R" após self-review.
+  Aplica refactoring se identificado; no-op documentado se nada a refatorar. Suite verde obrigatória.
+- **Cobertura mínima de testes** — >= 85% nos arquivos alterados (desejável 90%).
+  Validado com `--cov` no self-review. Campos `min_coverage` e `desired_coverage` no `ft_state.yml`.
+- **Commit strategy** para ciclos longos — `commit_strategy: per_task | squash_cycle` no state.
+  ft_manager pode instruir squash ao final de ciclos com > 5 tasks. Convenção: `feat(cycle-XX): summary`.
+- **Campo `interface_type`** em `ft_state.yml` — `cli_only | api | ui | mixed`.
+  Definido no `ft.plan.02.tech_stack`. Controla se acceptance gate é executado.
+
+#### Changed
+- **`ft.delivery.01.implement` removido** — absorvido por `ft.tdd.03.green`, que agora exige suite completa verde.
+- **Self-review expandido** (`ft.delivery.01.self_review`) — de 5 para 10 itens, organizados em 3 grupos:
+  Segurança & Higiene, Qualidade de Código, Arquitetura (Clean/Hex + ForgeBase).
+  Inclui: cobertura >= 85%, domínio puro, UseCaseRunner obrigatório, mapeamento ForgeBase Pulse, diagramas.
+- **Delivery renumerado** — de 3 para 3 steps (implement removido, refactor adicionado):
+  `ft.delivery.01.self_review` → `ft.delivery.02.refactor` → `ft.delivery.03.commit`.
+- Step count: 16 → 17. Phase count: 7 → 8.
+- Diagrama de fluxo (`docs/fast-track-flow.md`) atualizado com acceptance gate e refactor.
+- YAMLs de processo e state atualizados para v0.4.0.
+
+---
 
 ### [v0.3.0] — 2026-03-03
 

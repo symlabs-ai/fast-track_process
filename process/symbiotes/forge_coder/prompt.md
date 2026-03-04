@@ -452,6 +452,29 @@ Executado uma vez por ciclo, após o loop TDD/Delivery. Gate obrigatório.
 5. Para **API**: o teste deve fazer requests HTTP reais (GET/POST/PUT/DELETE) e verificar responses.
 6. Para **Mixed**: ambos os tipos acima, conforme os ACs de cada US.
 
+**🌍 Ambiente e modo de execução:**
+
+Durante o desenvolvimento, rodar testes contra o servidor de dev é aceitável para validação rápida.
+Porém, a **execução final do acceptance gate** (a que vale para o report) DEVE:
+
+1. **Rodar no ambiente do cliente** — não apenas no servidor de dev:
+
+| Situação | Ambiente de teste |
+|----------|------------------|
+| Deploy configurado (VPS, cloud, container) | **Produção ou staging** (Nginx, HTTPS, DNS, variáveis reais) |
+| Deploy não configurado (MVP inicial) | **Build de produção local** (`npm run build` + `serve`, docker-compose, Gunicorn — não `npm run dev`) |
+| PWA | **HTTPS obrigatório** (Service Workers exigem HTTPS) |
+
+2. **Usar Playwright em modo headed** — browser visível, não headless:
+   - `pytest --headed` ou `HEADLESS=false`
+   - O stakeholder deve poder ver os testes rodando no browser
+   - Cada AC é executado visualmente: navegação, cliques, preenchimento, verificação
+   - Capturar screenshots/vídeo como evidência
+
+3. **Cobrir 100% dos ACs** nesta execução final — todos os testes de aceitação previstos, sem exceções.
+
+4. **Documentar no report**: ambiente usado, modo headed, como reproduzir.
+
 ## Auditoria ForgeBase (ft.audit.01.forgebase)
 
 > ⚠️ Gate obrigatório antes do handoff. Auditoria consolidada — não é um check por task, é uma revisão final do MVP inteiro.

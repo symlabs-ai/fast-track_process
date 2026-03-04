@@ -388,10 +388,17 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    - [ ] 100% dos ACs cobertos (sem exceções)
    - [ ] **Validação de autenticidade**: abrir pelo menos 2 arquivos de teste e confirmar que contêm interação real com a interface (requests HTTP, Playwright actions, Chrome automation) — testes que apenas fazem grep/leitura de arquivos **REPROVAM o gate**
    - [ ] Report contém URL/porta do servidor testado e evidência de execução real
+   - [ ] **Ambiente correto**: a execução final rodou contra build de produção (não servidor de dev). Report deve documentar: build command, servidor usado, variáveis de ambiente
+   - [ ] Se deploy configurado: testes rodaram contra staging/produção
+   - [ ] Se PWA: testes rodaram com HTTPS
+   - [ ] **Playwright headed**: testes de UI rodaram com browser visível (`--headed`), com screenshots/vídeo como evidência
+   - [ ] **100% dos ACs** cobertos nesta execução final
 
    Se falhar: **não avançar para Feedback**. Reportar ao forge_coder. Corrigir e re-executar.
 
    > ⛔ **Anti-fraude**: Se os testes de aceitação apenas verificam existência de arquivos, fazem grep no source code ou passam sem servidor rodando, o gate está **REPROVADO** independente do que o report diz. O ft_manager DEVE inspecionar o código dos testes.
+
+   > ⚠️ **Ambiente**: Testes contra servidor de dev são válidos durante o desenvolvimento, mas a execução final do gate deve usar build de produção no ambiente do cliente. Verificar no report que não é apenas `npm run dev` / `flask run --debug`.
 
 4. Com acceptance passando (ou skipped): seguir para Feedback + decisão de ciclo.
 

@@ -95,6 +95,7 @@ LOOP[
 | Acceptance Tests | tests/acceptance/cycle-XX/ | ft.acceptance.01.interface_validation |
 | Retro | project/docs/retro-cycle-XX.md | ft.feedback.01.retro_note |
 | ForgeBase Audit | project/docs/forgebase-audit.md | ft.audit.01.forgebase |
+| Token Metrics | project/docs/metrics.yml | ft_manager (snapshots ao longo do processo) |
 | SPEC | project/docs/SPEC.md | ft.handoff.01.specs |
 | Changelog | CHANGELOG.md | ft.handoff.01.specs |
 | Backlog | BACKLOG.md | ft.handoff.01.specs |

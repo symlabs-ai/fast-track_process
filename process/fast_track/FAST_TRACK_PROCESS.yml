@@ -713,6 +713,12 @@ artifacts:
     description: "Auditoria consolidada de ForgeBase: UseCaseRunner, Value/Support Tracks, Pulse, logging, Clean/Hex"
     template: "process/fast_track/templates/template_forgebase_audit.md"
 
+  - id: token_metrics
+    path: "project/docs/metrics.yml"
+    phase: all
+    description: "Snapshots de consumo de tokens por fase — gerado pelo token_tracker.py"
+    tool: "process/fast_track/tools/token_tracker.py"
+
 # ============================================================
 # Symbiotas
 # ============================================================

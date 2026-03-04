@@ -144,7 +144,11 @@ Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_stat
      ```
 
 2. Ler `process/fast_track/state/ft_state.yml`.
-3. Se `current_phase: null` (projeto novo):
+3. **Inicializar token tracking** — gravar snapshot inicial:
+   ```bash
+   python3 process/fast_track/tools/token_tracker.py --project . snapshot --step init
+   ```
+4. Se `current_phase: null` (projeto novo):
    - **Detectar se o stakeholder entregou um PRD abrangente**:
      - Verificar se existe arquivo em `project/docs/` com conteúdo substantivo de produto
        (user stories, requisitos, visão, etc.) — ou se o stakeholder colou um documento na conversa.
@@ -162,7 +166,7 @@ Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_stat
        ```
        Atualizar state: `mdd_mode: normal`, `current_phase: ft_mdd`.
        Acionar `ft_coach` para `ft.mdd.01.hipotese`.
-4. Se já há estado:
+5. Se já há estado:
    - Informar: "Retomando de [next_recommended_step]. Último step: [last_completed_step]."
    - Continuar a partir do step pendente.
 
@@ -570,6 +574,30 @@ Executado após auditoria ForgeBase, quando MVP é declarado concluído (qualque
    · /feature <descrição>  → implementar feature (lê SPEC.md como contexto)
    ```
 
+5. **Relatório de consumo de tokens** — gravar snapshot final e apresentar relatório:
+   ```bash
+   python3 process/fast_track/tools/token_tracker.py --project . snapshot --step ft.handoff.01.specs
+   python3 process/fast_track/tools/token_tracker.py --project . history
+   ```
+   Apresentar ao stakeholder:
+   ```
+   📊 Consumo de Tokens — Projeto [nome]
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Fase              Tokens (acumulado)    Delta
+   ─────────────────────────────────────────────
+   init              X                     X
+   MDD (PRD)         Y                     +Z
+   Planning          Y                     +Z
+   TDD/Delivery C01  Y                     +Z
+   E2E Gate          Y                     +Z
+   Acceptance        Y                     +Z
+   Auditoria FB      Y                     +Z
+   Handoff           Y                     +Z
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Total: X tokens · Y sessões · Z ciclos
+   ```
+   Também salvar o relatório em `project/docs/metrics.yml` (já feito pelo script).
+
 ---
 
 ## Critérios de MVP
@@ -595,6 +623,19 @@ O MVP é considerado entregue quando **todos** os critérios abaixo são verdade
 - **Nunca avance sem validação** — Cada checkpoint bloqueante deve passar antes de continuar.
 - **Feedback específico** — Ao reportar falha, cite o item exato que falhou. Nunca devolva sem contexto.
 - **State sempre atualizado** — Após cada step concluído, atualizar `ft_state.yml`.
+- **Token tracking** — Gravar snapshots de consumo em momentos-chave para rastreabilidade. Executar:
+  ```bash
+  python3 process/fast_track/tools/token_tracker.py --project . snapshot --step <step_id>
+  ```
+  **Momentos obrigatórios para snapshot:**
+  - `init` — na inicialização do projeto
+  - `ft.mdd.03.validacao` — após PRD validado
+  - `ft.plan.03.diagrams` — após planning concluído
+  - `ft.delivery.03.commit` — ao final de cada ciclo TDD/Delivery (antes do smoke)
+  - `ft.e2e.01.cli_validation` — após E2E gate
+  - `ft.acceptance.01.interface_validation` — após acceptance gate (se aplicável)
+  - `ft.audit.01.forgebase` — após auditoria ForgeBase
+  - `ft.handoff.01.specs` — no handoff final
 - **ft_manager não implementa** — Qualquer produção de código ou artefatos de produto é delegada.
 - **Uma fonte de verdade** — Toda decisão de produto está no PRD. ft_manager não inventa requisitos.
 - **Autonomia não é negligência** — Em modo autônomo, os critérios de validação são os mesmos. Apenas o stakeholder não é acionado entre ciclos.

@@ -101,6 +101,57 @@ respeitando Clean/Hex, CLI-first offline e manifesto de plugins.
 
 > ⚠️ Unit tests passando **não** implica produto funcionando. Smoke é obrigatório.
 
+## Progress Report — obrigatório em transições de task
+
+> ⚠️ **REGRA**: forge_coder exibe o bloco de progresso em **3 momentos**:
+> 1. Ao **iniciar** uma task (após `ft.tdd.01.selecao`)
+> 2. Ao **concluir** uma task (após `ft.delivery.03.commit`)
+> 3. Ao **concluir todas as tasks** (antes de avançar para Smoke)
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🔧 [cycle-XX] Task [N] / [total] — [task ID]: [título]
+ ✅ Concluídas: [lista de IDs done]
+ 🔄 Em andamento: [task atual]
+ 📋 Pendentes: [lista de IDs pendentes]
+ 📊 Progresso: [N done] / [total] — [%]
+ 🔜 Próxima fase: [step seguinte após tasks]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Como preencher:**
+- **cycle-XX**: ciclo atual do `ft_state.yml`
+- **Task N / total**: posição da task atual na sequência
+- **Concluídas**: IDs das tasks com status `done` no TASK_LIST.md
+- **Pendentes**: IDs das tasks com status `pending`
+- **Próxima fase**: `Smoke Gate` se não há mais tasks; `TDD (T-XX)` se há
+
+**Exemplos:**
+
+Ao iniciar task:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🔧 cycle-01  Task 3 / 7 — T-03: Implementar repositório de pedidos
+ ✅ Concluídas: T-01, T-02
+ 🔄 Em andamento: T-03
+ 📋 Pendentes: T-04, T-05, T-06, T-07
+ 📊 Progresso: 2 / 7 — 29%
+ 🔜 Próxima fase: TDD (T-04)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Ao concluir todas as tasks:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🔧 cycle-01  Tasks completas
+ ✅ Concluídas: T-01, T-02, T-03, T-04, T-05, T-06, T-07
+ 📊 Progresso: 7 / 7 — 100%
+ 🔜 Próxima fase: Smoke Gate
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
 ## Ciclo de Trabalho (Fast Track)
 
 ### Pré-TDD: Tech Stack (ft.plan.02.tech_stack)
@@ -288,6 +339,22 @@ classDiagram
 
 ---
 
+### Pré-TDD: Setup do Ambiente *(primeiro ciclo apenas)*
+
+> ⚠️ **Obrigatório antes de escrever qualquer código.** Executado uma única vez, no início do primeiro ciclo TDD.
+
+1. Rodar `bash setup_env.sh` na raiz do projeto.
+2. Verificar que o script completou sem erros:
+   - `.venv` criada com Python 3.12
+   - ForgeBase e ForgeLLMClient instalados
+   - Ferramentas de dev disponíveis (pytest, mypy, ruff, pre-commit)
+3. Ativar o ambiente: `source .venv/bin/activate`
+4. Confirmar ao ft_manager: "Ambiente configurado."
+
+Se o script falhar: reportar o erro ao ft_manager antes de prosseguir. Não iniciar TDD sem ambiente funcional.
+
+---
+
 ### Loop por Task
 1) SELECAO — ler TASK_LIST.md, selecionar próxima task pendente.
 2) RED — ler ACs do PRD, escrever teste em `tests/unit/` que falha.
@@ -366,6 +433,21 @@ Executado uma vez por ciclo, após o loop TDD/Delivery. Gate obrigatório.
 - Rastreabilidade explícita: cada teste referencia o AC e a US correspondente.
 - 100% dos ACs devem ter pelo menos 1 teste. Sem exceções.
 - Se um AC não pode ser testado pela interface (ex: comportamento interno), documentar o motivo e testar via alternativa.
+
+**⛔ Anti-patterns — NÃO são testes de aceitação válidos:**
+- Verificar existência de arquivos (`os.path.exists`, `glob`)
+- Fazer grep/regex no código-fonte para buscar strings
+- Ler conteúdo de arquivos `.html`, `.tsx`, `.py` e verificar se contêm palavras-chave
+- Qualquer teste que **não interage com a aplicação rodando**
+- Testes que passam sem servidor/UI ativo
+
+**✅ Requisitos obrigatórios para testes de aceitação:**
+1. **Servidor/UI DEVE estar rodando** durante a execução dos testes. Subir o processo antes de rodar.
+2. **Interação real com a interface**: HTTP requests para API, cliques/preenchimento na UI via Playwright/Chrome, comandos no CLI.
+3. **Evidência de execução**: o report deve incluir URL/porta do servidor testado e log de execução dos testes.
+4. Para **UI**: o teste deve abrir a página no browser, interagir com elementos (clicar, preencher, navegar) e verificar o resultado visual.
+5. Para **API**: o teste deve fazer requests HTTP reais (GET/POST/PUT/DELETE) e verificar responses.
+6. Para **Mixed**: ambos os tipos acima, conforme os ACs de cada US.
 
 ## Value Tracks — Bridge Processo → ForgeBase
 

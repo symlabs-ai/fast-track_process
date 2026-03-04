@@ -25,5 +25,14 @@
 - Value Tracks testados: A / B
 - Status: **APROVADO** / **REPROVADO**
 
+## Evidência de Execução Real
+- Servidor/UI rodando em: [URL:porta ou comando usado para subir]
+- Comando de execução dos testes: [ex: pytest tests/acceptance/ -v]
+- Tempo total de execução: [X segundos]
+- Screenshots/logs: [path ou "inline abaixo"]
+
+> ⚠️ Este report é INVÁLIDO se os testes não interagiram com a aplicação rodando.
+> Testes que fazem grep em arquivos ou verificam existência de arquivos NÃO são testes de aceitação.
+
 ## Observações
 [Comportamentos inesperados, edge cases detectados, notas de ambiente]

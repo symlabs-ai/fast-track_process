@@ -185,9 +185,24 @@ Acionar `ft_coach` para conduzir:
 #### Fluxo hyper (mdd_mode: hyper)
 
 Acionar `ft_coach` em modo hyper com o documento fornecido:
-- `ft.mdd.hyper` (absorção + geração de artefatos + questionário) → aguardar respostas → incorporar
+- `ft.mdd.hyper` (absorção + auditoria + geração de artefatos + questionário) → aguardar respostas → incorporar
 
-**O questionário de alinhamento é obrigatório mesmo quando o PRD parece completo.** Nunca pular.
+**Regras do hyper-mode:**
+- O questionário de alinhamento é obrigatório mesmo quando o PRD parece completo. Nunca pular.
+- O ft_coach deve **auditar o PRD contra o processo normal** e classificar cada seção (✅ presente / ⚠️ inferido / ❌ ausente).
+- O ft_coach deve **apresentar o diagnóstico ao stakeholder** com opções de como prosseguir — não simplesmente seguir em frente.
+- **Nenhuma seção `❌ ausente` pode permanecer** após incorporação das respostas. Se o stakeholder não resolver, o processo não avança.
+- Tasks derivadas de seções `⚠️ inferido` devem estar marcadas como `[pendente confirmação]` até serem confirmadas.
+
+#### Checkpoint: Hyper-Mode (após incorporação das respostas)
+- [ ] Diagnóstico foi apresentado ao stakeholder (tabela de status por seção)
+- [ ] Questionário completo foi gerado (incluindo seção "📋 Obrigatórias Ausentes")
+- [ ] Stakeholder respondeu **todas** as obrigatórias ausentes
+- [ ] Todas as seções do PRD estão `✅ presente` (nenhuma `❌ ausente` remanescente)
+- [ ] Seções `⚠️ inferido` foram confirmadas ou corrigidas pelo stakeholder
+- [ ] Tasks `[pendente confirmação]` foram resolvidas no TASK_LIST.md
+
+Se falhar: devolver ao ft_coach. **Não avançar com seções obrigatórias sem resposta.**
 
 Quando ft_coach sinalizar conclusão (em qualquer modo), **validar** antes de avançar:
 
@@ -223,6 +238,12 @@ Após forge_coder gerar `tech_stack.md`, validar antes de apresentar ao stakehol
 Se falhar: devolver ao forge_coder com feedback específico.
 
 ### 3. Orquestração TDD/Delivery (forge_coder)
+
+> ⚠️ **REGRA OBRIGATÓRIA — setup do ambiente antes do primeiro ciclo TDD:**
+>
+> No **primeiro ciclo apenas**, antes de delegar qualquer task ao forge_coder, instruí-lo a rodar `bash setup_env.sh`.
+> Verificar que o ambiente está funcional (`.venv` criada, dependências instaladas, ferramentas de dev disponíveis).
+> Não iniciar TDD sem ambiente configurado.
 
 > ⚠️ **REGRA OBRIGATÓRIA — perguntar ANTES de iniciar o loop TDD:**
 >
@@ -286,7 +307,31 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    Se bloqueio depender do dev: pausar e acionar, independente do modo escolhido.
 
 3. Repetir até todas as tasks P0 estarem `done`.
-4. Ao concluir: apresentar resumo da fase ao dev antes de avançar para E2E.
+
+4. **Após cada task validada** (modo `phase_end`), registrar progresso internamente.
+   Em modo `per_task`, apresentar ao dev:
+   ```
+   ✅ Task T-XX concluída.
+   📊 Progresso: [N done] / [total] tasks — [%]
+       Concluídas: [IDs]
+       Pendentes: [IDs]
+   🔜 Próxima: T-YY — [título]
+   ```
+
+5. **Ao concluir todas as tasks P0**, apresentar resumo da fase ao dev:
+   ```
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   📊 Resumo do Ciclo — TDD/Delivery
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Tasks concluídas: [N] / [total]
+     P0: [X] / [Y]  ·  P1: [X] / [Y]  ·  P2: [X] / [Y]
+   Testes: [N] passando  ·  Cobertura: [X]%
+   Commits: [N]
+
+   Próxima fase: Smoke Gate
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ```
+   Aguardar confirmação antes de avançar para Smoke.
 
 ### 4. Smoke Gate (ft.smoke.01.cli_run)
 
@@ -341,8 +386,12 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    - [ ] Todos os testes passaram
    - [ ] `project/docs/acceptance-cycle-XX.md` gerado com mapeamento completo
    - [ ] 100% dos ACs cobertos (sem exceções)
+   - [ ] **Validação de autenticidade**: abrir pelo menos 2 arquivos de teste e confirmar que contêm interação real com a interface (requests HTTP, Playwright actions, Chrome automation) — testes que apenas fazem grep/leitura de arquivos **REPROVAM o gate**
+   - [ ] Report contém URL/porta do servidor testado e evidência de execução real
 
    Se falhar: **não avançar para Feedback**. Reportar ao forge_coder. Corrigir e re-executar.
+
+   > ⛔ **Anti-fraude**: Se os testes de aceitação apenas verificam existência de arquivos, fazem grep no source code ou passam sem servidor rodando, o gate está **REPROVADO** independente do que o report diz. O ft_manager DEVE inspecionar o código dos testes.
 
 4. Com acceptance passando (ou skipped): seguir para Feedback + decisão de ciclo.
 
@@ -355,22 +404,77 @@ Ao final do loop TDD/Delivery, se o ciclo teve > 5 tasks:
 
 ### 6. Interface com Stakeholder
 
+> ⚠️ **REGRA CRÍTICA — Análise de contexto antes de oferecer opções:**
+>
+> O ft_manager **nunca** apresenta opções genéricas de template. Antes de oferecer ao stakeholder
+> a decisão de ciclo, deve **analisar o estado real do projeto** contra os critérios de MVP:
+>
+> 1. Existem tasks P0 pendentes no TASK_LIST.md?
+> 2. O `interface_type` é `mixed` ou `ui` e o frontend ainda não foi entregue?
+> 3. O PRD define funcionalidades que ainda não foram implementadas?
+> 4. As métricas de sucesso (seção 4 do PRD) são alcançáveis com o que foi entregue?
+>
+> **Se a resposta a qualquer dessas perguntas indicar que o MVP está incompleto,
+> "encerrar MVP" NÃO deve ser oferecido como opção equivalente.** O ft_manager deve recomendar
+> claramente a continuação e explicar o que falta.
+
 #### Modo `interactive`
 
-Após E2E passando, apresentar ao stakeholder:
+Após gates passando, **avaliar o estado do projeto** e apresentar ao stakeholder com recomendação contextualizada:
+
+**Caso A — MVP claramente incompleto** (tasks P0 pendentes, interface não entregue, funcionalidades core faltando):
 ```
-Ciclo [N] concluído.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 📊 Ciclo [N] concluído
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Tasks entregues: X/Y (P0: Z)
-Testes passando: N
-E2E: PASSOU
+Tasks entregues: X / Y (P0: A/B pendentes)
+Testes passando: N  ·  Cobertura: X%
+Gates: Smoke ✅  E2E ✅  [Acceptance ✅]
 
-[Link ou resumo das features entregues]
+⚠️  MVP incompleto — [motivo específico]:
+    [ex: "PRD define interface_type: mixed, frontend PWA não entregue (T-18 a T-25)"]
+    [ex: "Tasks P0 pendentes: T-12, T-14"]
+
+➡️  Recomendação: iniciar cycle-[N+1] para [escopo do próximo ciclo].
 
 Opções:
-1. Iniciar novo ciclo (com ajustes ou novas features)
-2. MVP concluído — encerrar
+1. Iniciar cycle-[N+1] — [escopo específico] (recomendado)
+2. Continuar sem validação de ciclo (modo autônomo)
+3. Encerrar mesmo assim (MVP parcial — requer confirmação explícita)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Se o stakeholder escolher opção 3, exigir confirmação:
+```
+⚠️  Encerrar com MVP incompleto implica:
+    - [listar o que fica de fora]
+    - SPEC.md refletirá escopo reduzido
+    Confirma encerramento? (sim/não)
+```
+
+**Caso B — MVP potencialmente completo** (todas as tasks P0 done, interface entregue se aplicável):
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 📊 Ciclo [N] concluído
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tasks entregues: X / Y (P0: todas ✅)
+Testes passando: N  ·  Cobertura: X%
+Gates: Smoke ✅  E2E ✅  [Acceptance ✅]
+
+✅ Critérios de MVP atingidos:
+   - Todas as tasks P0 concluídas
+   - E2E/Acceptance passando
+   - [interface entregue se aplicável]
+
+[Resumo das features entregues por US]
+
+Opções:
+1. MVP concluído — encerrar e gerar SPEC.md (recomendado)
+2. Novo ciclo — implementar tasks P1/P2 restantes
 3. Continuar sem validação de ciclo (modo autônomo)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 Aguardar resposta explícita antes de prosseguir.
@@ -384,22 +488,24 @@ Aguardar resposta explícita antes de prosseguir.
 Nenhuma interrupção entre ciclos. ft_manager:
 - Valida todos os checkpoints internamente.
 - Roda quantos ciclos forem necessários.
-- Define MVP como: **todas as tasks P0 done + E2E passando** (conforme métricas na seção 4 do PRD).
+- **Não para até que os critérios de MVP sejam atingidos** (todas as tasks P0 done + E2E passando + interface entregue se `interface_type` != `cli_only`).
 - Ao atingir MVP: aciona o stakeholder com relatório final completo.
 
 #### Apresentação Final do MVP (modo autônomo)
 
 ```
-MVP entregue.
-
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ✅ MVP entregue
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Ciclos completados: N
-Total de tasks: X (P0: Y, P1: Z)
-Cobertura de testes: N testes passando
-E2E final: PASSOU
+Total de tasks: X (P0: Y ✅, P1: Z, P2: W)
+Testes: N passando  ·  Cobertura: X%
+Gates: Smoke ✅  E2E ✅  [Acceptance ✅]
 
 [Resumo das features por User Story]
 
 Aguardando validação final.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 ### 7. Handoff — Geração do SPEC.md
@@ -439,10 +545,14 @@ Executado após retro final, quando MVP é declarado concluído (qualquer modo).
 
 ## Critérios de MVP
 
-O MVP é considerado entregue quando:
+O MVP é considerado entregue quando **todos** os critérios abaixo são verdadeiros:
 1. Todas as tasks P0 do TASK_LIST.md estão `done`.
 2. E2E gate passou no último ciclo.
-3. Métricas de sucesso definidas na seção 4 do PRD são alcançáveis com as features entregues.
+3. Se `interface_type` != `cli_only`: interface entregue e acceptance gate passou.
+4. Métricas de sucesso definidas na seção 4 do PRD são alcançáveis com as features entregues.
+
+> ⚠️ **Nunca oferecer "encerrar MVP" se algum critério acima não foi atingido.**
+> Se o stakeholder insistir, exigir confirmação explícita e registrar como MVP parcial.
 
 ---
 

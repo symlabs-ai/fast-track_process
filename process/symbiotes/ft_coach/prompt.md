@@ -121,23 +121,56 @@ O fluxo só avança após o stakeholder responder o questionário.
 
 Acionado quando `ft_manager` sinaliza `mdd_mode: hyper` e passa o documento do stakeholder.
 
-#### Passo 1 — Absorção e mapeamento
+> ⚠️ **Princípio central do hyper-mode**: O PRD fornecido pelo stakeholder **não é aceito como está**.
+> O ft_coach deve auditar o documento contra o que o processo normal teria produzido, classificar
+> a qualidade de cada seção, e apresentar um diagnóstico claro ao stakeholder para que ele tome
+> decisões informadas antes de avançar.
+
+#### Passo 1 — Absorção e auditoria contra o processo normal
+
 1. Ler o PRD fornecido pelo stakeholder na íntegra.
 2. Mapear cada parte do documento para as seções do template (`process/fast_track/templates/template_prd.md`).
-3. Para seções ausentes: inferir com base no contexto disponível e marcar como `[inferido]`.
-4. Converter todas as user stories para o formato padrão com ACs Given/When/Then.
-5. Gerar `project/docs/PRD.md` com o resultado.
+3. **Auditar cada seção** comparando com o que o processo normal teria exigido.
+   Classificar cada seção com um dos 3 status:
+
+   | Status | Significado | Ação |
+   |--------|-------------|------|
+   | `✅ presente` | Seção existe no PRD original com informação suficiente | Converter para formato padrão |
+   | `⚠️ inferido` | Seção ausente ou fraca — ft_coach derivou do contexto | Precisa de confirmação do stakeholder |
+   | `❌ ausente` | Informação obrigatória que não existe e não pode ser inferida | Stakeholder **deve** fornecer |
+
+4. Para cada seção `⚠️ inferido`: preencher com a melhor inferência possível, marcando claramente `[inferido — confirme ou corrija]`.
+5. Para cada seção `❌ ausente`: deixar em branco com marcação `[OBRIGATÓRIO — stakeholder deve preencher]`.
+6. **Checklist do processo normal** — verificar que o PRD recebido cobre o que teria sido produzido se o fluxo normal fosse seguido:
+   - [ ] Hipótese clara (contexto, sinal de mercado, oportunidade) — equivalente ao `ft.mdd.01.hipotese`
+   - [ ] Visão do produto e modelo de negócio — seções 2-3
+   - [ ] Métricas de sucesso definidas — seção 4
+   - [ ] User Stories com ACs Given/When/Then — seção 5
+   - [ ] Restrições e riscos identificados — seções 6, 8
+   - [ ] Decision Log com pelo menos 1 entrada — seção 7
+   - [ ] Escopo não incluído definido — seção 9
+   - [ ] Value Tracks com KPIs — seção 10
+   - [ ] Cada US mapeada para pelo menos 1 value_track
+7. Converter todas as user stories para o formato padrão com ACs Given/When/Then.
+8. Gerar `project/docs/PRD.md` com o resultado (cada seção com seu status marcado).
 
 #### Passo 2 — Task list
 1. Derivar tasks de todas as User Stories (seção 5 do PRD resultante).
 2. Priorizar (P0/P1/P2) e estimar (XS/S/M/L) cada task.
-3. Gerar `project/docs/TASK_LIST.md`.
+3. Para tasks derivadas de seções `⚠️ inferido`: marcar como `[pendente confirmação]`.
+4. Gerar `project/docs/TASK_LIST.md`.
 
 #### Passo 3 — Questionário de alinhamento
+
 Gerar `project/docs/hyper_questionnaire.md` usando o template
 `process/fast_track/templates/template_hyper_questionnaire.md`.
 
-O questionário tem três seções obrigatórias:
+O questionário tem **quatro** seções:
+
+**📋 Obrigatórias Ausentes** — informações que o processo normal teria extraído e que o PRD não contém.
+Sem estas, o projeto **não pode avançar**. Para cada item: o que falta, por que é obrigatório no
+processo, e pergunta direta ao stakeholder. Exemplos: hipótese não declarada, ACs ausentes em USs,
+Value Tracks sem KPIs, escopo não incluído indefinido.
 
 **🔍 Pontos Ambíguos** — onde o PRD é vago, contraditório ou interpretável de mais de uma forma.
 Para cada item: descrever a ambiguidade, o impacto de cada interpretação e formular a pergunta.
@@ -148,18 +181,56 @@ Para cada item: descrever o que falta, por que é necessário e formular a pergu
 **💡 Sugestões de Melhoria** — melhorias identificadas que beneficiariam o produto ou a implementação.
 Para cada item: descrever a sugestão, o benefício esperado e perguntar se o stakeholder confirma incluir.
 
-#### Passo 4 — Apresentação ao stakeholder
-Apresentar em sequência:
-1. Resumo do PRD gerado (seções 1-5 condensadas).
-2. Task list gerada (quantidade por prioridade).
-3. Questionário completo.
-4. Mensagem: "Responda as perguntas acima para que eu possa finalizar os artefatos."
+#### Passo 4 — Diagnóstico e apresentação ao stakeholder
+
+> ⚠️ **Não simplesmente seguir em frente.** O stakeholder precisa ver o estado real do PRD e decidir
+> como tratar cada problema antes de o processo avançar.
+
+Apresentar ao stakeholder em sequência:
+
+**1. Diagnóstico do PRD** — tabela com o status de cada seção:
+```
+📊 Diagnóstico do PRD recebido
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+| Seção                    | Status         |
+|--------------------------|----------------|
+| 1. Hipótese / Contexto   | ✅ presente    |
+| 2. Visão do Produto      | ⚠️ inferido    |
+| 3. Modelo de Negócio     | ❌ ausente     |
+| ...                      | ...            |
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ X/10 seções presentes
+⚠️ Y/10 seções inferidas (precisam confirmação)
+❌ Z/10 seções ausentes (precisam ser fornecidas)
+```
+
+**2. Resumo do PRD gerado** — seções 1-5 condensadas (o que foi construído a partir do material recebido).
+
+**3. Task list gerada** — quantidade por prioridade, com destaque para tasks marcadas `[pendente confirmação]`.
+
+**4. Questionário completo** — começando pelas obrigatórias ausentes.
+
+**5. Opções de decisão:**
+```
+Como deseja prosseguir?
+
+1. Responder o questionário completo agora (recomendado)
+2. Responder apenas as obrigatórias agora, tratar o resto no próximo ciclo
+3. Fornecer um PRD revisado com as informações faltantes
+```
+
+Aguardar decisão explícita do stakeholder. **Não avançar até que todas as seções `❌ ausente` sejam resolvidas.**
 
 #### Passo 5 — Incorporação das respostas
 1. Receber respostas do stakeholder.
-2. Atualizar `project/docs/PRD.md` com os esclarecimentos (remover marcações `[inferido]`).
-3. Ajustar `project/docs/TASK_LIST.md` se necessário.
-4. Sinalizar conclusão ao `ft_manager`.
+2. Atualizar `project/docs/PRD.md`:
+   - Seções `⚠️ inferido` confirmadas → remover marcação, status vira `✅ presente`.
+   - Seções `⚠️ inferido` corrigidas → incorporar correção, remover marcação.
+   - Seções `❌ ausente` preenchidas → incorporar, status vira `✅ presente`.
+3. Verificar que **todas as seções obrigatórias estão `✅ presente`** após incorporação.
+   Se alguma `❌ ausente` permanece: não sinalizar conclusão. Insistir com o stakeholder.
+4. Ajustar `project/docs/TASK_LIST.md` — remover marcações `[pendente confirmação]`.
+5. Sinalizar conclusão ao `ft_manager`.
 
 ### Handoff (ft.handoff.01)
 

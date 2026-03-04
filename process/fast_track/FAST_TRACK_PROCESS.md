@@ -25,15 +25,21 @@ Discovery conduzido por conversa: ft_coach pergunta, dev responde, hipótese →
 
 ### `hyper`
 Ativado quando o **stakeholder entrega um PRD abrangente de entrada**.
-ft_coach consome o documento e, em um único pass:
-1. Produz `project/docs/PRD.md` completo (mapeando para o template, inferindo seções ausentes)
-2. Produz `project/docs/TASK_LIST.md`
-3. Gera `project/docs/hyper_questionnaire.md` com três seções:
+ft_coach consome o documento, **audita contra o processo normal** e, em um único pass:
+1. **Audita** cada seção do PRD contra o que teria sido produzido no fluxo normal, classificando como:
+   - `✅ presente` — informação suficiente no original
+   - `⚠️ inferido` — derivado do contexto, precisa confirmação
+   - `❌ ausente` — obrigatório, stakeholder deve fornecer
+2. Produz `project/docs/PRD.md` completo (com marcações de status por seção)
+3. Produz `project/docs/TASK_LIST.md` (tasks de seções inferidas marcadas `[pendente confirmação]`)
+4. Gera `project/docs/hyper_questionnaire.md` com **quatro** seções:
+   - **📋 Obrigatórias Ausentes** — informações que o processo normal teria extraído e que **bloqueiam** o avanço
    - **🔍 Pontos Ambíguos** — onde o PRD é vago ou interpretável de mais de uma forma
    - **🕳️ Lacunas** — informações necessárias para implementação que estão ausentes
    - **💡 Sugestões de Melhoria** — melhorias identificadas para o produto ou implementação
+5. **Apresenta diagnóstico ao stakeholder** com tabela de status por seção e opções de como prosseguir
 
-O stakeholder responde → ft_coach incorpora → artefatos finalizados → segue para validação normal.
+O stakeholder decide como tratar → responde → ft_coach incorpora → **todas as seções `❌ ausente` resolvidas** → artefatos finalizados → segue para validação normal.
 
 Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
@@ -101,6 +107,8 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 | Arquitetura | `diagrams/architecture.md` | `flowchart TD` |
 
 ### Fase 3: TDD — 3 steps (loop por task)
+
+> **Pré-requisito (primeiro ciclo):** forge_coder roda `bash setup_env.sh` para configurar o ambiente (`.venv`, ForgeBase, ferramentas de dev) antes de escrever qualquer código.
 
 #### ft.tdd.01.selecao — Selecionar Task
 - **Input**: TASK_LIST.md
@@ -220,7 +228,9 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Symbiota**: ft_coach
 - **Critério**: Seções preenchidas (o que funcionou, o que não, foco próximo)
 
-> **Decisão final**: Iniciar novo ciclo (volta para ft.plan.01) ou encerrar.
+> **Decisão final**: ft_manager analisa o estado do projeto contra os critérios de MVP antes de oferecer opções.
+> Se o MVP está claramente incompleto (tasks P0 pendentes, interface não entregue quando `interface_type` != `cli_only`),
+> recomenda novo ciclo. "Encerrar MVP" só é oferecido como opção primária quando todos os critérios são atendidos.
 
 ### Fase 8: Handoff — 1 step *(executado uma única vez, ao encerrar o projeto)*
 

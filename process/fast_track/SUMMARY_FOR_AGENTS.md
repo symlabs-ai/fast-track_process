@@ -138,6 +138,9 @@ LOOP[
 25. **ft_gatekeeper é independente** — Separação de responsabilidades: ft_manager orquestra, ft_gatekeeper bloqueia. O mesmo agente que orquestra não valida os gates.
 26. **Paralelização é opt-in** — `parallel_mode: true` no state habilita execução paralela de tasks em Value Tracks independentes via git worktrees. forge_coder avalia independência técnica em `ft.tdd.01.selecao`. Max 3 slots paralelos. Smoke é synchronization point (tudo merged antes). ft_manager controla merge. Quando `parallel_mode: false` (default), fluxo é estritamente sequencial.
 27. **gate.delivery tem enforcement por task** — Cada task `done` DEVE ter `gate.delivery: PASS` registrado no `gate_log` do `ft_state.yml`. Pre-flight check antes do smoke verifica completude. Sem registro = gate não executado = smoke bloqueado. ft_manager NÃO pode alegar "validei internamente" — o gate_log é a evidência.
+28. **N/A não é resultado válido de gate** — Cada item do checklist do ft_gatekeeper é ✅ ou ❌. "Não aplicável", "N/A" ou "não implementado" = ❌ BLOCK. Se o processo define condition: always, o item é obrigatório. Marcar como N/A é contornar o gate.
+29. **Artefatos em paths canônicos** — smoke-cycle-XX.md, acceptance-cycle-XX.md e forgebase-audit.md devem estar em `project/docs/`. Artefatos em `process/` ou `state/` = BLOCK no gate correspondente.
+30. **Step IDs devem ser válidos** — ft_manager só grava em `completed_steps` IDs que existam em FAST_TRACK_IDS.md. IDs inventados corrompem o estado.
 
 ## Stakeholder Mode
 

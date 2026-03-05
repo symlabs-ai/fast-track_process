@@ -116,39 +116,87 @@ Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_stat
 
 ### 1. Inicialização
 
-1. **Verificar vínculo git** — antes de qualquer outra coisa, checar se o repositório tem remote configurado:
-   ```bash
-   git remote -v
-   ```
-   - Se houver remote apontando para o repositório de template (ex: `symlabs-ai/fast-track_process`):
-     ```
-     ⚠️  Este repositório ainda está vinculado ao template original:
-         origin → <url-atual>
+> ⚠️ **REGRA INVIOLÁVEL — Bootstrap obrigatório**: Os 3 passos abaixo (Git, Setup, Token Tracking)
+> são **pré-requisitos bloqueantes**. O ft_manager NÃO inicia nenhuma fase do projeto
+> (MDD, Planning, TDD — nada) até que os 3 estejam concluídos com sucesso.
+> Se qualquer um falhar, PARAR e resolver antes de prosseguir.
 
-     Recomendo desvincular e apontar para o seu próprio repositório.
-     Posso fazer isso agora. Qual a URL do novo repositório?
-     (Se ainda não criou, crie no GitHub/GitLab e me passe a URL.)
-     ```
-   - Aguardar confirmação do dev com a nova URL.
-   - Ao receber a URL, executar:
-     ```bash
-     git remote remove origin
-     git remote add origin <nova-url>
-     git push -u origin main
-     ```
-   - Se não houver remote nenhum: prosseguir normalmente, mas sugerir criar um:
-     ```
-     ℹ️  Nenhum remote configurado. Recomendo criar um repositório e conectar:
-         git remote add origin <sua-url>
-     Posso fazer isso se você me passar a URL.
-     ```
+#### 1a. Verificar vínculo Git
 
-2. Ler `process/fast_track/state/ft_state.yml`.
-3. **Inicializar token tracking** — gravar snapshot inicial:
-   ```bash
-   python3 process/fast_track/tools/token_tracker.py --project . snapshot --step init
-   ```
-4. Se `current_phase: null` (projeto novo):
+```bash
+git remote -v
+```
+- Se houver remote apontando para o repositório de template (ex: `symlabs-ai/fast-track_process`):
+  ```
+  ⚠️  Este repositório ainda está vinculado ao template original:
+      origin → <url-atual>
+
+  Recomendo desvincular e apontar para o seu próprio repositório.
+  Posso fazer isso agora. Qual a URL do novo repositório?
+  (Se ainda não criou, crie no GitHub/GitLab e me passe a URL.)
+  ```
+- Aguardar confirmação do dev com a nova URL.
+- Ao receber a URL, executar:
+  ```bash
+  git remote remove origin
+  git remote add origin <nova-url>
+  git push -u origin main
+  ```
+- Se não houver remote nenhum: prosseguir normalmente, mas sugerir criar um:
+  ```
+  ℹ️  Nenhum remote configurado. Recomendo criar um repositório e conectar:
+      git remote add origin <sua-url>
+  Posso fazer isso se você me passar a URL.
+  ```
+
+#### 1b. Setup do Ambiente
+
+Instruir `forge_coder` a executar:
+```bash
+bash setup_env.sh
+```
+Verificar que o ambiente está funcional:
+- [ ] `.venv` criada
+- [ ] Dependências instaladas (ForgeBase, ForgeLLMClient)
+- [ ] Ferramentas de dev disponíveis (pytest, ruff, mypy, pre-commit)
+
+**Não avançar para nenhuma fase sem ambiente configurado.**
+
+#### 1c. Inicializar Token Tracking
+
+> ⚠️ **OBRIGATÓRIO**: Executar **imediatamente** após setup do ambiente. Sem snapshot inicial,
+> o relatório de consumo no handoff será inválido (sem baseline para calcular deltas).
+
+```bash
+python3 process/fast_track/tools/token_tracker.py --project . snapshot --step init
+```
+
+Confirmar que `project/docs/metrics.yml` foi criado/atualizado com o snapshot `init`.
+**Se falhar: resolver antes de prosseguir. Nenhuma fase inicia sem token tracking ativo.**
+
+#### 1d. Confirmação de Bootstrap
+
+##### 1d-extra. Verificar Versão do Processo
+
+Ler `version` em `FAST_TRACK_PROCESS.yml` e em `ft_state.yml`.
+- Se diferentes: atualizar `ft_state.yml` para a versão do processo.
+- Exibir: `Versão do processo: X.Y.Z`
+
+Antes de prosseguir, exibir ao dev:
+```
+✅ Bootstrap concluído:
+   Git: origin → [url do remote]
+   Ambiente: .venv ativa · ForgeBase ✅ · ferramentas dev ✅
+   Token tracking: snapshot init gravado
+   Versão: processo v[X.Y.Z] · state sincronizado ✅
+```
+
+**Se qualquer item acima não estiver ✅, PARAR e resolver.**
+
+#### 1e. Ler Estado e Prosseguir
+
+1. Ler `process/fast_track/state/ft_state.yml`.
+2. Se `current_phase: null` (projeto novo):
    - **Detectar se o stakeholder entregou um PRD abrangente**:
      - Verificar se existe arquivo em `project/docs/` com conteúdo substantivo de produto
        (user stories, requisitos, visão, etc.) — ou se o stakeholder colou um documento na conversa.
@@ -238,12 +286,6 @@ Se falhar: devolver ao forge_coder com feedback específico.
 > ℹ️ Tech Stack não tem gate dedicado no ft_gatekeeper — é validação interna do ft_manager pois envolve julgamento sobre escolhas técnicas.
 
 ### 3. Orquestração TDD/Delivery (forge_coder)
-
-> ⚠️ **REGRA OBRIGATÓRIA — setup do ambiente antes do primeiro ciclo TDD:**
->
-> No **primeiro ciclo apenas**, antes de delegar qualquer task ao forge_coder, instruí-lo a rodar `bash setup_env.sh`.
-> Verificar que o ambiente está funcional (`.venv` criada, dependências instaladas, ferramentas de dev disponíveis).
-> Não iniciar TDD sem ambiente configurado.
 
 > ⚠️ **REGRA OBRIGATÓRIA — perguntar ANTES de iniciar o loop TDD:**
 >
@@ -672,6 +714,10 @@ O MVP é considerado entregue quando **todos** os critérios abaixo são verdade
   ⛔ /feature e /backlog só estão disponíveis em maintenance mode.
   O projeto está em [fase atual]. Conclua o MVP via Fast Track primeiro.
   ```
+- **Enforcement de step IDs** — Ao gravar um step em `completed_steps` do `ft_state.yml`,
+  o ft_manager DEVE verificar que o step ID existe em `process/fast_track/FAST_TRACK_IDS.md`.
+  Step IDs inventados (ex: `ft.delivery.01.smoke`) corrompem o estado e invalidam a rastreabilidade.
+  Se o ID não existir na lista canônica, PARAR e corrigir antes de gravar.
 - **Nunca avance sem validação** — Cada checkpoint bloqueante deve passar antes de continuar.
 - **Sequência de gates é inviolável** — Os gates pós-TDD/Delivery DEVEM ser executados nesta ordem, sem pular nenhum:
   ```

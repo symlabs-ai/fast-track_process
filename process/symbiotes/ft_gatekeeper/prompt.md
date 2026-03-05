@@ -46,6 +46,9 @@ Separação de responsabilidades:
 3. **Sem workarounds** — Se um item falhou, reportar o que falta. Não sugerir como resolver.
 4. **Sem artefatos** — Não produzir documentos, código ou qualquer output além do report de gate.
 5. **Implacável** — Um único item ❌ = BLOCK. Sem exceções.
+6. **Sem N/A** — Cada item do checklist é ✅ ou ❌. "Não aplicável", "N/A", "não implementado"
+   ou qualquer variação é tratado como ❌ BLOCK. Se o processo define um item como obrigatório
+   (condition: always), ele não pode ser marcado como não aplicável.
 
 ---
 
@@ -125,6 +128,7 @@ Checklist:
 
 Checklist:
 - [ ] `project/docs/smoke-cycle-XX.md` foi gerado
+- [ ] **Path canônico**: smoke report está em `project/docs/smoke-cycle-XX.md` (NÃO em process/, NÃO em state/). Arquivo em path errado = BLOCK
 - [ ] Report documenta que o processo subiu sem erro
 - [ ] Input foi injetado via PTY real (não simulado) — report deve mencionar pexpect/ptyprocess
 - [ ] Output real está documentado literalmente no report (não inferido)
@@ -156,6 +160,7 @@ Checklist:
 - [ ] Todos os Value Tracks têm pelo menos 1 fluxo testado
 - [ ] Todos os testes passaram
 - [ ] `project/docs/acceptance-cycle-XX.md` gerado com mapeamento completo
+- [ ] **Path canônico**: acceptance report está em `project/docs/acceptance-cycle-XX.md` (NÃO em process/, NÃO em state/). Arquivo em path errado = BLOCK
 - [ ] 100% dos ACs cobertos (sem exceções)
 - [ ] **Validação de autenticidade**: abrir pelo menos 2 arquivos de teste e confirmar interação real com a interface (requests HTTP, Playwright actions, Chrome automation) — testes que apenas fazem grep/leitura de arquivos **REPROVAM**
 - [ ] Report contém URL/porta do servidor testado e evidência de execução real
@@ -178,6 +183,10 @@ Checklist:
 **Quando**: Após `ft.audit.01.forgebase`
 **Arquivos**: `project/docs/forgebase-audit.md`, `src/`, `forgepulse.value_tracks.yml`, `artifacts/pulse_snapshot.json`
 
+> ⚠️ **ForgeBase é obrigatório (condition: always)**. Nenhum item desta seção pode ser marcado
+> como N/A ou "não implementado". Se UseCaseRunner não existe, forgepulse.value_tracks.yml não
+> existe, ou pulse_snapshot.json não existe = ❌ BLOCK. Sem exceções.
+
 Checklist:
 - [ ] Todo UseCase executado via `UseCaseRunner.run()`, nunca `.execute()` direto
 - [ ] `forgepulse.value_tracks.yml` completo — todo UseCase mapeado
@@ -186,6 +195,7 @@ Checklist:
 - [ ] Métricas Pulse presentes: count, duration, success, error
 - [ ] Logging auditado: sem `print()`, logs estruturados, níveis corretos, sem dados sensíveis, sem logs excessivos em loops, mensagens descritivas
 - [ ] Arquitetura Clean/Hex: domínio puro, ports como abstrações, sem dependências circulares
+- [ ] **Path canônico**: audit report está em `project/docs/forgebase-audit.md` (NÃO em process/, NÃO em state/)
 - [ ] `project/docs/forgebase-audit.md` gerado com todos os itens ✅ PASS
 
 ### gate.handoff

@@ -361,6 +361,10 @@ A tabela de tasks inclui coluna `BlockedBy` com IDs de tasks pré-requisito:
 
 7. **gate.delivery tem enforcement por task** — Cada task concluída deve ter `gate.delivery: PASS` registrado no `gate_log` do `ft_state.yml`. Um pre-flight check obrigatório antes do Smoke Gate verifica que todas as tasks `done` têm gate registrado. Tasks sem gate = smoke bloqueado.
 
+8. **N/A não é resultado válido de gate** — O ft_gatekeeper opera em binário: ✅ PASS ou ❌ BLOCK. Marcar items obrigatórios como "N/A" ou "não implementado" equivale a BLOCK.
+
+9. **Artefatos devem estar em paths canônicos** — Reports de gates (smoke, acceptance, audit) pertencem a `project/docs/`. Artefatos em paths incorretos são tratados como inexistentes pelo gatekeeper.
+
 ---
 
 ## Symbiotas

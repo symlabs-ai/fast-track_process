@@ -2,7 +2,7 @@
 # Solo dev + AI — 18 steps em 9 fases
 
 id: forgeprocess_fast_track
-version: "0.4.7"
+version: "0.4.8"
 title: "ForgeProcess — Fast Track"
 description: >
   ForgeProcess para solo dev + AI.
@@ -323,7 +323,16 @@ phases:
 flow:
   - id: start
     type: start
-    next: decisao_mdd_mode
+    next: ft_bootstrap
+
+  - id: ft_bootstrap
+    type: orchestration
+    orchestrator: ft_manager
+    title: "Bootstrap — Git + Setup + Token Tracking"
+    narrative: "Pré-requisito bloqueante: verificar git remote, rodar setup_env.sh, gravar snapshot init de tokens. Nenhuma fase inicia sem os 3 concluídos."
+    action: "1) git remote -v (verificar/configurar) 2) bash setup_env.sh (ambiente) 3) token_tracker.py snapshot --step init"
+    on_pass: decisao_mdd_mode
+    on_fail: ft_bootstrap  # retry até resolver
 
   - id: decisao_mdd_mode
     type: decision

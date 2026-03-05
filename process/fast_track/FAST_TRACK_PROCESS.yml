@@ -233,6 +233,7 @@ phases:
           api: "pytest + httpx/requests → tests/acceptance/"
           ui_web: "Playwright ou Chrome automation → tests/acceptance/"
           ui_desktop: "Playwright (Electron) ou pyautogui → tests/acceptance/"
+          mixed: "AMBAS as estratégias: pytest + httpx para API E Playwright headed para UI. Ambos os conjuntos devem existir em tests/acceptance/"
           cli: "skip — coberto pelo E2E gate"
 
   - id: ft_feedback
@@ -447,7 +448,62 @@ flow:
   - id: ft_plan_03
     type: step
     step_ref: ft_plan.ft.plan.03.diagrams
-    next: ft_tdd_01
+    next: decisao_paralelo
+
+  # --- Decisão: Paralelo ou Sequencial ---
+
+  - id: decisao_paralelo
+    type: decision
+    orchestrator: ft_manager
+    decision:
+      question: "Executar tasks em paralelo (worktrees) ou sequencial?"
+      decider:
+        type: auto
+        check: "parallel_mode == true AND >= 3 pending tasks AND forge_coder recommended PARALELO"
+      branches:
+        - when: "parallel"
+          goto: ft_parallel_fanout
+        - when: "sequential"
+          goto: ft_tdd_01
+
+  - id: ft_parallel_fanout
+    type: orchestration
+    orchestrator: ft_manager
+    title: "Fan-out — criar worktrees e lançar agents paralelos"
+    narrative: "ft_manager cria worktrees para tasks independentes, lança forge_coder em cada slot"
+    action: "create worktrees, assign tasks to slots, launch parallel forge_coder instances"
+    max_slots: 3
+    next: ft_parallel_wait
+
+  - id: ft_parallel_wait
+    type: synchronization
+    orchestrator: ft_manager
+    title: "Aguardar slots paralelos"
+    narrative: "ft_manager aguarda todos os slots sinalizarem done (ou failed)"
+    action: "monitor parallel_tasks[].status until all == done|failed"
+    next: ft_parallel_fanin
+
+  - id: ft_parallel_fanin
+    type: orchestration
+    orchestrator: ft_manager
+    title: "Fan-in — merge, suite, cleanup"
+    narrative: "ft_manager faz merge sequencial das branches paralelas, roda suite completa, limpa worktrees"
+    action: "sequential merge --no-ff, resolve conflicts, pytest, cleanup worktrees and branches"
+    next: decisao_mais_tasks_pos_merge
+
+  - id: decisao_mais_tasks_pos_merge
+    type: decision
+    orchestrator: ft_manager
+    decision:
+      question: "Há mais tasks pendentes após merge paralelo?"
+      decider:
+        type: auto
+        check: "project/docs/TASK_LIST.md has pending tasks"
+      branches:
+        - when: "more_tasks"
+          goto: decisao_paralelo
+        - when: "done"
+          goto: ft_preflight_gates
 
   # --- Loop: TDD + Delivery por task ---
 
@@ -498,9 +554,20 @@ flow:
         check: "project/docs/TASK_LIST.md has pending tasks"
       branches:
         - when: "more_tasks"
-          goto: ft_tdd_01
+          goto: decisao_paralelo
         - when: "done"
-          goto: ft_smoke_01
+          goto: ft_preflight_gates
+
+  # --- Pre-flight Gate Log Check ---
+
+  - id: ft_preflight_gates
+    type: validation
+    orchestrator: ft_manager
+    title: "Pre-flight — verificar gate_log antes do Smoke"
+    narrative: "ft_manager verifica que todas as tasks done passaram gate.delivery. Bloqueia se houver gaps."
+    action: "read gate_log from ft_state.yml, compare with done tasks in TASK_LIST.md"
+    on_pass: ft_smoke_01
+    on_fail: ft_tdd_01  # volta para loop para executar gates faltantes
 
   # --- Smoke Gate ---
 

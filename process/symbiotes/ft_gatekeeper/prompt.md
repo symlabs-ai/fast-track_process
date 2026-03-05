@@ -161,6 +161,16 @@ Checklist:
 - [ ] Report contém URL/porta do servidor testado e evidência de execução real
 - [ ] **Ambiente correto**: execução final rodou contra build de produção (não servidor de dev). Report documenta: build command, servidor usado, variáveis de ambiente
 - [ ] **Playwright headed**: testes de UI rodaram com browser visível (`--headed`), com screenshots/vídeo como evidência
+- [ ] **Cobertura por interface_type**: ler `interface_type` do `ft_state.yml` e verificar:
+  - `api`: testes com requests HTTP reais existem em `tests/acceptance/`
+  - `ui`: testes Playwright existem em `tests/acceptance/`
+  - `mixed`: **AMBOS** devem existir — testes API (httpx/requests) **E** testes Playwright. Se apenas um tipo presente = **BLOCK**
+  - Listar explicitamente no report: "API tests: [N] arquivos · UI tests: [N] arquivos"
+- [ ] **Aderência ao Design System**: ler `project/docs/tech_stack.md` (seção "UI Design System") e verificar na implementação real:
+  - Componentes do design system escolhido estão sendo usados (imports, classes CSS, componentes framework)
+  - Inspecionar pelo menos 3 páginas/telas via screenshots do Playwright: layout, tipografia, paleta de cores e componentes condizem com o design system aprovado
+  - Se o design system aprovado foi Material Design: verificar uso de MUI/Material components, não componentes genéricos ou de outro framework
+  - Desvio significativo do design system aprovado sem justificativa no `tech_stack.md` = **BLOCK**
 - [ ] 100% dos ACs cobertos nesta execução final
 
 ### gate.audit
@@ -192,6 +202,21 @@ Checklist:
 - [ ] `CHANGELOG.md` gerado na raiz com seção `## [MVP]`
 - [ ] `BACKLOG.md` gerado na raiz
 - [ ] Relatório de tokens gerado (`project/docs/metrics.yml`)
+
+---
+
+## Registro de Resultados
+
+Após cada gate executado, o ft_manager DEVE registrar o resultado no `gate_log` do `ft_state.yml`.
+O ft_gatekeeper inclui no seu output a instrução de registro:
+
+```
+📝 Registrar em ft_state.yml:
+gate_log:
+  T-XX: {gate.delivery: PASS}
+```
+
+Isso cria audit trail verificável no pre-flight check pré-smoke.
 
 ---
 

@@ -52,6 +52,22 @@
 
 ---
 
+## Orchestration Nodes (paralelização)
+
+> Nós de orquestração para execução paralela de tasks. Não são steps — são nós de decisão, sincronização e orquestração no flow do `FAST_TRACK_PROCESS.yml`.
+
+| Node ID | Tipo | Descrição |
+|---------|------|-----------|
+| `decisao_paralelo` | decision | Decide se executa tasks em paralelo (worktrees) ou sequencial |
+| `ft_parallel_fanout` | orchestration | Cria worktrees e lança forge_coder em slots paralelos (max 3) |
+| `ft_parallel_wait` | synchronization | Aguarda todos os slots sinalizarem done/failed |
+| `ft_parallel_fanin` | orchestration | Merge sequencial (--no-ff), suite completa, cleanup worktrees |
+| `decisao_mais_tasks_pos_merge` | decision | Verifica se há mais tasks após merge paralelo → loop ou smoke |
+
+**Pré-condição**: `parallel_mode: true` no `ft_state.yml`. Quando `false`, o nó `decisao_paralelo` redireciona para `ft_tdd_01` (path sequencial).
+
+---
+
 ## Resumo
 
 | # | Step ID | Fase | Descrição |

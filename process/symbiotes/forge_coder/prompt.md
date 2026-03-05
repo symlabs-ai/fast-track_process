@@ -360,6 +360,46 @@ Se o script falhar: reportar o erro ao ft_manager antes de prosseguir. Não inic
 
 ### Loop por Task
 1) SELECAO — ler TASK_LIST.md, selecionar próxima task pendente.
+
+#### 1b) Avaliação de Paralelização *(quando `parallel_mode: true` ou ft_manager solicita)*
+
+Após selecionar a task atual, avaliar se há tasks independentes que podem rodar em paralelo.
+
+**Critérios de independência técnica:**
+- Value Tracks diferentes → forte candidata a paralelização
+- Mesmo VT, entidades diferentes → pode paralelizar
+- Mesmo VT + mesma entidade → NÃO paraleliza
+- Dependência de contrato (port/interface compartilhada) → NÃO
+- Ambas tocam composition root → NÃO
+- Duas tasks Size L simultaneamente → NÃO
+- Apenas 1 task pendente → SEQUENCIAL (sem sentido paralelizar)
+
+**Report estruturado (obrigatório quando avaliação é solicitada):**
+```
+🔀 Avaliação de Paralelização
+Recomendação: PARALELO | SEQUENCIAL
+  Slot 1: T-XX (VT: track_a)
+  Slot 2: T-YY (VT: track_b)
+Justificativa: [razão técnica concisa]
+Risco: baixo | médio
+```
+
+**Regras em worktree paralelo:**
+- forge_coder executa o ciclo completo (Red → Green → Self-Review → Refactor → Commit)
+- NÃO faz merge — merge é responsabilidade exclusiva do ft_manager
+- Sinaliza conclusão ao ft_manager com status `done` no slot
+
+**Progress Report em modo paralelo:**
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🔀 [cycle-XX] Slot [N] — T-XX: [título]
+ 📂 Worktree: .claude/worktrees/parallel-T-XX
+ 🌿 Branch: parallel/T-XX
+ 🏷️ Value Track: [track_id]
+ 📊 Step: [Red | Green | Review | Refactor | Commit]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
 2) RED — ler ACs do PRD, escrever teste em `tests/unit/` que falha.
 3) GREEN — implementar o mínimo código genérico (sem hardcode de valores de teste). **Rodar suite completa** — não apenas o teste da task.
 4) SELF-REVIEW — checklist expandido (10 itens, 3 grupos):

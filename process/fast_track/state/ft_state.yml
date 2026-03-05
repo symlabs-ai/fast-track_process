@@ -28,12 +28,29 @@ current_phase: ft_mdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e 
 current_cycle: cycle-01      # ex.: cycle-01
 
 last_completed_step: null    # ex.: ft.mdd.01.hipotese
-next_recommended_step: ft.mdd.01.hipotese
+next_step: ft.mdd.01.hipotese  # determinístico — o próximo step obrigatório, não uma sugestão
 
 completed_steps: []          # lista de step IDs concluídos
 
 blocked: false
 blocked_reason: null
+
+# Paralelização (opt-in) — só populados quando parallel_mode: true
+parallel_mode: false              # opt-in: habilita execução paralela de tasks em VTs independentes
+parallel_max_agents: 3            # máximo de forge_coder simultâneos (slots de worktree)
+parallel_tasks: []                # [{task_id, worktree, branch, status, agent_id}]
+parallel_merge_queue: []          # task_ids prontos para merge (ordem de conclusão)
+parallel_merge_status: idle       # idle | merging | conflict | done
+
+# Gate enforcement — registro de gates executados por task
+# Populado pelo ft_manager após cada chamada ao ft_gatekeeper
+# Formato: {task_id: {gate_id: result, ...}, ...}
+gate_log: {}
+# Exemplo quando populado:
+# gate_log:
+#   T-01: {gate.delivery: PASS}
+#   T-02: {gate.delivery: PASS}
+#   T-03: {gate.delivery: BLOCK, gate.delivery.retry: PASS}
 
 # Métricas simplificadas
 metricas:

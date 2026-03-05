@@ -288,6 +288,15 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    - Se BLOCK: reportar ao forge_coder os itens faltantes reportados pelo gatekeeper e aguardar correção.
    - Se bloqueio depender do dev: pausar e acionar, independente do modo escolhido.
 
+   > ⚠️ **ENFORCEMENT OBRIGATÓRIO**: Após cada gate.delivery, registrar resultado no `gate_log` do `ft_state.yml`:
+   >
+   > ```yaml
+   > gate_log:
+   >   T-XX: {gate.delivery: PASS}  # ou BLOCK
+   > ```
+   >
+   > **Sem registro no gate_log = gate não executado.** O pre-flight check pré-smoke vai bloquear.
+
 3. Repetir até todas as tasks P0 estarem `done`.
 
 4. **Após cada task validada** (modo `phase_end`), registrar progresso internamente.
@@ -314,6 +323,109 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    ```
    Aguardar confirmação antes de avançar para Smoke.
+
+### 3b. Orquestração Paralela (opcional)
+
+> ⚠️ Ativada apenas quando `parallel_mode: true` no `ft_state.yml`.
+> Default é sequencial — paralelização é opt-in.
+
+#### Ativação
+
+Condições para considerar paralelização:
+- >= 3 tasks pendentes no TASK_LIST.md
+- forge_coder recomendou `PARALELO` na avaliação de independência (seção 1b do prompt)
+
+Comportamento por `tdd_interaction_mode`:
+- `per_task`: confirmar com dev antes de ativar paralelização
+- `phase_end`: ft_manager decide internamente com base na recomendação do forge_coder
+
+#### Fan-out (lançar slots paralelos)
+
+1. **Slot 1**: worktree principal (forge_coder existente, branch atual)
+2. **Slots 2-N** (max `parallel_max_agents`):
+   ```bash
+   git worktree add .claude/worktrees/parallel-T-XX -b parallel/T-XX
+   ```
+3. Cada slot recebe um forge_coder com ciclo TDD/Delivery completo:
+   `ft.tdd.01.selecao` → `ft.tdd.02.red` → `ft.tdd.03.green`
+   → `ft.delivery.01.self_review` → `ft.delivery.02.refactor` → `ft.delivery.03.commit`
+
+4. Registrar no state:
+   ```yaml
+   parallel_tasks:
+     - task_id: T-XX
+       worktree: .claude/worktrees/parallel-T-XX
+       branch: parallel/T-XX
+       status: in_progress  # in_progress | done | failed
+       agent_id: slot-1
+   ```
+
+#### Gate por task (independente por slot)
+
+- `gate.delivery` é executado independentemente por slot via ft_gatekeeper
+- BLOCK em um slot **não bloqueia** os outros — cada slot corrige seus issues
+- ft_manager monitora status de todos os slots
+
+#### Fan-in (todos os slots `done`)
+
+1. **Merge sequencial** na ordem de conclusão:
+   ```bash
+   git merge parallel/T-XX --no-ff
+   ```
+2. **Conflito** → forge_coder principal resolve no worktree principal
+3. **Suite completa pós-merge**: `pytest` no worktree principal após todos os merges
+4. **Cleanup**:
+   ```bash
+   git worktree remove .claude/worktrees/parallel-T-XX
+   git branch -d parallel/T-XX
+   ```
+5. **Reset state**:
+   ```yaml
+   parallel_tasks: []
+   parallel_merge_queue: []
+   parallel_merge_status: done
+   ```
+
+#### Regras
+
+- **Max 3 agents paralelos** — nunca exceder `parallel_max_agents`
+- **Smoke = synchronization point** — tudo deve estar merged antes do smoke gate
+- **ft_manager controla merge** — forge_coder NÃO faz merge, apenas sinaliza `done`
+- **Só ft_manager escreve no state** — slots paralelos não tocam `ft_state.yml`
+- **Backward compatible** — quando `parallel_mode: false`, fluxo é idêntico ao sequencial
+
+#### Status header (modo paralelo ativo)
+
+Quando há slots paralelos ativos, adicionar ao header:
+```
+ 🔀 PARALLEL [N slots] — T-XX (slot-1), T-YY (slot-2)
+```
+
+---
+
+### 3c. Pre-flight Check (obrigatório antes do Smoke)
+
+> ⚠️ **REGRA INVIOLÁVEL**: Antes de instruir forge_coder para ft.smoke.01.cli_run,
+> ft_manager DEVE executar o pre-flight check abaixo. Smoke sem pre-flight = violação de processo.
+
+1. Ler `gate_log` do `ft_state.yml`.
+2. Ler todas as tasks com status `done` no TASK_LIST.md.
+3. Para cada task `done`:
+   - Verificar que `gate_log[T-XX].gate.delivery == PASS`
+   - Se ausente ou BLOCK: **BLOQUEAR**. Não avançar para Smoke.
+4. Se todas as tasks `done` têm gate.delivery PASS:
+   - Exibir confirmação:
+     ```
+     ✅ Pre-flight check: [N] tasks · [N] gate.delivery PASS · 0 pendentes
+     ```
+   - Avançar para Smoke Gate.
+5. Se alguma task falhar:
+   ```
+   ⛔ Pre-flight BLOCKED:
+      T-XX: gate.delivery ausente — executar gate antes de prosseguir
+      T-YY: gate.delivery BLOCK — resolver issues e re-executar
+   ```
+   Acionar ft_gatekeeper para as tasks faltantes antes de avançar.
 
 ### 4. Smoke Gate (ft.smoke.01.cli_run)
 
@@ -344,6 +456,15 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    - Se `api`, `ui` ou `mixed`: executar acceptance.
 
 2. Instruir `forge_coder` a executar `ft.acceptance.01.interface_validation`.
+
+   > ⚠️ **ENFORCEMENT POR INTERFACE_TYPE**: Antes de delegar, verificar `interface_type` no `ft_state.yml`
+   > e instruir forge_coder com a estratégia correta:
+   > - `api`: pytest + httpx/requests contra API real
+   > - `ui`: Playwright headed contra UI real
+   > - `mixed`: **AMBAS** — pytest + httpx para endpoints API **E** Playwright headed para UI.
+   >   Instruir explicitamente: "Você DEVE entregar testes API e testes Playwright. Apenas um dos dois = BLOCK."
+   >
+   > Não delegar genericamente. Especificar quais estratégias são obrigatórias.
 
 3. Acionar `ft_gatekeeper` para `gate.acceptance`.
    - Se PASS: seguir para Feedback + decisão de ciclo.

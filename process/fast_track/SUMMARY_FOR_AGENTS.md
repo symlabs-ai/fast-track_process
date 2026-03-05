@@ -37,11 +37,20 @@ ft.plan.02.tech_stack (forge_coder propõe) → stakeholder revisa/aprova
 ft.plan.03.diagrams (class / components / database / architecture)
   |
   v
+decisao_paralelo: parallel_mode true + >= 3 tasks + forge_coder recomendou?
+  |
+  +--> PARALLEL PATH:
+  |     ft_parallel_fanout (worktrees + slots)
+  |     -> ft_parallel_wait (aguardar slots done)
+  |     -> ft_parallel_fanin (merge --no-ff + pytest + cleanup)
+  |     -> more_tasks? -> decisao_paralelo / done? -> Smoke
+  |
+  +--> SEQUENTIAL PATH:
 LOOP[
   ft.tdd.01.selecao -> ft.tdd.02.red -> ft.tdd.03.green (suite completa obrigatória)
   -> ft.delivery.01.self_review (expandido, 10 itens) -> ft.delivery.02.refactor -> ft.delivery.03.commit
   [ft_gatekeeper: gate.delivery — cobertura >= 85%]
-  -> more_tasks? -> LOOP / done? -> EXIT
+  -> more_tasks? -> decisao_paralelo / done? -> EXIT
 ]
   -> ft.smoke.01.cli_run (GATE — processo real, PTY real, sem mocks, output documentado)
   -> ft.e2e.01.cli_validation (GATE — unit + smoke)
@@ -127,6 +136,8 @@ LOOP[
 23. **Skip de tasks requer aprovação** — Tasks P0 nunca podem ser puladas. Tasks P1 derivadas de features centrais do PRD não podem ser puladas sem aprovação do stakeholder. Todo skip registrado no TASK_LIST.md com motivo e quem aprovou.
 24. **Prioridades da task list requerem aprovação do stakeholder** — Após gate.task_list PASS, ft_manager apresenta prioridades ao stakeholder. Features centrais do PRD (visão, proposta de valor) devem ser P0. Stakeholder aprova ou ajusta antes de avançar.
 25. **ft_gatekeeper é independente** — Separação de responsabilidades: ft_manager orquestra, ft_gatekeeper bloqueia. O mesmo agente que orquestra não valida os gates.
+26. **Paralelização é opt-in** — `parallel_mode: true` no state habilita execução paralela de tasks em Value Tracks independentes via git worktrees. forge_coder avalia independência técnica em `ft.tdd.01.selecao`. Max 3 slots paralelos. Smoke é synchronization point (tudo merged antes). ft_manager controla merge. Quando `parallel_mode: false` (default), fluxo é estritamente sequencial.
+27. **gate.delivery tem enforcement por task** — Cada task `done` DEVE ter `gate.delivery: PASS` registrado no `gate_log` do `ft_state.yml`. Pre-flight check antes do smoke verifica completude. Sem registro = gate não executado = smoke bloqueado. ft_manager NÃO pode alegar "validei internamente" — o gate_log é a evidência.
 
 ## Stakeholder Mode
 
@@ -147,4 +158,10 @@ Skills disponíveis **apenas em maintenance mode**:
 
 Arquivo: `process/fast_track/state/ft_state.yml`
 Campo chave: `next_step` (determinístico — o próximo step obrigatório, não uma sugestão)
-Novos campos: `min_coverage`, `desired_coverage`, `commit_strategy`, `interface_type`
+Campos de qualidade: `min_coverage`, `desired_coverage`, `commit_strategy`, `interface_type`
+Campos de paralelização (opt-in, só populados quando `parallel_mode: true`):
+- `parallel_mode`: false (default) | true
+- `parallel_max_agents`: max forge_coder simultâneos (default: 3)
+- `parallel_tasks`: lista de `{task_id, worktree, branch, status, agent_id}`
+- `parallel_merge_queue`: task_ids prontos para merge
+- `parallel_merge_status`: idle | merging | conflict | done

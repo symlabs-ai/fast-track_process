@@ -306,6 +306,45 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 ---
 
+## Modo Paralelo (opcional)
+
+> Opt-in via `parallel_mode: true` no `ft_state.yml`. Default = sequencial.
+
+### Pré-condições
+
+- `parallel_mode: true` no state
+- >= 3 tasks pendentes no TASK_LIST.md
+- forge_coder avaliou independência técnica e recomendou `PARALELO`
+- Tasks candidatas estão em Value Tracks diferentes (ou entidades distintas no mesmo VT)
+- Nenhuma task candidata tem `BlockedBy` apontando para a outra
+
+### Mecanismo
+
+1. **Decisão** (`decisao_paralelo`): ft_manager verifica condições e decide path paralelo ou sequencial
+2. **Fan-out** (`ft_parallel_fanout`): cria git worktrees (`.claude/worktrees/parallel-T-XX`) com branches dedicadas (`parallel/T-XX`), lança até 3 forge_coder em slots independentes
+3. **Execução**: cada slot executa o ciclo TDD/Delivery completo (Red → Green → Review → Refactor → Commit) na sua worktree. `gate.delivery` é independente por slot
+4. **Fan-in** (`ft_parallel_fanin`): ft_manager faz merge sequencial (`--no-ff`), resolve conflitos via forge_coder principal, roda suite completa (`pytest`), limpa worktrees e branches
+
+### Coluna BlockedBy na Task List
+
+A tabela de tasks inclui coluna `BlockedBy` com IDs de tasks pré-requisito:
+```
+| ID | Task | From US | Value Track | Priority | Size | Status | BlockedBy |
+```
+- `—` = sem dependência
+- `T-01, T-03` = depende de T-01 e T-03 estarem `done`
+- Preenchida pelo ft_coach, refinada pelo forge_coder em seleção
+
+### Limitações
+
+- **Max 3 agents paralelos** — configurável via `parallel_max_agents`
+- **Smoke = synchronization point** — tudo merged antes do smoke gate
+- **ft_manager controla merge** — forge_coder NÃO faz merge
+- **Backward compatible** — `parallel_mode: false` → fluxo idêntico ao sequencial
+- Duas tasks Size L NÃO paralelizam simultaneamente
+
+---
+
 ## Regras
 
 1. **PRD é a fonte única de verdade** — Toda decisão de produto está no PRD. A exceção é `hipotese.md`, que registra a hipótese antes do PRD existir e é absorvido por ele. Não há documentos separados de visão, ADR ou backlog.
@@ -319,6 +358,8 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 5. **Self-review substitui review formal** — Checklist automatizado em vez de 3 reviewers.
 
 6. **Task list substitui roadmap** — Um arquivo (`TASK_LIST.md`) em vez de ROADMAP + BACKLOG + estimates.
+
+7. **gate.delivery tem enforcement por task** — Cada task concluída deve ter `gate.delivery: PASS` registrado no `gate_log` do `ft_state.yml`. Um pre-flight check obrigatório antes do Smoke Gate verifica que todas as tasks `done` têm gate registrado. Tasks sem gate = smoke bloqueado.
 
 ---
 

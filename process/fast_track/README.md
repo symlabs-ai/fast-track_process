@@ -1,6 +1,6 @@
 # Fast Track — Quick Start
 
-> Solo dev + AI. 18 steps. Valor > cerimônia.
+> Solo dev + AI. 18 steps. Valor > cerimônia, com sprints técnicas.
 
 ## Como começar
 
@@ -14,9 +14,11 @@ cp process/fast_track/templates/template_prd.md project/docs/PRD.md
 # 3. Após PRD aprovado, crie a task list
 cp process/fast_track/templates/template_task_list.md project/docs/TASK_LIST.md
 
-# 4. O forge_coder executa TDD + delivery por task
+# 4. O forge_coder executa TDD + delivery sprint a sprint
 
-# 5. E2E CLI gate fecha o ciclo
+# 5. Ao fim de cada sprint, rode o Sprint Expert Gate (/ask fast-track)
+
+# 6. Smoke + E2E CLI gate fecham o ciclo
 ```
 
 ## Estrutura
@@ -31,6 +33,7 @@ process/fast_track/
   templates/
     template_prd.md          # PRD consolidado
     template_task_list.md    # Task list
+    template_sprint_review.md # Review de sprint via especialista
     template_retro_note.md   # Retro note
 ```
 

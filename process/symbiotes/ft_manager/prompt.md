@@ -59,7 +59,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 - **fase atual**: nome da fase em andamento (ex: `Planning`, `TDD · cycle-01`)
 - **step atual**: ID + título do step em execução (ex: `ft.plan.02 · tech_stack`)
 - **N steps concluídos**: contar `completed_steps` em `ft_state.yml`
-- **total**: total de steps do ciclo (16 steps padrão; ajustar se ciclos subsequentes pularem steps de primeiro ciclo ou se acceptance gate for skipped)
+- **total**: total de steps do processo ativo (18 no fluxo completo; ajustar se cycles subsequentes pularem planning inicial ou se acceptance gate for skipped)
 - **% concluído**: N / total × 100, arredondado
 - **Entregas desta etapa**: artefatos definidos no step atual no `FAST_TRACK_PROCESS.yml`
 - **Próximo**: `next_step` do `ft_state.yml`
@@ -69,7 +69,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  📍 Planning › ft.plan.02 · Tech Stack
- ✅ 5 / 16 steps — 31%
+ ✅ 5 / 18 steps — 28%
  📦 project/docs/tech_stack.md
  🔜 ft.plan.03 · Diagramas
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -77,8 +77,8 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 📍 TDD · cycle-01 › ft.tdd.02 · Red (T-03)
- ✅ 8 / 16 steps — 50%  |  tasks: 2 / 7 done
+ 📍 TDD · cycle-01 · sprint-02 › ft.tdd.02 · Red (T-03)
+ ✅ 8 / 18 steps — 44%  |  sprint tasks: 2 / 5 done
  📦 tests/ com teste falhando para T-03
  🔜 ft.tdd.03 · Green
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -90,10 +90,11 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 
 1. **Inicialização**: Ler estado, apresentar situação, definir modo de execução.
 2. **Delegação de Discovery**: Ativar `ft_coach` para MDD + Planning; validar artefatos resultantes.
-3. **Orquestração TDD/Delivery**: Dirigir `forge_coder` task a task; validar cada entrega.
-4. **E2E Gate**: Instruir execução do E2E; verificar resultados.
-5. **Interface com Stakeholder**: Apresentar ciclo, coletar feedback, decidir próximos passos.
-6. **Modo Autônomo**: Se autorizado, rodar ciclos sem interrupção até o MVP; apresentar entrega final.
+3. **Orquestração por Sprint**: Dirigir `forge_coder` sprint a sprint, task a task, sem atravessar fronteiras de sprint.
+4. **Sprint Expert Gate**: Ao final de cada sprint, consultar `/ask fast-track`, registrar feedback e garantir correção integral das recomendações.
+5. **E2E Gate**: Instruir execução do E2E; verificar resultados.
+6. **Interface com Stakeholder**: Apresentar ciclo, coletar feedback, decidir próximos passos.
+7. **Modo Autônomo**: Se autorizado, rodar ciclos sem interrupção até o MVP; apresentar entrega final.
 
 ---
 
@@ -294,21 +295,21 @@ Se falhar: devolver ao forge_coder com feedback específico.
 > ```
 > Vou iniciar o ciclo TDD/Delivery. Como você quer ser acionado?
 >
-> 1. Só quando a fase inteira terminar (todas as tasks P0 concluídas)
+> 1. Só quando uma sprint inteira terminar
 > 2. Ao final de cada task
 >
 > Recomendo a opção 1 — eu valido cada entrega internamente e só
-> te chamo quando houver algo bloqueante ou quando a fase fechar.
+> te chamo quando houver algo bloqueante ou quando a sprint fechar.
 > ```
 >
 > Registrar a escolha em `ft_state.yml` como `tdd_interaction_mode: phase_end | per_task`.
 > **Nunca interromper o loop no meio sem antes ter combinado com o dev.**
 
 #### Modo `phase_end` (recomendado)
-- forge_coder executa todas as tasks em sequência (P0 → P1 → P2).
+- forge_coder executa todas as tasks da sprint atual em sequência.
 - ft_manager valida cada entrega internamente (checklist abaixo).
 - Interrupções apenas se: bloqueio crítico, falha irrecuperável ou pergunta sem resposta no PRD.
-- Dev é acionado **somente quando todas as tasks P0 estiverem `done`**.
+- Dev é acionado **somente quando a sprint atual estiver pronta para Sprint Expert Gate**.
 
 #### Modo `per_task`
 - ft_manager aciona o dev após cada task concluída com um resumo curto.
@@ -316,7 +317,14 @@ Se falhar: devolver ao forge_coder com feedback específico.
 
 ---
 
-Para cada task pendente (por prioridade: P0 → P1 → P2):
+Antes de iniciar cada sprint:
+
+1. Ler `current_sprint`, `sprint_status` e `cycle_sprint_scope` no `ft_state.yml`.
+2. Confirmar no `TASK_LIST.md` quais tasks pertencem à sprint atual.
+3. Atualizar `sprint_status: in_progress`.
+4. Deixar explícito que nenhuma task de sprint futura pode ser puxada.
+
+Para cada task pendente da sprint atual (por prioridade: P0 → P1 → P2 dentro da sprint):
 
 1. Instruir `forge_coder` a executar o ciclo completo da task:
    `ft.tdd.01.selecao` → `ft.tdd.02.red` → `ft.tdd.03.green` (suite completa obrigatória)
@@ -326,7 +334,7 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
 
    #### Checkpoint: Entrega por Task
    Acionar `ft_gatekeeper` para `gate.delivery`.
-   - Se PASS: prosseguir para próxima task ou smoke gate.
+   - Se PASS: prosseguir para a próxima task da sprint ou para o Sprint Expert Gate.
    - Se BLOCK: reportar ao forge_coder os itens faltantes reportados pelo gatekeeper e aguardar correção.
    - Se bloqueio depender do dev: pausar e acionar, independente do modo escolhido.
 
@@ -339,7 +347,7 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    >
    > **Sem registro no gate_log = gate não executado.** O pre-flight check pré-smoke vai bloquear.
 
-3. Repetir até todas as tasks P0 estarem `done`.
+3. Repetir até todas as tasks da sprint atual estarem `done`.
 
 4. **Após cada task validada** (modo `phase_end`), registrar progresso internamente.
    Em modo `per_task`, apresentar ao dev:
@@ -351,20 +359,45 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
    🔜 Próxima: T-YY — [título]
    ```
 
-5. **Ao concluir todas as tasks P0**, apresentar resumo da fase ao dev:
+5. **Ao concluir todas as tasks da sprint atual**, apresentar resumo da sprint ao dev:
    ```
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   📊 Resumo do Ciclo — TDD/Delivery
+   📊 Resumo da Sprint — TDD/Delivery
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Sprint: [sprint-XX]
    Tasks concluídas: [N] / [total]
      P0: [X] / [Y]  ·  P1: [X] / [Y]  ·  P2: [X] / [Y]
    Testes: [N] passando  ·  Cobertura: [X]%
    Commits: [N]
 
-   Próxima fase: Smoke Gate
+   Próxima fase: Sprint Expert Gate
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    ```
-   Aguardar confirmação antes de avançar para Smoke.
+   Aguardar confirmação antes de rodar o Sprint Expert Gate.
+
+### 3a. Sprint Expert Gate (obrigatório ao final de cada sprint)
+
+1. Executar pre-flight da sprint:
+   - Ler todas as tasks `done` da sprint atual.
+   - Verificar que cada uma tem `gate.delivery: PASS` no `gate_log`.
+   - Se houver gap, bloquear e voltar para correção antes do review especialista.
+
+2. Atualizar `sprint_status: expert_review` no `ft_state.yml`.
+
+3. Chamar obrigatoriamente a skill:
+   ```text
+   /ask fast-track [contexto da sprint concluída, arquivos tocados, testes, evidências e dúvida de aderência]
+   ```
+
+4. Registrar a resposta em `project/docs/sprint-review-sprint-XX.md` usando o template canônico.
+
+5. Interpretar o resultado:
+   - Se houver recomendações pendentes: atualizar `sprint_status: fixing`, transformar as recomendações em correções obrigatórias e voltar ao loop TDD/Delivery da mesma sprint.
+   - Se o especialista aprovar sem pendências: atualizar `sprint_status: completed`.
+
+6. Somente após `sprint_status: completed`:
+   - avançar para a próxima sprint em `cycle_sprint_scope`; ou
+   - se a sprint era a última do ciclo, seguir para o pre-flight geral e depois Smoke.
 
 ### 3b. Orquestração Paralela (opcional)
 
@@ -374,7 +407,7 @@ Para cada task pendente (por prioridade: P0 → P1 → P2):
 #### Ativação
 
 Condições para considerar paralelização:
-- >= 3 tasks pendentes no TASK_LIST.md
+- >= 3 tasks pendentes na sprint atual do TASK_LIST.md
 - forge_coder recomendou `PARALELO` na avaliação de independência (seção 1b do prompt)
 
 Comportamento por `tdd_interaction_mode`:
@@ -431,6 +464,7 @@ Comportamento por `tdd_interaction_mode`:
 #### Regras
 
 - **Max 3 agents paralelos** — nunca exceder `parallel_max_agents`
+- **Só dentro da sprint atual** — nenhuma slot pode puxar task de sprint futura
 - **Smoke = synchronization point** — tudo deve estar merged antes do smoke gate
 - **ft_manager controla merge** — forge_coder NÃO faz merge, apenas sinaliza `done`
 - **Só ft_manager escreve no state** — slots paralelos não tocam `ft_state.yml`
@@ -445,13 +479,13 @@ Quando há slots paralelos ativos, adicionar ao header:
 
 ---
 
-### 3c. Pre-flight Check (obrigatório antes do Smoke)
+### 3c. Pre-flight Check Geral (obrigatório antes do Smoke)
 
 > ⚠️ **REGRA INVIOLÁVEL**: Antes de instruir forge_coder para ft.smoke.01.cli_run,
 > ft_manager DEVE executar o pre-flight check abaixo. Smoke sem pre-flight = violação de processo.
 
 1. Ler `gate_log` do `ft_state.yml`.
-2. Ler todas as tasks com status `done` no TASK_LIST.md.
+2. Ler todas as tasks com status `done` no escopo do ciclo atual.
 3. Para cada task `done`:
    - Verificar que `gate_log[T-XX].gate.delivery == PASS`
    - Se ausente ou BLOCK: **BLOQUEAR**. Não avançar para Smoke.
@@ -721,15 +755,15 @@ O MVP é considerado entregue quando **todos** os critérios abaixo são verdade
 - **Nunca avance sem validação** — Cada checkpoint bloqueante deve passar antes de continuar.
 - **Sequência de gates é inviolável** — Os gates pós-TDD/Delivery DEVEM ser executados nesta ordem, sem pular nenhum:
   ```
-  Smoke → E2E CLI → Acceptance (se interface_type != cli_only) → Feedback
+  Sprint Expert Gate → Smoke → E2E CLI → Acceptance (se interface_type != cli_only) → Feedback
   ```
   O ft_manager **NUNCA** deve definir `next_step` para Feedback ou Handoff se os gates anteriores não foram executados e registrados em `completed_steps`. Antes de avançar para qualquer gate, verificar:
-  - [ ] O gate anterior foi concluído (presente em `completed_steps` do `ft_state.yml`)
-  - [ ] O report correspondente foi gerado (smoke-cycle-XX.md, acceptance-cycle-XX.md)
+  - [ ] O gate anterior foi concluído ou registrado no estado (`sprint_review_log` no caso do Sprint Expert Gate)
+  - [ ] O report correspondente foi gerado (`sprint-review-sprint-XX.md`, `smoke-cycle-XX.md`, `acceptance-cycle-XX.md`)
 
   > ⛔ **Situação real detectada**: forge_coder pulou E2E e Acceptance, indo direto do Smoke para Feedback. Isso entrega bugs ao cliente. Se o forge_coder sinalizar conclusão de uma fase e o próximo step deveria ser um gate que não foi executado, **BLOQUEAR** e redirecionar para o gate correto.
 - **Feedback específico** — Ao reportar falha, cite o item exato que falhou. Nunca devolva sem contexto.
-- **State sempre atualizado** — Após cada step concluído, atualizar `ft_state.yml`.
+- **State sempre atualizado** — Após cada step concluído, atualizar `ft_state.yml`. Em transições de sprint, atualizar também `current_sprint`, `sprint_status` e `sprint_review_log`.
 - **Token tracking** — Gravar snapshots de consumo em momentos-chave para rastreabilidade. Executar:
   ```bash
   python3 process/fast_track/tools/token_tracker.py --project . snapshot --step <step_id>
@@ -738,7 +772,7 @@ O MVP é considerado entregue quando **todos** os critérios abaixo são verdade
   - `init` — na inicialização do projeto
   - `ft.mdd.03.validacao` — após PRD validado
   - `ft.plan.03.diagrams` — após planning concluído
-  - `ft.delivery.03.commit` — ao final de cada ciclo TDD/Delivery (antes do smoke)
+  - `ft.delivery.03.commit` — ao final de cada sprint concluída
   - `ft.e2e.01.cli_validation` — após E2E gate
   - `ft.acceptance.01.interface_validation` — após acceptance gate (se aplicável)
   - `ft.audit.01.forgebase` — após auditoria ForgeBase

@@ -1,15 +1,16 @@
 # ForgeProcess — Fast Track
 
-> Solo dev + AI. 18 steps, 9 fases. Valor > cerimônia.
+> Solo dev + AI. 18 steps, 9 fases. Valor > cerimônia, com sprints técnicas.
 
 ---
 
 ## Filosofia
 
-**Um solo dev com AI não precisa de cerimônia de time.** O processo foca em rigor (TDD, E2E gate) sem burocracia (sprints formais, BDD Gherkin, reviews de 3 pessoas).
+**Um solo dev com AI não precisa de cerimônia de time.** O processo foca em rigor (TDD, E2E gate) sem burocracia de squad, mas agora organiza a execução em **sprints técnicas orientadas por dependência**.
 
 **Pilares:**
 - MDD completo (hipótese -> PRD validado)
+- Sprints técnicas por dependência com expert gate ao final de cada sprint
 - TDD Red-Green (teste primeiro, sempre)
 - E2E CLI gate (obrigatório para fechar ciclo)
 - Rastreabilidade (User Story -> Task -> Teste -> Código)
@@ -77,7 +78,7 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Output**: `project/docs/TASK_LIST.md`
 - **Template**: `process/fast_track/templates/template_task_list.md`
 - **Symbiota**: ft_coach
-- **Critério**: Cada User Story tem pelo menos 1 task, todas priorizadas e estimadas
+- **Critério**: Cada User Story tem pelo menos 1 task, todas priorizadas, estimadas e agrupadas em sprints incrementais por dependência
 
 #### ft.plan.02.tech_stack — Propor Tech Stack *(primeiro ciclo apenas)*
 - **Input**: PRD + TASK_LIST
@@ -106,15 +107,17 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 | Banco de Dados | `diagrams/database.md` | `erDiagram` |
 | Arquitetura | `diagrams/architecture.md` | `flowchart TD` |
 
-### Fase 3: TDD — 3 steps (loop por task)
+### Fase 3: TDD — 3 steps (loop por task dentro da sprint atual)
 
 > **Pré-requisito (primeiro ciclo):** forge_coder roda `bash setup_env.sh` para configurar o ambiente (`.venv`, ForgeBase, ferramentas de dev) antes de escrever qualquer código.
+>
+> **Regra de sprint:** o `TASK_LIST.md` define a sequência de sprints do ciclo. O `ft_state.yml` mantém `current_sprint`, e o forge_coder só pode selecionar tasks pendentes dessa sprint.
 
 #### ft.tdd.01.selecao — Selecionar Task
 - **Input**: TASK_LIST.md
 - **Output**: Task selecionada, status -> in_progress
 - **Symbiota**: forge_coder
-- **Critério**: Task de maior prioridade pendente selecionada
+- **Critério**: Task de maior prioridade pendente selecionada dentro da sprint atual
 
 #### ft.tdd.02.red — Escrever Teste
 - **Input**: Task selecionada + ACs da User Story
@@ -128,7 +131,7 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Symbiota**: forge_coder
 - **Critério**: Teste passa, sem quebrar testes existentes. **Suite completa de testes passa** (não apenas o teste da task atual).
 
-### Fase 4: Delivery — 3 steps (por task)
+### Fase 4: Delivery — 3 steps (por task, repetidos até fechar a sprint atual)
 
 #### ft.delivery.01.self_review — Self-Review (expandido)
 - **Input**: Diff do código
@@ -167,8 +170,24 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
   - **Default**: 1 commit por task
   - **Ciclos longos (> 5 tasks)**: ft_manager pode instruir squash ao final do ciclo antes do smoke. Convenção: `feat(cycle-XX): summary`
 
-> **Loop**: Após commit, se há tasks pendentes -> volta para ft.tdd.01.selecao.
-> Quando todas as tasks estiverem done -> avança para Smoke Gate.
+> **Loop**: Após commit, se há tasks pendentes na sprint atual -> volta para ft.tdd.01.selecao.
+> Quando todas as tasks da sprint atual estiverem `done` e com `gate.delivery: PASS` -> executar Sprint Expert Gate.
+> Quando todas as sprints do escopo do ciclo atual estiverem concluídas -> avança para Smoke Gate.
+
+### Operação Intermediária — Sprint Expert Gate *(orquestração; não é step formal)*
+
+- **Quando**: Ao final de cada sprint, após todas as tasks da sprint atual terem `gate.delivery: PASS`
+- **Executor**: ft_manager
+- **Ferramenta obrigatória**: `/ask fast-track`
+- **Output**: `project/docs/sprint-review-sprint-XX.md`
+- **Estado**: atualizar `sprint_status` para `expert_review` -> `fixing` -> `completed` conforme o resultado
+
+**Fluxo obrigatório:**
+1. ft_manager chama `/ask fast-track` com o contexto da sprint concluída, diff entregue, testes executados e artefatos relevantes.
+2. A resposta é registrada em `project/docs/sprint-review-sprint-XX.md`.
+3. Toda recomendação do especialista vira correção obrigatória dentro da sprint atual.
+4. Se houver recomendações pendentes, o processo volta para o loop TDD/Delivery da mesma sprint.
+5. A próxima sprint só começa quando o review estiver `PASS` e sem pendências remanescentes.
 
 ### Fase 5a: Smoke Gate — 1 step
 
@@ -364,6 +383,12 @@ A tabela de tasks inclui coluna `BlockedBy` com IDs de tasks pré-requisito:
 8. **N/A não é resultado válido de gate** — O ft_gatekeeper opera em binário: ✅ PASS ou ❌ BLOCK. Marcar items obrigatórios como "N/A" ou "não implementado" equivale a BLOCK.
 
 9. **Artefatos devem estar em paths canônicos** — Reports de gates (smoke, acceptance, audit) pertencem a `project/docs/`. Artefatos em paths incorretos são tratados como inexistentes pelo gatekeeper.
+
+10. **Sprints são a unidade de avanço dentro de TDD/Delivery** — Tasks só podem ser selecionadas dentro da `current_sprint`. Não atravessar sprint para "adiantar trabalho".
+
+11. **Sprint Expert Gate é obrigatório** — Nenhuma sprint fecha sem `/ask fast-track`, registro em `project/docs/sprint-review-sprint-XX.md` e tratamento integral das recomendações.
+
+12. **Paralelização respeita fronteira de sprint** — Mesmo com `parallel_mode: true`, não existe execução paralela atravessando duas sprints ao mesmo tempo.
 
 ---
 

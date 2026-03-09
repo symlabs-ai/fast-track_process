@@ -17,6 +17,7 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
    - Delegar ao `ft_coach`: iniciar `ft.mdd.01.hipotese`.
 3. **Se projeto em andamento**:
    - Informar: "Retomando de [next_step]. Último step: [last_completed_step]."
+   - Informar também a sprint ativa: `current_sprint` e `sprint_status`, quando preenchidos.
    - Continuar o fluxo a partir dali, delegando ao symbiota correto.
 
 > **Regra**: Nunca ficar parado esperando. Leu o estado → age.

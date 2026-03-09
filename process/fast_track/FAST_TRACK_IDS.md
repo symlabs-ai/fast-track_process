@@ -54,15 +54,21 @@
 
 ## Orchestration Nodes (paralelização)
 
-> Nós de orquestração para execução paralela de tasks. Não são steps — são nós de decisão, sincronização e orquestração no flow do `FAST_TRACK_PROCESS.yml`.
+> Nós de orquestração para execução paralela de tasks e controle de sprint. Não são steps — são nós de decisão, sincronização e orquestração no flow do `FAST_TRACK_PROCESS.yml`.
 
 | Node ID | Tipo | Descrição |
 |---------|------|-----------|
 | `decisao_paralelo` | decision | Decide se executa tasks em paralelo (worktrees) ou sequencial |
+| `ft_sprint_prepare` | state_update | Alinha `current_sprint` com a primeira sprint pendente do escopo do ciclo |
 | `ft_parallel_fanout` | orchestration | Cria worktrees e lança forge_coder em slots paralelos (max 3) |
 | `ft_parallel_wait` | synchronization | Aguarda todos os slots sinalizarem done/failed |
 | `ft_parallel_fanin` | orchestration | Merge sequencial (--no-ff), suite completa, cleanup worktrees |
-| `decisao_mais_tasks_pos_merge` | decision | Verifica se há mais tasks após merge paralelo → loop ou smoke |
+| `decisao_mais_tasks_pos_merge` | decision | Verifica se há mais tasks na sprint atual após merge paralelo |
+| `ft_preflight_sprint_gates` | validation | Confere se todas as tasks done da sprint atual têm `gate.delivery: PASS` |
+| `ft_sprint_expert_gate` | orchestration | Chama `/ask fast-track`, salva `sprint-review-sprint-XX.md` e atualiza `sprint_status` |
+| `decisao_sprint_status` | decision | Decide se a sprint volta para correção (`fixing`) ou segue (`completed`) |
+| `decisao_proxima_sprint` | decision | Verifica se há próxima sprint no `cycle_sprint_scope` |
+| `ft_sprint_advance` | state_update | Avança `current_sprint` para a próxima sprint do ciclo |
 
 **Pré-condição**: `parallel_mode: true` no `ft_state.yml`. Quando `false`, o nó `decisao_paralelo` redireciona para `ft_tdd_01` (path sequencial).
 

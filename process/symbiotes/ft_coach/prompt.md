@@ -109,7 +109,16 @@ O fluxo só avança após o stakeholder responder o questionário.
 2. Quebre cada US em tasks concretas.
 3. Priorize: P0 (must-have MVP), P1 (should-have), P2 (nice-to-have).
 4. Estime: XS (< 30min), S (30min-2h), M (2h-4h), L (4h+).
-5. Gere `project/docs/TASK_LIST.md`.
+5. Agrupe as tasks em **sprints incrementais orientadas por dependência**.
+6. Cada sprint deve ter:
+   - ID sequencial (`sprint-01`, `sprint-02`, ...)
+   - objetivo explícito
+   - conjunto de tasks que destrava o próximo incremento
+   - ordem clara até o MVP
+   - escopo explícito: `current_cycle` ou `backlog`
+7. O agrupamento deve respeitar dependências técnicas: uma sprint não pode depender de entregas futuras.
+8. Registre no `TASK_LIST.md` que toda sprint termina com Sprint Expert Gate via `/ask fast-track`.
+9. Gere `project/docs/TASK_LIST.md`.
 
 ### Retro Note (ft.feedback.01)
 1. Pergunte ao dev sobre o ciclo.

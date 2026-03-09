@@ -2,7 +2,7 @@
 # Estado do processo Fast Track
 
 process_variant: fast_track
-version: "0.4.5"
+version: "0.5.0"
 
 orchestrator: ft_manager
 stakeholder_mode: interactive    # interactive | autonomous
@@ -26,6 +26,13 @@ artifact_viewer: auto
 
 current_phase: ft_mdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback
 current_cycle: cycle-01      # ex.: cycle-01
+current_sprint: null         # sprint atual dentro do ciclo; preenchido apos a task list
+sprint_status: planned       # planned | in_progress | expert_review | fixing | completed
+cycle_sprint_scope: []       # sprints ativas para o ciclo atual
+backlog_sprints: []          # sprints fora do corte do ciclo atual
+planned_sprints: []          # [{id, goal, tasks, status}]
+sprint_review_gate: ask_fast_track
+sprint_review_log: {}
 
 last_completed_step: null    # ex.: ft.mdd.01.hipotese
 next_step: ft.mdd.01.hipotese  # determinístico — o próximo step obrigatório, não uma sugestão

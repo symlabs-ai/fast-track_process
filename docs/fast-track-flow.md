@@ -60,15 +60,16 @@ flowchart TD
         SK_REV -- aprovado --> DIAG
 
         DIAG["ft.plan.03\ndiagramas\n[forge_coder]\nclass · components\ndatabase · architecture"]
-        DIAG --> LOOP_START
+        DIAG --> SPRINT_PREP
     end
 
     note_hyper["ℹ️ Em hyper-mode\nTASK_LIST já gerada\nft_coach pula ft.plan.01"]
     HYPER -.-> note_hyper
     note_hyper -.-> PLAN
 
-    subgraph LOOP["🔁 Loop por Task"]
-        LOOP_START([próxima task])
+    subgraph LOOP["🔁 Loop por Sprint"]
+        SPRINT_PREP([alinhar\nsprint atual])
+        LOOP_START([próxima task\nda sprint])
 
         subgraph TDD["🧪 Fase 3: TDD — forge_coder"]
             SEL[ft.tdd.01\nselecionar task]
@@ -85,17 +86,29 @@ flowchart TD
         end
 
         VAL_ENT{ft_manager\nvalida entrega\n+ cov >= 85%}
-        MORE{tasks\npendentes?}
+        MORE{tasks pendentes\nna sprint?}
+        SPRINT_PREFLIGHT{pre-flight da sprint\nok?}
+        SPRINT_GATE["Sprint Expert Gate\n/ask fast-track"]
+        SPRINT_FIX{há correções\nobrigatórias?}
+        NEXT_SPRINT{sprint seguinte\nno ciclo?}
 
+        SPRINT_PREP --> LOOP_START
         LOOP_START --> SEL
         GREEN --> REVIEW
         COMMIT --> VAL_ENT
         VAL_ENT -- falhou --> REVIEW
         VAL_ENT -- ok --> MORE
         MORE -- sim --> LOOP_START
+        MORE -- não --> SPRINT_PREFLIGHT
+        SPRINT_PREFLIGHT -- gap --> LOOP_START
+        SPRINT_PREFLIGHT -- ok --> SPRINT_GATE
+        SPRINT_GATE --> SPRINT_FIX
+        SPRINT_FIX -- sim --> LOOP_START
+        SPRINT_FIX -- não --> NEXT_SPRINT
+        NEXT_SPRINT -- sim --> SPRINT_PREP
     end
 
-    MORE -- não --> SMOKE
+    NEXT_SPRINT -- não --> SMOKE
 
     subgraph SMOKE_GATE["🔥 Fase 5a: Smoke Gate — forge_coder"]
         SMOKE[ft.smoke.01\ncli run]

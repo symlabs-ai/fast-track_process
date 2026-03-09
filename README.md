@@ -1,6 +1,6 @@
 # ForgeProcess — Fast Track
 
-> Processo ágil para solo dev + AI. 18 steps, 9 fases, valor > cerimônia.
+> Processo ágil para solo dev + AI. 18 steps, 9 fases, valor > cerimônia, com sprints técnicas.
 
 **4 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode** · **Maintenance mode**
 
@@ -9,8 +9,8 @@
 ## O que é
 
 Fast Track é uma variante do ForgeProcess para desenvolvedor solo trabalhando com assistentes de IA.
-Define um fluxo completo — do insight à entrega — com rigor (TDD, E2E gate) e sem burocracia
-(sprints formais, BDD Gherkin, reviews de 3 pessoas).
+Define um fluxo completo — do insight à entrega — com rigor (TDD, Sprint Expert Gate, E2E gate) e sem burocracia
+de squad (cerimônias tradicionais, BDD Gherkin, reviews de 3 pessoas).
 
 ## Symbiotas
 
@@ -48,6 +48,19 @@ git push -u origin main
 ---
 
 ## Changelog
+
+### [v0.5.0] — 2026-03-09
+
+#### Added
+- **Sprints técnicas por dependência** — `ft.plan.01.task_list` agora exige agrupamento das tasks em sprints incrementais com objetivo explícito e gate de saída.
+- **Sprint Expert Gate** — ao final de cada sprint, o `ft_manager` deve chamar `/ask fast-track`, registrar o retorno em `project/docs/sprint-review-sprint-XX.md` e tratar todas as recomendações antes de seguir.
+- **Estado de sprint no `ft_state.yml`** — suporte a `current_sprint`, `sprint_status`, `cycle_sprint_scope`, `backlog_sprints`, `planned_sprints`, `sprint_review_gate` e `sprint_review_log`.
+- **Template `template_sprint_review.md`** — artefato canônico para registrar a pergunta ao especialista, feedback, recomendações e correções aplicadas.
+
+#### Changed
+- **Loop TDD/Delivery** passa a operar sprint a sprint, sem puxar tasks de sprint futura.
+- **Paralelização** continua opt-in, mas agora é limitada à sprint atual.
+- **Documentação central do processo** atualizada para refletir o loop `sprint -> Sprint Expert Gate -> correções -> próxima sprint`.
 
 ### [v0.4.0] — 2026-03-04
 

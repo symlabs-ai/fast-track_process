@@ -109,47 +109,48 @@ respeitando Clean/Hex, CLI-first offline e manifesto de plugins.
 > ⚠️ **REGRA**: forge_coder exibe o bloco de progresso em **3 momentos**:
 > 1. Ao **iniciar** uma task (após `ft.tdd.01.selecao`)
 > 2. Ao **concluir** uma task (após `ft.delivery.03.commit`)
-> 3. Ao **concluir todas as tasks** (antes de avançar para Smoke)
+> 3. Ao **concluir todas as tasks da sprint atual** (antes de devolver ao ft_manager para o Sprint Expert Gate)
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔧 [cycle-XX] Task [N] / [total] — [task ID]: [título]
+ 🔧 [cycle-XX] [sprint-XX] Task [N] / [total] — [task ID]: [título]
  ✅ Concluídas: [lista de IDs done]
  🔄 Em andamento: [task atual]
  📋 Pendentes: [lista de IDs pendentes]
  📊 Progresso: [N done] / [total] — [%]
- 🔜 Próxima fase: [step seguinte após tasks]
+ 🔜 Próxima fase: [próximo passo dentro da sprint]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 **Como preencher:**
 - **cycle-XX**: ciclo atual do `ft_state.yml`
-- **Task N / total**: posição da task atual na sequência
+- **sprint-XX**: sprint atual do `ft_state.yml`
+- **Task N / total**: posição da task atual dentro da sprint
 - **Concluídas**: IDs das tasks com status `done` no TASK_LIST.md
-- **Pendentes**: IDs das tasks com status `pending`
-- **Próxima fase**: `Smoke Gate` se não há mais tasks; `TDD (T-XX)` se há
+- **Pendentes**: IDs das tasks `pending` da sprint atual
+- **Próxima fase**: `TDD (T-XX)` se há mais tasks; `Sprint Expert Gate` se a sprint fechou
 
 **Exemplos:**
 
 Ao iniciar task:
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔧 cycle-01  Task 3 / 7 — T-03: Implementar repositório de pedidos
+ 🔧 cycle-01 sprint-02  Task 1 / 3 — T-03: Implementar repositório de pedidos
  ✅ Concluídas: T-01, T-02
  🔄 Em andamento: T-03
- 📋 Pendentes: T-04, T-05, T-06, T-07
- 📊 Progresso: 2 / 7 — 29%
+ 📋 Pendentes: T-04, T-05
+ 📊 Progresso: 2 / 5 — 40%
  🔜 Próxima fase: TDD (T-04)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Ao concluir todas as tasks:
+Ao concluir todas as tasks da sprint:
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔧 cycle-01  Tasks completas
- ✅ Concluídas: T-01, T-02, T-03, T-04, T-05, T-06, T-07
- 📊 Progresso: 7 / 7 — 100%
- 🔜 Próxima fase: Smoke Gate
+ 🔧 cycle-01 sprint-02  Tasks completas
+ ✅ Concluídas: T-03, T-04, T-05
+ 📊 Progresso: 3 / 3 — 100%
+ 🔜 Próxima fase: Sprint Expert Gate
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -359,11 +360,11 @@ Se o script falhar: reportar o erro ao ft_manager antes de prosseguir. Não inic
 ---
 
 ### Loop por Task
-1) SELECAO — ler TASK_LIST.md, selecionar próxima task pendente.
+1) SELECAO — ler `TASK_LIST.md`, identificar `current_sprint` no `ft_state.yml` e selecionar a próxima task pendente dessa sprint. Nunca puxar task de sprint futura.
 
 #### 1b) Avaliação de Paralelização *(quando `parallel_mode: true` ou ft_manager solicita)*
 
-Após selecionar a task atual, avaliar se há tasks independentes que podem rodar em paralelo.
+Após selecionar a task atual, avaliar se há tasks independentes da mesma sprint que podem rodar em paralelo.
 
 **Critérios de independência técnica:**
 - Value Tracks diferentes → forte candidata a paralelização
@@ -372,7 +373,7 @@ Após selecionar a task atual, avaliar se há tasks independentes que podem roda
 - Dependência de contrato (port/interface compartilhada) → NÃO
 - Ambas tocam composition root → NÃO
 - Duas tasks Size L simultaneamente → NÃO
-- Apenas 1 task pendente → SEQUENCIAL (sem sentido paralelizar)
+- Apenas 1 task pendente na sprint → SEQUENCIAL (sem sentido paralelizar)
 
 **Report estruturado (obrigatório quando avaliação é solicitada):**
 ```
@@ -409,7 +410,16 @@ Risco: baixo | médio
 5) REFACTOR — aplicar refactoring se self-review identificou oportunidades. Se nada a refatorar, documentar "nenhum refactoring necessário". Garantir suite verde após refactor.
 6) COMMIT — commit com mensagem referenciando task ID. Se ciclo longo (> 5 tasks) e ft_manager instruiu squash: usar convenção `feat(cycle-XX): summary`.
 
-### Smoke (ft.smoke.01.cli_run) — após todas as tasks P0 done
+### Fechamento da Sprint
+
+Ao concluir todas as tasks da `current_sprint`:
+
+1. Parar a seleção de novas tasks.
+2. Devolver o controle ao `ft_manager` para `ft_preflight_sprint_gates` + `Sprint Expert Gate`.
+3. Se o review via `/ask fast-track` trouxer recomendações, tratar essas correções ainda dentro da mesma sprint.
+4. Só voltar a selecionar tasks quando o `ft_manager` avançar formalmente para a próxima sprint.
+
+### Smoke (ft.smoke.01.cli_run) — após todas as sprints do ciclo atual concluídas
 
 Executado uma vez por ciclo, após o loop TDD/Delivery. Gate obrigatório.
 

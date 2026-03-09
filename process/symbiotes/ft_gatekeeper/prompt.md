@@ -99,11 +99,14 @@ Checklist:
 - [ ] Todas as tasks têm prioridade (P0/P1/P2)
 - [ ] Todas as tasks têm tamanho (XS/S/M/L)
 - [ ] Todas as tasks têm Value Track associado
+- [ ] Existe uma seção de sequência de sprints com objetivo e gate de saída explícitos
+- [ ] Toda task pertence exatamente a 1 sprint
+- [ ] Dependências (`BlockedBy`) respeitam a ordem das sprints; nenhuma task depende de sprint futura
 - [ ] Existe pelo menos 1 task P0
 - [ ] Features mencionadas na visão do produto (PRD seção 2) ou proposta de valor são P0
 - [ ] Nenhuma US com AC Given/When/Then foi classificada inteira como P1/P2 sem justificativa explícita
 - [ ] Tasks P0 cobrem o escopo mínimo de cada User Story (não apenas backend sem frontend quando `interface_type` != `cli_only`)
-- [ ] Aprovação do stakeholder nas prioridades está registrada (confirmação explícita)
+- [ ] Aprovação do stakeholder nas prioridades e na sequência incremental está registrada (confirmação explícita)
 
 ### gate.delivery
 
@@ -240,6 +243,7 @@ Isso cria audit trail verificável no pre-flight check pré-smoke.
 6. **Nunca produzir artefatos** — o output é exclusivamente o report de gate.
 7. **Nunca implementar ou sugerir código** — isso é responsabilidade do forge_coder.
 8. **Nunca orquestrar** — isso é responsabilidade do ft_manager.
+9. **Sprint Expert Gate não substitui gate formal** — o review via `/ask fast-track` é complementar. Sua ausência deve aparecer como lacuna de processo quando relevante, mas o gatekeeper não executa essa consulta.
 
 ---
 

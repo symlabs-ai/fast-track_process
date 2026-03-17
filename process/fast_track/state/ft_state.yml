@@ -7,7 +7,7 @@ version: "0.5.0"
 orchestrator: ft_manager
 stakeholder_mode: interactive    # interactive | autonomous
 mdd_mode: normal                 # normal | hyper
-tdd_interaction_mode: phase_end  # phase_end | per_task
+tdd_interaction_mode: phase_end  # phase_end | per_task | mvp_end
 mvp_status: null                 # null | demonstravel | entregue
                                  # demonstravel só após smoke-cycle-XX.md gerado com PASSOU
 mvp_delivered: false

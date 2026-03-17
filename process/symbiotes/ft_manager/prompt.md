@@ -297,12 +297,15 @@ Se falhar: devolver ao forge_coder com feedback específico.
 >
 > 1. Só quando uma sprint inteira terminar
 > 2. Ao final de cada task
+> 3. Só quando o MVP inteiro estiver pronto
 >
 > Recomendo a opção 1 — eu valido cada entrega internamente e só
 > te chamo quando houver algo bloqueante ou quando a sprint fechar.
+> A opção 3 é modo totalmente autônomo: eu conduzo tudo (sprints,
+> smoke, e2e, acceptance) e só te chamo no final com o MVP entregue.
 > ```
 >
-> Registrar a escolha em `ft_state.yml` como `tdd_interaction_mode: phase_end | per_task`.
+> Registrar a escolha em `ft_state.yml` como `tdd_interaction_mode: phase_end | per_task | mvp_end`.
 > **Nunca interromper o loop no meio sem antes ter combinado com o dev.**
 
 #### Modo `phase_end` (recomendado)
@@ -314,6 +317,14 @@ Se falhar: devolver ao forge_coder com feedback específico.
 #### Modo `per_task`
 - ft_manager aciona o dev após cada task concluída com um resumo curto.
 - Dev decide se continua ou pausa.
+
+#### Modo `mvp_end`
+- Modo totalmente autônomo: ft_manager conduz todo o ciclo sem acionar o dev.
+- forge_coder executa sprints, Sprint Expert Gates, smoke, e2e e acceptance automaticamente.
+- ft_manager toma decisões internas (paralelização, retries, sprint transitions) sem consultar o dev.
+- Interrupções **somente** em: bloqueio irrecuperável, falha de gate sem fix possível, ou pergunta crítica sem resposta no PRD.
+- Dev é acionado **uma única vez** ao final, quando `mvp_status: entregue` ou quando um bloqueio irrecuperável impede o avanço.
+- Na apresentação final, ft_manager exibe: resumo de todas as sprints, resultados de gates, smoke/e2e/acceptance, e artefatos gerados.
 
 ---
 
@@ -349,7 +360,7 @@ Para cada task pendente da sprint atual (por prioridade: P0 → P1 → P2 dentro
 
 3. Repetir até todas as tasks da sprint atual estarem `done`.
 
-4. **Após cada task validada** (modo `phase_end`), registrar progresso internamente.
+4. **Após cada task validada** (modo `phase_end` ou `mvp_end`), registrar progresso internamente.
    Em modo `per_task`, apresentar ao dev:
    ```
    ✅ Task T-XX concluída.
@@ -373,7 +384,8 @@ Para cada task pendente da sprint atual (por prioridade: P0 → P1 → P2 dentro
    Próxima fase: Sprint Expert Gate
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    ```
-   Aguardar confirmação antes de rodar o Sprint Expert Gate.
+   Em modo `per_task` ou `phase_end`: aguardar confirmação antes de rodar o Sprint Expert Gate.
+   Em modo `mvp_end`: prosseguir automaticamente para o Sprint Expert Gate sem acionar o dev.
 
 ### 3a. Sprint Expert Gate (obrigatório ao final de cada sprint)
 
@@ -413,6 +425,7 @@ Condições para considerar paralelização:
 Comportamento por `tdd_interaction_mode`:
 - `per_task`: confirmar com dev antes de ativar paralelização
 - `phase_end`: ft_manager decide internamente com base na recomendação do forge_coder
+- `mvp_end`: ft_manager decide internamente (mesmo comportamento de `phase_end`)
 
 #### Fan-out (lançar slots paralelos)
 

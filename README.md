@@ -161,7 +161,8 @@ git push -u origin main
 - **ft.plan.03.diagrams** — forge_coder gera 4 diagramas Mermaid após stack aprovada:
   `class.md`, `components.md`, `database.md`, `architecture.md` em `project/docs/diagrams/`.
 - **TDD interaction mode** — ft_manager pergunta upfront, antes de iniciar o loop, como o dev quer
-  ser acionado: `phase_end` (só quando todas as tasks P0 concluírem) ou `per_task` (após cada task).
+  ser acionado: `phase_end` (ao final de cada sprint), `per_task` (após cada task) ou `mvp_end`
+  (só quando o MVP inteiro estiver pronto — modo totalmente autônomo).
   Escolha persiste em `ft_state.yml` como `tdd_interaction_mode`.
 - **Status header obrigatório** em toda mensagem do ft_manager: bloco `━━━` com fase atual, step,
   progresso N/total (%), entregas da etapa e próximo step. Regra inviolável.

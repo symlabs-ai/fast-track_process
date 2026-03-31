@@ -4,6 +4,10 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.6.4] - 2026-03-31
+
+- fix: ft_manager must be main Claude persona, not a subagent
+
 ## [v0.6.3] - 2026-03-31
 
 - feat: add --gateway option to ft init for SymGateway routing

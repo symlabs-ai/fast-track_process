@@ -17,6 +17,7 @@ Uso:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,30 +26,60 @@ from pathlib import Path
 # Paths — derivados da raiz do projeto, nunca hardcoded
 # ---------------------------------------------------------------------------
 
+ENGINE_DIR = Path.home() / ".local" / "share" / "fast-track"
+
+
 def find_project_root() -> Path:
-    """Encontra a raiz do projeto subindo até achar FAST_TRACK_PROCESS.yml."""
+    """Encontra a raiz do projeto. Prioridade: FT_PROJECT_ROOT env > subir até achar."""
+    env_root = os.environ.get("FT_PROJECT_ROOT")
+    if env_root:
+        return Path(env_root)
+
     current = Path.cwd()
+    # Procurar por project/state/ft_state.yml (dinâmico) ou process/ (template)
     for parent in [current, *current.parents]:
+        if (parent / "project" / "state" / "ft_state.yml").exists():
+            return parent
         if (parent / "process" / "fast_track" / "FAST_TRACK_PROCESS.yml").exists():
             return parent
-    print("ERRO: Não encontrei a raiz do projeto (process/fast_track/FAST_TRACK_PROCESS.yml ausente).")
+    print("ERRO: Não encontrei a raiz do projeto.")
+    print("  Procurei por: project/state/ft_state.yml ou process/fast_track/FAST_TRACK_PROCESS.yml")
+    sys.exit(1)
+
+
+def find_process_dir(root: Path) -> Path:
+    """Encontra o diretório process/: local no projeto > engine global."""
+    local = root / "process"
+    if (local / "fast_track" / "FAST_TRACK_PROCESS.yml").exists():
+        return local
+
+    global_process = ENGINE_DIR / "process"
+    if (global_process / "fast_track" / "FAST_TRACK_PROCESS.yml").exists():
+        return global_process
+
+    print("ERRO: process/ nao encontrado nem localmente nem na engine global.")
+    print(f"  Local:  {local}")
+    print(f"  Global: {global_process}")
+    print("  Rode: ft update")
     sys.exit(1)
 
 
 class ProjectPaths:
-    """Paths canônicos do projeto, derivados da raiz."""
+    """Paths canônicos do projeto, derivados da raiz + process dir."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, process_dir: Path | None = None):
         self.root = root
-        # Estático (processo)
-        self.process_yml = root / "process" / "fast_track" / "FAST_TRACK_PROCESS.yml"
-        self.process_md = root / "process" / "fast_track" / "FAST_TRACK_PROCESS.md"
-        self.ids_md = root / "process" / "fast_track" / "FAST_TRACK_IDS.md"
-        self.schema_dir = root / "process" / "fast_track" / "schemas"
+        pdir = process_dir or find_process_dir(root)
+        # Estático (processo — pode ser local ou engine global)
+        self.process_yml = pdir / "fast_track" / "FAST_TRACK_PROCESS.yml"
+        self.process_md = pdir / "fast_track" / "FAST_TRACK_PROCESS.md"
+        self.ids_md = pdir / "fast_track" / "FAST_TRACK_IDS.md"
+        self.schema_dir = pdir / "fast_track" / "schemas"
         self.state_schema = self.schema_dir / "ft_state.schema.json"
-        self.tools_dir = root / "process" / "fast_track" / "tools"
-        self.templates_dir = root / "process" / "fast_track" / "templates"
-        # Dinâmico (projeto)
+        self.tools_dir = pdir / "fast_track" / "tools"
+        self.templates_dir = pdir / "fast_track" / "templates"
+        self.symbiotes_dir = pdir / "symbiotes"
+        # Dinâmico (projeto — sempre local)
         self.state_yml = root / "project" / "state" / "ft_state.yml"
         self.project_docs = root / "project" / "docs"
         self.project_state = root / "project" / "state"
@@ -505,7 +536,7 @@ model: inherit
 def _check_agents(paths: ProjectPaths, check_only: bool) -> list[tuple[bool, str]]:
     """Verifica e opcionalmente sincroniza agents do Claude Code."""
     results = []
-    symbiotes_dir = paths.root / "process" / "symbiotes"
+    symbiotes_dir = paths.symbiotes_dir
 
     if not symbiotes_dir.is_dir():
         results.append((False, "Agents: process/symbiotes/ nao encontrado"))

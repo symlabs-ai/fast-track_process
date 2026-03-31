@@ -1,25 +1,27 @@
 # Symbiotas e Agents — Guia Rápido
 
-## Primeiro passo absoluto: instalar agents
+## Criar novo projeto
 
-> **Antes de tudo** — antes de carregar o ft_manager, antes de ler estado, antes de qualquer fase.
-
-Se voce acabou de clonar o template e e a primeira vez neste projeto:
+> **Requer**: `ft` instalado em `~/.local/bin/ft` (script global do Fast Track).
 
 ```bash
-python process/fast_track/tools/ft.py init
+ft init meu-projeto
+ft init meu-projeto --remote git@github.com:user/meu-projeto.git
 ```
 
-Este comando cria os 5 agents do Claude Code em `~/.claude/agents/` (se ainda nao existirem)
-e configura o projeto (dirs, scaffold, .gitignore, versao). Sem isso, os symbiotas nao estarao
-disponiveis como agents no Claude Code.
+Isto clona o template, desconecta do remote original, inicializa o projeto (dirs, scaffold,
+agents do Claude Code, .gitignore, token tracking) e opcionalmente conecta ao remote do projeto.
 
-Para verificar sem criar nada:
+## Projeto ja clonado — instalar agents
+
+Se o projeto ja foi clonado mas os agents do Claude Code ainda nao existem:
+
 ```bash
-python process/fast_track/tools/ft.py init --check
+ft init            # de dentro do projeto — cria agents + configura tudo
+ft init --check    # verifica sem criar nada
 ```
 
-Se os agents ja existem e o projeto ja foi inicializado, o init reporta PASS e nao muda nada.
+Sem os agents instalados, os symbiotas nao estarao disponiveis no Claude Code.
 
 ## Ponto de entrada: `ft_manager`
 

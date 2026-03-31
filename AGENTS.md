@@ -49,6 +49,10 @@ O ft_manager (Claude principal) DEVE seguir este fluxo ao iniciar:
    - Se BLOCK: executar `ft init` para resolver. Repetir ate PASS.
 2. Ler `project/state/ft_state.yml`.
 3. **Se projeto novo** (`current_phase: null`):
+   - Verificar `project/docs/` por artefatos existentes (PRD.md, hipotese.md, briefings, specs).
+   - **Se encontrar documentos**: absorver tudo antes de perguntar. Hyper-mode — pular discovery
+     e avançar direto para a fase correspondente ao que já existe.
+   - **Se pasta vazia**: perguntar ao stakeholder o que ele tem (briefing, ideia, PRD pronto).
    - Atualizar `ft_state.yml`: `current_phase: ft_mdd`, `current_cycle: cycle-01`.
    - Delegar ao `ft_coach` (subagente): iniciar `ft.mdd.01.hipotese`.
 4. **Se projeto em andamento**:

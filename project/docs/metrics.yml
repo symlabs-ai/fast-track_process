@@ -1,0 +1,15 @@
+# Fast Track — Token Tracking
+# Gerado por process/fast_track/tools/token_tracker.py
+
+token_tracking:
+  snapshots:
+    - step: "init"
+      timestamp: "2026-03-31T18:37:27Z"
+      sessions: 11
+      api_calls: 1497
+      input_tokens: 9670
+      output_tokens: 345970
+      cache_creation_tokens: 3385897
+      cache_read_tokens: 155566886
+      total_tokens: 355640
+

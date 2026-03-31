@@ -34,7 +34,7 @@ Carregue o prompt: `process/symbiotes/ft_manager/prompt.md`
 
 O `ft_manager` DEVE seguir este fluxo ao iniciar:
 
-1. Executar `python process/fast_track/tools/ft.py init --check`.
+1. Executar `ft init --check`.
    - Se BLOCK: executar `ft.py init` para resolver. Repetir ate PASS.
 2. Ler `project/state/ft_state.yml`.
 3. **Se projeto novo** (`current_phase: null`):
@@ -80,7 +80,7 @@ Ferramenta de validação determinística em `process/fast_track/tools/ft.py`. D
 do processo e schemas em runtime.
 
 ```bash
-python process/fast_track/tools/ft.py <command>
+ft <command>
 ```
 
 | Comando | Quem usa | Quando |

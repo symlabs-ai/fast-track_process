@@ -6,13 +6,13 @@ Ferramenta unificada para inicialização, validação e operações do processo
 Data-driven: lê FAST_TRACK_PROCESS.yml e schemas em runtime, sem hardcodar regras.
 
 Uso:
-    python process/fast_track/tools/ft.py init          # inicializa projeto
-    python process/fast_track/tools/ft.py init --check   # valida sem criar nada
-    python process/fast_track/tools/ft.py validate state  # valida ft_state.yml
-    python process/fast_track/tools/ft.py validate artifacts  # artefatos existem
-    python process/fast_track/tools/ft.py validate gate smoke  # pre-flight de gate
-    python process/fast_track/tools/ft.py tokens status   # consumo de tokens
-    python process/fast_track/tools/ft.py self-check      # consistência interna
+    ft init          # inicializa projeto
+    ft init --check   # valida sem criar nada
+    ft validate state  # valida ft_state.yml
+    ft validate artifacts  # artefatos existem
+    ft validate gate smoke  # pre-flight de gate
+    ft tokens status   # consumo de tokens
+    ft self-check      # consistência interna
 """
 
 import argparse

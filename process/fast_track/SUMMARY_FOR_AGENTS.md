@@ -11,7 +11,7 @@ Para solo dev + AI. Sem BDD Gherkin e sem cerimônia de squad, mas com sprints t
 
 ## CLI (ft.py)
 
-Validação determinística: `python process/fast_track/tools/ft.py <cmd>`
+Validação determinística: `ft <cmd>`
 
 - `init --check` — bootstrap (ft_manager, antes de tudo)
 - `validate state` — estado válido? (ft_manager + ft_gatekeeper, após cada update)

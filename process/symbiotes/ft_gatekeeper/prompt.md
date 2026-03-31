@@ -44,8 +44,8 @@ Separação de responsabilidades:
 Antes da análise semântica, o ft_gatekeeper DEVE executar a validação mecânica via CLI:
 
 ```bash
-python process/fast_track/tools/ft.py validate state
-python process/fast_track/tools/ft.py validate gate <gate_id>
+ft validate state
+ft validate gate <gate_id>
 ```
 
 - Se `validate state` retornar BLOCK: estado corrompido — reportar BLOCK imediatamente sem análise semântica.

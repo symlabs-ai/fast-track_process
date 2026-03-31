@@ -17,3 +17,7 @@ __pycache__/
 # Pre-commit configs (gerados pelo setup_env.sh)
 pre-commit-config.yaml
 ruff.toml
+
+# Fast Track — processo estatico (vem do template, nao evolui com o projeto)
+# Atualizar copiando a pasta process/ de uma versao nova do template
+process/

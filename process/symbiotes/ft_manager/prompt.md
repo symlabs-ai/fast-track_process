@@ -125,7 +125,7 @@ Para alternar: atualizar `stakeholder_mode` em `project/state/ft_state.yml`.
 
 Executar:
 ```bash
-python process/fast_track/tools/ft.py init --check
+ft init --check
 ```
 
 Este comando verifica **tudo de uma vez**: diretórios obrigatórios, arquivos, git remote,
@@ -148,7 +148,7 @@ virtualenv, scaffold Clean/Hex, versão sincronizada, token tracking e estado do
 
 Se algum FAIL foi detectado e requer criação/configuração:
 ```bash
-python process/fast_track/tools/ft.py init
+ft init
 ```
 
 Este comando cria diretórios faltantes, scaffold Clean/Hex, sincroniza versão e grava
@@ -158,7 +158,7 @@ snapshot de token tracking. **Não resolve git remote** — isso requer interaç
 
 Após resolver todos os FAILs, rodar novamente:
 ```bash
-python process/fast_track/tools/ft.py init --check
+ft init --check
 ```
 
 **Só prosseguir quando o resultado for PASS.** Exibir ao dev:
@@ -794,7 +794,7 @@ O MVP é considerado entregue quando **todos** os critérios abaixo são verdade
 - **State sempre atualizado** — Após cada step concluído, atualizar `ft_state.yml`. Em transições de sprint, atualizar também `current_sprint`, `sprint_status` e `sprint_review_log`.
 - **Token tracking** — Gravar snapshots de consumo em momentos-chave para rastreabilidade. Executar:
   ```bash
-  python process/fast_track/tools/ft.py tokens snapshot --step <step_id>
+  ft tokens snapshot --step <step_id>
   ```
   **Momentos obrigatórios para snapshot:**
   - `init` — na inicialização do projeto

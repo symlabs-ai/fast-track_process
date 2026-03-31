@@ -239,12 +239,22 @@ class Report:
         for sev, msg in self.items:
             print(f"  {icons[sev]} {msg}")
         print(f"{'─' * 50}")
-        if self.passed() and not self.has_warnings():
+        warns = [msg for sev, msg in self.items if sev == self.WARN]
+        fails = [msg for sev, msg in self.items if sev == self.FAIL]
+        if not fails and not warns:
             print(f"  RESULTADO: PASS")
-        elif self.passed() and self.has_warnings():
-            print(f"  RESULTADO: PASS (com avisos — podem ser resolvidos depois)")
+        elif not fails and warns:
+            print(f"  RESULTADO: PASS (com avisos)")
+            for w in warns:
+                print(f"    → {w}")
         else:
             print(f"  RESULTADO: BLOCK")
+            for f in fails:
+                print(f"    → {f}")
+            if warns:
+                print(f"  AVISOS:")
+                for w in warns:
+                    print(f"    → {w}")
         print(f"{'━' * 50}\n")
 
 

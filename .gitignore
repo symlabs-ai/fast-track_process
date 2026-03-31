@@ -14,9 +14,9 @@ __pycache__/
 # OS
 .DS_Store
 
-# Pre-commit configs (gerados pelo setup_env.sh)
-pre-commit-config.yaml
-ruff.toml
+# Pre-commit configs (gerados pelo setup_env.sh na raiz — env/git-dev/ é o fonte)
+/pre-commit-config.yaml
+/ruff.toml
 
 # Fast Track — processo estatico
 # No template: process/ esta commitado (e o fonte)

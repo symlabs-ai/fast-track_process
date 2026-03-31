@@ -4,6 +4,11 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.6.2] - 2026-03-31
+
+- fix: differentiate WARN from FAIL in ft init reports
+- fix: track env/git-dev/ configs and scope gitignore to root only
+
 ## [v0.6.1] - 2026-03-31
 
 - feat: add ft help (agent discovery) and ft role (scope enforcement)

@@ -28,25 +28,33 @@ Sem os agents instalados, os symbiotas nao estarao disponiveis no Claude Code.
 
 ## Ponto de entrada: `ft_manager`
 
-**Toda sessão começa pelo `ft_manager`.** Ele é o orquestrador — lê o estado, decide o que fazer e
-delega para os outros symbiotas. Nunca inicie diretamente pelo `ft_coach` ou `forge_coder`.
+**IMPORTANTE: O Claude Code principal É o ft_manager.** Ele não é um subagente — ele assume o
+papel diretamente. Os outros symbiotas (ft_coach, forge_coder, ft_gatekeeper, ft_acceptance)
+são lançados como subagentes pelo ft_manager quando necessário.
 
-Carregue o prompt: `process/symbiotes/ft_manager/prompt.md`
+Ao iniciar uma sessão, o usuario dira algo como "inicie o projeto" ou "carregue o ft_manager".
+O Claude Code deve:
+1. Ler o prompt do ft_manager: `process/symbiotes/ft_manager/prompt.md`
+2. **Assumir o papel** — seguir todas as regras do prompt como persona principal
+3. Orquestrar os demais symbiotas como subprocessos (Agent tool)
+
+> **Nunca lance o ft_manager como subagente.** Ele morre ao terminar e perde o contexto.
+> O ft_manager é o Claude principal. Os outros sao subagentes.
 
 ## Primeiros passos (nova sessão)
 
-O `ft_manager` DEVE seguir este fluxo ao iniciar:
+O ft_manager (Claude principal) DEVE seguir este fluxo ao iniciar:
 
 1. Executar `ft init --check`.
-   - Se BLOCK: executar `ft.py init` para resolver. Repetir ate PASS.
+   - Se BLOCK: executar `ft init` para resolver. Repetir ate PASS.
 2. Ler `project/state/ft_state.yml`.
 3. **Se projeto novo** (`current_phase: null`):
    - Atualizar `ft_state.yml`: `current_phase: ft_mdd`, `current_cycle: cycle-01`.
-   - Delegar ao `ft_coach`: iniciar `ft.mdd.01.hipotese`.
+   - Delegar ao `ft_coach` (subagente): iniciar `ft.mdd.01.hipotese`.
 4. **Se projeto em andamento**:
    - Informar: "Retomando de [next_step]. Último step: [last_completed_step]."
    - Informar também a sprint ativa: `current_sprint` e `sprint_status`, quando preenchidos.
-   - Continuar o fluxo a partir dali, delegando ao symbiota correto.
+   - Continuar o fluxo a partir dali, delegando ao symbiota correto (subagente).
 
 > **Regra**: Nunca ficar parado esperando. Leu o estado → age.
 
@@ -69,13 +77,13 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
 
 ## Symbiotas
 
-| Symbiota | Papel | Prompt |
-|----------|-------|--------|
-| `ft_manager` | Orquestrador — gerencia o processo completo, delega validações ao gatekeeper e interage com o stakeholder | `process/symbiotes/ft_manager/prompt.md` |
-| `ft_gatekeeper` | Validador determinístico de stage gates — PASS ou BLOCK, sem interpretação criativa | `process/symbiotes/ft_gatekeeper/prompt.md` |
-| `ft_acceptance` | Especialista em design de cenários de aceitação por Value/Support Track | `process/symbiotes/ft_acceptance/prompt.md` |
-| `ft_coach` | MDD, Planning, Feedback — conduzido pelo ft_manager | `process/symbiotes/ft_coach/prompt.md` |
-| `forge_coder` | TDD, Delivery, E2E — orquestrado pelo ft_manager | `process/symbiotes/forge_coder/prompt.md` |
+| Symbiota | Modo | Papel | Prompt |
+|----------|------|-------|--------|
+| `ft_manager` | **PRINCIPAL** | Orquestrador — o Claude Code assume este papel diretamente | `process/symbiotes/ft_manager/prompt.md` |
+| `ft_gatekeeper` | subagente | Validador deterministico de stage gates — PASS ou BLOCK | `process/symbiotes/ft_gatekeeper/prompt.md` |
+| `ft_acceptance` | subagente | Design de cenarios de aceitacao por Value/Support Track | `process/symbiotes/ft_acceptance/prompt.md` |
+| `ft_coach` | subagente | MDD, Planning, Feedback — lancado pelo ft_manager | `process/symbiotes/ft_coach/prompt.md` |
+| `forge_coder` | subagente | TDD, Delivery, E2E — lancado pelo ft_manager | `process/symbiotes/forge_coder/prompt.md` |
 
 ## CLI do processo (ft.py)
 

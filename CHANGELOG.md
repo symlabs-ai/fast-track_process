@@ -4,6 +4,11 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.6.3] - 2026-03-31
+
+- feat: add --gateway option to ft init for SymGateway routing
+- fix: show warnings and failures summary in RESULTADO line
+
 ## [v0.6.2] - 2026-03-31
 
 - fix: differentiate WARN from FAIL in ft init reports

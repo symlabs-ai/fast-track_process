@@ -1188,6 +1188,295 @@ def cmd_generate_check(paths: ProjectPaths):
 
 
 # ---------------------------------------------------------------------------
+# Command: help (discovery para agentes)
+# ---------------------------------------------------------------------------
+
+HELP_TEXT = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ft — Fast Track CLI
+  Validacao deterministica do processo. Data-driven.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+COMANDOS:
+
+  ft init [--check]
+    Inicializa projeto: cria dirs, scaffold Clean/Hex, .gitignore,
+    sincroniza versao, grava token snapshot, instala agents no Claude Code.
+    --check: valida sem criar nada (dry-run). Retorna PASS ou BLOCK.
+    QUANDO: Primeiro comando ao abrir um projeto. Obrigatorio no bootstrap.
+    QUEM USA: ft_manager
+
+  ft validate state
+    Valida ft_state.yml contra JSON Schema e regras do processo.
+    Detecta: campos invalidos, step IDs inventados, versao divergente,
+    phase/step inconsistentes, blocked sem reason.
+    QUANDO: Apos cada atualizacao do ft_state.yml.
+    QUEM USA: ft_manager, ft_gatekeeper
+
+  ft validate artifacts
+    Verifica que artefatos esperados existem nos paths canonicos.
+    Cruza completed_steps com outputs definidos no FAST_TRACK_PROCESS.yml.
+    QUANDO: Antes do handoff, ou para diagnostico.
+    QUEM USA: ft_manager
+
+  ft validate integration
+    Mock audit + dead code + wiring + interface enforcement.
+    Detecta: ports sem impl real, usecases nao invocados, adapters soltos,
+    interface_type sem adapter correspondente, design system ausente.
+    QUANDO: Antes do gate.audit (obrigatorio).
+    QUEM USA: ft_gatekeeper
+
+  ft validate gate <id>
+    Pre-flight mecanico de um gate especifico.
+    Gates: smoke, e2e, acceptance, handoff.
+    Verifica pre-condicoes mecanicas antes da analise semantica.
+    QUANDO: Antes de cada gate formal.
+    QUEM USA: ft_gatekeeper
+
+  ft generate ids
+    Gera FAST_TRACK_IDS.md a partir do FAST_TRACK_PROCESS.yml.
+    QUANDO: Apos mudanca no processo.
+    QUEM USA: ft_manager
+
+  ft generate check
+    Verifica consistencia entre YAML, MD, IDs e Summary.
+    QUANDO: Apos atualizacao do processo. Diagnostico de drift.
+    QUEM USA: ft_manager
+
+  ft tokens status|snapshot|history
+    Token tracking. Proxy para token_tracker.py.
+    snapshot --step <id>: grava snapshot num momento-chave.
+    QUANDO: Momentos-chave (init, pos-PRD, pos-sprint, pos-E2E, handoff).
+    QUEM USA: ft_manager
+
+  ft role <symbiota_id>
+    Mostra permissoes e escopo de um symbiota.
+    Util para verificar se uma acao esta dentro do escopo antes de executar.
+    QUANDO: Antes de delegar ou ao questionar se uma acao e permitida.
+    QUEM USA: ft_manager, qualquer agente
+
+  ft self-check
+    Verifica consistencia interna: schema existe, steps no YAML, phases no schema.
+    QUANDO: Diagnostico. Apos atualizacao da CLI ou do processo.
+    QUEM USA: ft_manager
+
+  ft help [comando]
+    Este manual. Com argumento, detalha um comando especifico.
+
+REGRA: Se qualquer comando retornar BLOCK, parar e resolver antes de prosseguir.
+OUTPUT: Todos os comandos de validacao retornam PASS ou BLOCK com itens detalhados.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+HELP_TOPICS = {
+    "init": """
+ft init [--check]
+
+Inicializa ou valida o projeto. Verifica 10 itens:
+  1. Diretorios obrigatorios (do FAST_TRACK_PROCESS.yml)
+  2. Arquivos obrigatorios
+  3. .gitignore com process/ excluido
+  4. Scaffold Clean/Hex em src/
+  5. Git remote (nao aponta pro template)
+  6. Virtualenv (.venv)
+  7. Versao sincronizada (processo == state)
+  8. Token tracking (metrics.yml com snapshot init)
+  9. Estado do projeto (fase, next_step)
+  10. Agents do Claude Code (5 symbiotas instalados/atualizados)
+
+--check: reporta PASS/BLOCK sem modificar nada.
+Sem --check: cria o que falta, sincroniza versao, instala agents.
+""",
+    "validate": """
+ft validate <target>
+
+Targets:
+  state        — ft_state.yml contra schema + processo
+  artifacts    — artefatos nos paths canonicos
+  integration  — mock audit, dead code, wiring, interface
+  gate <id>    — pre-flight de gate (smoke|e2e|acceptance|handoff)
+
+Todos retornam PASS ou BLOCK com itens [ok] e [FAIL].
+""",
+    "role": """
+ft role <symbiota_id>
+
+Mostra o que um symbiota pode e nao pode fazer:
+  - Steps permitidos
+  - Fases de atuacao
+  - Paths que pode ler/escrever
+  - O que e proibido
+
+Symbiota IDs: ft_manager, ft_gatekeeper, ft_acceptance, ft_coach, forge_coder
+
+Exemplo: ft role ft_gatekeeper
+""",
+}
+
+
+def cmd_help(topic: str | None = None):
+    """Exibe help rico para agentes."""
+    if topic and topic in HELP_TOPICS:
+        print(HELP_TOPICS[topic])
+    else:
+        print(HELP_TEXT)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Command: role (enforcement de escopo)
+# ---------------------------------------------------------------------------
+
+# Permissões por symbiota — extraídas dos frontmatters dos prompts
+ROLE_DEFINITIONS = {
+    "ft_manager": {
+        "descricao": "Orquestrador — gerencia o fluxo, delega, interage com stakeholder",
+        "pode": [
+            "Ler e escrever project/state/ft_state.yml",
+            "Ler qualquer arquivo do projeto",
+            "Delegar steps ao ft_coach, forge_coder, ft_acceptance, ft_gatekeeper",
+            "Interagir com o stakeholder",
+            "Decidir modo de execucao (interactive/autonomous)",
+            "Executar ft init, ft validate, ft tokens, ft generate",
+            "Atualizar completed_steps, next_step, current_phase, sprint_status",
+        ],
+        "nao_pode": [
+            "Implementar codigo (delegar ao forge_coder)",
+            "Redigir PRD ou task list (delegar ao ft_coach)",
+            "Validar gates (delegar ao ft_gatekeeper)",
+            "Projetar cenarios de aceitacao (delegar ao ft_acceptance)",
+        ],
+        "steps": ["*"],
+        "phases": ["*"],
+    },
+    "ft_gatekeeper": {
+        "descricao": "Validador deterministico — PASS ou BLOCK, sem interpretacao criativa",
+        "pode": [
+            "Ler qualquer arquivo do projeto",
+            "Executar ft validate state, ft validate gate, ft validate integration",
+            "Emitir report de gate (PASS/BLOCK com checklist)",
+        ],
+        "nao_pode": [
+            "Escrever arquivos (exceto output do report)",
+            "Orquestrar o processo (responsabilidade do ft_manager)",
+            "Implementar codigo ou sugerir codigo",
+            "Produzir artefatos alem do report de gate",
+            "Aceitar N/A como resultado — cada item e PASS ou BLOCK",
+        ],
+        "steps": ["*"],
+        "phases": ["*"],
+    },
+    "ft_acceptance": {
+        "descricao": "Especialista em design de cenarios de aceitacao por track",
+        "pode": [
+            "Ler PRD, TASK_LIST, tech_stack, ft_state.yml",
+            "Escrever project/docs/acceptance-scenarios-cycle-XX.md",
+            "Demandar dados faltantes do stakeholder (via ft_manager)",
+        ],
+        "nao_pode": [
+            "Implementar testes (responsabilidade do forge_coder)",
+            "Orquestrar o processo",
+            "Validar gates",
+            "Modificar codigo em src/",
+            "Inventar cenarios sem base nos ACs do PRD",
+        ],
+        "steps": ["ft.acceptance.01.scenario_design"],
+        "phases": ["ft_acceptance"],
+    },
+    "ft_coach": {
+        "descricao": "Conduz MDD, planning, feedback e handoff",
+        "pode": [
+            "Ler qualquer arquivo do projeto",
+            "Escrever em project/docs/ (PRD, hipotese, task_list, SPEC, retro)",
+            "Usar templates de process/fast_track/templates/",
+            "Conduzir discovery com stakeholder (via ft_manager)",
+        ],
+        "nao_pode": [
+            "Implementar codigo",
+            "Executar testes",
+            "Orquestrar o processo (responsabilidade do ft_manager)",
+            "Validar gates",
+            "Projetar cenarios de aceitacao (responsabilidade do ft_acceptance)",
+        ],
+        "steps": [
+            "ft.mdd.01.hipotese", "ft.mdd.02.prd", "ft.mdd.03.validacao",
+            "ft.plan.01.task_list", "ft.feedback.01.retro_note", "ft.handoff.01.specs",
+        ],
+        "phases": ["ft_mdd", "ft_plan", "ft_feedback", "ft_handoff"],
+    },
+    "forge_coder": {
+        "descricao": "Implementa TDD, delivery, smoke, E2E e acceptance tests",
+        "pode": [
+            "Ler qualquer arquivo do projeto",
+            "Escrever em src/, tests/, artifacts/",
+            "Escrever em project/docs/ (smoke report, acceptance report, diagrams)",
+            "Executar pytest, comandos de build, servidores para teste",
+            "Propor tech stack (ft.plan.02.tech_stack)",
+        ],
+        "nao_pode": [
+            "Orquestrar o processo (responsabilidade do ft_manager)",
+            "Redigir PRD ou task list (responsabilidade do ft_coach)",
+            "Validar gates (responsabilidade do ft_gatekeeper)",
+            "Projetar cenarios de aceitacao (responsabilidade do ft_acceptance)",
+            "Modificar ft_state.yml (responsabilidade do ft_manager)",
+            "Interagir diretamente com o stakeholder",
+        ],
+        "steps": [
+            "ft.plan.02.tech_stack", "ft.plan.03.diagrams",
+            "ft.tdd.01.selecao", "ft.tdd.02.red", "ft.tdd.03.green",
+            "ft.delivery.01.self_review", "ft.delivery.02.refactor", "ft.delivery.03.commit",
+            "ft.smoke.01.cli_run", "ft.e2e.01.cli_validation",
+            "ft.acceptance.02.interface_validation", "ft.audit.01.forgebase",
+        ],
+        "phases": ["ft_plan", "ft_tdd", "ft_delivery", "ft_smoke", "ft_e2e", "ft_acceptance", "ft_audit"],
+    },
+}
+
+
+def cmd_role(paths: ProjectPaths, symbiota_id: str):
+    """Mostra permissões e escopo de um symbiota."""
+    if symbiota_id not in ROLE_DEFINITIONS:
+        print(f"ERRO: Symbiota '{symbiota_id}' desconhecido.")
+        print(f"Validos: {', '.join(ROLE_DEFINITIONS.keys())}")
+        return 1
+
+    role = ROLE_DEFINITIONS[symbiota_id]
+    print(f"\n{'━' * 50}")
+    print(f"  ROLE: {symbiota_id}")
+    print(f"  {role['descricao']}")
+    print(f"{'━' * 50}")
+
+    print(f"\n  PODE:")
+    for item in role["pode"]:
+        print(f"    [ok] {item}")
+
+    print(f"\n  NAO PODE:")
+    for item in role["nao_pode"]:
+        print(f"    [x]  {item}")
+
+    print(f"\n  STEPS: {', '.join(role['steps'])}")
+    print(f"  PHASES: {', '.join(role['phases'])}")
+    print(f"{'━' * 50}\n")
+    return 0
+
+
+def cmd_role_check(paths: ProjectPaths, symbiota_id: str, step_id: str):
+    """Verifica se um symbiota pode executar um step."""
+    if symbiota_id not in ROLE_DEFINITIONS:
+        print(f"BLOCK — symbiota '{symbiota_id}' desconhecido")
+        return 1
+
+    role = ROLE_DEFINITIONS[symbiota_id]
+    if "*" in role["steps"] or step_id in role["steps"]:
+        print(f"PASS — {symbiota_id} pode executar {step_id}")
+        return 0
+    else:
+        print(f"BLOCK — {symbiota_id} NAO pode executar {step_id}")
+        print(f"  Steps permitidos: {', '.join(role['steps'])}")
+        return 1
+
+
+# ---------------------------------------------------------------------------
 # Command: tokens (delega para token_tracker.py)
 # ---------------------------------------------------------------------------
 
@@ -1239,10 +1528,24 @@ def main():
     generate_sub.add_parser("ids", help="Gerar FAST_TRACK_IDS.md")
     generate_sub.add_parser("check", help="Verificar consistencia YAML <-> MD")
 
+    # help
+    help_parser = sub.add_parser("help", help="Manual completo para agentes")
+    help_parser.add_argument("topic", nargs="?", help="Topico: init, validate, role")
+
+    # role
+    role_parser = sub.add_parser("role", help="Permissoes e escopo de um symbiota")
+    role_parser.add_argument("symbiota_id", help="Ex: ft_manager, ft_gatekeeper, forge_coder")
+    role_parser.add_argument("--check-step", help="Verificar se pode executar um step especifico")
+
     # self-check
     sub.add_parser("self-check", help="Verificar consistencia interna da CLI")
 
     args = parser.parse_args()
+
+    # help não precisa de projeto
+    if args.command == "help":
+        sys.exit(cmd_help(args.topic))
+
     root = find_project_root()
     paths = ProjectPaths(root)
 
@@ -1268,6 +1571,11 @@ def main():
             sys.exit(cmd_generate_check(paths))
         else:
             generate_parser.print_help()
+    elif args.command == "role":
+        if args.check_step:
+            sys.exit(cmd_role_check(paths, args.symbiota_id, args.check_step))
+        else:
+            sys.exit(cmd_role(paths, args.symbiota_id))
     elif args.command == "self-check":
         sys.exit(cmd_self_check(paths))
     else:

@@ -18,6 +18,6 @@ __pycache__/
 pre-commit-config.yaml
 ruff.toml
 
-# Fast Track — processo estatico (vem do template, nao evolui com o projeto)
-# Atualizar copiando a pasta process/ de uma versao nova do template
-process/
+# Fast Track — processo estatico
+# No template: process/ esta commitado (e o fonte)
+# No projeto do cliente: ft init adiciona process/ aqui automaticamente

@@ -7,10 +7,13 @@
 ```bash
 ft init meu-projeto
 ft init meu-projeto --remote git@github.com:user/meu-projeto.git
+ft init meu-projeto --gateway anthropic:sk-sym_abc123
 ```
 
 Isto clona o template, desconecta do remote original, inicializa o projeto (dirs, scaffold,
 agents do Claude Code, .gitignore, token tracking) e opcionalmente conecta ao remote do projeto.
+
+`--gateway provider:apikey` configura `.claude/settings.local.json` para rotear pelo SymGateway.
 
 ## Projeto ja clonado — instalar agents
 

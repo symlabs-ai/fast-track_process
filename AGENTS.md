@@ -1,5 +1,26 @@
 # Symbiotas e Agents — Guia Rápido
 
+## Primeiro passo absoluto: instalar agents
+
+> **Antes de tudo** — antes de carregar o ft_manager, antes de ler estado, antes de qualquer fase.
+
+Se voce acabou de clonar o template e e a primeira vez neste projeto:
+
+```bash
+python process/fast_track/tools/ft.py init
+```
+
+Este comando cria os 5 agents do Claude Code em `~/.claude/agents/` (se ainda nao existirem)
+e configura o projeto (dirs, scaffold, .gitignore, versao). Sem isso, os symbiotas nao estarao
+disponiveis como agents no Claude Code.
+
+Para verificar sem criar nada:
+```bash
+python process/fast_track/tools/ft.py init --check
+```
+
+Se os agents ja existem e o projeto ja foi inicializado, o init reporta PASS e nao muda nada.
+
 ## Ponto de entrada: `ft_manager`
 
 **Toda sessão começa pelo `ft_manager`.** Ele é o orquestrador — lê o estado, decide o que fazer e
@@ -11,11 +32,13 @@ Carregue o prompt: `process/symbiotes/ft_manager/prompt.md`
 
 O `ft_manager` DEVE seguir este fluxo ao iniciar:
 
-1. Ler `project/state/ft_state.yml`.
-2. **Se projeto novo** (`current_phase: null`):
+1. Executar `python process/fast_track/tools/ft.py init --check`.
+   - Se BLOCK: executar `ft.py init` para resolver. Repetir ate PASS.
+2. Ler `project/state/ft_state.yml`.
+3. **Se projeto novo** (`current_phase: null`):
    - Atualizar `ft_state.yml`: `current_phase: ft_mdd`, `current_cycle: cycle-01`.
    - Delegar ao `ft_coach`: iniciar `ft.mdd.01.hipotese`.
-3. **Se projeto em andamento**:
+4. **Se projeto em andamento**:
    - Informar: "Retomando de [next_step]. Último step: [last_completed_step]."
    - Informar também a sprint ativa: `current_sprint` e `sprint_status`, quando preenchidos.
    - Continuar o fluxo a partir dali, delegando ao symbiota correto.
@@ -27,6 +50,7 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
 - Prompts dos symbiotas:
   - `process/symbiotes/ft_manager/prompt.md` ← **ponto de entrada**
   - `process/symbiotes/ft_gatekeeper/prompt.md`
+  - `process/symbiotes/ft_acceptance/prompt.md`
   - `process/symbiotes/ft_coach/prompt.md`
   - `process/symbiotes/forge_coder/prompt.md`
 - Processo e estado:

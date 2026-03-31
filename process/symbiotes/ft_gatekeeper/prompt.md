@@ -39,6 +39,22 @@ Separação de responsabilidades:
 - `ft_gatekeeper` valida e bloqueia
 - `ft_coach` e `forge_coder` executam
 
+## Pre-flight mecânico (ft.py)
+
+Antes da análise semântica, o ft_gatekeeper DEVE executar a validação mecânica via CLI:
+
+```bash
+python process/fast_track/tools/ft.py validate state
+python process/fast_track/tools/ft.py validate gate <gate_id>
+```
+
+- Se `validate state` retornar BLOCK: estado corrompido — reportar BLOCK imediatamente sem análise semântica.
+- Se `validate gate` retornar BLOCK: pré-condições mecânicas não atendidas (ex: gate_log vazio, artefatos ausentes) — reportar BLOCK com os itens do pre-flight.
+- Se ambos retornarem PASS: prosseguir para a análise semântica (checklists abaixo).
+
+A CLI verifica o que é **mecanicamente verificável** (estado válido, artefatos existem, paths corretos).
+O ft_gatekeeper complementa com o que requer **leitura e julgamento** (conteúdo do PRD, qualidade dos testes, aderência arquitetural).
+
 ## Princípios
 
 1. **Binário** — Cada item é ✅ ou ❌. Não existe "parcialmente ok".
@@ -155,12 +171,21 @@ Checklist:
 
 ### gate.acceptance
 
-**Quando**: Após `ft.acceptance.01` (condicional — só quando `interface_type` != `cli_only`)
-**Arquivos**: `project/docs/acceptance-cycle-XX.md`, `tests/acceptance/cycle-XX/`
+**Quando**: Após `ft.acceptance.02.interface_validation` (condicional — só quando `interface_type` != `cli_only`)
+**Arquivos**: `project/docs/acceptance-scenarios-cycle-XX.md`, `project/docs/acceptance-cycle-XX.md`, `tests/acceptance/cycle-XX/`
 
 Checklist:
-- [ ] Cada AC do PRD tem pelo menos 1 teste de aceitação
-- [ ] Todos os Value Tracks têm pelo menos 1 fluxo testado
+
+#### Cenários (ft_acceptance)
+- [ ] `project/docs/acceptance-scenarios-cycle-XX.md` existe e foi aprovado pelo stakeholder
+- [ ] Cada Value Track tem >= 3 cenários (happy path, edge case, error path)
+- [ ] Cada Support Track tem >= 1 cenário
+- [ ] 100% dos ACs do PRD aparecem em pelo menos 1 cenário
+- [ ] Nenhum cenário com dados pendentes/placeholder — todos resolvidos
+
+#### Implementação (forge_coder)
+- [ ] Cada cenário da matriz tem pelo menos 1 teste implementado em `tests/acceptance/cycle-XX/`
+- [ ] forge_coder implementou exatamente os cenários da matriz (não inventou nem pulou)
 - [ ] Todos os testes passaram
 - [ ] `project/docs/acceptance-cycle-XX.md` gerado com mapeamento completo
 - [ ] **Path canônico**: acceptance report está em `project/docs/acceptance-cycle-XX.md` (NÃO em process/, NÃO em state/). Arquivo em path errado = BLOCK
@@ -200,6 +225,19 @@ Checklist:
 - [ ] Arquitetura Clean/Hex: domínio puro, ports como abstrações, sem dependências circulares
 - [ ] **Path canônico**: audit report está em `project/docs/forgebase-audit.md` (NÃO em process/, NÃO em state/)
 - [ ] `project/docs/forgebase-audit.md` gerado com todos os itens ✅ PASS
+
+#### Mock Audit (integração real)
+- [ ] **Nenhum port tem apenas implementação mock/in-memory sem implementação real** — para cada Port em `src/application/ports/`, verificar que existe pelo menos 1 implementação concreta em `src/infrastructure/` (não contar mocks em `tests/`). Port com apenas mock = **BLOCK**
+- [ ] **Todo UseCase é invocado por pelo menos 1 adapter** — verificar imports em `src/adapters/`. UseCase que nenhum adapter chama = código morto = **BLOCK**
+- [ ] **Todo adapter está conectado no wiring/bootstrap** — verificar que cada adapter em `src/adapters/` é instanciado no ponto de entrada (ex: `main.py`, `cli.py`, `app.py`). Adapter solto = **BLOCK**
+- [ ] **Nenhuma rota/endpoint sem handler funcional** — se `interface_type` inclui API/UI, verificar que cada rota definida tem handler que chama um UseCase real (não stub/pass/NotImplementedError)
+- [ ] **Pre-flight mecânico**: executar `ft.py validate integration` — se BLOCK, não avançar para análise semântica
+
+#### Design System Conformidade (condicional — `interface_type` != `cli_only`)
+- [ ] `project/docs/tech_stack.md` contém seção "UI Design System" com design system escolhido
+- [ ] Componentes do design system aprovado estão sendo usados nos arquivos de UI (imports, classes CSS, componentes do framework)
+- [ ] Inspecionar pelo menos 3 telas via screenshots: layout, tipografia, paleta e componentes condizem com o design system
+- [ ] Desvio significativo do design system sem justificativa no `tech_stack.md` = **BLOCK**
 
 ### gate.handoff
 
@@ -249,7 +287,7 @@ Isso cria audit trail verificável no pre-flight check pré-smoke.
 
 ## Referências
 
-- Estado: `process/fast_track/state/ft_state.yml`
+- Estado: `project/state/ft_state.yml`
 - Processo: `process/fast_track/FAST_TRACK_PROCESS.yml`
 - PRD: `project/docs/PRD.md`
 - Task List: `project/docs/TASK_LIST.md`

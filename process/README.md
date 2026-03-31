@@ -14,8 +14,8 @@ process/
 │   ├── FAST_TRACK_IDS.md              # Step IDs canônicos
 │   ├── SUMMARY_FOR_AGENTS.md          # Resumo para LLMs
 │   ├── README.md                      # Quick-start
-│   ├── state/
-│   │   └── ft_state.yml               # Estado do processo
+│   ├── state/                          # (migrado para project/state/)
+│   │   └── ft_state.yml               # → project/state/ft_state.yml
 │   └── templates/
 │       ├── template_prd.md            # PRD consolidado
 │       ├── template_task_list.md      # Task list
@@ -51,7 +51,7 @@ Inicie com `ft.mdd.01.hipotese` — o ft_coach guia o processo.
 ## Para Agentes / LLMs
 
 Leia `process/fast_track/SUMMARY_FOR_AGENTS.md` para um resumo compacto.
-Estado em `process/fast_track/state/ft_state.yml`.
+Estado em `project/state/ft_state.yml`.
 
 ## Princípios
 

@@ -2,14 +2,14 @@
 # Estado do processo Fast Track
 
 process_variant: fast_track
-version: "0.5.1"
+version: "0.6.0"
 
 orchestrator: ft_manager
-stakeholder_mode: interactive    # interactive | autonomous
-mdd_mode: normal                 # normal | hyper
-tdd_interaction_mode: phase_end  # phase_end | per_task | mvp_end
+stakeholder_mode: interactive    # interactive | autonomous (flow: decisao_stakeholder_ciclo)
+mdd_mode: normal                 # normal | hyper (flow: decisao_mdd_mode)
 mvp_status: null                 # null | demonstravel | entregue
-                                 # demonstravel só após smoke-cycle-XX.md gerado com PASSOU
+                                 # demonstravel: set pelo flow após ft_smoke_01 PASS
+                                 # entregue: set pelo flow em ft_manager_handoff_completo
 mvp_delivered: false
 maintenance_mode: false      # true após ft.handoff.01.specs concluído; /feature é o fluxo após isso
 
@@ -25,19 +25,24 @@ interface_type: cli_only     # cli_only | api | ui | mixed — definido no ft.pl
 artifact_viewer: auto
 
 current_phase: ft_mdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback
+                             # atualizado implicitamente pelo ft_manager ao entrar em cada fase
 current_cycle: cycle-01      # ex.: cycle-01
-current_sprint: null         # sprint atual dentro do ciclo; preenchido apos a task list
-sprint_status: planned       # planned | in_progress | expert_review | fixing | completed
-cycle_sprint_scope: []       # sprints ativas para o ciclo atual
-backlog_sprints: []          # sprints fora do corte do ciclo atual
-planned_sprints: []          # [{id, goal, tasks, status}]
+current_sprint: null         # sprint atual dentro do ciclo; preenchido em ft_sprint_prepare
+sprint_status: planned       # planned | in_progress | fixing | completed
+                             # in_progress: set por ft_sprint_prepare / ft_sprint_advance
+                             # fixing: set por ft_sprint_expert_gate quando há pendências
+                             # completed: set por ft_sprint_expert_gate quando aprovada
+cycle_sprint_scope: []       # subset de planned_sprints selecionado para o ciclo atual
+backlog_sprints: []          # planned_sprints fora do corte do ciclo atual (próximos ciclos)
+planned_sprints: []          # [{id, goal, tasks, status}] — todas as sprints derivadas da task list
 sprint_review_gate: ask_fast_track
 sprint_review_log: {}
 
-last_completed_step: null    # ex.: ft.mdd.01.hipotese
+last_completed_step: null    # ex.: ft.mdd.01.hipotese — atualizado pelo ft_manager após cada step
 next_step: ft.mdd.01.hipotese  # determinístico — o próximo step obrigatório, não uma sugestão
+                               # atualizado pelo ft_manager com base no flow
 
-completed_steps: []          # lista de step IDs concluídos
+completed_steps: []          # lista de step IDs concluídos — acumulador gerido pelo ft_manager
 
 blocked: false
 blocked_reason: null

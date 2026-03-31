@@ -4,10 +4,23 @@
 
 ## O que é
 
-ForgeProcess: **18 steps, 4 symbiotas, 1 PRD → 1 SPEC**.
+ForgeProcess: **19 steps, 5 symbiotas, 1 PRD → 1 SPEC**.
 Para solo dev + AI. Sem BDD Gherkin e sem cerimônia de squad, mas com sprints técnicas por dependência.
 
-`ft_manager` orquestra tudo. `ft_gatekeeper` valida gates (PASS/BLOCK). `ft_coach` e `forge_coder` executam quando delegados.
+`ft_manager` orquestra tudo. `ft_gatekeeper` valida gates (PASS/BLOCK). `ft_acceptance` projeta cenários de aceitação. `ft_coach` e `forge_coder` executam quando delegados.
+
+## CLI (ft.py)
+
+Validação determinística: `python process/fast_track/tools/ft.py <cmd>`
+
+- `init --check` — bootstrap (ft_manager, antes de tudo)
+- `validate state` — estado válido? (ft_manager + ft_gatekeeper, após cada update)
+- `validate gate <id>` — pre-flight mecânico (ft_gatekeeper, antes de cada gate)
+- `validate artifacts` — artefatos existem? (ft_manager, antes do handoff)
+- `validate integration` — mock audit, dead code, wiring (ft_gatekeeper, antes do gate.audit)
+- `tokens snapshot --step <id>` — token tracking (ft_manager, momentos-chave)
+
+BLOCK em qualquer comando = parar e resolver.
 
 ## Flow
 
@@ -62,7 +75,8 @@ LOOP[
   -> sprints_done? -> ft_preflight_gates
   -> ft.smoke.01.cli_run (GATE — processo real, PTY real, sem mocks, output documentado)
   -> ft.e2e.01.cli_validation (GATE — unit + smoke)
-  -> interface_type != cli_only? -> ft.acceptance.01.interface_validation (GATE — ACs × interface real)
+  -> interface_type != cli_only? -> ft.acceptance.01.scenario_design (ft_acceptance projeta cenários por track)
+  -> ft.acceptance.02.interface_validation (GATE — cenários × interface real)
   -> [ft_manager decide modo]
      interactive: apresenta ao stakeholder -> feedback / MVP / autonomous
      autonomous:  valida internamente -> prossegue até MVP -> apresenta stakeholder
@@ -90,7 +104,8 @@ LOOP[
 | ft.delivery.03.commit | forge_coder | ft_manager |
 | ft.smoke.01.cli_run | forge_coder | ft_manager |
 | ft.e2e.01.cli_validation | forge_coder | ft_manager |
-| ft.acceptance.01.interface_validation | forge_coder | ft_manager |
+| ft.acceptance.01.scenario_design | ft_acceptance | ft_manager |
+| ft.acceptance.02.interface_validation | forge_coder | ft_manager |
 | ft.feedback.01.retro_note | ft_coach | ft_manager |
 | ft.audit.01.forgebase | forge_coder | ft_manager |
 | ft.handoff.01.specs | ft_coach | ft_manager |
@@ -120,38 +135,63 @@ LOOP[
 
 ## Regras Críticas
 
-1. **Sprint é a unidade de avanço dentro do ciclo** — TDD/Delivery opera sprint a sprint; tasks só podem ser selecionadas na `current_sprint`.
-2. **Sprint Expert Gate é obrigatório** — Toda sprint termina com `/ask fast-track`, report salvo em `project/docs/sprint-review-sprint-XX.md` e correção integral das recomendações antes da próxima sprint.
-3. **Smoke gate é obrigatório** — Ciclo não avança sem produto real executado e output documentado.
-4. **E2E CLI gate é obrigatório** — Ciclo não fecha sem `run-all.sh` passando (unit + smoke).
-5. **Acceptance gate é condicional** — Obrigatório quando `interface_type` != `cli_only`. Cada AC do PRD testado contra a interface real.
+### Tier 1 — Invioláveis (violação = processo corrompido)
+
+> Estas regras nunca podem ser ignoradas. Violá-las invalida o ciclo inteiro.
+
+1. **Sequência de gates é inviolável** — Sprint Expert Gate → Smoke → E2E CLI → Acceptance (condicional) → Feedback. Nenhum gate pode ser pulado.
+2. **N/A não é resultado válido de gate** — Cada item do checklist do ft_gatekeeper é ✅ ou ❌. "Não aplicável", "N/A" ou "não implementado" = ❌ BLOCK.
+3. **ft_gatekeeper é independente** — Separação de responsabilidades: ft_manager orquestra, ft_gatekeeper bloqueia. O mesmo agente que orquestra não valida os gates.
+4. **gate.delivery tem enforcement por task** — Cada task `done` DEVE ter `gate.delivery: PASS` registrado no `gate_log` do `ft_state.yml`.
+5. **TDD Red-Green** — Teste falhando antes de código. Sempre. Suite completa verde no green.
 6. **`mvp_status: demonstravel` exige smoke PASSOU** — nunca declarar com base em unit tests.
-7. **TDD Red-Green** — Teste falhando antes de código. Sempre. Suite completa verde no green.
-8. **PRD é fonte única** — Sem documentos satélite.
-9. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
-10. **ft_gatekeeper valida gates binários** — Cada checkpoint formal delega ao ft_gatekeeper (PASS/BLOCK). O Sprint Expert Gate é revisão externa complementar, não substitui o gatekeeper.
-11. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
-12. **SPEC.md é obrigatório ao encerrar** — MVP concluído sem SPEC.md gerado não está realmente encerrado.
-13. **SPEC.md reflete o entregue, não o planejado** — features não implementadas vão para "fora do escopo".
-14. **Value Tracks são obrigatórios** — PRD deve ter 2-5 Value Tracks com KPIs. Cada US mapeada para pelo menos 1 track.
-15. **Observabilidade via ForgeBase Pulse** — todo UseCase passa por `UseCaseRunner`. Smoke gate gera `pulse_snapshot.json` com `mapping_source: "spec"`. Nunca inventar telemetria própria.
-16. **Cobertura mínima 85%** — Arquivos alterados devem ter >= 85% de cobertura (desejável 90%). Validado no self-review com `--cov`.
-17. **Self-review expandido** — 10 itens em 3 grupos: segurança/higiene, qualidade de código, arquitetura Clean/Hex + ForgeBase.
-18. **Refactor é step formal** — Após self-review, antes do commit. No-op documentado se nada a refatorar.
-19. **Decisão de ciclo é contextual, não genérica** — ft_manager analisa critérios de MVP antes de oferecer opções. Se tasks P0 pendentes ou interface não entregue (quando `interface_type` != `cli_only`), recomenda novo ciclo. "Encerrar MVP" só é opção primária quando critérios estão atendidos.
-20. **Progresso visível** — forge_coder exibe progress report ao iniciar/concluir cada task. ft_manager exibe resumo por sprint e por ciclo.
-21. **Acceptance tests devem ser reais** — Testes que fazem grep em arquivos, verificam existência de arquivos ou passam sem servidor rodando NÃO são testes de aceitação válidos. O ft_manager DEVE inspecionar o código dos testes para confirmar interação real (HTTP requests, Playwright, Chrome automation).
-22. **Execução final do acceptance gate no ambiente do cliente** — Testes de dev são válidos durante desenvolvimento, mas a execução final que vale para o report deve usar build de produção + ambiente do cliente. UI tests com Playwright headed (browser visível). PWA exige HTTPS. 100% dos ACs cobertos nesta execução.
-23. **Auditoria ForgeBase é obrigatória antes do handoff** — Verificar UseCaseRunner wiring, Value/Support Tracks completos, qualidade de logging (sem print, logs estruturados, níveis corretos, sem dados sensíveis), Pulse snapshot com mapping_source: "spec", e aderência Clean/Hex. MVP não é entregue sem auditoria passando.
-24. **Sequência de gates é inviolável** — Sprint Expert Gate → Smoke → E2E CLI → Acceptance (condicional) → Feedback. Nenhum gate pode ser pulado.
-25. **Skip de tasks requer aprovação** — Tasks P0 nunca podem ser puladas. Tasks P1 derivadas de features centrais do PRD não podem ser puladas sem aprovação do stakeholder. Todo skip registrado no TASK_LIST.md com motivo e quem aprovou.
+7. **Smoke gate é obrigatório** — Ciclo não avança sem produto real executado e output documentado.
+8. **Step IDs devem ser válidos** — ft_manager só grava em `completed_steps` IDs que existam em FAST_TRACK_IDS.md. IDs inventados corrompem o estado. Validável via `ft.py validate state`.
+9. **Artefatos em paths canônicos** — smoke-cycle-XX.md, acceptance-cycle-XX.md, sprint-review-sprint-XX.md e forgebase-audit.md devem estar em `project/docs/`. Validável via `ft.py validate artifacts`.
+10. **PRD é fonte única** — Sem documentos satélite.
+
+### Tier 2 — Defaults do processo (deriváveis do YAML, mas importantes)
+
+> Regras que definem como o processo opera normalmente. Deriváveis da spec mas listadas aqui para referência rápida.
+
+11. **Sprint é a unidade de avanço dentro do ciclo** — TDD/Delivery opera sprint a sprint; tasks só podem ser selecionadas na `current_sprint`.
+12. **Sprint Expert Gate é obrigatório** — Toda sprint termina com `/ask fast-track`, report salvo em `project/docs/sprint-review-sprint-XX.md` e correção integral das recomendações antes da próxima sprint.
+13. **E2E CLI gate é obrigatório** — Ciclo não fecha sem `run-all.sh` passando (unit + smoke).
+14. **ACs substituem BDD** — Given/When/Then dentro do PRD, sem .feature files.
+15. **ft_gatekeeper valida gates binários** — Cada checkpoint formal delega ao ft_gatekeeper (PASS/BLOCK). O Sprint Expert Gate é revisão externa complementar, não substitui o gatekeeper.
+16. **Modo autônomo não dispensa critérios** — ft_manager valida internamente com os mesmos padrões.
+17. **SPEC.md é obrigatório ao encerrar** — MVP concluído sem SPEC.md gerado não está realmente encerrado.
+18. **SPEC.md reflete o entregue, não o planejado** — features não implementadas vão para "fora do escopo".
+19. **Value Tracks são obrigatórios** — PRD deve ter 2-5 Value Tracks com KPIs. Cada US mapeada para pelo menos 1 track.
+20. **Observabilidade via ForgeBase Pulse** — todo UseCase passa por `UseCaseRunner`. Smoke gate gera `pulse_snapshot.json` com `mapping_source: "spec"`. Nunca inventar telemetria própria.
+21. **Cobertura mínima 85%** — Arquivos alterados devem ter >= 85% de cobertura (desejável 90%). Validado no self-review com `--cov`.
+22. **Self-review expandido** — 10 itens em 3 grupos: segurança/higiene, qualidade de código, arquitetura Clean/Hex + ForgeBase.
+23. **Refactor é step formal** — Após self-review, antes do commit. No-op documentado se nada a refatorar.
+24. **Decisão de ciclo é contextual, não genérica** — ft_manager analisa critérios de MVP antes de oferecer opções. "Encerrar MVP" só é opção primária quando critérios estão atendidos.
+25. **Skip de tasks requer aprovação** — Tasks P0 nunca podem ser puladas. Todo skip registrado no TASK_LIST.md com motivo e quem aprovou.
 26. **Prioridades e sequência de sprints requerem aprovação do stakeholder** — Após gate.task_list PASS, ft_manager apresenta prioridades e agrupamento incremental ao stakeholder.
-27. **ft_gatekeeper é independente** — Separação de responsabilidades: ft_manager orquestra, ft_gatekeeper bloqueia. O mesmo agente que orquestra não valida os gates.
-28. **Paralelização é opt-in e limitada à sprint atual** — `parallel_mode: true` habilita execução paralela em worktrees, mas nunca atravessando duas sprints.
-29. **gate.delivery tem enforcement por task** — Cada task `done` DEVE ter `gate.delivery: PASS` registrado no `gate_log` do `ft_state.yml`.
-30. **N/A não é resultado válido de gate** — Cada item do checklist do ft_gatekeeper é ✅ ou ❌. "Não aplicável", "N/A" ou "não implementado" = ❌ BLOCK.
-31. **Artefatos em paths canônicos** — smoke-cycle-XX.md, acceptance-cycle-XX.md, sprint-review-sprint-XX.md e forgebase-audit.md devem estar em `project/docs/`.
-32. **Step IDs devem ser válidos** — ft_manager só grava em `completed_steps` IDs que existam em FAST_TRACK_IDS.md. IDs inventados corrompem o estado.
+27. **Progresso visível** — forge_coder exibe progress report ao iniciar/concluir cada task. ft_manager exibe resumo por sprint e por ciclo.
+28. **Auditoria ForgeBase é obrigatória antes do handoff** — MVP não é entregue sem auditoria passando.
+
+### Tier 3 — Contextuais (só aplicam quando feature/modo está ativo)
+
+> Regras que só entram em vigor em cenários específicos. Ignoráveis quando o contexto não se aplica.
+
+29. **Acceptance gate é condicional** — Obrigatório quando `interface_type` != `cli_only`. Cada AC do PRD testado contra a interface real.
+30. **Acceptance tests devem ser reais** — Testes que fazem grep em arquivos ou passam sem servidor rodando NÃO são testes de aceitação válidos. Requer interação real (HTTP requests, Playwright, Chrome automation).
+31. **Execução final do acceptance no ambiente do cliente** — Build de produção, Playwright headed, PWA exige HTTPS. 100% dos ACs cobertos.
+32. **Paralelização é opt-in e limitada à sprint atual** — `parallel_mode: true` habilita execução paralela em worktrees, mas nunca atravessando duas sprints.
+
+## Recovery — O que fazer quando algo trava
+
+| Cenário | Ação |
+|---------|------|
+| Sprint Expert Gate bloqueia 3x seguidas | ft_manager pausa, apresenta o padrão de bloqueio ao stakeholder e pergunta: reduzir escopo da sprint, pedir ajuda externa, ou pivotar abordagem |
+| Smoke trava (freeze/hang) | forge_coder documenta o travamento em `smoke-cycle-XX.md` com log completo. ft_manager avalia: bug de implementação (voltar para TDD) ou problema de ambiente (resolver antes de retry) |
+| Gate.delivery BLOCK repetido na mesma task | Após 2 BLOCKs na mesma task, ft_manager avalia se a task é viável. Opções: quebrar em subtasks menores, marcar como blocked com motivo, ou escalar ao stakeholder |
+| Stakeholder ausente (modo interactive) | Após timeout razoável (~1 sessão sem resposta), ft_manager registra `blocked: true, blocked_reason: "aguardando stakeholder"`. Não avança sem aprovação onde requerida |
+| Estado corrompido | Rodar `ft.py validate state` para diagnóstico. Corrigir campos inválidos manualmente ou restaurar de git (`git checkout project/state/ft_state.yml`) |
+| Divergência processo/state | Rodar `ft.py init --check` para detectar. `ft.py init` sincroniza versão automaticamente |
 
 ## Stakeholder Mode
 
@@ -170,7 +210,7 @@ Skills disponíveis **apenas em maintenance mode**:
 
 ## Estado
 
-Arquivo: `process/fast_track/state/ft_state.yml`
+Arquivo: `project/state/ft_state.yml`
 Campo chave: `next_step` (determinístico — o próximo step obrigatório, não uma sugestão)
 Campos de qualidade: `min_coverage`, `desired_coverage`, `commit_strategy`, `interface_type`
 Campos de sprint:

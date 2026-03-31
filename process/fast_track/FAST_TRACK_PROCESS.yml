@@ -1,12 +1,12 @@
 # ForgeProcess Fast Track
-# Solo dev + AI — 18 steps em 9 fases, com sprints técnicas
+# Solo dev + AI — 19 steps em 9 fases, com sprints técnicas
 
 id: forgeprocess_fast_track
-version: "0.5.1"
+version: "0.6.0"
 title: "ForgeProcess — Fast Track"
 description: >
   ForgeProcess para solo dev + AI.
-  18 steps, 9 fases. Gates obrigatórios: PRD validado, TDD Red-Green, Sprint Expert Gate,
+  19 steps, 9 fases. Gates obrigatórios: PRD validado, TDD Red-Green, Sprint Expert Gate,
   Smoke, E2E CLI, Acceptance (condicional).
 
 target_profile:
@@ -19,13 +19,14 @@ project_layout:
     - "process/"
     - "process/fast_track/"
     - "project/"
+    - "project/state/"
     - "project/docs/"
     - "src/"
     - "tests/"
     - "artifacts/"
   required_files:
     - "process/fast_track/FAST_TRACK_PROCESS.yml"
-    - "process/fast_track/state/ft_state.yml"
+    - "project/state/ft_state.yml"
 
 getting_started:
   message: |
@@ -217,14 +218,28 @@ phases:
         symbiote: forge_coder
 
   - id: ft_acceptance
-    title: "Acceptance — Validação de Interface"
-    narrative: "Gate condicional: validação de ACs contra a interface real (API/UI). Skip se cli_only."
+    title: "Acceptance — Design de Cenários e Validação de Interface"
+    narrative: "ft_acceptance projeta cenários por Value/Support Track, demanda dados faltantes do stakeholder, e forge_coder implementa os testes contra a interface real. Condicional: skip se cli_only."
     condition: "interface_type != cli_only"
     steps:
-      - id: ft.acceptance.01.interface_validation
+      - id: ft.acceptance.01.scenario_design
+        title: "Design de Cenários de Aceitação"
+        narrative: "ft_acceptance lê PRD (ACs, Value Tracks, Support Tracks), gera matriz de cenários (happy/edge/error por track), identifica dados faltantes e demanda do stakeholder"
+        inputs: ["project/docs/PRD.md (seção 5 + 10)", "project/docs/TASK_LIST.md", "project/docs/tech_stack.md"]
+        outputs: ["project/docs/acceptance-scenarios-cycle-XX.md"]
+        condition: "interface_type != cli_only"
+        symbiote: ft_acceptance
+        checklist:
+          - "Cada Value Track tem >= 3 cenários (happy, edge, error)"
+          - "Cada Support Track tem >= 1 cenário"
+          - "100% dos ACs do PRD cobertos em pelo menos 1 cenário"
+          - "Dados pendentes demandados do stakeholder e resolvidos"
+          - "Cenários aprovados pelo stakeholder via ft_manager"
+
+      - id: ft.acceptance.02.interface_validation
         title: "Acceptance Test — Interface Validation"
-        narrative: "Mapear cada AC do PRD para teste de aceitação contra a interface real. Gerar report com rastreabilidade US→AC→Teste."
-        inputs: ["project/docs/PRD.md (seção 5 — ACs)", "src/", "interface do produto"]
+        narrative: "forge_coder implementa testes baseados na matriz de cenários do ft_acceptance. Cada cenário vira pelo menos 1 teste real contra a interface."
+        inputs: ["project/docs/acceptance-scenarios-cycle-XX.md", "src/", "interface do produto"]
         outputs: ["project/docs/acceptance-cycle-XX.md", "tests/acceptance/cycle-XX/"]
         template: "process/fast_track/templates/template_acceptance_report.md"
         gate: true
@@ -320,6 +335,10 @@ phases:
 # ============================================================
 # Flow
 # ============================================================
+
+# Convenção: ft_manager atualiza implicitamente após cada step:
+#   current_phase, last_completed_step, next_step, completed_steps
+# Esses campos NÃO possuem nós explícitos no flow — são side-effects do orchestrator.
 
 flow:
   - id: start
@@ -600,7 +619,7 @@ flow:
       question: "A sprint foi aprovada sem pendências pelo Sprint Expert Gate?"
       decider:
         type: state
-        check: "process/fast_track/state/ft_state.yml#sprint_status"
+        check: "project/state/ft_state.yml#sprint_status"
       branches:
         - when: "fixing"
           goto: ft_tdd_01
@@ -644,6 +663,7 @@ flow:
     type: step
     step_ref: ft_smoke.ft.smoke.01.cli_run
     gate: true
+    state_update: "set mvp_status: demonstravel in ft_state.yml"
     next: ft_e2e_01
 
   # --- E2E Gate ---
@@ -660,16 +680,21 @@ flow:
       question: "Produto tem interface além de CLI?"
       decider:
         type: state
-        check: "process/fast_track/state/ft_state.yml#interface_type"
+        check: "project/state/ft_state.yml#interface_type"
       branches:
         - when: "cli_only"
           goto: decisao_stakeholder_ciclo
         - when: "api|ui|mixed"
-          goto: ft_acceptance_01
+          goto: ft_acceptance_01_scenario
 
-  - id: ft_acceptance_01
+  - id: ft_acceptance_01_scenario
     type: step
-    step_ref: ft_acceptance.ft.acceptance.01.interface_validation
+    step_ref: ft_acceptance.ft.acceptance.01.scenario_design
+    next: ft_acceptance_02
+
+  - id: ft_acceptance_02
+    type: step
+    step_ref: ft_acceptance.ft.acceptance.02.interface_validation
     gate: true
     next: decisao_stakeholder_ciclo
 
@@ -682,7 +707,7 @@ flow:
       question: "Apresentar ciclo ao stakeholder ou prosseguir em modo autônomo?"
       decider:
         type: state
-        check: "process/fast_track/state/ft_state.yml#stakeholder_mode"
+        check: "project/state/ft_state.yml#stakeholder_mode"
       branches:
         - when: "interactive"
           goto: ft_manager_apresenta_stakeholder
@@ -736,7 +761,7 @@ flow:
   - id: ft_manager_handoff_completo
     type: state_update
     orchestrator: ft_manager
-    action: "set mvp_delivered: true, maintenance_mode: true in ft_state.yml"
+    action: "set mvp_delivered: true, maintenance_mode: true, mvp_status: entregue in ft_state.yml"
     next: end_completo
 
   # --- Feedback (ciclo normal) ---
@@ -901,6 +926,16 @@ symbiotes:
       - validar_gate_acceptance
       - validar_gate_audit
       - validar_gate_handoff
+    can_decide: false
+
+  - name: ft_acceptance
+    role: "Especialista em design de cenários de teste de aceitação — projeta cenários por Value/Support Track, demanda dados faltantes do stakeholder"
+    prompt_file: "process/symbiotes/ft_acceptance/prompt.md"
+    capabilities:
+      - design_acceptance_scenarios
+      - mapear_value_tracks
+      - identificar_dados_faltantes
+      - demandar_stakeholder
     can_decide: false
 
   - name: forge_coder

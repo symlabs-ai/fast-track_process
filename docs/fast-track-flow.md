@@ -2,22 +2,18 @@
 
 ```mermaid
 flowchart TD
-    START([🚀 Início]) --> GIT
+    START([🚀 Início]) --> BOOTSTRAP
 
-    subgraph INIT["⚙️ Inicialização — ft_manager"]
-        GIT{Remote aponta\npara template?}
-        GIT -- Sim --> RECONFIG[Solicitar nova URL\nReconfigurar origin]
-        GIT -- Não / já correto --> STATE
-        RECONFIG --> STATE
-        STATE[Ler ft_state.yml]
+    subgraph INIT["⚙️ Bootstrap — ft_manager"]
+        BOOTSTRAP["ft_bootstrap\n1) git remote -v\n2) setup_env.sh\n3) token_tracker snapshot --step init"]
+        BOOTSTRAP -- falhou --> BOOTSTRAP
     end
 
-    STATE -- projeto novo --> MDD_MODE
-    STATE -- em andamento --> RESUME([Retomar step\npendente])
+    BOOTSTRAP -- ok --> MDD_MODE
 
     MDD_MODE{PRD abrangente\nentregue?}
-    MDD_MODE -- não --> MDD
-    MDD_MODE -- sim --> HYPER
+    MDD_MODE -- normal --> H
+    MDD_MODE -- hyper --> HY1
 
     subgraph HYPER["⚡ Hyper-Mode MDD — ft_coach"]
         HY1[Absorver PRD\ndo stakeholder]
@@ -33,43 +29,53 @@ flowchart TD
     subgraph MDD["📋 Fase 1: MDD normal — ft_coach"]
         H[ft.mdd.01\nhipótese]
         H_DOC["📄 hipotese.md"]
-        H --> H_DOC --> PRD[ft.mdd.02\nredigir PRD]
-        PRD --> VALPRD2[ft.mdd.03\nvalidar PRD]
+        PRD[ft.mdd.02\nredigir PRD]
+        VALPRD2[ft.mdd.03\nvalidar PRD]
+        H --> H_DOC --> PRD --> VALPRD2
     end
 
     HY5 --> VAL_PRD
     VALPRD2 --> VAL_PRD
 
-    VAL_PRD{ft_manager\nvalida PRD}
+    VAL_PRD{ft_gatekeeper\ngate.prd}
     VAL_PRD -- falhou --> PRD
-    VAL_PRD -- falhou hyper --> HY5
-    VAL_PRD -- ok --> GO{go / no-go}
+    VAL_PRD -- ok --> GO{go / no-go\nhil: ft_manager}
 
     GO -- rejected --> END_REJ([❌ Encerrado])
-    GO -- approved --> PLAN
+    GO -- approved --> TL
 
     subgraph PLAN["📝 Fase 2: Planning"]
         TL["ft.plan.01\ntask list\n[ft_coach]"]
-        TL --> VAL_TL{ft_manager\nvalida task list}
-        VAL_TL -- falhou --> TL
-        VAL_TL -- ok --> STACK
+        VAL_TL{ft_gatekeeper\ngate.task_list}
+        SK_PRIO{stakeholder\naprova prioridades}
+        STACK["ft.plan.02\ntech stack\n[forge_coder]\n(1º ciclo)"]
+        SK_REV{stakeholder\nrevisa stack}
+        DIAG["ft.plan.03\ndiagramas\n[forge_coder]\nclass · components\ndatabase · architecture"]
 
-        STACK["ft.plan.02\ntech stack\n[forge_coder]"]
-        STACK --> SK_REV{stakeholder\nrevisa stack}
+        TL --> VAL_TL
+        VAL_TL -- falhou --> TL
+        VAL_TL -- ok --> SK_PRIO
+        SK_PRIO -- ajustes --> TL
+        SK_PRIO -- aprovado --> STACK
+        STACK --> SK_REV
         SK_REV -- ajustes --> STACK
         SK_REV -- aprovado --> DIAG
-
-        DIAG["ft.plan.03\ndiagramas\n[forge_coder]\nclass · components\ndatabase · architecture"]
-        DIAG --> SPRINT_PREP
     end
 
-    note_hyper["ℹ️ Em hyper-mode\nTASK_LIST já gerada\nft_coach pula ft.plan.01"]
-    HYPER -.-> note_hyper
-    note_hyper -.-> PLAN
+    DIAG --> SPRINT_PREP
 
     subgraph LOOP["🔁 Loop por Sprint"]
         SPRINT_PREP([alinhar\nsprint atual])
-        LOOP_START([próxima task\nda sprint])
+        DEC_PAR{paralelo ou\nsequencial?}
+
+        subgraph PARALLEL["⚡ Paralelo — ft_manager"]
+            FANOUT["Fan-out\ncriar worktrees\n(max 3 slots)"]
+            WAIT["Aguardar slots"]
+            FANIN["Fan-in\nmerge + suite + cleanup"]
+            FANOUT --> WAIT --> FANIN
+        end
+
+        MORE_PAR{tasks pendentes\napós merge?}
 
         subgraph TDD["🧪 Fase 3: TDD — forge_coder"]
             SEL[ft.tdd.01\nselecionar task]
@@ -85,106 +91,111 @@ flowchart TD
             REVIEW --> REFACTOR --> COMMIT
         end
 
-        VAL_ENT{ft_manager\nvalida entrega\n+ cov >= 85%}
+        VAL_ENT{ft_gatekeeper\ngate.delivery\n+ cov >= 85%}
         MORE{tasks pendentes\nna sprint?}
-        SPRINT_PREFLIGHT{pre-flight da sprint\nok?}
+        SPRINT_PREFLIGHT{pre-flight sprint\ngate_log ok?}
         SPRINT_GATE["Sprint Expert Gate\n/ask fast-track"]
-        SPRINT_FIX{há correções\nobrigatórias?}
-        NEXT_SPRINT{sprint seguinte\nno ciclo?}
+        SPRINT_FIX{sprint aprovada?}
+        NEXT_SPRINT{próxima sprint\nno ciclo?}
 
-        SPRINT_PREP --> LOOP_START
-        LOOP_START --> SEL
+        SPRINT_PREP --> DEC_PAR
+        DEC_PAR -- paralelo --> FANOUT
+        DEC_PAR -- sequencial --> SEL
+        FANIN --> MORE_PAR
+        MORE_PAR -- sim --> DEC_PAR
+        MORE_PAR -- não --> SPRINT_PREFLIGHT
         GREEN --> REVIEW
         COMMIT --> VAL_ENT
         VAL_ENT -- falhou --> REVIEW
         VAL_ENT -- ok --> MORE
-        MORE -- sim --> LOOP_START
+        MORE -- sim --> DEC_PAR
         MORE -- não --> SPRINT_PREFLIGHT
-        SPRINT_PREFLIGHT -- gap --> LOOP_START
+        SPRINT_PREFLIGHT -- gap --> SEL
         SPRINT_PREFLIGHT -- ok --> SPRINT_GATE
         SPRINT_GATE --> SPRINT_FIX
-        SPRINT_FIX -- sim --> LOOP_START
-        SPRINT_FIX -- não --> NEXT_SPRINT
+        SPRINT_FIX -- fixing --> SEL
+        SPRINT_FIX -- completed --> NEXT_SPRINT
         NEXT_SPRINT -- sim --> SPRINT_PREP
     end
 
-    NEXT_SPRINT -- não --> SMOKE
+    NEXT_SPRINT -- não --> PREFLIGHT_CICLO
+
+    PREFLIGHT_CICLO{pre-flight ciclo\ngate_log ok?}
+    PREFLIGHT_CICLO -- gap --> SEL
+    PREFLIGHT_CICLO -- ok --> SMOKE
 
     subgraph SMOKE_GATE["🔥 Fase 5a: Smoke Gate — forge_coder"]
         SMOKE[ft.smoke.01\ncli run]
         SMOKE_R["📄 smoke-cycle-XX.md\noutput real documentado"]
-        VAL_SMOKE{smoke\nPASSOUU?}
-        SMOKE --> SMOKE_R --> VAL_SMOKE
-        VAL_SMOKE -- TRAVOU --> SMOKE
+        SMOKE_MVP["set mvp_status: demonstravel"]
+        SMOKE --> SMOKE_R --> SMOKE_MVP
     end
 
-    VAL_SMOKE -- PASSOU --> E2E
+    SMOKE_MVP --> E2E
 
     subgraph E2E_GATE["🔒 Fase 5b: E2E Gate — forge_coder"]
         E2E[ft.e2e.01\ncli validation\nunit + smoke]
-        VAL_E2E{E2E\npassou?}
-        E2E --> VAL_E2E
-        VAL_E2E -- falhou --> E2E
     end
 
-    VAL_E2E -- ok --> ACCEPT_DEC
+    E2E --> ACCEPT_DEC
+
+    ACCEPT_DEC{interface_type\n!= cli_only?}
+    ACCEPT_DEC -- "cli_only — skip" --> MODO
+    ACCEPT_DEC -- api/ui/mixed --> ACCEPT
 
     subgraph ACCEPTANCE_GATE["🎯 Fase 5c: Acceptance Gate — forge_coder"]
-        ACCEPT_DEC{interface_type\n!= cli_only?}
-        ACCEPT_DEC -- cli_only\nskip --> MODO
-        ACCEPT_DEC -- api/ui/mixed --> ACCEPT
         ACCEPT[ft.acceptance.01\ninterface validation\nACs × interface real]
         ACCEPT_R["📄 acceptance-cycle-XX.md\nmapeamento US→AC→Teste"]
-        VAL_ACCEPT{acceptance\npassou?}
-        ACCEPT --> ACCEPT_R --> VAL_ACCEPT
-        VAL_ACCEPT -- falhou --> ACCEPT
-        VAL_ACCEPT -- ok --> MODO
+        ACCEPT --> ACCEPT_R
     end
+
+    ACCEPT_R --> MODO
+
+    subgraph STAKEHOLDER["👥 Decisão de Ciclo — ft_manager"]
+        MODO{stakeholder\nmode?}
+        APRESENTA[Apresentar ciclo\nao stakeholder]
+        SK_DEC{decisão}
+        SET_AUTO[set autonomous]
+        MVP_ENTREGUE[Apresentar\nMVP final report]
+
+        MODO -- interactive --> APRESENTA
+        APRESENTA --> SK_DEC
+        SK_DEC -- novo ciclo --> RETRO
+        SK_DEC -- changes requested --> RETRO
+        SK_DEC -- MVP concluído --> MVP_ENTREGUE
+        SK_DEC -- continue sem validação --> SET_AUTO
+        SET_AUTO --> RETRO
+    end
+
+    MODO -- autonomous --> RETRO
+
+    MVP_ENTREGUE --> RETRO_FINAL
 
     subgraph FEEDBACK["📊 Fase 6: Feedback — ft_coach"]
         RETRO[ft.feedback.01\nretro note]
     end
 
-    subgraph STAKEHOLDER["👥 Decisão de Ciclo — ft_manager"]
-        MODO{stakeholder\nmode?}
-        MODO -- interactive --> APRESENTA[Apresentar E2E\nao stakeholder]
-        MODO -- autonomous --> RETRO
+    RETRO_FINAL["ft.feedback.01\nretro note (final)"]
 
-        APRESENTA --> SK_DEC{decisão}
-        SK_DEC -- novo ciclo --> RETRO
-        SK_DEC -- MVP concluído --> MVP_OK
-        SK_DEC -- continue sem validação --> SET_AUTO[set autonomous]
-        SET_AUTO --> RETRO
-    end
+    RETRO --> CONTINUAR{continuar?\nhil: ft_manager}
+    CONTINUAR -- novo ciclo --> TL
+    CONTINUAR -- encerrar --> AUDIT
 
-    RETRO --> CONTINUAR{continuar?}
-    CONTINUAR -- novo ciclo --> PLAN
-    CONTINUAR -- encerrar --> MVP_OK
-
-    MVP_OK{autonomous\ne MVP pronto?}
-    MVP_OK -- sim --> MVP_FINAL[Apresentar\nMVP final ao stakeholder]
-    MVP_OK -- não --> AUDIT
-
-    MVP_FINAL --> AUDIT
+    RETRO_FINAL --> AUDIT
 
     subgraph AUDIT_PHASE["🔍 Fase 8: Auditoria ForgeBase — forge_coder"]
         AUDIT[ft.audit.01\nForgeBase audit]
         AUDIT_ITEMS["UseCaseRunner wiring\nValue/Support Tracks\nPulse snapshot\nLogging quality\nClean/Hex"]
-        VAL_AUDIT{auditoria\npassou?}
-        AUDIT --> AUDIT_ITEMS --> VAL_AUDIT
-        VAL_AUDIT -- falhou --> AUDIT
+        AUDIT --> AUDIT_ITEMS
     end
 
-    VAL_AUDIT -- ok --> HANDOFF
+    AUDIT_ITEMS --> HANDOFF
 
     subgraph HANDOFF_PHASE["📄 Fase 9: Handoff — ft_coach"]
-        HANDOFF[ft.handoff.01\ngerar SPEC.md]
-        HANDOFF_VAL{SPEC.md\nválido?}
-        HANDOFF --> HANDOFF_VAL
-        HANDOFF_VAL -- falhou --> HANDOFF
+        HANDOFF[ft.handoff.01\ngerar SPEC.md\n+ CHANGELOG + BACKLOG]
     end
 
-    HANDOFF_VAL -- ok --> SET_MAINT[set maintenance_mode: true]
+    HANDOFF --> SET_MAINT["set maintenance_mode: true\nmvp_delivered: true\nmvp_status: entregue"]
     SET_MAINT --> END_OK([✅ Projeto concluído\nmaintenance_mode ativo])
 
     END_OK -. "🔧 Manutenção via\n/feature descrição" .-> FEATURE_NOTE["📝 /feature lê SPEC.md\nantes de implementar\natualiza SPEC.md\nao finalizar"]

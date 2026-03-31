@@ -70,24 +70,20 @@ pip install "git+https://github.com/symlabs-ai/forgellmclient.git"
 echo "==> Instalando ferramentas de desenvolvimento (pre-commit, mypy, ruff, pytest, pytest-bdd, pytest-cov)..."
 pip install pre-commit mypy ruff pytest pytest-bdd pytest-cov
 
-# 5. Descompactar git-dev.zip (configuração de pre-commit/ruff) se existir
-GIT_ENV_ZIP="env/git-dev.zip"
+# 5. Copiar configuração de pre-commit/ruff se existir
+GIT_ENV_DIR="env/git-dev"
 
-if [ -f "${GIT_ENV_ZIP}" ]; then
-  echo "==> Encontrado ${GIT_ENV_ZIP}. Preparando configuração de pre-commit/ruff..."
-
-  if ! command -v unzip >/dev/null 2>&1; then
-    echo "!! Aviso: 'unzip' não encontrado. Pulei a extração de ${GIT_ENV_ZIP}."
+if [ -d "${GIT_ENV_DIR}" ]; then
+  echo "==> Encontrado ${GIT_ENV_DIR}/. Preparando configuração de pre-commit/ruff..."
+  if [ ! -f "pre-commit-config.yaml" ]; then
+    echo "==> Copiando configuração de ${GIT_ENV_DIR}/ para raiz..."
+    cp "${GIT_ENV_DIR}/pre-commit-config.yaml" .
+    cp "${GIT_ENV_DIR}/ruff.toml" .
   else
-    if [ ! -f "pre-commit-config.yaml" ]; then
-      echo "==> Extraindo ${GIT_ENV_ZIP} na raiz de ${ROOT_DIR}..."
-      unzip -o "${GIT_ENV_ZIP}"
-    else
-      echo "==> pre-commit-config.yaml já existe, não vou sobrescrever."
-    fi
+    echo "==> pre-commit-config.yaml já existe, não vou sobrescrever."
   fi
 else
-  echo "==> ${GIT_ENV_ZIP} não encontrado; pulei configuração automática de pre-commit/ruff."
+  echo "==> ${GIT_ENV_DIR}/ não encontrado; pulei configuração automática de pre-commit/ruff."
 fi
 
 # 6. Instalar hooks de pre-commit (se configuração disponível)
@@ -97,7 +93,7 @@ if command -v pre-commit >/dev/null 2>&1; then
     pre-commit install
   else
     echo "!! Aviso: pre-commit instalado, mas pre-commit-config.yaml não existe nesta raiz."
-    echo "   Você pode extraí-lo de env/git-dev.zip ou criar sua própria configuração."
+    echo "   Veja env/git-dev/ ou crie sua própria configuração."
   fi
 else
   echo "!! Aviso: pre-commit não encontrado no ambiente, algo deu errado na instalação."

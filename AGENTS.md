@@ -11,7 +11,7 @@ Carregue o prompt: `process/symbiotes/ft_manager/prompt.md`
 
 O `ft_manager` DEVE seguir este fluxo ao iniciar:
 
-1. Ler `process/fast_track/state/ft_state.yml`.
+1. Ler `project/state/ft_state.yml`.
 2. **Se projeto novo** (`current_phase: null`):
    - Atualizar `ft_state.yml`: `current_phase: ft_mdd`, `current_cycle: cycle-01`.
    - Delegar ao `ft_coach`: iniciar `ft.mdd.01.hipotese`.
@@ -32,7 +32,7 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
 - Processo e estado:
   - `process/fast_track/FAST_TRACK_PROCESS.yml`
   - `process/fast_track/FAST_TRACK_PROCESS.md`
-  - `process/fast_track/state/ft_state.yml`
+  - `project/state/ft_state.yml`
   - `process/fast_track/SUMMARY_FOR_AGENTS.md`
 - Regras de arquitetura e código:
   - `docs/integrations/forgebase_guides/usuarios/forgebase-rules.md`
@@ -44,8 +44,33 @@ O `ft_manager` DEVE seguir este fluxo ao iniciar:
 |----------|-------|--------|
 | `ft_manager` | Orquestrador — gerencia o processo completo, delega validações ao gatekeeper e interage com o stakeholder | `process/symbiotes/ft_manager/prompt.md` |
 | `ft_gatekeeper` | Validador determinístico de stage gates — PASS ou BLOCK, sem interpretação criativa | `process/symbiotes/ft_gatekeeper/prompt.md` |
+| `ft_acceptance` | Especialista em design de cenários de aceitação por Value/Support Track | `process/symbiotes/ft_acceptance/prompt.md` |
 | `ft_coach` | MDD, Planning, Feedback — conduzido pelo ft_manager | `process/symbiotes/ft_coach/prompt.md` |
 | `forge_coder` | TDD, Delivery, E2E — orquestrado pelo ft_manager | `process/symbiotes/forge_coder/prompt.md` |
+
+## CLI do processo (ft.py)
+
+Ferramenta de validação determinística em `process/fast_track/tools/ft.py`. Data-driven — lê o YAML
+do processo e schemas em runtime.
+
+```bash
+python process/fast_track/tools/ft.py <command>
+```
+
+| Comando | Quem usa | Quando |
+|---------|----------|--------|
+| `init --check` | ft_manager | Bootstrap — antes de qualquer fase |
+| `init` | ft_manager / forge_coder | Criar dirs, scaffold, sincronizar versão |
+| `validate state` | ft_manager, ft_gatekeeper | Após cada atualização do ft_state.yml |
+| `validate artifacts` | ft_manager | Antes do handoff |
+| `validate integration` | ft_gatekeeper | Mock audit, dead code, wiring — antes do gate.audit |
+| `validate gate <id>` | ft_gatekeeper | Pre-flight mecânico antes de cada gate |
+| `generate check` | ft_manager | Verificar consistência YAML ↔ MD |
+| `generate ids` | ft_manager | Regenerar FAST_TRACK_IDS.md após mudança no processo |
+| `tokens snapshot --step <id>` | ft_manager | Momentos-chave de token tracking |
+| `self-check` | ft_manager | Verificar consistência interna da CLI vs. processo |
+
+> **Regra**: Se qualquer comando retornar BLOCK, parar e resolver antes de prosseguir.
 
 ## Defaults para qualquer symbiota
 

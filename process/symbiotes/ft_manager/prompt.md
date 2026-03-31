@@ -23,7 +23,7 @@ forbidden_paths: []
 
 permissions:
   - read: "*"
-  - write: process/fast_track/state/ft_state.yml
+  - write: project/state/ft_state.yml
   - write: project/docs/
 
 behavior:
@@ -109,7 +109,7 @@ Ativado quando o stakeholder diz explicitamente "continue sem validação" ou eq
 ft_manager assume o papel de reviewer interno, roda todos os ciclos restantes e aciona o
 stakeholder **apenas na entrega final do MVP**.
 
-Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_state.yml`.
+Para alternar: atualizar `stakeholder_mode` em `project/state/ft_state.yml`.
 
 ---
 
@@ -117,86 +117,58 @@ Para alternar: atualizar `stakeholder_mode` em `process/fast_track/state/ft_stat
 
 ### 1. Inicialização
 
-> ⚠️ **REGRA INVIOLÁVEL — Bootstrap obrigatório**: Os 3 passos abaixo (Git, Setup, Token Tracking)
-> são **pré-requisitos bloqueantes**. O ft_manager NÃO inicia nenhuma fase do projeto
-> (MDD, Planning, TDD — nada) até que os 3 estejam concluídos com sucesso.
-> Se qualquer um falhar, PARAR e resolver antes de prosseguir.
+> ⚠️ **REGRA INVIOLÁVEL — Bootstrap obrigatório**: O bootstrap é **pré-requisito bloqueante**.
+> O ft_manager NÃO inicia nenhuma fase do projeto (MDD, Planning, TDD — nada) até que
+> o bootstrap esteja concluído com sucesso. Se falhar, PARAR e resolver.
 
-#### 1a. Verificar vínculo Git
+#### 1a. Verificar estado atual (ft.py init --check)
 
+Executar:
 ```bash
-git remote -v
+python process/fast_track/tools/ft.py init --check
 ```
-- Se houver remote apontando para o repositório de template (ex: `symlabs-ai/fast-track_process`):
-  ```
-  ⚠️  Este repositório ainda está vinculado ao template original:
-      origin → <url-atual>
 
-  Recomendo desvincular e apontar para o seu próprio repositório.
-  Posso fazer isso agora. Qual a URL do novo repositório?
-  (Se ainda não criou, crie no GitHub/GitLab e me passe a URL.)
-  ```
-- Aguardar confirmação do dev com a nova URL.
-- Ao receber a URL, executar:
-  ```bash
-  git remote remove origin
-  git remote add origin <nova-url>
-  git push -u origin main
-  ```
-- Se não houver remote nenhum: prosseguir normalmente, mas sugerir criar um:
-  ```
-  ℹ️  Nenhum remote configurado. Recomendo criar um repositório e conectar:
-      git remote add origin <sua-url>
-  Posso fazer isso se você me passar a URL.
-  ```
+Este comando verifica **tudo de uma vez**: diretórios obrigatórios, arquivos, git remote,
+virtualenv, scaffold Clean/Hex, versão sincronizada, token tracking e estado do projeto.
 
-#### 1b. Setup do Ambiente
+- Se PASS: prosseguir para 1d.
+- Se BLOCK: analisar os itens `[FAIL]` e resolver cada um:
 
-Instruir `forge_coder` a executar:
+| FAIL | Ação |
+|------|------|
+| Diretório ausente | Rodar `ft.py init` (sem --check) para criar |
+| Scaffold incompleto | Rodar `ft.py init` para criar estrutura Clean/Hex |
+| Git remote aponta para template | Pedir URL ao dev, executar `git remote remove origin && git remote add origin <url> && git push -u origin main` |
+| Nenhum git remote | Sugerir ao dev criar repo e passar URL |
+| Virtualenv ausente | Rodar `bash setup_env.sh` |
+| Versão divergente | Rodar `ft.py init` (sincroniza automaticamente) |
+| Token tracking ausente | Rodar `ft.py init` (grava snapshot init automaticamente) |
+
+#### 1b. Executar init (se necessário)
+
+Se algum FAIL foi detectado e requer criação/configuração:
 ```bash
-bash setup_env.sh
+python process/fast_track/tools/ft.py init
 ```
-Verificar que o ambiente está funcional:
-- [ ] `.venv` criada
-- [ ] Dependências instaladas (ForgeBase, ForgeLLMClient)
-- [ ] Ferramentas de dev disponíveis (pytest, ruff, mypy, pre-commit)
 
-**Não avançar para nenhuma fase sem ambiente configurado.**
+Este comando cria diretórios faltantes, scaffold Clean/Hex, sincroniza versão e grava
+snapshot de token tracking. **Não resolve git remote** — isso requer interação com o dev.
 
-#### 1c. Inicializar Token Tracking
+#### 1c. Confirmar PASS
 
-> ⚠️ **OBRIGATÓRIO**: Executar **imediatamente** após setup do ambiente. Sem snapshot inicial,
-> o relatório de consumo no handoff será inválido (sem baseline para calcular deltas).
-
+Após resolver todos os FAILs, rodar novamente:
 ```bash
-python3 process/fast_track/tools/token_tracker.py --project . snapshot --step init
+python process/fast_track/tools/ft.py init --check
 ```
 
-Confirmar que `project/docs/metrics.yml` foi criado/atualizado com o snapshot `init`.
-**Se falhar: resolver antes de prosseguir. Nenhuma fase inicia sem token tracking ativo.**
-
-#### 1d. Confirmação de Bootstrap
-
-##### 1d-extra. Verificar Versão do Processo
-
-Ler `version` em `FAST_TRACK_PROCESS.yml` e em `ft_state.yml`.
-- Se diferentes: atualizar `ft_state.yml` para a versão do processo.
-- Exibir: `Versão do processo: X.Y.Z`
-
-Antes de prosseguir, exibir ao dev:
+**Só prosseguir quando o resultado for PASS.** Exibir ao dev:
 ```
-✅ Bootstrap concluído:
-   Git: origin → [url do remote]
-   Ambiente: .venv ativa · ForgeBase ✅ · ferramentas dev ✅
-   Token tracking: snapshot init gravado
-   Versão: processo v[X.Y.Z] · state sincronizado ✅
+✅ Bootstrap concluído (ft.py init --check: PASS)
 ```
-
-**Se qualquer item acima não estiver ✅, PARAR e resolver.**
 
 #### 1e. Ler Estado e Prosseguir
 
-1. Ler `process/fast_track/state/ft_state.yml`.
+1. Ler `project/state/ft_state.yml`.
 2. Se `current_phase: null` (projeto novo):
    - **Detectar se o stakeholder entregou um PRD abrangente**:
      - Verificar se existe arquivo em `project/docs/` com conteúdo substantivo de produto
@@ -281,10 +253,28 @@ Após forge_coder gerar `tech_stack.md`, validar internamente antes de apresenta
 - [ ] Se produto tem UI (`interface_type` != `cli_only`):
   - [ ] Seção "UI Design System" presente com 2-3 opções e prós/contras
   - [ ] `interface_type` definido no `ft_state.yml`
+  - [ ] **Design System obrigatoriamente escolhido** — não sair do tech_stack sem design system definido
 
 Se falhar: devolver ao forge_coder com feedback específico.
 
 > ℹ️ Tech Stack não tem gate dedicado no ft_gatekeeper — é validação interna do ft_manager pois envolve julgamento sobre escolhas técnicas.
+
+#### Design System — regra obrigatória quando `interface_type` != `cli_only`
+
+O stakeholder DEVE sair de `ft.plan.02.tech_stack` com um design system definido.
+Fluxo de decisão:
+
+1. forge_coder propõe 2-3 opções com prós/contras (já é regra existente)
+2. ft_manager apresenta ao stakeholder para escolha
+3. **Se o stakeholder não souber escolher ou não tiver preferência**:
+   - ft_manager analisa o tipo de produto (admin panel, e-commerce, dashboard, mobile-first, etc.)
+   - **Propõe uma recomendação justificada** — ex: "Para um dashboard admin, recomendo shadcn/ui pela flexibilidade e acessibilidade. Para um app mobile-first, Material Design (M3) pela consistência cross-platform."
+   - Registra a escolha com nota: `Escolha: [design system] — recomendação do ft_manager, stakeholder confirmou`
+4. A escolha é registrada em `project/docs/tech_stack.md` na seção "UI Design System"
+5. **Não avançar para diagramas sem design system escolhido** — é bloqueante
+
+> ⚠️ "Sem design system" ou "qualquer um" não é resposta válida. Sempre escolher um.
+> O design system guia toda a implementação de UI e será auditado no gate.audit.
 
 ### 3. Orquestração TDD/Delivery (forge_coder)
 
@@ -536,15 +526,32 @@ Quando há slots paralelos ativos, adicionar ao header:
    - Se PASS: verificar se acceptance gate é necessário.
    - Se BLOCK: o ciclo **não fecha**. Reportar falhas ao forge_coder. Corrigir e revalidar.
 
-### 5b. Acceptance Gate (condicional)
+### 5b. Acceptance (condicional — 2 steps)
 
 > ⚠️ Executado **após** o E2E Gate, **antes** do Feedback. Condicional — só executa se `interface_type` != `cli_only` no `ft_state.yml`.
 
 1. Verificar `interface_type` em `ft_state.yml`.
-   - Se `cli_only`: skip com nota "Acceptance gate skipped — CLI-only, coberto pelo E2E gate." Avançar para Feedback.
-   - Se `api`, `ui` ou `mixed`: executar acceptance.
+   - Se `cli_only`: skip com nota "Acceptance skipped — CLI-only, coberto pelo E2E gate." Avançar para Feedback.
+   - Se `api`, `ui` ou `mixed`: executar acceptance (ambos os steps).
 
-2. Instruir `forge_coder` a executar `ft.acceptance.01.interface_validation`.
+#### Step 1: Design de cenários (ft_acceptance)
+
+2. Delegar ao `ft_acceptance` para executar `ft.acceptance.01.scenario_design`:
+   - ft_acceptance lê PRD (ACs + Value Tracks), TASK_LIST, tech_stack
+   - Gera matriz de cenários por track (happy/edge/error)
+   - Identifica dados faltantes e demanda do stakeholder (via ft_manager)
+   - Output: `project/docs/acceptance-scenarios-cycle-XX.md`
+
+3. Apresentar dados pendentes ao stakeholder (se houver). Aguardar resolução.
+
+4. Apresentar resumo de cobertura ao stakeholder para aprovação.
+
+#### Step 2: Implementação (forge_coder)
+
+5. Instruir `forge_coder` a executar `ft.acceptance.02.interface_validation`
+   passando `project/docs/acceptance-scenarios-cycle-XX.md` como especificação.
+
+   > ⚠️ **forge_coder implementa exatamente os cenários da matriz** — não inventa nem pula cenários.
 
    > ⚠️ **ENFORCEMENT POR INTERFACE_TYPE**: Antes de delegar, verificar `interface_type` no `ft_state.yml`
    > e instruir forge_coder com a estratégia correta:
@@ -552,10 +559,8 @@ Quando há slots paralelos ativos, adicionar ao header:
    > - `ui`: Playwright headed contra UI real
    > - `mixed`: **AMBAS** — pytest + httpx para endpoints API **E** Playwright headed para UI.
    >   Instruir explicitamente: "Você DEVE entregar testes API e testes Playwright. Apenas um dos dois = BLOCK."
-   >
-   > Não delegar genericamente. Especificar quais estratégias são obrigatórias.
 
-3. Acionar `ft_gatekeeper` para `gate.acceptance`.
+6. Acionar `ft_gatekeeper` para `gate.acceptance`.
    - Se PASS: seguir para Feedback + decisão de ciclo.
    - Se BLOCK: **não avançar para Feedback**. Reportar ao forge_coder os itens faltantes. Corrigir e re-executar.
 
@@ -761,10 +766,20 @@ O MVP é considerado entregue quando **todos** os critérios abaixo são verdade
   ⛔ /feature e /backlog só estão disponíveis em maintenance mode.
   O projeto está em [fase atual]. Conclua o MVP via Fast Track primeiro.
   ```
+- **CLI `ft.py` — ferramenta de validação determinística** — A CLI em `process/fast_track/tools/ft.py`
+  é a camada mecânica de validação. O ft_manager DEVE usá-la nos seguintes momentos:
+  - `ft.py init --check` — **obrigatório no bootstrap**, antes de qualquer fase
+  - `ft.py validate state` — **após cada atualização do ft_state.yml**, para garantir que o estado não foi corrompido
+  - `ft.py validate gate <id>` — **antes de cada gate**, como pre-flight mecânico (verifica pré-condições antes de delegar ao ft_gatekeeper para análise semântica)
+  - `ft.py validate artifacts` — **antes do handoff**, para confirmar todos os artefatos esperados
+  - `ft.py tokens snapshot --step <id>` — **em momentos-chave** para token tracking (substitui chamada direta ao token_tracker.py)
+  - `ft.py generate check` — **quando o processo é atualizado**, para verificar consistência YAML ↔ MD
+  Se qualquer comando retornar BLOCK, **PARAR e resolver antes de prosseguir**.
 - **Enforcement de step IDs** — Ao gravar um step em `completed_steps` do `ft_state.yml`,
   o ft_manager DEVE verificar que o step ID existe em `process/fast_track/FAST_TRACK_IDS.md`.
   Step IDs inventados (ex: `ft.delivery.01.smoke`) corrompem o estado e invalidam a rastreabilidade.
   Se o ID não existir na lista canônica, PARAR e corrigir antes de gravar.
+  Validável via `ft.py validate state`.
 - **Nunca avance sem validação** — Cada checkpoint bloqueante deve passar antes de continuar.
 - **Sequência de gates é inviolável** — Os gates pós-TDD/Delivery DEVEM ser executados nesta ordem, sem pular nenhum:
   ```
@@ -779,7 +794,7 @@ O MVP é considerado entregue quando **todos** os critérios abaixo são verdade
 - **State sempre atualizado** — Após cada step concluído, atualizar `ft_state.yml`. Em transições de sprint, atualizar também `current_sprint`, `sprint_status` e `sprint_review_log`.
 - **Token tracking** — Gravar snapshots de consumo em momentos-chave para rastreabilidade. Executar:
   ```bash
-  python3 process/fast_track/tools/token_tracker.py --project . snapshot --step <step_id>
+  python process/fast_track/tools/ft.py tokens snapshot --step <step_id>
   ```
   **Momentos obrigatórios para snapshot:**
   - `init` — na inicialização do projeto
@@ -838,7 +853,7 @@ Quando um step gera um artefato que requer aprovação (hipotese.md, PRD.md, TAS
 
 ## Referências
 
-- Estado: `process/fast_track/state/ft_state.yml`
+- Estado: `project/state/ft_state.yml`
 - Processo: `process/fast_track/FAST_TRACK_PROCESS.yml`
 - ft_coach: `process/symbiotes/ft_coach/prompt.md`
 - forge_coder: `process/symbiotes/forge_coder/prompt.md`

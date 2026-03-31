@@ -42,6 +42,14 @@ ft_coach consome o documento, **audita contra o processo normal** e, em um únic
 
 O stakeholder decide como tratar → responde → ft_coach incorpora → **todas as seções `❌ ausente` resolvidas** → artefatos finalizados → segue para validação normal.
 
+#### Hyper parcial
+
+Quando o documento entregue cobre apenas parte das seções (ex: 3 de 10), o ft_coach classifica como **hyper-partial**:
+- Seções presentes no documento: processadas normalmente (auditoria ✅/⚠️/❌)
+- Seções ausentes do documento: marcadas como `❌ ausente` no diagnóstico
+- Para as seções ausentes, o ft_coach conduz **discovery conversacional** (como no modo normal) em vez de bloquear o stakeholder com um questionário gigante
+- O `mdd_mode` no state é `hyper` (não existe valor separado) — o ft_coach detecta a parcialidade pela quantidade de seções `❌ ausente`
+
 Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 
 ---
@@ -215,21 +223,33 @@ Template: `process/fast_track/templates/template_hyper_questionnaire.md`
 - **Critério**: `run-all.sh` executa com sucesso
 - **GATE OBRIGATÓRIO**: Ciclo não pode ser encerrado sem E2E passando
 
-### Fase 5c: Acceptance — Validação de Interface *(condicional)* — 1 step
+### Fase 5c: Acceptance — Design de Cenários e Validação de Interface *(condicional)* — 2 steps
 
 > Gate condicional — executado apenas quando `interface_type` != `cli_only` no `ft_state.yml`.
 > Se produto é CLI-only, E2E CLI já cobre → skip com nota.
 
-#### ft.acceptance.01.interface_validation — Acceptance Test
-- **Input**: PRD (seção 5 — ACs), `src/`, interface do produto (CLI/API/UI)
+#### ft.acceptance.01.scenario_design — Design de Cenários de Aceitação
+- **Input**: PRD (seção 5 — ACs, seção 10 — Value Tracks), TASK_LIST.md, tech_stack.md
+- **Output**: `project/docs/acceptance-scenarios-cycle-XX.md`
+- **Symbiota**: ft_acceptance
+- **Critério**:
+  - Cada Value Track tem >= 3 cenários (happy path, edge case, error path)
+  - Cada Support Track tem >= 1 cenário
+  - 100% dos ACs do PRD cobertos em pelo menos 1 cenário
+  - Dados pendentes demandados do stakeholder e resolvidos
+  - Cenários aprovados pelo stakeholder via ft_manager
+
+#### ft.acceptance.02.interface_validation — Acceptance Test
+- **Input**: `project/docs/acceptance-scenarios-cycle-XX.md`, `src/`, interface do produto
 - **Output**: `project/docs/acceptance-cycle-XX.md` + `tests/acceptance/cycle-XX/`
 - **Template**: `process/fast_track/templates/template_acceptance_report.md`
 - **Symbiota**: forge_coder
 - **GATE**: Obrigatório quando `interface_type` != `cli_only`
+- **Regra**: forge_coder implementa exatamente os cenários da matriz do ft_acceptance — não inventa cenários
 - **Mapeamento AC → Teste**:
-  - Cada AC do PRD (Given/When/Then) gera pelo menos 1 teste de aceitação
-  - Testes organizados por US → AC, com rastreabilidade explícita
-  - Todos os Value Tracks devem ter pelo menos 1 fluxo testado pela interface
+  - Cada cenário da matriz vira pelo menos 1 teste real
+  - Testes organizados por Track → Cenário, com rastreabilidade explícita
+  - Todos os Value Tracks e Support Tracks devem ter cobertura
 
 | Interface | Ferramenta | Diretório |
 |-----------|-----------|-----------|
@@ -433,6 +453,6 @@ O agente `/feature` lê `project/docs/SPEC.md` para entender o contexto e atuali
 ## Referências
 
 - Step IDs: `process/fast_track/FAST_TRACK_IDS.md`
-- Estado: `process/fast_track/state/ft_state.yml`
+- Estado: `project/state/ft_state.yml`
 - YAML completo: `process/fast_track/FAST_TRACK_PROCESS.yml`
 - Summary para agentes: `process/fast_track/SUMMARY_FOR_AGENTS.md`

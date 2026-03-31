@@ -29,7 +29,8 @@ process/fast_track/
   FAST_TRACK_PROCESS.md     # Spec legível
   FAST_TRACK_IDS.md         # Step IDs canônicos
   SUMMARY_FOR_AGENTS.md     # Resumo para LLMs
-  state/ft_state.yml        # Estado do processo
+  state/                     # (migrado para project/state/)
+  # ft_state.yml agora em project/state/ft_state.yml
   templates/
     template_prd.md          # PRD consolidado
     template_task_list.md    # Task list

@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ft_state.schema.json",
+  "title": "Fast Track State",
+  "description": "Schema para validação do ft_state.yml — estado do processo Fast Track",
+  "type": "object",
+  "required": [
+    "process_variant",
+    "version",
+    "orchestrator",
+    "stakeholder_mode",
+    "mdd_mode",
+    "mvp_delivered",
+    "maintenance_mode",
+    "min_coverage",
+    "desired_coverage",
+    "commit_strategy",
+    "interface_type",
+    "current_phase",
+    "current_cycle",
+    "sprint_status",
+    "completed_steps",
+    "blocked",
+    "parallel_mode",
+    "gate_log",
+    "metricas"
+  ],
+  "properties": {
+    "process_variant": {
+      "const": "fast_track"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "orchestrator": {
+      "const": "ft_manager"
+    },
+    "stakeholder_mode": {
+      "enum": ["interactive", "autonomous"]
+    },
+    "mdd_mode": {
+      "enum": ["normal", "hyper"]
+    },
+    "mvp_status": {
+      "enum": [null, "demonstravel", "entregue"]
+    },
+    "mvp_delivered": {
+      "type": "boolean"
+    },
+    "maintenance_mode": {
+      "type": "boolean"
+    },
+    "min_coverage": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "desired_coverage": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "commit_strategy": {
+      "enum": ["per_task", "squash_cycle"]
+    },
+    "interface_type": {
+      "enum": ["cli_only", "api", "ui", "mixed"]
+    },
+    "artifact_viewer": {
+      "type": "string"
+    },
+    "current_phase": {
+      "enum": [
+        null,
+        "ft_mdd",
+        "ft_plan",
+        "ft_tdd",
+        "ft_delivery",
+        "ft_smoke",
+        "ft_e2e",
+        "ft_acceptance",
+        "ft_feedback",
+        "ft_audit",
+        "ft_handoff"
+      ]
+    },
+    "current_cycle": {
+      "type": ["string", "null"],
+      "pattern": "^cycle-\\d+$"
+    },
+    "current_sprint": {
+      "type": ["string", "null"]
+    },
+    "sprint_status": {
+      "enum": ["planned", "in_progress", "expert_review", "fixing", "completed"]
+    },
+    "cycle_sprint_scope": {
+      "type": "array"
+    },
+    "backlog_sprints": {
+      "type": "array"
+    },
+    "planned_sprints": {
+      "type": "array"
+    },
+    "sprint_review_gate": {
+      "type": "string"
+    },
+    "sprint_review_log": {
+      "type": "object"
+    },
+    "last_completed_step": {
+      "type": ["string", "null"],
+      "description": "Must be a valid step ID from FAST_TRACK_IDS.md or null"
+    },
+    "next_step": {
+      "type": ["string", "null"],
+      "description": "Must be a valid step ID from FAST_TRACK_IDS.md or null"
+    },
+    "completed_steps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Each item must be a valid step ID from FAST_TRACK_IDS.md"
+      }
+    },
+    "tdd_interaction_mode": {
+      "enum": ["phase_end", "per_task", "mvp_end"]
+    },
+    "blocked": {
+      "type": "boolean"
+    },
+    "blocked_reason": {
+      "type": ["string", "null"]
+    },
+    "parallel_mode": {
+      "type": "boolean"
+    },
+    "parallel_max_agents": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "parallel_tasks": {
+      "type": "array"
+    },
+    "parallel_merge_queue": {
+      "type": "array"
+    },
+    "parallel_merge_status": {
+      "enum": ["idle", "merging", "conflict", "done"]
+    },
+    "gate_log": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "enum": ["PASS", "BLOCK"]
+        }
+      }
+    },
+    "metricas": {
+      "type": "object",
+      "required": ["tokens_consumidos", "horas_consumidas", "data_inicio", "ciclos_completos"],
+      "properties": {
+        "tokens_consumidos": { "type": "integer", "minimum": 0 },
+        "horas_consumidas": { "type": "number", "minimum": 0 },
+        "data_inicio": { "type": ["string", "null"] },
+        "ciclos_completos": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "additionalProperties": false
+}

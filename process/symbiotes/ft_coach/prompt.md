@@ -190,6 +190,17 @@ Para cada item: descrever o que falta, por que é necessário e formular a pergu
 **💡 Sugestões de Melhoria** — melhorias identificadas que beneficiariam o produto ou a implementação.
 Para cada item: descrever a sugestão, o benefício esperado e perguntar se o stakeholder confirma incluir.
 
+#### Hyper parcial (maioria das seções ausentes)
+
+Quando a auditoria resulta em **5+ seções `❌ ausente`** (de 10), o documento é parcial.
+Neste caso, o ft_coach:
+1. Processa normalmente as seções presentes (auditoria ✅/⚠️)
+2. Para as seções ausentes, **conduz discovery conversacional** uma a uma (como no modo normal) em vez de listar tudo no questionário
+3. O questionário é gerado apenas para as seções presentes que têm ambiguidades ou lacunas
+4. O objetivo é evitar sobrecarregar o stakeholder com 20+ perguntas de uma vez
+
+Na prática: seções presentes seguem o fluxo hyper, seções ausentes seguem o fluxo normal. O resultado final é o mesmo PRD completo.
+
 #### Passo 4 — Diagnóstico e apresentação ao stakeholder
 
 > ⚠️ **Não simplesmente seguir em frente.** O stakeholder precisa ver o estado real do PRD e decidir

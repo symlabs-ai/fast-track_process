@@ -207,29 +207,44 @@ def extract_step_artifacts(process: dict) -> dict[str, list[str]]:
 class Report:
     """Acumula resultados de validação e formata output."""
 
+    # Severidades: ok, warn (nao bloqueia), fail (bloqueia)
+    OK = "ok"
+    WARN = "warn"
+    FAIL = "fail"
+
     def __init__(self, title: str):
         self.title = title
-        self.items: list[tuple[bool, str]] = []
+        self.items: list[tuple[str, str]] = []
 
     def ok(self, msg: str):
-        self.items.append((True, msg))
+        self.items.append((self.OK, msg))
+
+    def warn(self, msg: str):
+        self.items.append((self.WARN, msg))
 
     def fail(self, msg: str):
-        self.items.append((False, msg))
+        self.items.append((self.FAIL, msg))
 
     def passed(self) -> bool:
-        return all(ok for ok, _ in self.items)
+        return not any(sev == self.FAIL for sev, _ in self.items)
+
+    def has_warnings(self) -> bool:
+        return any(sev == self.WARN for sev, _ in self.items)
 
     def print(self):
+        icons = {self.OK: "[ok]", self.WARN: "[WARN]", self.FAIL: "[FAIL]"}
         print(f"\n{'━' * 50}")
         print(f"  {self.title}")
         print(f"{'━' * 50}")
-        for ok, msg in self.items:
-            icon = "[ok]" if ok else "[FAIL]"
-            print(f"  {icon} {msg}")
+        for sev, msg in self.items:
+            print(f"  {icons[sev]} {msg}")
         print(f"{'─' * 50}")
-        result = "PASS" if self.passed() else "BLOCK"
-        print(f"  RESULTADO: {result}")
+        if self.passed() and not self.has_warnings():
+            print(f"  RESULTADO: PASS")
+        elif self.passed() and self.has_warnings():
+            print(f"  RESULTADO: PASS (com avisos — podem ser resolvidos depois)")
+        else:
+            print(f"  RESULTADO: BLOCK")
         print(f"{'━' * 50}\n")
 
 
@@ -351,7 +366,7 @@ def cmd_init(paths: ProjectPaths, check_only: bool = False):
         if "symlabs-ai/fast-track_process" in remotes:
             report.fail("Git remote aponta para o template original — desvincular antes de prosseguir")
         elif not remotes.strip():
-            report.fail("Nenhum git remote configurado")
+            report.warn("Nenhum git remote configurado — configurar antes do push")
         else:
             # Extrair URL do origin
             for line in remotes.splitlines():
@@ -367,7 +382,7 @@ def cmd_init(paths: ProjectPaths, check_only: bool = False):
     if venv_path.is_dir():
         report.ok("Virtualenv: .venv existe")
     elif check_only:
-        report.fail("Virtualenv: .venv ausente — rodar setup_env.sh")
+        report.warn("Virtualenv: .venv ausente — rodar setup_env.sh")
     else:
         setup_script = paths.root / "setup_env.sh"
         if setup_script.exists():
@@ -379,7 +394,7 @@ def cmd_init(paths: ProjectPaths, check_only: bool = False):
             if result.returncode == 0:
                 report.ok("Ambiente configurado via setup_env.sh")
             else:
-                report.fail("setup_env.sh falhou")
+                report.warn("setup_env.sh teve erros — verificar ambiente manualmente")
         else:
             report.fail("Virtualenv ausente e setup_env.sh nao encontrado")
 

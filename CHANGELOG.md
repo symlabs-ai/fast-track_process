@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.6.1] - 2026-03-31
+
+- feat: add ft help (agent discovery) and ft role (scope enforcement)
+- refactor: use ft command instead of full path in all prompts
+- feat: add global engine support to ft.py
+- feat: add ft system-wide command for creating new projects
+- docs: add agent installation as first step in AGENTS.md
+
 ## [v0.6.0] — 2026-03-31
 
 ### Novas funcionalidades

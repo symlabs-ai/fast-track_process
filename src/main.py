@@ -14,16 +14,28 @@ from typing import Any
 import yaml
 
 
+def _load_yaml(path: str, label: str) -> dict[str, Any]:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    with open(p) as f:
+        return yaml.safe_load(f)
+
+
+def _pass() -> dict[str, str]:
+    return {"status": "PASS", "reason": ""}
+
+
+def _block(reason: str) -> dict[str, str]:
+    return {"status": "BLOCK", "reason": reason}
+
+
 class ProcessLoader:
     """Loads and queries process definitions from YAML."""
 
     @staticmethod
     def load(path: str) -> dict[str, Any]:
-        p = Path(path)
-        if not p.exists():
-            raise FileNotFoundError(f"Process file not found: {path}")
-        with open(p) as f:
-            return yaml.safe_load(f)
+        return _load_yaml(path, "Process file")
 
     @staticmethod
     def get_node(process: dict, node_id: str) -> dict | None:
@@ -38,11 +50,7 @@ class EngineState:
 
     @staticmethod
     def load(path: str) -> dict[str, Any]:
-        p = Path(path)
-        if not p.exists():
-            raise FileNotFoundError(f"State file not found: {path}")
-        with open(p) as f:
-            return yaml.safe_load(f)
+        return _load_yaml(path, "State file")
 
     @staticmethod
     def save(path: str, state: dict[str, Any]) -> None:
@@ -71,36 +79,29 @@ class Validator:
     @staticmethod
     def file_exists(path: str) -> dict[str, str]:
         if Path(path).exists():
-            return {"status": "PASS", "reason": ""}
-        return {"status": "BLOCK", "reason": f"File not found: {path}"}
+            return _pass()
+        return _block(f"File not found: {path}")
 
     @staticmethod
     def min_lines(path: str, minimum: int) -> dict[str, str]:
         p = Path(path)
         if not p.exists():
-            return {"status": "BLOCK", "reason": f"File not found: {path}"}
-        lines = p.read_text().strip().splitlines()
-        count = len(lines)
+            return _block(f"File not found: {path}")
+        count = len(p.read_text().strip().splitlines())
         if count >= minimum:
-            return {"status": "PASS", "reason": ""}
-        return {
-            "status": "BLOCK",
-            "reason": f"File has {count} lines, minimum is {minimum}",
-        }
+            return _pass()
+        return _block(f"File has {count} lines, minimum is {minimum}")
 
     @staticmethod
     def has_sections(path: str, sections: list[str]) -> dict[str, str]:
         p = Path(path)
         if not p.exists():
-            return {"status": "BLOCK", "reason": f"File not found: {path}"}
+            return _block(f"File not found: {path}")
         content = p.read_text()
         missing = [s for s in sections if not re.search(rf"#{{1,6}}\s*.*{re.escape(s)}", content)]
         if not missing:
-            return {"status": "PASS", "reason": ""}
-        return {
-            "status": "BLOCK",
-            "reason": f"Missing sections: {', '.join(missing)}",
-        }
+            return _pass()
+        return _block(f"Missing sections: {', '.join(missing)}")
 
     @staticmethod
     def tests_pass(path: str) -> dict[str, str]:
@@ -112,13 +113,10 @@ class Validator:
                 timeout=60,
             )
             if result.returncode == 0:
-                return {"status": "PASS", "reason": ""}
-            return {
-                "status": "BLOCK",
-                "reason": f"Tests failed:\n{result.stdout}\n{result.stderr}",
-            }
+                return _pass()
+            return _block(f"Tests failed:\n{result.stdout}\n{result.stderr}")
         except subprocess.TimeoutExpired:
-            return {"status": "BLOCK", "reason": "Tests timed out after 60s"}
+            return _block("Tests timed out after 60s")
 
 
 class Engine:

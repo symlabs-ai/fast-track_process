@@ -4,6 +4,13 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.7.1] - 2026-04-01
+
+- feat: add Sprint Expert Gate — node type `review` com veredicto APPROVED/REJECTED determinístico via parse do relatório LLM
+- feat: unit tests do engine — 88 testes cobrindo graph (91%), state (97%), artifacts (97%), stakeholder (76%), validators e runner
+
+---
+
 ## [v0.7.0] - 2026-04-01
 
 ### Novas funcionalidades

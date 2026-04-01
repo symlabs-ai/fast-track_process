@@ -4,6 +4,15 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.7.3] - 2026-04-01
+
+- feat: E2E Fast Track V2 completo — 22/22 nodes PASS, 297 testes passando, gate MVP aprovado
+- feat: SPEC.md gerado (ft.handoff.01.specs) — documentação completa da interface pública do ft engine
+- feat: E2E CLI Validation (sprint-06-e2e) — 285 testes E2E passando
+- feat: Auditoria ForgeBase (sprint-08-audit) — lint limpo, gate.audit PASS
+
+---
+
 ## [v0.7.2] - 2026-04-01
 
 - fix: prevenir race condition quando dois processos `ft continue` rodam simultaneamente — `StateManager.load(check_lock=True)` verifica se o PID do lock ainda está vivo e lança `StateLockError`

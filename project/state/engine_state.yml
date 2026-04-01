@@ -1,24 +1,36 @@
 process_id: test_process
 version: 0.1.0
-current_node: step.01.hipotese
-node_status: awaiting_approval
-completed_nodes: []
+current_node: null
+node_status: done
+completed_nodes:
+- step.01.hipotese
+- step.02.prd
+- step.03.implementacao
+- step.04.gate
+- step.05.done
 current_cycle: cycle-01
 current_sprint: null
 sprint_status: null
-gate_log: {}
+gate_log:
+  step.01.hipotese: PASS
+  step.02.prd: PASS
+  step.03.implementacao: PASS
+  step.04.gate: PASS
+  step.05.done: PASS
 artifacts:
   hipotese: project/docs/hipotese.md
+  PRD: project/docs/PRD.md
+  main: src/main.py
 blocked_reason: null
-pending_approval: step.01.hipotese
+pending_approval: null
 metrics:
-  steps_completed: 0
+  steps_completed: 5
   steps_total: 4
   tests_passing: 0
   coverage: 0
-  llm_calls: 2
+  llm_calls: 4
   tokens_used: 0
 _lock:
   owner: ft_engine
-  pid: 1289359
-  timestamp: '2026-04-01T19:28:36Z'
+  pid: 1314955
+  timestamp: '2026-04-01T19:41:25Z'

@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.7.2] - 2026-04-01
+
+- fix: prevenir race condition quando dois processos `ft continue` rodam simultaneamente — `StateManager.load(check_lock=True)` verifica se o PID do lock ainda está vivo e lança `StateLockError`
+- fix: gate `ft.mdd.03.validacao` no Fast Track V2 — adicionado `outputs` ao node para `min_lines` ter caminho correto
+- e2e: Fast Track V2 validado em 15/22 nodes (sprints 1–5 completas), bloqueado por quota de LLM
+
+---
+
 ## [v0.7.1] - 2026-04-01
 
 - feat: add Sprint Expert Gate — node type `review` com veredicto APPROVED/REJECTED determinístico via parse do relatório LLM

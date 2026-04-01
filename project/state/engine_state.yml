@@ -1,36 +1,57 @@
-process_id: test_process
-version: 0.1.0
-current_node: null
-node_status: done
+process_id: fast_track_v2
+version: 0.7.0
+current_node: ft.e2e.01.cli_validation
+node_status: ready
 completed_nodes:
-- step.01.hipotese
-- step.02.prd
-- step.03.implementacao
-- step.04.gate
-- step.05.done
+- ft.mdd.01.hipotese
+- ft.mdd.02.prd
+- ft.mdd.03.validacao
+- ft.plan.01.task_list
+- ft.plan.02.tech_stack
+- ft.plan.03.diagrams
+- gate.planning
+- ft.tdd.02.red
+- ft.tdd.03.green
+- gate.tdd
+- ft.delivery.01.self_review
+- ft.delivery.02.refactor
+- gate.delivery
+- ft.smoke.01.cli_run
+- gate.smoke
 current_cycle: cycle-01
 current_sprint: null
 sprint_status: null
 gate_log:
-  step.01.hipotese: PASS
-  step.02.prd: PASS
-  step.03.implementacao: PASS
-  step.04.gate: PASS
-  step.05.done: PASS
+  ft.mdd.01.hipotese: PASS
+  ft.mdd.02.prd: PASS
+  ft.mdd.03.validacao: PASS
+  ft.plan.01.task_list: PASS
+  ft.plan.02.tech_stack: PASS
+  ft.plan.03.diagrams: PASS
+  gate.planning: PASS
+  ft.tdd.02.red: PASS
+  ft.tdd.03.green: PASS
+  gate.tdd: PASS
+  ft.delivery.01.self_review: PASS
+  ft.delivery.02.refactor: PASS
+  gate.delivery: PASS
+  ft.smoke.01.cli_run: PASS
+  gate.smoke: PASS
 artifacts:
   hipotese: project/docs/hipotese.md
   PRD: project/docs/PRD.md
-  main: src/main.py
+  TASK_LIST: project/docs/TASK_LIST.md
+  tech_stack: project/docs/tech_stack.md
+  architecture: project/docs/diagrams/architecture.md
+  tests: tests/
+  src: src/
 blocked_reason: null
 pending_approval: null
 metrics:
-  steps_completed: 5
-  steps_total: 4
+  steps_completed: 15
+  steps_total: 22
   tests_passing: 0
   coverage: 0
-  llm_calls: 4
+  llm_calls: 14
   tokens_used: 0
-_lock:
-  owner: ft_engine
-  pid: 1314955
-  timestamp: '2026-04-01T19:41:25Z'
+_lock: null

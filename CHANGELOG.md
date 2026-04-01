@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.7.4] - 2026-04-01
+
+- feat: `pyproject.toml` — `ft-engine` instalável via `pip install -e .` com entry point `ft`
+- feat: extração do engine para `~/dev/tools/ft-engine` — repo standalone, 88 testes OK
+- chore: backlog atualizado para 48/50 (96%)
+
+---
+
 ## [v0.7.3] - 2026-04-01
 
 - feat: E2E Fast Track V2 completo — 22/22 nodes PASS, 297 testes passando, gate MVP aprovado

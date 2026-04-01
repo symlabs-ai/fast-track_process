@@ -70,4 +70,4 @@ O LLM só executa tarefas de construção — o Python controla todo o fluxo, va
 
 ## Changelog
 
-Versão atual: **v0.7.3** — Changelog completo em [`CHANGELOG.md`](CHANGELOG.md)
+Versão atual: **v0.7.4** — Changelog completo em [`CHANGELOG.md`](CHANGELOG.md)

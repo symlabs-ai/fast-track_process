@@ -1,0 +1,24 @@
+process_id: test_process
+version: 0.1.0
+current_node: step.01.hipotese
+node_status: awaiting_approval
+completed_nodes: []
+current_cycle: cycle-01
+current_sprint: null
+sprint_status: null
+gate_log: {}
+artifacts:
+  hipotese: project/docs/hipotese.md
+blocked_reason: null
+pending_approval: step.01.hipotese
+metrics:
+  steps_completed: 0
+  steps_total: 4
+  tests_passing: 0
+  coverage: 0
+  llm_calls: 2
+  tokens_used: 0
+_lock:
+  owner: ft_engine
+  pid: 1289359
+  timestamp: '2026-04-01T19:28:36Z'

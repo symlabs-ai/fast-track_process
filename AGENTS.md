@@ -62,6 +62,18 @@ O ft_manager (Claude principal) DEVE seguir este fluxo ao iniciar:
 
 > **Regra**: Nunca ficar parado esperando. Leu o estado → age.
 
+## Regra de continuidade
+
+Ao completar uma sprint, gate ou step:
+1. **Não pare.** Atualize o ft_state.yml, reporte o progresso ao stakeholder em 3-5 linhas.
+2. **Inicie a próxima sprint/step imediatamente** — não espere input do usuário.
+3. Se precisar de decisão do stakeholder, pergunte de forma objetiva e **continue com o restante
+   que não depende da resposta**.
+4. Só pare se: (a) gate retornou BLOCK que requer input humano, (b) MVP finalizado, (c) erro
+   irrecuperável.
+
+> **Anti-pattern**: Anunciar "continuando para sprint-03" e parar. Se anunciou, execute.
+
 ## Referências obrigatórias
 
 - Prompts dos symbiotas:

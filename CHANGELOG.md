@@ -4,6 +4,10 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.6.6] - 2026-04-01
+
+- feat: add ft validate gate mvp + Claude Code hooks for enforcement
+
 ## [v0.6.5] - 2026-04-01
 
 - feat: sprint-level delegation model — forge_coder receives full sprint

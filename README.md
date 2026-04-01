@@ -50,4 +50,4 @@ git push -u origin main
 
 ## Changelog
 
-Versão atual: **v0.6.5** — Changelog completo em [`CHANGELOG.md`](CHANGELOG.md)
+Versão atual: **v0.6.6** — Changelog completo em [`CHANGELOG.md`](CHANGELOG.md)

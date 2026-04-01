@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.6.5] - 2026-04-01
+
+- feat: sprint-level delegation model — forge_coder receives full sprint
+- fix: add continuity rule — never announce and stop
+- fix: ft_manager checks project/docs/ for existing artifacts before asking
+
 ## [v0.6.4] - 2026-03-31
 
 - fix: ft_manager must be main Claude persona, not a subagent

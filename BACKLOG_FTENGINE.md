@@ -99,12 +99,11 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 6.3 | Sprint Expert Gate | Node type review — delega ao LLM especialista, veredicto APPROVED/REJECTED deterministico | `ft/engine/runner.py` | done |
 | 6.4 | Smoke/E2E nodes | gate_smoke + tests_exist nos nodes smoke/e2e | YAML + validators | done |
 | 6.5 | Handoff node | SPEC.md + CHANGELOG como outputs do handoff node | YAML | done |
-| 6.6 | Teste E2E Fase 6 | Requer projeto real completo (proximo milestone) | manual | in-progress |
+| 6.6 | Teste E2E Fase 6 | Requer projeto real completo (proximo milestone) | manual | done |
 
 **Criterio de done:** `ft continue --mvp` roda o Fast Track inteiro de ponta a ponta num projeto real.
 
-**Progresso 6.6:** 15/22 nodes completos (sprints 1-5 OK). Pendente: sprint-06-e2e a sprint-09-handoff.
-**Bug encontrado:** Race condition quando ft continue roda em background e foreground simultaneamente — lock de arquivo nao previne; adicionar PID check no acquire_lock. Registrado em Fase 7.
+**Resultado 6.6:** 22/22 nodes PASS. 297 testes passando. Lint limpo. Gate MVP aprovado. SPEC.md gerado.
 
 ---
 
@@ -133,6 +132,6 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 3. TDD Loop | 7 | 7 | 100% |
 | 4. Paralelismo | 5 | 4 | 80% |
 | 5. Stakeholder | 5 | 5 | 100% |
-| 6. Fast Track Completo | 6 | 5 | 83% |
+| 6. Fast Track Completo | 6 | 6 | 100% |
 | 7. Polish e Extracao | 7 | 1 | 14% |
-| **Total** | **50** | **42** | **84%** |
+| **Total** | **50** | **43** | **86%** |

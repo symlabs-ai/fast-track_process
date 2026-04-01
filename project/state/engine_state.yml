@@ -1,7 +1,7 @@
 process_id: fast_track_v2
 version: 0.7.0
-current_node: ft.e2e.01.cli_validation
-node_status: ready
+current_node: null
+node_status: done
 completed_nodes:
 - ft.mdd.01.hipotese
 - ft.mdd.02.prd
@@ -18,6 +18,14 @@ completed_nodes:
 - gate.delivery
 - ft.smoke.01.cli_run
 - gate.smoke
+- ft.e2e.01.cli_validation
+- gate.e2e
+- ft.feedback.01.retro_note
+- ft.audit.01.forgebase
+- gate.audit
+- ft.handoff.01.specs
+- gate.mvp
+- ft.end
 current_cycle: cycle-01
 current_sprint: null
 sprint_status: null
@@ -37,6 +45,14 @@ gate_log:
   gate.delivery: PASS
   ft.smoke.01.cli_run: PASS
   gate.smoke: PASS
+  ft.e2e.01.cli_validation: PASS
+  gate.e2e: PASS
+  ft.feedback.01.retro_note: PASS
+  ft.audit.01.forgebase: PASS
+  gate.audit: PASS
+  ft.handoff.01.specs: PASS
+  gate.mvp: PASS
+  ft.end: PASS
 artifacts:
   hipotese: project/docs/hipotese.md
   PRD: project/docs/PRD.md
@@ -45,13 +61,21 @@ artifacts:
   architecture: project/docs/diagrams/architecture.md
   tests: tests/
   src: src/
+  e2e: tests/e2e/
+  retro: project/docs/retro.md
+  forgebase-audit: project/docs/forgebase-audit.md
+  SPEC: project/docs/SPEC.md
+  CHANGELOG: CHANGELOG.md
 blocked_reason: null
 pending_approval: null
 metrics:
-  steps_completed: 15
+  steps_completed: 23
   steps_total: 22
   tests_passing: 0
   coverage: 0
-  llm_calls: 14
+  llm_calls: 18
   tokens_used: 0
-_lock: null
+_lock:
+  owner: ft_engine
+  pid: 1575467
+  timestamp: '2026-04-01T22:22:27Z'

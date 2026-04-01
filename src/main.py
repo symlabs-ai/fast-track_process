@@ -143,17 +143,17 @@ class Engine:
     def _run_validator(self, vtype: str, varg: Any) -> dict[str, str]:
         if vtype == "file_exists":
             return Validator.file_exists(str(varg))
-        elif vtype == "min_lines":
+        if vtype == "min_lines":
             node = ProcessLoader.get_node(self.process, self.state["current_node"])
             outputs = node.get("outputs", [])
             path = outputs[0] if outputs else ""
             return Validator.min_lines(path, int(varg))
-        elif vtype == "has_sections":
+        if vtype == "has_sections":
             node = ProcessLoader.get_node(self.process, self.state["current_node"])
             outputs = node.get("outputs", [])
             path = outputs[0] if outputs else ""
             return Validator.has_sections(path, varg)
-        elif vtype == "tests_pass":
+        if vtype == "tests_pass":
             return Validator.tests_pass("src/tests/")
         return {"status": "BLOCK", "reason": f"Unknown validator: {vtype}"}
 

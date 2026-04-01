@@ -96,7 +96,7 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 |---|------|-----------|---------|--------|
 | 6.1 | YAML Fast Track v2 | FAST_TRACK_PROCESS_V2.yml no formato de grafo | `process/fast_track/FAST_TRACK_PROCESS_V2.yml` | done |
 | 6.2 | Mapeamento completo | 23 nodes, 9 sprints, validators deterministicos | YAML | done |
-| 6.3 | Sprint Expert Gate | A ser implementado: node type review para /ask | `ft/engine/runner.py` | todo |
+| 6.3 | Sprint Expert Gate | Node type review — delega ao LLM especialista, veredicto APPROVED/REJECTED deterministico | `ft/engine/runner.py` | done |
 | 6.4 | Smoke/E2E nodes | gate_smoke + tests_exist nos nodes smoke/e2e | YAML + validators | done |
 | 6.5 | Handoff node | SPEC.md + CHANGELOG como outputs do handoff node | YAML | done |
 | 6.6 | Teste E2E Fase 6 | Requer projeto real completo (proximo milestone) | manual | todo |
@@ -114,7 +114,7 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 7.3 | Documentacao | README, guia de uso, guia de criacao de processos custom | docs/ | todo |
 | 7.4 | Processos custom | Suporte a qualquer YAML de processo, nao so Fast Track | `ft/engine/graph.py` | todo |
 | 7.5 | Compilador NL → YAML | Descrever processo em linguagem natural, compilar para YAML | `ft/engine/compiler.py` | todo |
-| 7.6 | Testes unitarios do motor | Cobertura > 90% do engine | `tests/` | todo |
+| 7.6 | Testes unitarios do motor | 88 testes, 48% cobertura geral (97% state, 91% graph, 97% artifacts) | `tests/engine/` | done |
 
 **Criterio de done:** `pip install ft-engine` funciona. Qualquer processo YAML roda. Docs completa.
 
@@ -129,6 +129,6 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 3. TDD Loop | 7 | 7 | 100% |
 | 4. Paralelismo | 5 | 4 | 80% |
 | 5. Stakeholder | 5 | 5 | 100% |
-| 6. Fast Track Completo | 6 | 4 | 67% |
-| 7. Polish e Extracao | 6 | 0 | 0% |
-| **Total** | **49** | **40** | **82%** |
+| 6. Fast Track Completo | 6 | 5 | 83% |
+| 7. Polish e Extracao | 6 | 1 | 17% |
+| **Total** | **49** | **42** | **86%** |

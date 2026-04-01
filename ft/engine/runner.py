@@ -198,6 +198,27 @@ Checklist:
 - Simplificar logica complexa
 - Manter testes verdes
 """
+    elif node.type == "review":
+        return f"""EXPERT REVIEW: {node.title}
+
+Revise os artefatos produzidos e emita um parecer de qualidade.
+
+Artefatos para revisao: {outputs_str}
+
+Checklist de revisao:
+- Cobertura funcional: os artefatos cobrem todos os requisitos do PRD?
+- Qualidade tecnica: codigo limpo, testado, sem debt obvio?
+- Arquitetura: Clean/Hex respeitada, sem acoplamentos incorretos?
+- Seguranca: sem secrets, sem dados sensiveis, inputs validados?
+- Observabilidade: logs estruturados, sem prints de debug?
+
+Responda com:
+- APPROVED se tudo estiver adequado
+- APPROVED WITH NOTES se aprovado mas com observacoes menores (liste-as)
+- REJECTED se houver problemas que precisam ser corrigidos (liste-os)
+
+Produza o relatorio em: {outputs_str}
+"""
     elif node.type == "build":
         return f"""Implemente: {node.title}
 
@@ -281,6 +302,16 @@ class StepRunner:
             sprint_label = f" | Sprint: {node.sprint}" if node.sprint else ""
             print(f"  Tipo: {node.type} | Executor: {node.executor}{sprint_label}")
             print(f"{'─'*50}")
+
+            # Review node — expert gate via LLM
+            if node.type == "review":
+                self._run_review(node)
+                if mode == "step":
+                    break
+                state = self.state_mgr.load()
+                if state.node_status in ("blocked", "awaiting_approval"):
+                    break
+                continue
 
             # Gate — validacao pura, sem LLM
             if node.type == "gate":
@@ -478,6 +509,96 @@ class StepRunner:
         else:
             self.state_mgr.block(f"Decision sem branch valido: condicao={node.condition}")
             print(f"  DECISION BLOCK: nenhum branch valido")
+
+    def _run_review(self, node: Node):
+        """
+        Sprint Expert Gate — delega ao LLM especialista para revisao.
+        Le o relatorio produzido e verifica APPROVED/REJECTED.
+        """
+        state = self.state_mgr.state
+        task_prompt = build_task_prompt(node, {})
+
+        allowed = []
+        for output in node.outputs:
+            parent = str(Path(output).parent)
+            if parent not in allowed:
+                allowed.append(parent)
+        if not allowed:
+            allowed = ["project/docs/"]
+
+        print(f"  Expert Review ({node.executor})...")
+        state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
+        self.state_mgr.save()
+
+        result = delegate_to_llm(
+            task=task_prompt,
+            project_root=self.project_root,
+            allowed_paths=allowed,
+        )
+
+        if not result.success:
+            self.state_mgr.block(f"Review falhou: {result.output[:300]}")
+            print(f"  REVIEW BLOCK: LLM nao conseguiu revisar")
+            return
+
+        # Registrar artefato do relatorio
+        for output_path in node.outputs:
+            name = Path(output_path).stem
+            self.state_mgr.record_artifact(name, output_path)
+
+        # Validar artefatos deterministicos
+        validation = run_validators(node, self.project_root)
+        self._print_validation(validation)
+
+        if not validation.passed:
+            if validation.retryable:
+                print(f"  REVIEW: validadores falharam, retentando...")
+                result2 = delegate_with_feedback(
+                    original_task=task_prompt,
+                    feedback=validation.feedback or "",
+                    project_root=self.project_root,
+                    allowed_paths=allowed,
+                )
+                state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
+                validation = run_validators(node, self.project_root)
+                self._print_validation(validation)
+
+            if not validation.passed:
+                self.state_mgr.block(f"Review: validadores falharam: {validation.feedback}")
+                return
+
+        # Ler relatorio e verificar veredicto
+        review_output = ""
+        for output_path in node.outputs:
+            full = Path(self.project_root) / output_path
+            if full.exists():
+                review_output = full.read_text()
+                break
+
+        # Veredicto deterministico via parse do relatorio
+        output_upper = review_output.upper()
+        if "REJECTED" in output_upper:
+            # Extrair motivos
+            lines = [l.strip() for l in review_output.splitlines() if l.strip()]
+            reason_lines = []
+            capture = False
+            for line in lines:
+                if "REJECTED" in line.upper():
+                    capture = True
+                if capture:
+                    reason_lines.append(line)
+                    if len(reason_lines) >= 5:
+                        break
+            reason = " | ".join(reason_lines[:3])
+            self.state_mgr.block(f"Expert Review REJECTED: {reason[:300]}")
+            print(f"  REVIEW REJECTED — verificar: {node.outputs[0] if node.outputs else ''}")
+            return
+
+        # APPROVED ou APPROVED WITH NOTES
+        verdict = "APPROVED WITH NOTES" if "WITH NOTES" in output_upper else "APPROVED"
+        next_id = self.graph.resolve_next(node.id)
+        self.state_mgr.advance(node.id, next_id, verdict)
+        print(f"  REVIEW {verdict} → proximo: {next_id}")
 
     def _run_parallel_group(self, nodes: list[Node]):
         """Fan-out: delega nodes independentes em paralelo via worktrees."""

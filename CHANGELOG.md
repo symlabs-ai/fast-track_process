@@ -4,6 +4,37 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.7.0] - 2026-04-01
+
+### Novas funcionalidades
+
+- **ft engine — Motor Determinístico**: Implementação completa de um runtime Python que elimina orquestração não-determinística por LLMs. O Python controla todo o fluxo de processo; o LLM é restrito a tarefas de construção.
+- **DAG de Processo (graph.py)**: Parser YAML → DAG com suporte a sprints, grupos paralelos, decision nodes e custom prompts por node.
+- **TDD Loop Nativo**: Node types `test_red`, `test_green`, `refactor` com prompts dedicados e validadores `tests_fail`/`tests_pass` que forçam o ciclo red→green→refactor.
+- **Sprint Boundaries**: `ft continue --sprint` para na fronteira de sprint com sprint report automático.
+- **Auto-commit**: Motor faz `git commit` automaticamente após PASS em nodes de build/test/refactor com labels `red:`, `green:`, `refactor:`, `feat:`.
+- **Paralelismo via Worktrees**: `parallel.py` com fan-out/fan-in via git worktrees, semáforo de slots e verificação de independência de outputs.
+- **Stakeholder Intelligence**: `stakeholder.py` com hyper-mode (absorve docs existentes e enriquece prompt), rejection workflow com retry automático ao LLM.
+- **Fast Track V2**: `FAST_TRACK_PROCESS_V2.yml` — processo completo mapeado no formato de grafo: 23 nodes, 9 sprints, validators determinísticos para cada fase.
+- **Gate Validators Compostos**: `gate_delivery`, `gate_smoke`, `gate_mvp` como validadores que agregam múltiplas verificações.
+- **Validators de Código**: `lint_clean` (ruff), `format_check`, `coverage_per_file`, `tests_exist`, `no_large_files`, `no_print_statements`.
+- **Hook PreToolUse**: Bloqueia LLM de editar `engine_state.yml` diretamente.
+
+### Melhorias
+
+- **CLI ft**: Adicionado `ft init` para resetar/inicializar estado; `ft reject --no-retry` para rejeição sem LLM; prioridade de processo (v2 > v1 > fast_track).
+- **ft status --full**: Grafo agrupado por sprint com indicadores ✓/→/○ e ◀ no node atual.
+- **Retry com feedback**: Falha de validação gera feedback específico para o LLM (max 3 retries).
+
+### Outros
+
+- Backlog `BACKLOG_FTENGINE.md`: 49 tasks em 7 fases, progresso 82% (40/49)
+- Spec `ft_engine_spec.md`: documentação completa da arquitetura
+- Análise competitiva: SpecKit, BMAD, OpenSpec vs Fast Track
+- Processos de teste v1, v2, v3 (TDD), v4 (parallel) para validação do engine
+
+---
+
 ## [v0.6.6] - 2026-04-01
 
 - feat: add ft validate gate mvp + Claude Code hooks for enforcement

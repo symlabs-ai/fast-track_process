@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ft-engine"
+version = "0.7.3"
+description = "Deterministic process engine for solo dev + AI workflows"
+readme = "docs/ft_engine_usage.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.scripts]
+ft = "ft.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ft"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

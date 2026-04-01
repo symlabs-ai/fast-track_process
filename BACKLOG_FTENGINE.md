@@ -111,13 +111,13 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 
 | # | Task | Descricao | Entrega | Status |
 |---|------|-----------|---------|--------|
-| 7.1 | Extrair para repo separado | `ft-engine` como pacote Python instalavel | novo repo | todo |
-| 7.2 | pip install ft-engine | Publicar no PyPI ou instalar via git | pyproject.toml | todo |
-| 7.3 | Documentacao | README, guia de uso, guia de criacao de processos custom | docs/ | todo |
-| 7.4 | Processos custom | Suporte a qualquer YAML de processo, nao so Fast Track | `ft/engine/graph.py` | todo |
+| 7.1 | Extrair para repo separado | `ft-engine` como pacote Python instalavel | novo repo | done (~/dev/tools/ft-engine, 88 testes OK) |
+| 7.2 | pip install ft-engine | Publicar no PyPI ou instalar via git | pyproject.toml | done (pip install -e . funciona, conda env) |
+| 7.3 | Documentacao | README, guia de uso, guia de criacao de processos custom | docs/ | done (ft_engine_usage.md completo) |
+| 7.4 | Processos custom | Suporte a qualquer YAML de processo, nao so Fast Track | `ft/engine/graph.py` | done (--process flag + qualquer YAML) |
 | 7.5 | Compilador NL → YAML | Descrever processo em linguagem natural, compilar para YAML | `ft/engine/compiler.py` | todo |
-| 7.7 | Fix race condition no lock | acquire_lock deve rejeitar se pid ja existe; prevenir dois ft continue simultaneos | `ft/engine/state.py` | todo |
 | 7.6 | Testes unitarios do motor | 88 testes, 48% cobertura geral (97% state, 91% graph, 97% artifacts) | `tests/engine/` | done |
+| 7.7 | Fix race condition no lock | PID liveness check em acquire_lock | `ft/engine/state.py` | done |
 
 **Criterio de done:** `pip install ft-engine` funciona. Qualquer processo YAML roda. Docs completa.
 
@@ -133,5 +133,5 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 4. Paralelismo | 5 | 4 | 80% |
 | 5. Stakeholder | 5 | 5 | 100% |
 | 6. Fast Track Completo | 6 | 6 | 100% |
-| 7. Polish e Extracao | 7 | 1 | 14% |
-| **Total** | **50** | **43** | **86%** |
+| 7. Polish e Extracao | 7 | 6 | 86% |
+| **Total** | **50** | **48** | **96%** |

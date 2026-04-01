@@ -91,3 +91,38 @@ def gate_mvp(
     if failures:
         return False, f"gate_mvp FAIL: {'; '.join(failures)}"
     return True, f"gate_mvp: docs + testes + cobertura >= {min_coverage}% OK"
+
+
+def gate_tdd_sequence(
+    tdd_log: dict,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Gate TDD — exige red phase antes de green (testes passando)."""
+    if not tdd_log.get("red_phase_completed"):
+        return False, "gate_tdd_sequence FAIL: red phase não foi completada"
+    if not tdd_log.get("tests_passing"):
+        return False, "gate_tdd_sequence FAIL: testes não estão passando"
+    return True, "gate_tdd_sequence: OK — red→green sequencial confirmado"
+
+
+def gate_coverage_80(
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Gate de cobertura — bloqueia se cobertura < 80%."""
+    passed, detail = coverage_min(80, project_root)
+    if not passed:
+        return False, f"gate_coverage_80 FAIL: {detail}"
+    return True, f"gate_coverage_80: PASS — {detail}"
+
+
+def gate_e2e_all_pass(
+    scenarios: list[dict],
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Gate E2E — falha se qualquer cenário não passar ou lista vazia."""
+    if not scenarios:
+        return False, "gate_e2e_all_pass FAIL: lista de cenários vazia"
+    failed = [s["id"] for s in scenarios if not s.get("passed")]
+    if failed:
+        return False, f"gate_e2e_all_pass FAIL: cenários falharam: {', '.join(failed)}"
+    return True, f"gate_e2e_all_pass: PASS — {len(scenarios)} cenários OK"

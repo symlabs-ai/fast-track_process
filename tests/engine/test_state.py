@@ -68,6 +68,7 @@ class TestStateManager:
 
     def test_advance_clears_blocked_reason(self, initialized_state):
         initialized_state.block("reason")
+        initialized_state.unblock()
         initialized_state.advance("node.01", "node.02")
         state = initialized_state.load()
         assert state.blocked_reason is None

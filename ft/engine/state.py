@@ -132,6 +132,8 @@ class StateManager:
     def advance(self, completed_node: str, next_node: str | None, gate_result: str = "PASS"):
         """Avanca estado apos validacao PASS."""
         s = self.state
+        if s.node_status == "blocked":
+            raise RuntimeError(f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance().")
         s.completed_nodes.append(completed_node)
         s.gate_log[completed_node] = gate_result
         s.current_node = next_node
@@ -141,8 +143,33 @@ class StateManager:
         s.metrics["steps_completed"] = len(s.completed_nodes)
         self.save()
 
+    def advance_guarded(self, completed_node: str, next_node: str | None, gate_result: str = "PASS"):
+        """Avanca estado com verificacao de gate_result e bloqueio."""
+        if gate_result != "PASS":
+            raise ValueError(f"gate_result deve ser 'PASS' para avançar, recebido: '{gate_result}'")
+        s = self.state
+        if s.node_status == "blocked":
+            raise RuntimeError(f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance_guarded().")
+        s.completed_nodes.append(completed_node)
+        s.gate_log[completed_node] = gate_result
+        s.current_node = next_node
+        s.node_status = "ready" if next_node else "done"
+        s.blocked_reason = None
+        s.pending_approval = None
+        s.metrics["steps_completed"] = len(s.completed_nodes)
+        self.save()
+
+    def unblock(self):
+        """Remove bloqueio do motor."""
+        s = self.state
+        s.node_status = "ready"
+        s.blocked_reason = None
+        self.save()
+
     def block(self, reason: str):
         """Bloqueia o motor no node atual."""
+        if not reason:
+            raise ValueError("blocked reason / motivo não pode ser vazio")
         s = self.state
         s.node_status = "blocked"
         s.blocked_reason = reason
@@ -157,5 +184,21 @@ class StateManager:
 
     def record_artifact(self, name: str, path: str):
         """Registra artefato produzido."""
+        if not name:
+            raise ValueError("artifact name não pode ser vazio")
+        if not path:
+            raise ValueError("artifact path não pode ser vazio")
         self.state.artifacts[name] = path
+        self.save()
+
+    def list_artifacts(self) -> dict[str, str | None]:
+        """Retorna dict com todos os artifacts."""
+        return dict(self.state.artifacts)
+
+    def block_gate(self, node_id: str, reason: str):
+        """Registra BLOCK no gate_log para o node."""
+        s = self.state
+        s.gate_log[node_id] = "BLOCK"
+        s.node_status = "blocked"
+        s.blocked_reason = reason
         self.save()

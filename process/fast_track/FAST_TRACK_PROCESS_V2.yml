@@ -1,0 +1,311 @@
+# Fast Track Process V2 — formato de grafo para ft engine
+# Mapeamento completo: 19 steps, 9 fases, validators deterministicos
+
+id: fast_track_v2
+version: "0.7.0"
+title: "ForgeProcess — Fast Track V2"
+
+nodes:
+  # ================================================================
+  # Fase 1: MDD — Market Driven Development
+  # ================================================================
+
+  - id: ft.mdd.01.hipotese
+    type: discovery
+    title: "Capturar Hipotese"
+    executor: llm_coach
+    sprint: sprint-01-mdd
+    outputs:
+      - project/docs/hipotese.md
+    requires_approval: true
+    validators:
+      - file_exists: project/docs/hipotese.md
+      - min_lines: 10
+      - has_sections:
+          - Problema
+          - Oportunidade
+    next: ft.mdd.02.prd
+
+  - id: ft.mdd.02.prd
+    type: document
+    title: "Redigir PRD"
+    executor: llm_coach
+    sprint: sprint-01-mdd
+    outputs:
+      - project/docs/PRD.md
+    requires_approval: true
+    validators:
+      - file_exists: project/docs/PRD.md
+      - min_lines: 30
+      - has_sections:
+          - Hipotese
+          - Visao
+          - User Stories
+      - min_user_stories: 3
+    next: ft.mdd.03.validacao
+
+  - id: ft.mdd.03.validacao
+    type: gate
+    title: "Validar PRD"
+    executor: python
+    sprint: sprint-01-mdd
+    validators:
+      - file_exists: project/docs/hipotese.md
+      - file_exists: project/docs/PRD.md
+      - min_lines: 30
+    next: ft.plan.01.task_list
+
+  # ================================================================
+  # Fase 2: Planning
+  # ================================================================
+
+  - id: ft.plan.01.task_list
+    type: document
+    title: "Criar Task List"
+    executor: llm_coach
+    sprint: sprint-02-planning
+    outputs:
+      - project/docs/TASK_LIST.md
+    validators:
+      - file_exists: project/docs/TASK_LIST.md
+      - min_lines: 20
+    next: ft.plan.02.tech_stack
+
+  - id: ft.plan.02.tech_stack
+    type: document
+    title: "Propor Tech Stack"
+    executor: llm_coder
+    sprint: sprint-02-planning
+    outputs:
+      - project/docs/tech_stack.md
+    requires_approval: true
+    validators:
+      - file_exists: project/docs/tech_stack.md
+      - min_lines: 10
+    next: ft.plan.03.diagrams
+
+  - id: ft.plan.03.diagrams
+    type: document
+    title: "Gerar Diagramas Tecnicos"
+    executor: llm_coder
+    sprint: sprint-02-planning
+    outputs:
+      - project/docs/diagrams/architecture.md
+    validators:
+      - file_exists: project/docs/diagrams/architecture.md
+      - min_lines: 5
+    next: gate.planning
+
+  - id: gate.planning
+    type: gate
+    title: "Gate de Planning"
+    executor: python
+    sprint: sprint-02-planning
+    validators:
+      - file_exists: project/docs/TASK_LIST.md
+      - file_exists: project/docs/tech_stack.md
+      - file_exists: project/docs/diagrams/architecture.md
+    next: ft.tdd.02.red
+
+  # ================================================================
+  # Fase 3: TDD
+  # ================================================================
+
+  - id: ft.tdd.02.red
+    type: test_red
+    title: "Red — Escrever Testes"
+    executor: llm_coder
+    sprint: sprint-03-tdd
+    outputs:
+      - tests/
+    validators:
+      - tests_exist: tests/
+      - tests_fail: true
+    next: ft.tdd.03.green
+
+  - id: ft.tdd.03.green
+    type: test_green
+    title: "Green — Implementar"
+    executor: llm_coder
+    sprint: sprint-03-tdd
+    outputs:
+      - src/
+    validators:
+      - tests_pass: true
+    next: gate.tdd
+
+  - id: gate.tdd
+    type: gate
+    title: "Gate TDD"
+    executor: python
+    sprint: sprint-03-tdd
+    validators:
+      - tests_pass: true
+    next: ft.delivery.01.self_review
+
+  # ================================================================
+  # Fase 4: Delivery
+  # ================================================================
+
+  - id: ft.delivery.01.self_review
+    type: refactor
+    title: "Self-Review"
+    executor: llm_coder
+    sprint: sprint-04-delivery
+    outputs:
+      - src/
+    validators:
+      - tests_pass: true
+      - lint_clean: true
+    next: ft.delivery.02.refactor
+
+  - id: ft.delivery.02.refactor
+    type: refactor
+    title: "Refactor"
+    executor: llm_coder
+    sprint: sprint-04-delivery
+    outputs:
+      - src/
+    validators:
+      - tests_pass: true
+    next: gate.delivery
+
+  - id: gate.delivery
+    type: gate
+    title: "Gate de Delivery"
+    executor: python
+    sprint: sprint-04-delivery
+    validators:
+      - gate_delivery: true
+    outputs:
+      - src/
+    next: ft.smoke.01.cli_run
+
+  # ================================================================
+  # Fase 5: Smoke
+  # ================================================================
+
+  - id: ft.smoke.01.cli_run
+    type: build
+    title: "Smoke CLI Run"
+    executor: llm_coder
+    sprint: sprint-05-smoke
+    outputs:
+      - project/docs/smoke-report.md
+    validators:
+      - file_exists: project/docs/smoke-report.md
+      - min_lines: 10
+    next: gate.smoke
+
+  - id: gate.smoke
+    type: gate
+    title: "Gate de Smoke"
+    executor: python
+    sprint: sprint-05-smoke
+    validators:
+      - gate_smoke: true
+    next: ft.e2e.01.cli_validation
+
+  # ================================================================
+  # Fase 6: E2E
+  # ================================================================
+
+  - id: ft.e2e.01.cli_validation
+    type: build
+    title: "E2E CLI Validation"
+    executor: llm_coder
+    sprint: sprint-06-e2e
+    outputs:
+      - tests/e2e/
+    validators:
+      - tests_exist: tests/e2e/
+      - tests_pass: true
+    next: gate.e2e
+
+  - id: gate.e2e
+    type: gate
+    title: "Gate E2E"
+    executor: python
+    sprint: sprint-06-e2e
+    validators:
+      - tests_pass: true
+    next: ft.feedback.01.retro_note
+
+  # ================================================================
+  # Fase 7: Feedback
+  # ================================================================
+
+  - id: ft.feedback.01.retro_note
+    type: document
+    title: "Retro Note"
+    executor: llm_coach
+    sprint: sprint-07-feedback
+    outputs:
+      - project/docs/retro.md
+    validators:
+      - file_exists: project/docs/retro.md
+      - min_lines: 10
+    next: ft.audit.01.forgebase
+
+  # ================================================================
+  # Fase 8: Auditoria
+  # ================================================================
+
+  - id: ft.audit.01.forgebase
+    type: build
+    title: "Auditoria ForgeBase"
+    executor: llm_coder
+    sprint: sprint-08-audit
+    outputs:
+      - project/docs/forgebase-audit.md
+    validators:
+      - file_exists: project/docs/forgebase-audit.md
+      - min_lines: 20
+      - tests_pass: true
+    next: gate.audit
+
+  - id: gate.audit
+    type: gate
+    title: "Gate de Auditoria"
+    executor: python
+    sprint: sprint-08-audit
+    validators:
+      - file_exists: project/docs/forgebase-audit.md
+      - tests_pass: true
+      - lint_clean: true
+    next: ft.handoff.01.specs
+
+  # ================================================================
+  # Fase 9: Handoff
+  # ================================================================
+
+  - id: ft.handoff.01.specs
+    type: document
+    title: "Gerar SPEC.md"
+    executor: llm_coach
+    sprint: sprint-09-handoff
+    outputs:
+      - project/docs/SPEC.md
+      - CHANGELOG.md
+    validators:
+      - file_exists: project/docs/SPEC.md
+      - file_exists: CHANGELOG.md
+      - min_lines: 20
+    next: gate.mvp
+
+  - id: gate.mvp
+    type: gate
+    title: "Gate MVP"
+    executor: python
+    sprint: sprint-09-handoff
+    validators:
+      - file_exists: project/docs/PRD.md
+      - file_exists: project/docs/TASK_LIST.md
+      - file_exists: project/docs/SPEC.md
+      - file_exists: CHANGELOG.md
+      - tests_pass: true
+    next: ft.end
+
+  - id: ft.end
+    type: end
+    title: "MVP Entregue"

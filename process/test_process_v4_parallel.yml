@@ -1,0 +1,53 @@
+# Processo de teste v4 — tasks paralelas via worktrees
+# Valida Fase 4: fan-out/fan-in com parallel_group
+
+id: test_process_v4_parallel
+version: "0.4.0"
+title: "Processo de Teste v4 (Paralelo)"
+
+nodes:
+  - id: step.01.setup
+    type: document
+    title: "Setup do projeto"
+    executor: llm_coach
+    outputs:
+      - project/docs/hipotese.md
+    validators:
+      - file_exists: project/docs/hipotese.md
+    next: step.02a.modulo_a
+
+  # Grupo paralelo — A e B rodam simultaneamente
+  - id: step.02a.modulo_a
+    type: build
+    title: "Implementar modulo A"
+    executor: llm_coder
+    parallel_group: sprint-02-parallel
+    outputs:
+      - src/modulo_a.py
+    validators:
+      - file_exists: src/modulo_a.py
+    next: step.03.gate
+
+  - id: step.02b.modulo_b
+    type: build
+    title: "Implementar modulo B"
+    executor: llm_coder
+    parallel_group: sprint-02-parallel
+    outputs:
+      - src/modulo_b.py
+    validators:
+      - file_exists: src/modulo_b.py
+    next: step.03.gate
+
+  - id: step.03.gate
+    type: gate
+    title: "Gate pos-paralelo"
+    executor: python
+    validators:
+      - file_exists: src/modulo_a.py
+      - file_exists: src/modulo_b.py
+    next: step.04.done
+
+  - id: step.04.done
+    type: end
+    title: "Processo completo"

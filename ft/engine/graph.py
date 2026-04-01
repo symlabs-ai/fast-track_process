@@ -28,6 +28,8 @@ class Node:
     sprint: str | None = None
     # Custom prompt for LLM
     prompt: str | None = None
+    # Parallel group — nodes com mesmo grupo rodam em paralelo
+    parallel_group: str | None = None
 
 
 class ProcessGraph:
@@ -104,6 +106,10 @@ class ProcessGraph:
         """Retorna todos os nodes de uma sprint, na ordem do YAML."""
         return [n for n in self.nodes.values() if n.sprint == sprint]
 
+    def get_parallel_group(self, group: str) -> list[Node]:
+        """Retorna todos os nodes de um grupo paralelo."""
+        return [n for n in self.nodes.values() if n.parallel_group == group]
+
     def get_sprints(self) -> list[str]:
         """Retorna lista de sprints unicas na ordem que aparecem."""
         seen = []
@@ -162,6 +168,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             condition=node_raw.get("condition"),
             sprint=node_raw.get("sprint"),
             prompt=node_raw.get("prompt"),
+            parallel_group=node_raw.get("parallel_group"),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

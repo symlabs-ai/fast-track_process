@@ -92,7 +92,7 @@ def cmd_approve(args):
 
 def cmd_reject(args):
     runner = get_runner(args.process)
-    runner.reject(args.reason)
+    runner.reject(args.reason, retry=not args.no_retry)
 
 
 def cmd_graph(args):
@@ -128,6 +128,7 @@ def main():
     # reject
     rj = sub.add_parser("reject", help="Rejeitar artefato pendente")
     rj.add_argument("reason", help="Motivo da rejeicao")
+    rj.add_argument("--no-retry", action="store_true", help="Nao reenviar ao LLM apos rejeicao")
 
     # graph
     sub.add_parser("graph", help="Mostrar grafo com status")

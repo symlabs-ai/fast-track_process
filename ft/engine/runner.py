@@ -18,6 +18,12 @@ from ft.engine.validators import tests as test_val
 from ft.engine.validators import code as code_val
 from ft.engine.validators import review as review_val
 from ft.engine.git_ops import auto_commit
+from ft.engine.parallel import ParallelRunner, check_independence
+from ft.engine.stakeholder import (
+    scan_existing_docs, should_skip_node,
+    hyper_mode_prompt, build_rejection_prompt,
+    format_pending_summary,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +298,21 @@ class StepRunner:
                 state = self.state_mgr.load()
                 continue
 
+            # Parallel group — fan-out/fan-in
+            if node.parallel_group:
+                group_nodes = self.graph.get_parallel_group(node.parallel_group)
+                # So inicia fan-out se este e o primeiro do grupo nao completado
+                completed = set(self.state_mgr.state.completed_nodes)
+                group_pending = [n for n in group_nodes if n.id not in completed]
+                if len(group_pending) > 1 and group_pending[0].id == node_id:
+                    self._run_parallel_group(group_pending)
+                    state = self.state_mgr.load()
+                    if state.node_status in ("blocked", "awaiting_approval"):
+                        break
+                    if mode == "step":
+                        break
+                    continue
+
             # Discovery/Document/Build — delegar ao LLM
             if node.executor.startswith("llm"):
                 self._run_llm_step(node)
@@ -311,6 +332,13 @@ class StepRunner:
         """Delega ao LLM, valida resultado, avanca ou retenta."""
         state = self.state_mgr.state
         task_prompt = build_task_prompt(node, {})
+
+        # Hyper-mode: enriquecer prompt com docs existentes
+        if node.type in ("discovery", "document"):
+            existing = scan_existing_docs(self.project_root)
+            if existing:
+                task_prompt = hyper_mode_prompt(existing, task_prompt)
+                print(f"  Hyper-mode: {len(existing)} docs existentes carregados")
 
         # Determinar paths permitidos
         allowed = []
@@ -451,6 +479,68 @@ class StepRunner:
             self.state_mgr.block(f"Decision sem branch valido: condicao={node.condition}")
             print(f"  DECISION BLOCK: nenhum branch valido")
 
+    def _run_parallel_group(self, nodes: list[Node]):
+        """Fan-out: delega nodes independentes em paralelo via worktrees."""
+        print(f"\n  PARALLEL GROUP: {len(nodes)} tasks")
+        for n in nodes:
+            print(f"    → {n.id}: {n.title}")
+
+        tasks = []
+        for n in nodes:
+            allowed = [str(Path(o).parent) for o in n.outputs] or ["src/", "tests/"]
+            tasks.append({
+                "node_id": n.id,
+                "task_prompt": build_task_prompt(n, {}),
+                "allowed_paths": allowed,
+                "outputs": n.outputs,
+            })
+
+        par = ParallelRunner(project_root=self.project_root, max_slots=2)
+        try:
+            results = par.run_parallel(tasks, delegate_to_llm)
+        except ValueError as e:
+            self.state_mgr.block(str(e))
+            print(f"  PARALLEL BLOCK: {e}")
+            return
+
+        # Fan-in: merge + validar cada resultado
+        all_passed = True
+        for wt_result in results:
+            node = self.graph.get_node(wt_result.node_id)
+            if not wt_result.success:
+                self.state_mgr.block(f"Parallel task falhou: {wt_result.node_id}")
+                print(f"  PARALLEL FAIL: {wt_result.node_id}")
+                all_passed = False
+                continue
+
+            # Merge worktree branch
+            ok, detail = par.merge_all([wt_result])[0] if wt_result.branch else (False, "sem branch")
+            if not ok:
+                self.state_mgr.block(f"Merge falhou: {detail}")
+                print(f"  MERGE FAIL: {detail}")
+                all_passed = False
+                continue
+
+            print(f"  MERGED: {wt_result.node_id}")
+
+        if not all_passed:
+            return
+
+        # Validar e avançar todos os nodes do grupo
+        for wt_result in results:
+            node = self.graph.get_node(wt_result.node_id)
+            validation = run_validators(node, self.project_root)
+            self._print_validation(validation)
+            if validation.passed:
+                next_id = self.graph.resolve_next(node.id)
+                self.state_mgr.advance(node.id, next_id)
+                print(f"  PARALLEL PASS: {node.id} → {next_id}")
+            else:
+                self.state_mgr.block(
+                    f"Validacao falhou apos merge: {node.id}: {validation.feedback}"
+                )
+                return
+
     def _generate_sprint_report(self, sprint: str, state):
         """Gera relatorio de sprint."""
         sprint_nodes = self.graph.get_sprint_nodes(sprint)
@@ -483,16 +573,54 @@ class StepRunner:
         self.state_mgr.advance(node_id, next_id)
         print(f"  APROVADO: {node_id} → proximo: {next_id}")
 
-    def reject(self, reason: str):
-        """Stakeholder rejeita artefato pendente."""
+    def reject(self, reason: str, retry: bool = True):
+        """
+        Stakeholder rejeita artefato pendente.
+        Se retry=True, reenvia ao LLM com feedback do motivo.
+        """
         state = self.state_mgr.load()
         if not state.pending_approval:
             print("Nenhuma rejeicao pendente.")
             return
 
         node_id = state.pending_approval
-        self.state_mgr.block(f"Rejeitado pelo stakeholder: {reason}")
+        node = self.graph.get_node(node_id)
         print(f"  REJEITADO: {node_id} — {reason}")
+
+        if retry and node.executor.startswith("llm"):
+            # Reenviar ao LLM com feedback da rejeicao
+            from ft.engine.delegate import delegate_with_feedback
+            original_prompt = build_task_prompt(node, {})
+            retry_prompt = build_rejection_prompt(original_prompt, reason)
+
+            allowed = [str(Path(o).parent) for o in node.outputs] or ["src/", "project/docs/"]
+            print(f"  Reenviando ao LLM com feedback da rejeicao...")
+
+            # Desbloquear estado para retry
+            state.node_status = "ready"
+            state.pending_approval = None
+            state.blocked_reason = None
+            self.state_mgr.save()
+
+            result = delegate_with_feedback(
+                original_task=original_prompt,
+                feedback=f"REJEITADO PELO STAKEHOLDER: {reason}",
+                project_root=self.project_root,
+                allowed_paths=allowed,
+            )
+            state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
+
+            if result.success:
+                validation = run_validators(node, self.project_root)
+                self._print_validation(validation)
+                if validation.passed:
+                    print(f"  AGUARDANDO APROVACAO — rode: ft approve")
+                    self.state_mgr.set_pending_approval(node.id)
+                    return
+            # Se retry falhou, bloquear
+            self.state_mgr.block(f"Retry apos rejeicao falhou: {reason}")
+        else:
+            self.state_mgr.block(f"Rejeitado pelo stakeholder: {reason}")
 
     def status(self, full: bool = False):
         """Mostra estado atual."""

@@ -21,8 +21,9 @@ def find_project_root() -> Path:
 
 
 def find_process_yaml(root: Path) -> Path | None:
-    """Encontra o YAML do processo (test_process.yml ou FAST_TRACK_PROCESS.yml)."""
+    """Encontra o YAML do processo (prioridade: v2 > v1 > fast_track)."""
     candidates = [
+        root / "process" / "test_process_v2.yml",
         root / "process" / "test_process.yml",
         root / "process" / "fast_track" / "FAST_TRACK_PROCESS_V2.yml",
         root / "process" / "fast_track" / "FAST_TRACK_PROCESS.yml",
@@ -50,6 +51,18 @@ def get_runner(process: str | None = None) -> StepRunner:
         state_path=state_path,
         project_root=root,
     )
+
+
+def cmd_init(args):
+    runner = get_runner(args.process)
+    # Limpar estado anterior se existir
+    if runner.state_mgr.path.exists():
+        runner.state_mgr.path.unlink()
+        runner.state_mgr._state = None
+    runner.init_state()
+    sprints = runner.graph.get_sprints()
+    if sprints:
+        print(f"  Sprints: {', '.join(sprints)}")
 
 
 def cmd_continue(args):
@@ -95,6 +108,9 @@ def main():
     parser.add_argument("--process", "-p", help="Path do YAML de processo")
     sub = parser.add_subparsers(dest="command")
 
+    # init
+    sub.add_parser("init", help="Inicializar/resetar estado do processo")
+
     # continue
     cont = sub.add_parser("continue", help="Avancar no processo")
     cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
@@ -118,7 +134,9 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "continue":
+    if args.command == "init":
+        cmd_init(args)
+    elif args.command == "continue":
         cmd_continue(args)
     elif args.command == "status":
         cmd_status(args)

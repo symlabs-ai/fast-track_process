@@ -235,3 +235,11 @@ Ferramenta interna Symlabs (open-source no futuro). Valor gerado pela eliminacao
 | US-06 | continue_loop | state_recovery |
 | US-07 | continue_loop | — |
 | US-08 | sprint_execution | gate_enforcement |
+
+### Contrato de Observabilidade
+
+- **Metricas por execucao**: count, duration, success, error
+- **Eventos minimos**: start, finish, error, retry, blocked
+- **Edges observaveis**: LLM (subagent delegation), filesystem (YAML state R/W)
+- **Disciplina de tags**: proibido alta cardinalidade (ex: prompt_content como tag)
+- **Implementacao**: toda execucao de step passa pelo `engine.runner` — nunca executar steps diretamente fora do motor

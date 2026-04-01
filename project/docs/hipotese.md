@@ -2,7 +2,7 @@
 
 > Projeto: ft engine
 > Data: 2026-04-01
-> Status: draft
+> Status: complete
 
 ---
 
@@ -69,3 +69,46 @@ Desenvolvedores solo que trabalham com assistentes de IA (Claude Code, Cursor, e
 | retry_with_feedback | continue_loop | Quando validação falha, reenvia ao LLM com feedback dos validadores. Max N retries antes de BLOCK. |
 | state_recovery | continue_loop | Detecta estado corrompido ou inconsistente e oferece procedimento de recovery. |
 | gate_enforcement | sprint_execution | Executa gates compostos (delivery, smoke, MVP) como validadores Python determinísticos. |
+
+---
+
+## 7. Premissas Críticas
+
+> Condições que precisam ser verdadeiras para a hipótese se sustentar. Se qualquer premissa for invalidada, a hipótese deve ser revista.
+
+| # | Premissa | Como verificar | Status |
+|---|----------|----------------|--------|
+| P1 | LLMs (Claude Code subagents) conseguem executar tasks de construção com qualidade suficiente quando recebem contexto controlado e prompt específico | Testes com delegação real em 3+ steps do processo | A verificar |
+| P2 | Validadores determinísticos (Python puro) conseguem detectar artefatos incompletos ou incorretos sem falsos positivos excessivos | Implementar 5+ validadores e medir false positive rate < 10% | A verificar |
+| P3 | O processo Fast Track pode ser representado como grafo YAML sem perda de semântica relevante | Converter processo completo para YAML e executar E2E | Parcialmente validado (v3 funciona com 5 steps) |
+| P4 | O desenvolvedor solo aceita ceder controle de orquestração ao motor em troca de garantias de processo | Dogfooding interno em 2+ projetos Symlabs | A verificar |
+| P5 | O overhead do motor (startup, validação, retry) não torna o fluxo mais lento que orquestração manual | Medir tempo por step < 120s em média | A verificar |
+
+---
+
+## 8. Critérios de Validação da Hipótese
+
+> O que precisa acontecer para considerar a hipótese **validada** e avançar para o PRD completo.
+
+### Validação Mínima (gate para avançar)
+
+- [ ] Motor executa processo E2E (discovery → delivery) sem intervenção manual no fluxo
+- [ ] Zero drift de processo em execução completa (nenhum step pulado ou validação ignorada)
+- [ ] Pelo menos 1 projeto Symlabs real usa o motor em dogfooding
+
+### Sinais de Invalidação (red flags)
+
+- LLM não consegue produzir artefatos válidos mesmo com retry + feedback específico (retry success < 30%)
+- Validadores geram tantos falsos positivos que o dev desativa validação (false positive > 30%)
+- Tempo por step excede 5min consistentemente, tornando o motor mais lento que processo manual
+- Representação YAML do processo perde nuances que causam comportamento incorreto do motor
+
+---
+
+## 9. Próximos Passos
+
+1. **Validar P3** — Executar processo V3 completo com motor atual e documentar gaps
+2. **Validar P1** — Testar delegação real a Claude Code subagents em steps de construção (código, docs)
+3. **Validar P2** — Implementar validadores core e medir taxa de falsos positivos
+4. **Dogfooding** — Usar motor no próximo projeto Symlabs interno para validar P4 e P5
+5. **Decisão** — Com premissas validadas, avançar para PRD completo (já rascunhado)

@@ -275,3 +275,77 @@ class TestEngine:
         assert status["node_title"] == "Build"
         assert status["completed"] == 0
         assert status["total"] == 2
+
+    def test_run_step_pass_advances(self, tmp_path):
+        """When validators pass, run_step advances state to next node."""
+        process_path = self._make_process(tmp_path)
+        state_path = self._make_state(tmp_path)
+        # Create the expected output so file_exists passes
+        (tmp_path / "out.txt").write_text("hello")
+
+        engine = Engine(process_path, state_path)
+        result = engine.run_step()
+
+        assert result["gate"] == "PASS"
+        assert engine.state["current_node"] == "step.02"
+        assert "step.01" in engine.state["completed_nodes"]
+        assert engine.state["metrics"]["steps_completed"] == 1
+
+    def test_run_step_fail_blocks(self, tmp_path):
+        """When validators fail, run_step blocks state with reason."""
+        process_path = self._make_process(tmp_path)
+        state_path = self._make_state(tmp_path)
+        # Don't create the output file — validator will fail
+
+        engine = Engine(process_path, state_path)
+        result = engine.run_step()
+
+        assert result["gate"] == "BLOCK"
+        assert engine.state["node_status"] == "blocked"
+        assert engine.state["blocked_reason"] is not None
+
+    def test_run_step_saves_state(self, tmp_path):
+        """run_step persists state to disk after advancing."""
+        process_path = self._make_process(tmp_path)
+        state_path = self._make_state(tmp_path)
+        (tmp_path / "out.txt").write_text("hello")
+
+        engine = Engine(process_path, state_path)
+        engine.run_step()
+
+        # Reload from disk and verify persistence
+        reloaded = EngineState.load(state_path)
+        assert reloaded["current_node"] == "step.02"
+        assert "step.01" in reloaded["completed_nodes"]
+
+    def test_run_step_at_end_node(self, tmp_path):
+        """run_step on an end node returns done status."""
+        process_yaml = {
+            "id": "test",
+            "version": "0.1.0",
+            "title": "Test",
+            "nodes": [
+                {"id": "step.end", "type": "end", "title": "Done"},
+            ],
+        }
+        path = tmp_path / "process.yml"
+        path.write_text(yaml.dump(process_yaml))
+
+        state = {
+            "process_id": "test",
+            "version": "0.1.0",
+            "current_node": "step.end",
+            "node_status": "ready",
+            "completed_nodes": ["step.01"],
+            "gate_log": {},
+            "artifacts": {},
+            "blocked_reason": None,
+            "metrics": {"steps_completed": 1, "steps_total": 2},
+        }
+        state_path = tmp_path / "engine_state.yml"
+        state_path.write_text(yaml.dump(state))
+
+        engine = Engine(str(path), str(state_path))
+        result = engine.run_step()
+
+        assert result["gate"] == "DONE"

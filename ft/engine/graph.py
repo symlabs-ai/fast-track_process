@@ -24,6 +24,10 @@ class Node:
     # Para decisions
     branches: dict[str, str] | None = None
     condition: str | None = None
+    # Sprint grouping
+    sprint: str | None = None
+    # Custom prompt for LLM
+    prompt: str | None = None
 
 
 class ProcessGraph:
@@ -96,6 +100,22 @@ class ProcessGraph:
                 status[node_id] = "blocked"
         return status
 
+    def get_sprint_nodes(self, sprint: str) -> list[Node]:
+        """Retorna todos os nodes de uma sprint, na ordem do YAML."""
+        return [n for n in self.nodes.values() if n.sprint == sprint]
+
+    def get_sprints(self) -> list[str]:
+        """Retorna lista de sprints unicas na ordem que aparecem."""
+        seen = []
+        for n in self.nodes.values():
+            if n.sprint and n.sprint not in seen:
+                seen.append(n.sprint)
+        return seen
+
+    def sprint_of(self, node_id: str) -> str | None:
+        """Retorna a sprint de um node."""
+        return self.nodes[node_id].sprint if node_id in self.nodes else None
+
     def _is_ready(self, node_id: str, completed: set[str]) -> bool:
         """Um node esta ready se todos os nodes que apontam para ele estao done."""
         # Para sequencia linear: o node esta ready se o anterior esta done (ou e o primeiro)
@@ -140,6 +160,8 @@ def load_graph(path: str | Path) -> ProcessGraph:
             next=node_raw.get("next"),
             branches=node_raw.get("branches"),
             condition=node_raw.get("condition"),
+            sprint=node_raw.get("sprint"),
+            prompt=node_raw.get("prompt"),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

@@ -169,5 +169,29 @@ class Engine:
             "blocked_reason": self.state.get("blocked_reason"),
         }
 
+    def run_step(self) -> dict[str, Any]:
+        """Validate current node, advance or block, persist state."""
+        node = ProcessLoader.get_node(self.process, self.state["current_node"])
+
+        # End node — nothing to validate
+        if node.get("type") == "end":
+            return {"gate": "DONE", "node": node["id"]}
+
+        # Run validators
+        results = self.validate_node(node)
+        failed = [r for r in results if r["status"] != "PASS"]
+
+        if failed:
+            reasons = "; ".join(r["reason"] for r in failed)
+            self.state = EngineState.block(self.state, reasons)
+            self.save()
+            return {"gate": "BLOCK", "node": node["id"], "reasons": reasons}
+
+        # All passed — advance
+        next_node = node.get("next", "")
+        self.state = EngineState.advance(self.state, node["id"], next_node)
+        self.save()
+        return {"gate": "PASS", "node": node["id"], "next": next_node}
+
     def save(self) -> None:
         EngineState.save(self.state_path, self.state)

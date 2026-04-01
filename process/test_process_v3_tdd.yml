@@ -1,0 +1,114 @@
+# Processo de teste v3 — TDD loop completo
+# Valida Fase 3: red → green → refactor → gate → commit automatico
+
+id: test_process_v3_tdd
+version: "0.3.0"
+title: "Processo de Teste v3 (TDD)"
+
+nodes:
+  # Sprint 1: Discovery (simplificado)
+  - id: step.01.hipotese
+    type: discovery
+    title: "Hipotese do produto"
+    executor: llm_coach
+    sprint: sprint-01-discovery
+    outputs:
+      - project/docs/hipotese.md
+    validators:
+      - file_exists: project/docs/hipotese.md
+      - min_lines: 5
+    next: gate.01.discovery
+
+  - id: gate.01.discovery
+    type: gate
+    title: "Gate de discovery"
+    executor: python
+    sprint: sprint-01-discovery
+    validators:
+      - file_exists: project/docs/hipotese.md
+    next: step.02.tdd_red
+
+  # Sprint 2: TDD
+  - id: step.02.tdd_red
+    type: test_red
+    title: "Escrever testes (red phase)"
+    executor: llm_coder
+    sprint: sprint-02-tdd
+    outputs:
+      - tests/test_calculator.py
+    prompt: |
+      EXERCICIO TDD — Este e um projeto de demonstracao.
+      Crie o arquivo tests/test_calculator.py com testes para uma calculadora simples.
+
+      A calculadora (que sera implementada em src/calculator.py) deve suportar:
+      - add(a, b) → soma
+      - subtract(a, b) → subtracao
+      - multiply(a, b) → multiplicacao
+      - divide(a, b) → divisao (com erro para divisao por zero)
+
+      IMPORTANTE:
+      - Escreva APENAS os testes, NAO crie src/calculator.py
+      - Os testes DEVEM importar de src.calculator (que ainda nao existe)
+      - Os testes DEVEM FALHAR quando rodados (red phase)
+      - Use pytest
+      - Minimo 8 test cases
+    validators:
+      - file_exists: tests/test_calculator.py
+      - tests_fail: true
+    next: step.03.tdd_green
+
+  - id: step.03.tdd_green
+    type: test_green
+    title: "Implementar codigo (green phase)"
+    executor: llm_coder
+    sprint: sprint-02-tdd
+    outputs:
+      - src/calculator.py
+    prompt: |
+      TDD GREEN PHASE — Implemente src/calculator.py para fazer os testes passarem.
+
+      Os testes em tests/test_calculator.py ja existem e estao falhando.
+      Implemente o MINIMO necessario para faze-los passar:
+      - class Calculator ou funcoes add, subtract, multiply, divide
+      - divide(a, 0) deve levantar ValueError
+
+      NAO modifique os testes. Apenas crie src/calculator.py.
+    validators:
+      - file_exists: src/calculator.py
+      - tests_pass: true
+    next: step.04.tdd_refactor
+
+  - id: step.04.tdd_refactor
+    type: refactor
+    title: "Refatorar mantendo testes verdes"
+    executor: llm_coder
+    sprint: sprint-02-tdd
+    outputs:
+      - src/calculator.py
+    prompt: |
+      TDD REFACTOR — Melhore a qualidade de src/calculator.py.
+
+      - Adicione docstrings
+      - Melhore nomes se necessario
+      - Garanta que todos os testes continuam passando
+      - NAO adicione funcionalidades novas
+    validators:
+      - tests_pass: true
+      - lint_clean: true
+    next: gate.02.quality
+
+  # Sprint 3: Quality gate
+  - id: gate.02.quality
+    type: gate
+    title: "Gate de qualidade"
+    executor: python
+    sprint: sprint-03-quality
+    validators:
+      - tests_pass: true
+      - file_exists: src/calculator.py
+      - file_exists: tests/test_calculator.py
+    next: step.05.done
+
+  - id: step.05.done
+    type: end
+    title: "Processo completo"

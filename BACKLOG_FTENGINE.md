@@ -2,45 +2,45 @@
 
 > Spec: `process/fast_track/docs/ft_engine_spec.md`
 > Repo: fast-track (prototipo aqui, extrai depois)
-> Status: Backlog
+> Status: Fase 1 completa, Fase 2 em andamento
 
 ---
 
-## Fase 1: Motor Basico (Continue Loop)
+## Fase 1: Motor Basico (Continue Loop) ✓
 
 O minimo para rodar um processo de 5 steps de ponta a ponta.
 
 | # | Task | Descricao | Entrega | Status |
 |---|------|-----------|---------|--------|
-| 1.1 | Grafo de processo | Parse YAML → DAG, topological sort, resolve_next() | `ft/engine/graph.py` | todo |
-| 1.2 | State manager | Leitura/escrita ft_state.yml com lock. Unico escritor. | `ft/engine/state.py` | todo |
-| 1.3 | Validadores basicos | file_exists, min_lines, has_sections, min_user_stories | `ft/engine/validators/artifacts.py` | todo |
-| 1.4 | LLM executor | Interface para chamar Claude Code como subagente de construcao | `ft/engine/delegate.py` | todo |
-| 1.5 | Step runner | Loop principal: resolve → delegate → validate → advance | `ft/engine/runner.py` | todo |
-| 1.6 | Stakeholder IO | prompt_stakeholder(), approve(), reject(), answer() | `ft/engine/stakeholder.py` | todo |
-| 1.7 | CLI: ft continue | Comando que inicia o loop principal | `ft/cli/continue_cmd.py` | todo |
-| 1.8 | CLI: ft status | Mostra estado atual: no, fase, progresso, artefatos | `ft/cli/status_cmd.py` | todo |
-| 1.9 | CLI: ft approve/reject | Stakeholder aprova ou rejeita artefato pendente | `ft/cli/approve_cmd.py` | todo |
-| 1.10 | Hook PreToolUse | Impede LLM de editar ft_state.yml | `.claude/settings.json` | todo |
-| 1.11 | Processo de teste | YAML simples de 5 steps para validar o loop | `process/test_process.yml` | todo |
-| 1.12 | Teste E2E Fase 1 | Rodar ft continue no processo de teste ate o fim | manual | todo |
+| 1.1 | Grafo de processo | Parse YAML → DAG, topological sort, resolve_next() | `ft/engine/graph.py` | done |
+| 1.2 | State manager | Leitura/escrita engine_state.yml com lock. Unico escritor. | `ft/engine/state.py` | done |
+| 1.3 | Validadores basicos | file_exists, min_lines, has_sections, min_user_stories | `ft/engine/validators/artifacts.py` | done |
+| 1.4 | LLM executor | Interface para chamar Claude Code como subagente de construcao | `ft/engine/delegate.py` | done |
+| 1.5 | Step runner | Loop principal: resolve → delegate → validate → advance | `ft/engine/runner.py` | done |
+| 1.6 | Stakeholder IO | approve(), reject() integrados no runner | `ft/engine/runner.py` | done |
+| 1.7 | CLI: ft continue | Comando que inicia o loop principal | `ft/cli/main.py` | done |
+| 1.8 | CLI: ft status | Mostra estado atual: no, fase, progresso, artefatos | `ft/cli/main.py` | done |
+| 1.9 | CLI: ft approve/reject | Stakeholder aprova ou rejeita artefato pendente | `ft/cli/main.py` | done |
+| 1.10 | Hook PreToolUse | Impede LLM de editar engine_state.yml | `.claude/settings.json` | done |
+| 1.11 | Processo de teste | YAML simples de 5 steps para validar o loop | `process/test_process.yml` | done |
+| 1.12 | Teste E2E Fase 1 | Rodar ft continue no processo de teste ate o fim | manual | done |
 
-**Criterio de done:** `ft continue` roda 5 steps, delega ao LLM, valida artefatos, avanca estado, para no fim.
+**Criterio de done:** ✓ `ft continue` roda 5 steps, delega ao LLM, valida artefatos, avanca estado, para no fim.
 
 ---
 
-## Fase 2: Gates e Sprints
+## Fase 2: Gates e Sprints ← ATUAL
 
 | # | Task | Descricao | Entrega | Status |
 |---|------|-----------|---------|--------|
-| 2.1 | Gate validators | gate.delivery, gate.smoke, gate.mvp como validadores compostos | `ft/engine/validators/gates.py` | todo |
-| 2.2 | Sprint scoping | Agrupar tasks do TASK_LIST por sprint, delegar sprint inteira | `ft/engine/sprint.py` | todo |
-| 2.3 | Retry com feedback | Reenviar ao LLM com feedback dos validadores. Max N retries. | `ft/engine/runner.py` | todo |
-| 2.4 | Sprint report | Gerar sprint-report automaticamente apos sprint | `ft/engine/reporters.py` | todo |
-| 2.5 | CLI: ft continue --sprint | Avancar ate o fim da sprint atual | `ft/cli/continue_cmd.py` | todo |
-| 2.6 | CLI: ft continue --mvp | Modo autonomo ate MVP | `ft/cli/continue_cmd.py` | todo |
-| 2.7 | CLI: ft graph | Mostra grafo com BLOCKED/READY/DONE | `ft/cli/graph_cmd.py` | todo |
-| 2.8 | Teste E2E Fase 2 | Rodar ft continue --sprint com gates e retries | manual | todo |
+| 2.1 | Gate validators | gate.delivery, gate.smoke, gate.mvp como validadores compostos | `ft/engine/validators/gates.py` | done |
+| 2.2 | Sprint scoping | Agrupar nodes por sprint, campo sprint no Node, sprint boundary no runner | `ft/engine/graph.py` + `runner.py` | done |
+| 2.3 | Decision nodes | Nodes com condicoes (if/else) baseados em estado | `ft/engine/graph.py` + `runner.py` | done |
+| 2.4 | Sprint report | Gerar sprint-report automaticamente apos sprint | `ft/engine/runner.py` | done |
+| 2.5 | CLI: ft continue --sprint | Avancar ate o fim da sprint atual | `ft/cli/main.py` | done |
+| 2.6 | CLI: ft continue --mvp | Modo autonomo ate MVP | `ft/cli/main.py` | done |
+| 2.7 | CLI: ft graph / status --full | Mostra grafo agrupado por sprint com BLOCKED/READY/DONE | `ft/cli/main.py` | done |
+| 2.8 | Teste E2E Fase 2 | Rodar ft continue --sprint com gates e retries | manual | done |
 
 **Criterio de done:** `ft continue --sprint` roda sprint inteira com gate.delivery por task e retry automatico.
 
@@ -124,11 +124,11 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 
 | Fase | Tasks | Done | % |
 |------|-------|------|---|
-| 1. Motor Basico | 12 | 0 | 0% |
-| 2. Gates e Sprints | 8 | 0 | 0% |
+| 1. Motor Basico | 12 | 12 | 100% |
+| 2. Gates e Sprints | 8 | 8 | 100% |
 | 3. TDD Loop | 7 | 0 | 0% |
 | 4. Paralelismo | 5 | 0 | 0% |
 | 5. Stakeholder | 5 | 0 | 0% |
 | 6. Fast Track Completo | 6 | 0 | 0% |
 | 7. Polish e Extracao | 6 | 0 | 0% |
-| **Total** | **49** | **0** | **0%** |
+| **Total** | **49** | **20** | **41%** |

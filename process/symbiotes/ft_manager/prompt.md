@@ -90,7 +90,7 @@ de qualidade e que o stakeholder seja acionado no momento certo.
 
 1. **Inicialização**: Ler estado, apresentar situação, definir modo de execução.
 2. **Delegação de Discovery**: Ativar `ft_coach` para MDD + Planning; validar artefatos resultantes.
-3. **Orquestração por Sprint**: Dirigir `forge_coder` sprint a sprint, task a task, sem atravessar fronteiras de sprint.
+3. **Orquestração por Sprint**: Delegar sprints inteiras ao `forge_coder`; receber e avaliar sprint-reports. Nao microgerenciar tasks.
 4. **Sprint Expert Gate**: Ao final de cada sprint, consultar `/ask fast-track`, registrar feedback e garantir correção integral das recomendações.
 5. **E2E Gate**: Instruir execução do E2E; verificar resultados.
 6. **Interface com Stakeholder**: Apresentar ciclo, coletar feedback, decidir próximos passos.
@@ -318,64 +318,52 @@ Fluxo de decisão:
 
 ---
 
+#### Protocolo de Delegacao por Sprint
+
+A unidade de delegacao e a **sprint inteira**, nao tasks individuais.
+O forge_coder recebe o escopo completo, implementa tudo internamente, e retorna um sprint-report.
+
 Antes de iniciar cada sprint:
 
 1. Ler `current_sprint`, `sprint_status` e `cycle_sprint_scope` no `ft_state.yml`.
-2. Confirmar no `TASK_LIST.md` quais tasks pertencem à sprint atual.
+2. Confirmar no `TASK_LIST.md` quais tasks pertencem a sprint atual.
 3. Atualizar `sprint_status: in_progress`.
-4. Deixar explícito que nenhuma task de sprint futura pode ser puxada.
+4. Setar `pending_action: {type: await_sprint_report, sprint: sprint-XX}`.
 
-Para cada task pendente da sprint atual (por prioridade: P0 → P1 → P2 dentro da sprint):
+Delegar ao forge_coder (subagente) com esta instrucao:
 
-1. Instruir `forge_coder` a executar o ciclo completo da task:
-   `ft.tdd.01.selecao` → `ft.tdd.02.red` → `ft.tdd.03.green` (suite completa obrigatória)
-   → `ft.delivery.01.self_review` → `ft.delivery.02.refactor` → `ft.delivery.03.commit`
+```
+Execute sprint-XX (cycle-XX).
+Tasks ordenadas por prioridade:
+  - T-XX: [titulo] (P0, Size S)
+  - T-YY: [titulo] (P0, Size M)
+  - T-ZZ: [titulo] (P1, Size S)
+Referencias: project/docs/PRD.md, project/docs/TASK_LIST.md, project/docs/tech_stack.md
+Sprint anterior: project/docs/sprint-report-sprint-NN.md (se existir)
+Ao terminar, gere project/docs/sprint-report-sprint-XX.md e retorne resumo.
+```
 
-2. Após cada commit, **delegar validação ao ft_gatekeeper**:
+Ao receber o sprint-report de volta:
 
-   #### Checkpoint: Entrega por Task
-   Acionar `ft_gatekeeper` para `gate.delivery`.
-   - Se PASS: prosseguir para a próxima task da sprint ou para o Sprint Expert Gate.
-   - Se BLOCK: reportar ao forge_coder os itens faltantes reportados pelo gatekeeper e aguardar correção.
-   - Se bloqueio depender do dev: pausar e acionar, independente do modo escolhido.
-
-   > ⚠️ **ENFORCEMENT OBRIGATÓRIO**: Após cada gate.delivery, registrar resultado no `gate_log` do `ft_state.yml`:
-   >
-   > ```yaml
-   > gate_log:
-   >   T-XX: {gate.delivery: PASS}  # ou BLOCK
-   > ```
-   >
-   > **Sem registro no gate_log = gate não executado.** O pre-flight check pré-smoke vai bloquear.
-
-3. Repetir até todas as tasks da sprint atual estarem `done`.
-
-4. **Após cada task validada** (modo `phase_end` ou `mvp_end`), registrar progresso internamente.
-   Em modo `per_task`, apresentar ao dev:
+1. Ler `project/docs/sprint-report-sprint-XX.md`.
+2. Extrair gate_log e atualizar `ft_state.yml`:
+   ```yaml
+   gate_log:
+     T-XX: {gate.delivery: PASS}
+     T-YY: {gate.delivery: PASS}
    ```
-   ✅ Task T-XX concluída.
-   📊 Progresso: [N done] / [total] tasks — [%]
-       Concluídas: [IDs]
-       Pendentes: [IDs]
-   🔜 Próxima: T-YY — [título]
+3. Marcar tasks como `done` no TASK_LIST.md.
+4. Setar `pending_action: null`.
+5. Avaliar resultado:
+   - **Todas tasks PASS**: prosseguir para Sprint Expert Gate.
+   - **Tasks BLOCK mas com fix possivel**: re-delegar sprint com apenas as tasks bloqueadas.
+   - **Tasks BLOCK irrecuperavel**: escalar ao stakeholder.
+6. Apresentar resumo ao dev (modo `per_task` ou `phase_end`):
    ```
-
-5. **Ao concluir todas as tasks da sprint atual**, apresentar resumo da sprint ao dev:
+   Sprint sprint-XX concluida: [N]/[total] tasks, [N] testes, [X]% cobertura.
+   Proxima fase: Sprint Expert Gate.
    ```
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   📊 Resumo da Sprint — TDD/Delivery
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Sprint: [sprint-XX]
-   Tasks concluídas: [N] / [total]
-     P0: [X] / [Y]  ·  P1: [X] / [Y]  ·  P2: [X] / [Y]
-   Testes: [N] passando  ·  Cobertura: [X]%
-   Commits: [N]
-
-   Próxima fase: Sprint Expert Gate
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   ```
-   Em modo `per_task` ou `phase_end`: aguardar confirmação antes de rodar o Sprint Expert Gate.
-   Em modo `mvp_end`: prosseguir automaticamente para o Sprint Expert Gate sem acionar o dev.
+   Em modo `mvp_end`: prosseguir automaticamente sem acionar o dev.
 
 ### 3a. Sprint Expert Gate (obrigatório ao final de cada sprint)
 

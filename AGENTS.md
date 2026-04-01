@@ -99,7 +99,22 @@ Ao completar uma sprint, gate ou step:
 | `ft_gatekeeper` | subagente | Validador deterministico de stage gates — PASS ou BLOCK | `process/symbiotes/ft_gatekeeper/prompt.md` |
 | `ft_acceptance` | subagente | Design de cenarios de aceitacao por Value/Support Track | `process/symbiotes/ft_acceptance/prompt.md` |
 | `ft_coach` | subagente | MDD, Planning, Feedback — lancado pelo ft_manager | `process/symbiotes/ft_coach/prompt.md` |
-| `forge_coder` | subagente | TDD, Delivery, E2E — lancado pelo ft_manager | `process/symbiotes/forge_coder/prompt.md` |
+| `forge_coder` | subagente | Sprint-scoped TDD/Delivery — recebe sprint inteira, retorna sprint-report | `process/symbiotes/forge_coder/prompt.md` |
+
+## Modelo de delegacao
+
+O ft_manager delega **sprints inteiras** ao forge_coder (nao tasks individuais).
+Isso mantem o contexto do ft_manager enxuto — ele so ve sprint-reports, nao detalhes de implementacao.
+
+```
+ft_manager → forge_coder(sprint-03 inteira) → sprint-report.md volta (10 linhas)
+           → ft_gatekeeper(Sprint Expert Gate) → PASS/BLOCK
+           → forge_coder(sprint-04 inteira) → sprint-report.md volta
+           → ...
+```
+
+O forge_coder internamente itera pelas tasks, roda TDD, invoca ft_gatekeeper para gate.delivery
+por task, e gera o sprint-report ao final. Todo o contexto pesado vive e morre dentro do subagente.
 
 ## CLI do processo (ft.py)
 

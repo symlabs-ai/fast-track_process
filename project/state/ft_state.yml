@@ -47,6 +47,14 @@ completed_steps: []          # lista de step IDs concluídos — acumulador geri
 blocked: false
 blocked_reason: null
 
+# Continuidade entre sessoes — acao pendente ao retomar
+pending_action: null
+# Exemplo quando populado:
+# pending_action:
+#   type: await_sprint_report
+#   sprint: sprint-03
+#   detail: "forge_coder executando tasks T-18..T-27"
+
 # Paralelização (opt-in) — só populados quando parallel_mode: true
 parallel_mode: false              # opt-in: habilita execução paralela de tasks em VTs independentes
 parallel_max_agents: 3            # máximo de forge_coder simultâneos (slots de worktree)

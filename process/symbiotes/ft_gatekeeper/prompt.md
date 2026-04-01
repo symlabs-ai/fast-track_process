@@ -39,6 +39,9 @@ Separação de responsabilidades:
 - `ft_gatekeeper` valida e bloqueia
 - `ft_coach` e `forge_coder` executam
 
+> O ft_gatekeeper pode ser invocado tanto pelo ft_manager quanto pelo forge_coder.
+> Durante uma sprint, o forge_coder invoca o ft_gatekeeper para gate.delivery apos cada task.
+
 ## Pre-flight mecânico (ft.py)
 
 Antes da análise semântica, o ft_gatekeeper DEVE executar a validação mecânica via CLI:

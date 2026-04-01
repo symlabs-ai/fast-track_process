@@ -151,6 +151,22 @@
     "parallel_merge_status": {
       "enum": ["idle", "merging", "conflict", "done"]
     },
+    "pending_action": {
+      "type": ["object", "null"],
+      "description": "Acao pendente para continuidade entre sessoes. Null quando nao ha acao pendente.",
+      "properties": {
+        "type": {
+          "enum": ["await_sprint_report", "await_expert_gate", "await_gate_fix", "await_stakeholder"]
+        },
+        "sprint": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": ["type", "sprint"]
+    },
     "gate_log": {
       "type": "object",
       "additionalProperties": {

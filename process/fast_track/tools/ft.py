@@ -1430,18 +1430,18 @@ ROLE_DEFINITIONS = {
         "phases": ["ft_mdd", "ft_plan", "ft_feedback", "ft_handoff"],
     },
     "forge_coder": {
-        "descricao": "Implementa TDD, delivery, smoke, E2E e acceptance tests",
+        "descricao": "Sprint-scoped TDD/Delivery — recebe sprint inteira, retorna sprint-report",
         "pode": [
             "Ler qualquer arquivo do projeto",
             "Escrever em src/, tests/, artifacts/",
-            "Escrever em project/docs/ (smoke report, acceptance report, diagrams)",
+            "Escrever em project/docs/ (sprint-report, smoke report, acceptance report, diagrams)",
             "Executar pytest, comandos de build, servidores para teste",
             "Propor tech stack (ft.plan.02.tech_stack)",
+            "Invocar ft_gatekeeper para gate.delivery apos cada task (subagente)",
         ],
         "nao_pode": [
             "Orquestrar o processo (responsabilidade do ft_manager)",
             "Redigir PRD ou task list (responsabilidade do ft_coach)",
-            "Validar gates (responsabilidade do ft_gatekeeper)",
             "Projetar cenarios de aceitacao (responsabilidade do ft_acceptance)",
             "Modificar ft_state.yml (responsabilidade do ft_manager)",
             "Interagir diretamente com o stakeholder",

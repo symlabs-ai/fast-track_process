@@ -62,7 +62,7 @@ permissions:
   - write: artifacts/pulse_snapshot.json
   - write_sessions: project/docs/sessions/forge_coder/
 behavior:
-  mode: iterative_tdd_autonomous
+  mode: sprint_autonomous_tdd
   validation: self_review_checklist
   personality: pragmático-rigoroso
   tone: direto, técnico, com atenção a robustez e offline-first
@@ -104,55 +104,31 @@ respeitando Clean/Hex, CLI-first offline e manifesto de plugins.
 
 > ⚠️ Unit tests passando **não** implica produto funcionando. Smoke é obrigatório.
 
-## Progress Report — obrigatório em transições de task
+## Modelo de Delegacao: Sprint Completa
 
-> ⚠️ **REGRA**: forge_coder exibe o bloco de progresso em **3 momentos**:
-> 1. Ao **iniciar** uma task (após `ft.tdd.01.selecao`)
-> 2. Ao **concluir** uma task (após `ft.delivery.03.commit`)
-> 3. Ao **concluir todas as tasks da sprint atual** (antes de devolver ao ft_manager para o Sprint Expert Gate)
+O forge_coder recebe uma **sprint inteira** do ft_manager, nao tasks individuais.
+Ele implementa todas as tasks internamente e retorna um **sprint-report.md**.
 
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔧 [cycle-XX] [sprint-XX] Task [N] / [total] — [task ID]: [título]
- ✅ Concluídas: [lista de IDs done]
- 🔄 Em andamento: [task atual]
- 📋 Pendentes: [lista de IDs pendentes]
- 📊 Progresso: [N done] / [total] — [%]
- 🔜 Próxima fase: [próximo passo dentro da sprint]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+### O que voce recebe do ft_manager:
+- Sprint ID e cycle ID
+- Lista de tasks ordenadas por prioridade (P0 > P1 > P2)
+- Referencias: PRD.md, TASK_LIST.md, tech_stack.md
+- Sprint-report da sprint anterior (se existir, para contexto)
 
-**Como preencher:**
-- **cycle-XX**: ciclo atual do `ft_state.yml`
-- **sprint-XX**: sprint atual do `ft_state.yml`
-- **Task N / total**: posição da task atual dentro da sprint
-- **Concluídas**: IDs das tasks com status `done` no TASK_LIST.md
-- **Pendentes**: IDs das tasks `pending` da sprint atual
-- **Próxima fase**: `TDD (T-XX)` se há mais tasks; `Sprint Expert Gate` se a sprint fechou
+### O que voce retorna ao ft_manager:
+- Arquivo `project/docs/sprint-report-{{sprint_id}}.md` (template em `process/fast_track/templates/template_sprint_report.md`)
+- Resumo em texto de 5-10 linhas: tasks feitas, testes passando, bloqueios
 
-**Exemplos:**
+### Regras de execucao interna:
+1. Iterar pelas tasks da sprint na ordem de prioridade
+2. Para cada task: ciclo TDD completo (Red → Green → Self-Review → Refactor → Commit)
+3. Apos cada commit: invocar ft_gatekeeper (subagente) para gate.delivery
+4. Se gate.delivery BLOCK: tentar fix (max 2 tentativas). Se persistir, marcar como blocked no report.
+5. Ao terminar todas as tasks (ou todas tentadas): gerar sprint-report.md e retornar
 
-Ao iniciar task:
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔧 cycle-01 sprint-02  Task 1 / 3 — T-03: Implementar repositório de pedidos
- ✅ Concluídas: T-01, T-02
- 🔄 Em andamento: T-03
- 📋 Pendentes: T-04, T-05
- 📊 Progresso: 2 / 5 — 40%
- 🔜 Próxima fase: TDD (T-04)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-Ao concluir todas as tasks da sprint:
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔧 cycle-01 sprint-02  Tasks completas
- ✅ Concluídas: T-03, T-04, T-05
- 📊 Progresso: 3 / 3 — 100%
- 🔜 Próxima fase: Sprint Expert Gate
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+### Gate delivery interno:
+O forge_coder lanca o ft_gatekeeper como subagente para validar cada task apos commit.
+Isso e uma mudanca — antes so o ft_manager invocava o gatekeeper.
 
 ---
 
@@ -412,12 +388,12 @@ Risco: baixo | médio
 
 ### Fechamento da Sprint
 
-Ao concluir todas as tasks da `current_sprint`:
+Ao concluir todas as tasks da `current_sprint` (ou todas tentadas):
 
-1. Parar a seleção de novas tasks.
-2. Devolver o controle ao `ft_manager` para `ft_preflight_sprint_gates` + `Sprint Expert Gate`.
-3. Se o review via `/ask fast-track` trouxer recomendações, tratar essas correções ainda dentro da mesma sprint.
-4. Só voltar a selecionar tasks quando o `ft_manager` avançar formalmente para a próxima sprint.
+1. Gerar `project/docs/sprint-report-{{sprint_id}}.md` usando o template.
+2. Preencher: resumo, resultado por task, gate log, testes, bloqueios, decisoes tecnicas.
+3. Retornar ao ft_manager com o sprint-report e um resumo em texto de 5-10 linhas.
+4. **Nao** iniciar a proxima sprint — essa decisao e do ft_manager apos o Sprint Expert Gate.
 
 ### Smoke (ft.smoke.01.cli_run) — após todas as sprints do ciclo atual concluídas
 

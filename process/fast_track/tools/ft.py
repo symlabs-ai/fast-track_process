@@ -461,14 +461,89 @@ def cmd_init(paths: ProjectPaths, check_only: bool = False):
 
     # 10. Claude Code agents — verificar se existem no global ou local
     agents_report = _check_agents(paths, check_only)
-    for ok, msg in agents_report:
-        if ok:
+    for sev, msg in agents_report:
+        if sev:
             report.ok(msg)
         else:
             report.fail(msg)
 
+    # 11. Hooks do Claude Code — enforcement automatico
+    _init_hooks(paths, report, check_only)
+
     report.print()
     return 0 if report.passed() else 1
+
+
+# ---------------------------------------------------------------------------
+# Hooks — enforcement automatico via Claude Code hooks
+# ---------------------------------------------------------------------------
+
+HOOKS_SETTINGS = {
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q 'ft_state.yml'; then ft validate state 2>&1 | tail -5; fi"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q 'mvp_status.*entregue'; then echo '⚠️  MVP gate check:' && ft validate gate mvp 2>&1 | tail -15; fi"
+                    }
+                ]
+            }
+        ],
+        "PostBash": [
+            {
+                "matcher": "git commit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "ft validate state 2>&1 | tail -3"
+                    }
+                ]
+            }
+        ]
+    }
+}
+
+
+def _init_hooks(paths: ProjectPaths, report: 'Report', check_only: bool):
+    """Instala ou verifica hooks do Claude Code no projeto."""
+    claude_dir = paths.root / ".claude"
+    settings_path = claude_dir / "settings.json"
+
+    if settings_path.exists():
+        # Verificar se hooks estão presentes
+        try:
+            current = json.loads(settings_path.read_text())
+            if "hooks" in current and "PostToolUse" in current.get("hooks", {}):
+                report.ok("Hooks: enforcement automatico instalado")
+                return
+            else:
+                if check_only:
+                    report.fail("Hooks: settings.json existe mas sem hooks de enforcement")
+                    return
+                # Merge hooks no settings existente
+                current.setdefault("hooks", {})
+                current["hooks"].update(HOOKS_SETTINGS["hooks"])
+                settings_path.write_text(json.dumps(current, indent=2) + "\n")
+                report.ok("Hooks: enforcement adicionado ao settings.json existente")
+        except (json.JSONDecodeError, KeyError):
+            report.warn("Hooks: settings.json existe mas nao e JSON valido — nao modificado")
+    elif check_only:
+        report.fail("Hooks: .claude/settings.json ausente — rodar ft init")
+    else:
+        claude_dir.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(HOOKS_SETTINGS, indent=2) + "\n")
+        report.ok("Hooks: .claude/settings.json criado com enforcement automatico")
 
 
 # ---------------------------------------------------------------------------
@@ -859,9 +934,109 @@ def cmd_validate_gate(paths: ProjectPaths, gate_id: str):
             else:
                 report.fail(f"{artifact} ausente")
 
+    elif gate_id == "mvp":
+        # Gate MVP — verifica TUDO antes de declarar MVP entregue
+        process = load_process(paths)
+        all_step_ids = extract_step_ids(process)
+        completed = state.get("completed_steps", [])
+
+        # 1. Todas as fases completadas
+        missing_steps = [s for s in all_step_ids if s not in completed]
+        if missing_steps:
+            report.fail(f"Steps nao completados: {missing_steps}")
+        else:
+            report.ok(f"Todos os {len(all_step_ids)} steps completados")
+
+        # 2. Gate log — todas as tasks devem ter gate.delivery
+        gate_log = state.get("gate_log", {})
+        if not gate_log:
+            report.fail("gate_log vazio — nenhuma task teve gate.delivery executado")
+        else:
+            tasks_without_gate = []
+            for task_id, gates in gate_log.items():
+                if "gate.delivery" not in gates:
+                    tasks_without_gate.append(task_id)
+                elif gates["gate.delivery"] != "PASS":
+                    if gates.get("gate.delivery.retry") != "PASS":
+                        tasks_without_gate.append(task_id)
+            if tasks_without_gate:
+                report.fail(f"Tasks sem gate.delivery PASS: {tasks_without_gate}")
+            else:
+                report.ok(f"gate_log: {len(gate_log)} tasks com gate.delivery PASS")
+
+        # 3. Artefatos obrigatorios
+        required_artifacts = {
+            "PRD.md": paths.project_docs / "PRD.md",
+            "TASK_LIST.md": paths.project_docs / "TASK_LIST.md",
+            "tech_stack.md": paths.project_docs / "tech_stack.md",
+            "SPEC.md": paths.project_docs / "SPEC.md",
+            "CHANGELOG.md": paths.root / "CHANGELOG.md",
+            "BACKLOG.md": paths.root / "BACKLOG.md",
+        }
+        for name, path in required_artifacts.items():
+            if path.exists():
+                report.ok(f"Artefato: {name}")
+            else:
+                report.fail(f"Artefato ausente: {name}")
+
+        # 4. Smoke report
+        smoke_files = list(paths.project_docs.glob("smoke-*.md"))
+        if smoke_files:
+            report.ok(f"Smoke reports: {len(smoke_files)} encontrados")
+        else:
+            report.fail("Nenhum smoke report em project/docs/smoke-*.md")
+
+        # 5. Sprint reports
+        sprint_reports = list(paths.project_docs.glob("sprint-report-*.md"))
+        if sprint_reports:
+            report.ok(f"Sprint reports: {len(sprint_reports)} encontrados")
+        else:
+            report.fail("Nenhum sprint-report em project/docs/sprint-report-*.md")
+
+        # 6. Sprint reviews
+        sprint_reviews = list(paths.project_docs.glob("sprint-review-*.md"))
+        if sprint_reviews:
+            report.ok(f"Sprint reviews: {len(sprint_reviews)} encontrados")
+        else:
+            report.fail("Nenhum sprint-review em project/docs/sprint-review-*.md")
+
+        # 7. Retro note
+        retro = paths.project_docs / "retro_note.md"
+        if retro.exists():
+            report.ok("Retro note existe")
+        else:
+            report.fail("retro_note.md ausente em project/docs/")
+
+        # 8. Diagramas
+        diagrams_dir = paths.project_docs / "diagrams"
+        if diagrams_dir.is_dir() and list(diagrams_dir.glob("*.md")):
+            report.ok(f"Diagramas: {len(list(diagrams_dir.glob('*.md')))} encontrados")
+        else:
+            report.fail("Diagramas ausentes em project/docs/diagrams/")
+
+        # 9. Testes existem
+        test_dirs_with_files = 0
+        for tdir in ["unit", "smoke", "e2e"]:
+            td = paths.tests / tdir
+            if td.is_dir() and list(td.rglob("*.py")):
+                test_dirs_with_files += 1
+        if test_dirs_with_files >= 2:
+            report.ok(f"Diretorios de teste com arquivos: {test_dirs_with_files}")
+        else:
+            report.fail(f"Poucos diretorios de teste com arquivos: {test_dirs_with_files} (minimo 2)")
+
+        # 10. ft_state consistencia
+        mvp_status = state.get("mvp_status")
+        if mvp_status == "entregue" and missing_steps:
+            report.fail("mvp_status=entregue mas steps incompletos — inconsistente")
+        elif mvp_status == "entregue" and not missing_steps:
+            report.ok("mvp_status=entregue e steps completos — consistente")
+        else:
+            report.warn(f"mvp_status={mvp_status} — gate mvp sendo executado antes da entrega")
+
     else:
         report.fail(f"Gate desconhecido: {gate_id}")
-        report.ok("Gates validos: smoke, e2e, acceptance, handoff")
+        report.ok("Gates validos: smoke, e2e, acceptance, handoff, mvp")
 
     report.print()
     return 0 if report.passed() else 1
@@ -1253,7 +1428,7 @@ COMANDOS:
 
   ft validate gate <id>
     Pre-flight mecanico de um gate especifico.
-    Gates: smoke, e2e, acceptance, handoff.
+    Gates: smoke, e2e, acceptance, handoff, mvp.
     Verifica pre-condicoes mecanicas antes da analise semantica.
     QUANDO: Antes de cada gate formal.
     QUEM USA: ft_gatekeeper

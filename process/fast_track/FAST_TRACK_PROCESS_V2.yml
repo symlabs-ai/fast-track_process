@@ -49,6 +49,8 @@ nodes:
     title: "Validar PRD"
     executor: python
     sprint: sprint-01-mdd
+    outputs:
+      - project/docs/PRD.md
     validators:
       - file_exists: project/docs/hipotese.md
       - file_exists: project/docs/PRD.md

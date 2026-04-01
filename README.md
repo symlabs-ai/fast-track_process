@@ -38,10 +38,30 @@ git push -u origin main
 # 3. O ft_manager conduz tudo a partir daí
 ```
 
+## ft engine (v0.7+)
+
+O Fast Track agora inclui um **motor determinístico Python** que substitui a orquestração por LLM:
+
+```bash
+ft init                      # inicializar processo
+ft continue --sprint         # rodar sprint completa
+ft approve                   # aprovar artefato pendente
+ft status --full             # ver grafo com progresso
+```
+
+O LLM só executa tarefas de construção — o Python controla todo o fluxo, validações e gates.
+
+- **Guia completo**: [`docs/ft_engine_usage.md`](docs/ft_engine_usage.md)
+- **Processo V2**: `process/fast_track/FAST_TRACK_PROCESS_V2.yml`
+
+---
+
 ## Documentação
 
 - **Processo**: `process/fast_track/FAST_TRACK_PROCESS.md`
 - **YAML (machine-readable)**: `process/fast_track/FAST_TRACK_PROCESS.yml`
+- **YAML V2 (engine)**: `process/fast_track/FAST_TRACK_PROCESS_V2.yml`
+- **ft engine**: `docs/ft_engine_usage.md`
 - **Resumo para agentes**: `process/fast_track/SUMMARY_FOR_AGENTS.md`
 - **Diagrama de fluxo**: `docs/fast-track-flow.md`
 - **Guia de agentes**: `AGENTS.md`
@@ -50,4 +70,4 @@ git push -u origin main
 
 ## Changelog
 
-Versão atual: **v0.6.6** — Changelog completo em [`CHANGELOG.md`](CHANGELOG.md)
+Versão atual: **v0.7.1** — Changelog completo em [`CHANGELOG.md`](CHANGELOG.md)

@@ -99,9 +99,12 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 6.3 | Sprint Expert Gate | Node type review — delega ao LLM especialista, veredicto APPROVED/REJECTED deterministico | `ft/engine/runner.py` | done |
 | 6.4 | Smoke/E2E nodes | gate_smoke + tests_exist nos nodes smoke/e2e | YAML + validators | done |
 | 6.5 | Handoff node | SPEC.md + CHANGELOG como outputs do handoff node | YAML | done |
-| 6.6 | Teste E2E Fase 6 | Requer projeto real completo (proximo milestone) | manual | todo |
+| 6.6 | Teste E2E Fase 6 | Requer projeto real completo (proximo milestone) | manual | in-progress |
 
 **Criterio de done:** `ft continue --mvp` roda o Fast Track inteiro de ponta a ponta num projeto real.
+
+**Progresso 6.6:** 15/22 nodes completos (sprints 1-5 OK). Pendente: sprint-06-e2e a sprint-09-handoff.
+**Bug encontrado:** Race condition quando ft continue roda em background e foreground simultaneamente — lock de arquivo nao previne; adicionar PID check no acquire_lock. Registrado em Fase 7.
 
 ---
 
@@ -114,6 +117,7 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 7.3 | Documentacao | README, guia de uso, guia de criacao de processos custom | docs/ | todo |
 | 7.4 | Processos custom | Suporte a qualquer YAML de processo, nao so Fast Track | `ft/engine/graph.py` | todo |
 | 7.5 | Compilador NL → YAML | Descrever processo em linguagem natural, compilar para YAML | `ft/engine/compiler.py` | todo |
+| 7.7 | Fix race condition no lock | acquire_lock deve rejeitar se pid ja existe; prevenir dois ft continue simultaneos | `ft/engine/state.py` | todo |
 | 7.6 | Testes unitarios do motor | 88 testes, 48% cobertura geral (97% state, 91% graph, 97% artifacts) | `tests/engine/` | done |
 
 **Criterio de done:** `pip install ft-engine` funciona. Qualquer processo YAML roda. Docs completa.
@@ -130,5 +134,5 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 4. Paralelismo | 5 | 4 | 80% |
 | 5. Stakeholder | 5 | 5 | 100% |
 | 6. Fast Track Completo | 6 | 5 | 83% |
-| 7. Polish e Extracao | 6 | 1 | 17% |
-| **Total** | **49** | **42** | **86%** |
+| 7. Polish e Extracao | 7 | 1 | 14% |
+| **Total** | **50** | **42** | **84%** |

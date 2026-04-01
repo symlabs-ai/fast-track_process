@@ -264,7 +264,12 @@ class StepRunner:
           "sprint" — avanca ate o fim da sprint atual
           "mvp"    — avanca ate o fim ou BLOCK
         """
-        state = self.state_mgr.load()
+        from ft.engine.state import StateLockError
+        try:
+            state = self.state_mgr.load(check_lock=True)
+        except StateLockError as e:
+            print(f"  ERRO: {e}")
+            return
 
         if state.current_node is None:
             print("Processo nao inicializado. Rode: ft init")

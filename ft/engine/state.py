@@ -40,6 +40,10 @@ class EngineState:
     _lock: dict[str, Any] | None = None
 
 
+class StateLockError(RuntimeError):
+    """Levantado quando outro processo ft engine esta rodando."""
+
+
 class StateManager:
     """Gerencia o estado do motor. Unico escritor."""
 
@@ -47,11 +51,33 @@ class StateManager:
         self.path = Path(state_path)
         self._state: EngineState | None = None
 
-    def load(self) -> EngineState:
+    def _is_pid_alive(self, pid: int) -> bool:
+        """Verifica se um PID ainda esta em execucao."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+    def _check_lock(self, raw: dict[str, Any]) -> None:
+        """Lanca StateLockError se outro processo estiver com o lock."""
+        lock = raw.get("_lock")
+        if not lock or not isinstance(lock, dict):
+            return
+        pid = lock.get("pid")
+        if pid and pid != os.getpid() and self._is_pid_alive(int(pid)):
+            raise StateLockError(
+                f"ft engine ja esta rodando (PID {pid}). "
+                "Aguarde o termino ou delete project/state/engine_state.yml para resetar."
+            )
+
+    def load(self, check_lock: bool = False) -> EngineState:
         """Carrega estado do YAML."""
         if self.path.exists():
             with open(self.path) as f:
                 raw = yaml.safe_load(f) or {}
+            if check_lock:
+                self._check_lock(raw)
             self._state = EngineState(
                 process_id=raw.get("process_id", ""),
                 version=raw.get("version", "0.1.0"),

@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.7.5] - 2026-04-01
+
+- fix: `advance()` faz auto-unblock quando estado estava `blocked` — elimina crash ao retomar após gate BLOCK
+- fix: timeout do delegate aumentado de 600s para 1800s — projetos reais (ex: ServiceMate) precisam de mais tempo no TDD green
+- e2e: `service_mate_4` validado de ponta a ponta — 22/22 nodes, 283 testes, gate MVP aprovado
+
+---
+
 ## [v0.7.4] - 2026-04-01
 
 - feat: `pyproject.toml` — `ft-engine` instalável via `pip install -e .` com entry point `ft`

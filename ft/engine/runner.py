@@ -261,6 +261,7 @@ class StepRunner:
         self.graph = load_graph(process_path)
         self.state_mgr = StateManager(state_path)
         self.project_root = str(Path(project_root).resolve())
+        self._auto_approve = False
 
     def init_state(self):
         """Inicializa estado a partir do grafo."""
@@ -290,6 +291,8 @@ class StepRunner:
         if state.current_node is None:
             print("Processo nao inicializado. Rode: ft init")
             return
+
+        self._auto_approve = (mode == "mvp")
 
         # Determinar sprint de referencia para mode="sprint"
         start_sprint = self.graph.sprint_of(state.current_node) if state.current_node else None
@@ -374,8 +377,15 @@ class StepRunner:
 
             # Checar se ficou bloqueado ou aguardando aprovacao
             state = self.state_mgr.load()
-            if state.node_status in ("blocked", "awaiting_approval"):
+            if state.node_status == "blocked":
                 break
+            if state.node_status == "awaiting_approval":
+                if self._auto_approve:
+                    next_id = self.graph.resolve_next(state.current_node)
+                    self.state_mgr.advance(state.current_node, next_id)
+                    state = self.state_mgr.load()
+                else:
+                    break
 
             if mode == "step":
                 break
@@ -431,7 +441,7 @@ class StepRunner:
             # Auto-commit para nodes de build/test
             self._maybe_auto_commit(node)
 
-            if node.requires_approval:
+            if node.requires_approval and not self._auto_approve:
                 print(f"  AGUARDANDO APROVACAO — rode: ft approve")
                 self.state_mgr.set_pending_approval(node.id)
                 return

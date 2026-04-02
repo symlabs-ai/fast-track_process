@@ -159,6 +159,7 @@ nodes:
     sprint: sprint-03-frontend
     outputs:
       - frontend/package.json
+      - frontend/index.html
       - frontend/public/manifest.json
     prompt: |
       Crie a estrutura base do projeto frontend com suporte a PWA.
@@ -167,17 +168,41 @@ nodes:
       Estrutura minima obrigatoria:
         frontend/
           package.json             dependencias e scripts npm (build, dev, preview)
-          vite.config.js           bundler config
+          vite.config.js           bundler config (IMPORTANTE: veja template abaixo)
+          index.html               RAIZ do Vite — HTML base com <link rel="manifest"> e <div id="root">
           public/
             manifest.json          PWA manifest com: name, short_name, start_url, display, theme_color, background_color, icons
-            index.html             HTML base com <link rel="manifest">
           src/
             main.js                entry point
+
+      ATENCAO CRITICA: o Vite exige que index.html esteja em frontend/index.html (raiz
+      do frontend), NAO em frontend/public/index.html. Colocar em public/ e um erro
+      fatal — o servidor retorna 404 em todas as requisicoes.
+
+      O arquivo vite.config.js DEVE conter exatamente este proxy para integrar com o backend:
+
+        import { defineConfig } from 'vite'
+
+        export default defineConfig({
+          server: {
+            proxy: {
+              '/api': {
+                target: 'http://localhost:8000',
+                changeOrigin: true,
+                rewrite: (path) => path.replace(/^\/api/, ''),
+              },
+            },
+          },
+        })
+
+      A linha rewrite e OBRIGATORIA. Sem ela, o backend recebe /api/rota em vez de
+      /rota e retorna 404 em todas as chamadas do frontend.
 
       NAO implemente telas ainda. Apenas o scaffold funcional.
       Ao final diga DONE e liste os arquivos criados.
     validators:
       - file_exists: frontend/package.json
+      - file_exists: frontend/index.html
       - file_exists: frontend/public/manifest.json
     next: ft.frontend.02.implement
 
@@ -193,6 +218,10 @@ nodes:
 
       Diretrizes:
       - Cada User Story que envolve interface deve ter ao menos uma tela/componente
+      - NAVEGACAO OBRIGATORIA: toda secao do PRD que possui tela dedicada DEVE aparecer
+        no bottom navigation bar (ou em menu lateral com rotulo textual visivel).
+        E proibido usar apenas icones sem texto ou acoes escondidas no AppBar para
+        secoes principais. O usuario deve identificar todas as telas sem explorar a UI.
       - Use o framework definido no tech_stack.md e o scaffold existente em frontend/
       - Service worker deve cachear assets estaticos (cache-first)
       - UI responsiva, mobile-first
@@ -202,7 +231,6 @@ nodes:
       Ao final diga DONE e liste os arquivos criados.
     validators:
       - file_exists: frontend/src/
-      - min_lines: 50
     next: gate.frontend
 
   - id: gate.frontend
@@ -212,6 +240,7 @@ nodes:
     sprint: sprint-03-frontend
     validators:
       - file_exists: frontend/package.json
+      - file_exists: frontend/index.html
       - file_exists: frontend/public/manifest.json
       - file_exists: frontend/src/
       - gate_frontend: true

@@ -132,7 +132,7 @@ def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     """Gate de frontend — verifica estrutura minima de PWA."""
     import json
     failures = []
-    for path in ["frontend/package.json", "frontend/public/manifest.json", "frontend/src/"]:
+    for path in ["frontend/package.json", "frontend/index.html", "frontend/public/manifest.json", "frontend/src/"]:
         full = Path(project_root) / path
         if not full.exists():
             failures.append(f"{path} nao encontrado")

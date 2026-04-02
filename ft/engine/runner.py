@@ -6,6 +6,7 @@ resolve_next() → delegate() → validate() → advance()
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -263,6 +264,22 @@ class StepRunner:
         self.project_root = str(Path(project_root).resolve())
         self._auto_approve = False
 
+    def _log_activity(self, node_id: str, title: str, node_type: str, result: str, summary: str):
+        """Registra atividade no terminal e em servicemate_log.md."""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        meta = f"  # [{ts}] {node_id} ({node_type}) → {result}: {summary}"
+        print(meta)
+        log_path = Path(self.project_root) / "servicemate_log.md"
+        entry = f"| {ts} | `{node_id}` | {title} | {result} | {summary} |\n"
+        if not log_path.exists():
+            log_path.write_text(
+                "# ServiceMate Activity Log\n\n"
+                "| Timestamp | Node | Título | Resultado | Resumo |\n"
+                "|-----------|------|--------|-----------|--------|\n"
+            )
+        with log_path.open("a") as f:
+            f.write(entry)
+
     def init_state(self):
         """Inicializa estado a partir do grafo."""
         first = self.graph.first_node()
@@ -343,6 +360,10 @@ class StepRunner:
                 if mode == "step":
                     break
                 state = self.state_mgr.load()
+                if state.node_status == "blocked":
+                    self._log_activity(node_id, node.title, "gate", "BLOCKED", state.blocked_reason or "gate falhou")
+                    break
+                self._log_activity(node_id, node.title, "gate", "PASS", f"→ {self.graph.resolve_next(node_id) or 'fim'}")
                 continue
 
             # Decision node — avaliar condicao e seguir branch
@@ -351,6 +372,7 @@ class StepRunner:
                 if mode == "step":
                     break
                 state = self.state_mgr.load()
+                self._log_activity(node_id, node.title, "decision", "ROUTED", f"→ {state.current_node}")
                 continue
 
             # Parallel group — fan-out/fan-in
@@ -378,14 +400,18 @@ class StepRunner:
             # Checar se ficou bloqueado ou aguardando aprovacao
             state = self.state_mgr.load()
             if state.node_status == "blocked":
+                self._log_activity(node_id, node.title, node.type, "BLOCKED", state.blocked_reason or "bloqueado")
                 break
             if state.node_status == "awaiting_approval":
+                self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL", "aguardando aprovacao humana")
                 if self._auto_approve:
                     next_id = self.graph.resolve_next(state.current_node)
                     self.state_mgr.advance(state.current_node, next_id)
                     state = self.state_mgr.load()
                 else:
                     break
+            else:
+                self._log_activity(node_id, node.title, node.type, "PASS", f"concluido → {self.graph.resolve_next(node_id) or 'fim'}")
 
             if mode == "step":
                 break

@@ -244,6 +244,54 @@ nodes:
       - file_exists: frontend/public/manifest.json
       - file_exists: frontend/src/
       - gate_frontend: true
+    next: ft.frontend.03.prd_review
+
+  - id: ft.frontend.03.prd_review
+    type: review
+    title: "Revisao PRD — Conformidade de Arquitetura"
+    executor: llm_coder
+    sprint: sprint-03-frontend
+    outputs:
+      - project/docs/frontend-prd-review.md
+    requires_approval: false
+    prompt: |
+      Voce e um arquiteto de software revisando se o frontend implementado esta em
+      conformidade com o PRD do projeto. Sua tarefa e: APROVAR ou REJEITAR.
+
+      PASSO 1 — Leia obrigatoriamente:
+        - project/docs/PRD.md  (especialmente secao "Contrato de Navegacao UI")
+        - frontend/src/components/Layout.jsx
+        - frontend/src/App.jsx
+
+      PASSO 2 — Verifique cada item da checklist abaixo:
+
+        [ ] Bottom nav tem exatamente 5 itens na ordem correta (conforme PRD secao 8.5)
+        [ ] Assistente NAO esta no bottom nav (e FAB flutuante)
+        [ ] FAB do Assistente existe no Layout com posicao fixed acima dos FABs de pagina
+        [ ] Catalogo esta acessivel diretamente no bottom nav
+        [ ] Todas as rotas do PRD estao mapeadas no App.jsx
+        [ ] Empty states nao duplicam o botao do FAB
+
+      PASSO 3 — Escreva um relatorio em project/docs/frontend-prd-review.md com:
+
+        # Frontend PRD Review
+
+        ## Veredicto: APPROVED  (ou REJECTED)
+
+        ## Checklist
+        - [x] ou [ ] item: observacao
+
+        ## Problemas Encontrados (se REJECTED)
+        - descricao do problema e o que precisa ser corrigido
+
+        ## Conformidades (sempre listar)
+        - o que foi implementado corretamente
+
+      REGRA: Se qualquer item da checklist falhar, o veredicto DEVE ser REJECTED.
+      Apenas responda APPROVED se TODOS os itens passarem.
+    validators:
+      - file_exists: project/docs/frontend-prd-review.md
+      - min_lines: 10
     next: ft.tdd.02.red
 
   # ================================================================

@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.1] - 2026-04-02
+
+- fix: scaffold prompt agora especifica `index.html` na raiz do Vite (não em `public/`)
+- fix: template obrigatório de `vite.config.js` com `rewrite` no proxy `/api`
+- fix: `gate_frontend` valida presença de `frontend/index.html`
+- fix: `--mvp` agora auto-aprova nodes com `requires_approval` (modo não-interativo)
+- fix: diretriz de navegação explícita no prompt do `ft.frontend.02.implement`
+
 ## [v0.8.0] - 2026-04-02
 
 ### Novas funcionalidades

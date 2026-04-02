@@ -359,20 +359,10 @@ class StepRunner:
         self._check_environment()
 
     def _check_environment(self):
-        """Verifica environment/ e avisa sobre configurações faltantes."""
+        """Lê environment/ se existir. Gateway é opcional — sem aviso se ausente."""
         gateway_file = Path(self._ft_root) / "environment" / "gateway.md"
-        example_file = Path(self._ft_root) / "environment" / "gateway.example.md"
-
         if gateway_file.exists():
-            print(f"  Environment: gateway.md encontrado")
-        elif example_file.exists():
-            print(
-                f"\n  ⚠️  AVISO: environment/gateway.md não encontrado.\n"
-                f"  Se o gateway bloquear com 403, copie e preencha:\n"
-                f"    cp {example_file} {gateway_file}\n"
-                f"  e siga as instruções dentro do arquivo.\n"
-            )
-        # Sem template = instalação sem environment/ configurado, silencioso
+            print(f"  Environment: gateway.md carregado")
 
     def run(self, mode: str = "step"):
         """

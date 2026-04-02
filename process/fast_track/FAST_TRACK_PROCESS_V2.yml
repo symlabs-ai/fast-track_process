@@ -467,11 +467,65 @@ nodes:
       - file_exists: project/docs/forgebase-audit.md
       - tests_pass: true
       - lint_clean: true
-    next: ft.handoff.01.specs
+    next: ft.prd.rewrite
 
   # ================================================================
   # Fase 10: Handoff
   # ================================================================
+
+  - id: ft.prd.rewrite
+    type: document
+    title: "Reescrever PRD — Incorporar Aprendizados do Ciclo"
+    executor: llm_coach
+    sprint: sprint-10-handoff
+    outputs:
+      - project/docs/PRD.md
+    requires_approval: true
+    prompt: |
+      Você é o product coach responsável por evoluir o PRD com base nos aprendizados
+      do ciclo que acabou de ser concluído.
+
+      LEIA obrigatoriamente antes de reescrever:
+        - project/docs/PRD.md              (versão atual — base para evolução)
+        - project/docs/retro.md            (problemas encontrados e gaps de detecção)
+        - project/docs/forgebase-audit.md  (auditoria técnica)
+        - project/docs/frontend-prd-review.md  (se existir — gaps de UI/navegação)
+        - project/docs/TASK_LIST.md        (o que foi e não foi implementado)
+
+      OBJETIVO: produzir uma versão evoluída de project/docs/PRD.md que:
+
+      1. MANTÉM toda a substância do PRD original (hipótese, user stories, modelo de negócio)
+      2. CORRIGE gaps identificados na retro e no review:
+         - Adiciona ou corrige seções que o ciclo revelou como ausentes ou ambíguas
+         - Documenta decisões que emergiram durante a implementação
+      3. ADICIONA (se não existirem) as seguintes seções obrigatórias:
+
+         ## 8.5 Contrato de Navegação UI
+         - Lista exata dos itens do bottom nav (quantidade, ordem, rótulos)
+         - Regras do FAB do Assistente (position: fixed, z-index, posicionamento)
+         - Rotas obrigatórias (tabela rota → componente)
+         - Regras de empty state
+
+         ## 8.6 Contrato de Integração HTTP
+         - interface_type explícito (cli_only | api | ui | mixed)
+         - Entry point obrigatório (main.py / app.py com FastAPI/Flask)
+         - Endpoint /health obrigatório
+         - Configuração de proxy do Vite (se mixed/ui)
+
+      4. NÃO remove user stories nem restringe escopo sem justificativa explícita
+      5. ATUALIZA o Decision Log (seção 8.2) com decisões tomadas neste ciclo
+
+      O PRD reescrito é o input canônico do próximo ciclo — deve ser autocontido e
+      eliminar qualquer ambiguidade que causou problemas neste ciclo.
+
+      Ao final diga DONE e liste o que foi alterado/adicionado.
+    validators:
+      - file_exists: project/docs/PRD.md
+      - min_lines: 50
+      - has_sections:
+          - Hipotese
+          - User Stories
+          - interface_type
 
   - id: ft.handoff.01.specs
     type: document

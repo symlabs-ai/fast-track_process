@@ -18,6 +18,10 @@ __pycache__/
 /pre-commit-config.yaml
 /ruff.toml
 
+# Environment — configuração local (cada usuário tem o seu, não commitar)
+environment/gateway.md
+environment/*.local.md
+
 # Fast Track — processo estatico
 # No template: process/ esta commitado (e o fonte)
 # No projeto do cliente: ft init adiciona process/ aqui automaticamente

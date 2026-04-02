@@ -99,6 +99,19 @@ else
   echo "!! Aviso: pre-commit não encontrado no ambiente, algo deu errado na instalação."
 fi
 
+# 7. Criar environment/gateway.md a partir do template se não existir
+ENV_DIR="${ROOT_DIR}/environment"
+GATEWAY_FILE="${ENV_DIR}/gateway.md"
+GATEWAY_EXAMPLE="${ENV_DIR}/gateway.example.md"
+
+if [ ! -f "${GATEWAY_FILE}" ] && [ -f "${GATEWAY_EXAMPLE}" ]; then
+  echo "==> Criando environment/gateway.md a partir do template..."
+  cp "${GATEWAY_EXAMPLE}" "${GATEWAY_FILE}"
+  echo "!! ATENÇÃO: Preencha ${GATEWAY_FILE} com os dados do seu workspace antes de rodar ft init."
+elif [ -f "${GATEWAY_FILE}" ]; then
+  echo "==> environment/gateway.md já existe."
+fi
+
 cat <<EOF
 
 ============================================================

@@ -24,6 +24,7 @@ from ft.engine.stakeholder import (
     scan_existing_docs, should_skip_node,
     hyper_mode_prompt, build_rejection_prompt,
     format_pending_summary,
+    scan_kb_lessons, kb_lessons_prompt,
 )
 
 
@@ -61,6 +62,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "gate_mvp": gates.gate_mvp,
     "gate_frontend": gates.gate_frontend,
     "gate_server_starts": gates.gate_server_starts,
+    "gate_kb_review": gates.gate_kb_review,
     "read_artifact": val.read_artifact,
     # Test validators (Phase 3)
     "coverage_per_file": test_val.coverage_per_file,
@@ -327,6 +329,8 @@ class StepRunner:
         self.state_mgr = StateManager(state_path)
         self.project_root = str(Path(project_root).resolve())
         self._auto_approve = False
+        # Raiz do repo fast-track — derivada do process_path (sobe 3 níveis)
+        self._ft_root = str(Path(process_path).resolve().parent.parent.parent)
 
     def _log_activity(self, node_id: str, title: str, node_type: str, result: str, summary: str):
         """Registra atividade no terminal e em servicemate_log.md."""
@@ -492,6 +496,14 @@ class StepRunner:
             if existing:
                 task_prompt = hyper_mode_prompt(existing, task_prompt)
                 print(f"  Hyper-mode: {len(existing)} docs existentes carregados")
+
+        # KB-mode: injetar lições de runs anteriores em nodes de build e retro
+        if node.type in ("build", "retro"):
+            itype = state_dict.get("artifacts", {}).get("interface_type") or state_dict.get("interface_type")
+            lessons = scan_kb_lessons(self._ft_root, interface_type=itype)
+            if lessons:
+                task_prompt = kb_lessons_prompt(lessons, task_prompt)
+                print(f"  KB-mode: lições de runs anteriores injetadas")
 
         # Determinar paths permitidos
         allowed = []

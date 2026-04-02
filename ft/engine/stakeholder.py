@@ -78,6 +78,91 @@ Foque em complementar e refinar, nao em reescrever do zero.
 
 
 # ---------------------------------------------------------------------------
+# KB Lessons
+# ---------------------------------------------------------------------------
+
+def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
+    """
+    Lê avaliações de runs anteriores em <ft_root>/kb/avaliacao_e2e_*.md.
+    Extrai seções de lições e pitfalls. Retorna string compacta para injeção no prompt.
+    interface_type: se fornecido, destaca lições específicas para aquele tipo.
+    """
+    kb_dir = Path(ft_root) / "kb"
+    if not kb_dir.exists():
+        return ""
+
+    evals = sorted(kb_dir.glob("avaliacao_e2e_*.md"))
+    if not evals:
+        return ""
+
+    parts = ["LIÇÕES DE RUNS ANTERIORES (Process KB):"]
+
+    for path in evals[-2:]:  # últimas 2 avaliações
+        try:
+            content = path.read_text()
+        except OSError:
+            continue
+
+        lines = content.splitlines()
+        title_line = next((l for l in lines if l.startswith("# ")), path.stem)
+        nota_line = next((l for l in lines if "Nota:" in l), "")
+
+        # Extrair seções relevantes
+        sections_to_extract = [
+            "O que falhou",
+            "Causa Raiz",
+            "Lições para Próximos",
+            "Correções Aplicadas",
+        ]
+
+        extracted = [f"\n### {title_line.lstrip('# ')} {nota_line}"]
+        in_section = False
+        section_lines: list[str] = []
+
+        for line in lines:
+            if any(s.lower() in line.lower() for s in sections_to_extract) and line.startswith("##"):
+                if section_lines:
+                    extracted.extend(section_lines[:15])
+                in_section = True
+                section_lines = [line]
+            elif in_section:
+                if line.startswith("## ") and not any(s.lower() in line.lower() for s in sections_to_extract):
+                    extracted.extend(section_lines[:15])
+                    in_section = False
+                    section_lines = []
+                else:
+                    section_lines.append(line)
+
+        if section_lines:
+            extracted.extend(section_lines[:15])
+
+        parts.extend(extracted)
+
+    if interface_type and interface_type not in ("cli_only", "api"):
+        parts.append(
+            "\n⚠️  ATENÇÃO (interface_type inclui UI/mixed): "
+            "Verificar obrigatoriamente se existe entry point HTTP (main.py/app.py com FastAPI/Flask). "
+            "Run SM5 falhou por backend ausente mesmo com testes unitários passando."
+        )
+
+    return "\n".join(parts)
+
+
+def kb_lessons_prompt(lessons: str, original_prompt: str) -> str:
+    """Injeta lições do KB no prompt, após o conteúdo principal."""
+    if not lessons:
+        return original_prompt
+    return f"""{original_prompt}
+
+---
+
+{lessons}
+
+Consulte as lições acima para evitar replicar erros de runs anteriores.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Approval context
 # ---------------------------------------------------------------------------
 

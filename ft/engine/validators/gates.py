@@ -204,6 +204,106 @@ def gate_server_starts(
         return False, f"gate_server_starts FAIL: erro ao iniciar servidor — {exc}"
 
 
+def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
+    """
+    Gate final de liberação — verifica que o projeto não repete pitfalls P0
+    já documentados na KB de runs anteriores.
+
+    Checks derivados das avaliações:
+      SM4: interface_type=ui/mixed → frontend deve existir (package.json + index.html)
+      SM5: interface_type=mixed/api → entry point HTTP deve existir (FastAPI/Flask)
+      SM5: interface_type=mixed → vite.config.js deve ter proxy para backend
+    """
+    # Derivar ft_root a partir de gates.py: ft/engine/validators/gates.py → 4 níveis acima
+    ft_root = Path(__file__).resolve().parent.parent.parent.parent
+
+    # Ler interface_type do tech_stack.md
+    root = Path(project_root)
+    tech_stack = root / "project/docs/tech_stack.md"
+    interface_type = "unknown"
+    if tech_stack.exists():
+        import re
+        m = re.search(r"interface_type:\s*(\w+)", tech_stack.read_text())
+        if m:
+            interface_type = m.group(1).lower()
+
+    # Verificar KB disponível
+    kb_dir = ft_root / "kb"
+    kb_entries = sorted(kb_dir.glob("avaliacao_e2e_*.md")) if kb_dir.exists() else []
+    kb_count = len(kb_entries)
+
+    failures = []
+
+    # ── Pitfall SM4: sem frontend apesar de interface_type exigir UI ──────────
+    if interface_type in ("ui", "mixed"):
+        for path in ("frontend/package.json", "frontend/index.html"):
+            if not (root / path).exists():
+                failures.append(
+                    f"KB-SM4: interface_type={interface_type} exige frontend, "
+                    f"mas '{path}' não encontrado"
+                )
+
+    # ── Pitfall SM5: sem entry point HTTP apesar de interface_type exigir server ──
+    if interface_type in ("mixed", "api"):
+        http_candidates = [
+            "backend/main.py", "src/main.py", "main.py",
+            "backend/app.py", "src/app.py", "app.py",
+            "backend/server.py", "src/server.py", "server.py",
+        ]
+        entry = next((c for c in http_candidates if (root / c).exists()), None)
+        if not entry:
+            failures.append(
+                f"KB-SM5: interface_type={interface_type} exige servidor HTTP, "
+                f"mas nenhum entry point (main.py/app.py) encontrado"
+            )
+        else:
+            content = (root / entry).read_text()
+            if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =")):
+                failures.append(
+                    f"KB-SM5: {entry} existe mas não parece servidor HTTP "
+                    f"(FastAPI/Flask/Starlette não encontrado)"
+                )
+
+    # ── Pitfall SM5: proxy do Vite ausente em projetos mixed ─────────────────
+    if interface_type == "mixed":
+        vite_cfg = root / "frontend/vite.config.js"
+        if vite_cfg.exists():
+            if "proxy" not in vite_cfg.read_text():
+                failures.append(
+                    "KB-SM5: vite.config.js sem configuração de proxy — "
+                    "frontend não conseguirá se comunicar com o backend"
+                )
+        else:
+            failures.append(
+                "KB-SM5: frontend/vite.config.js ausente — "
+                "proxy do Vite não configurado"
+            )
+
+    # ── Pitfall SM5: interface_type=ui mas código Python de backend existe (deveria ser mixed) ──
+    if interface_type == "ui":
+        backend_dirs = [root / d for d in ("src", "backend") if (root / d).is_dir()]
+        py_files_exist = any(list(d.glob("**/*.py")) for d in backend_dirs)
+        frontend_exists = (root / "frontend").is_dir()
+        if frontend_exists and py_files_exist:
+            # frontend + código Python backend = mixed, não ui
+            failures.append(
+                "KB-SM5: interface_type=ui mas existem frontend/ E src/ com Python — "
+                "provável interface_type=mixed; sem essa correção gate_server_starts não "
+                "verificará se o backend HTTP está funcional"
+            )
+
+    if failures:
+        return False, (
+            f"gate_kb_review FAIL ({kb_count} avaliações na KB, "
+            f"interface_type={interface_type}): " + "; ".join(failures)
+        )
+
+    return True, (
+        f"gate_kb_review: PASS — {kb_count} pitfalls da KB verificados, "
+        f"interface_type={interface_type}, nenhum replicado"
+    )
+
+
 def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     """Gate de frontend — verifica estrutura minima de PWA."""
     import json

@@ -498,6 +498,15 @@ nodes:
       - file_exists: project/docs/SPEC.md
       - file_exists: CHANGELOG.md
       - tests_pass: true
+    next: gate.kb_review
+
+  - id: gate.kb_review
+    type: gate
+    title: "Gate KB Review — Pitfalls de Runs Anteriores"
+    executor: python
+    sprint: sprint-10-handoff
+    validators:
+      - gate_kb_review: true
     next: decision.mvp_frontend
 
   - id: decision.mvp_frontend

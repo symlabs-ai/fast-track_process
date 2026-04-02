@@ -237,6 +237,69 @@ Responda com:
 
 Produza o relatorio em: {outputs_str}
 """
+    elif node.type == "retro":
+        # Injeta o activity log e state para análise real
+        activity_log = ""
+        log_path = Path(state_dict.get("_project_root", ".")) / "servicemate_log.md"
+        if log_path.exists():
+            activity_log = log_path.read_text()
+
+        gate_log = state_dict.get("gate_log", {})
+        blocked = state_dict.get("blocked_reason", "")
+        completed = state_dict.get("completed_nodes", [])
+
+        return f"""Você é um agente de qualidade conduzindo uma retrospectiva honesta e técnica.
+
+LEIA obrigatoriamente antes de escrever:
+- project/docs/PRD.md
+- project/docs/TASK_LIST.md
+- project/docs/tech_stack.md
+- Todos os arquivos em project/docs/ (forgebase-audit.md, smoke-report.md, frontend-prd-review.md se existirem)
+
+DADOS DO CICLO (injetados pelo motor):
+
+Activity Log:
+{activity_log or "(nenhum log registrado)"}
+
+Gate Log: {gate_log}
+Nodes concluidos: {completed}
+Blocked reason: {blocked or "nenhum"}
+
+CHECKLIST OBRIGATÓRIO — verifique cada item explicitamente no retro.md:
+
+INTEGRAÇÃO FULL-STACK:
+[ ] O backend tem entry point HTTP (main.py / app.py com FastAPI/Flask)?
+[ ] O frontend consegue se conectar ao backend (proxy configurado e backend sobe)?
+[ ] Os testes unitários passam MAS o sistema funciona end-to-end?
+[ ] Existe pelo menos 1 rota de API testada com request HTTP real?
+
+COBERTURA FUNCIONAL:
+[ ] Todas as User Stories P0 do PRD têm implementação verificável?
+[ ] O fluxo principal (create→list→detail) funciona de ponta a ponta?
+[ ] Empty states e error states estão implementados?
+
+QUALIDADE DE PROCESSO:
+[ ] Algum gate foi pulado ou forçado manualmente? Se sim, por quê?
+[ ] Os validadores detectaram todos os problemas reais?
+[ ] O smoke test testou o sistema rodando, não só testes unitários?
+
+DÍVIDAS TÉCNICAS:
+[ ] Liste TODAS as dívidas abertas com prioridade P0/P1/P2
+[ ] Para cada dívida, identifique: causa raiz + o que o processo deveria ter pego
+
+FORMATO OBRIGATÓRIO do {outputs_str}:
+## 1. Resumo do Ciclo
+## 2. O que foi entregue (tabela)
+## 3. O que funcionou bem
+## 4. Problemas Encontrados (subseções por categoria)
+### 4.1 Integração e Servidor
+### 4.2 Frontend/UX
+### 4.3 Processo e Gates
+## 5. Gaps de Detecção (o que o processo NÃO pegou e deveria ter pego)
+## 6. Dívidas Técnicas (tabela priorizada)
+## 7. Métricas do Ciclo
+## 8. Ações para o Próximo Ciclo
+"""
     elif node.type == "build":
         return f"""Implemente: {node.title}
 
@@ -420,10 +483,11 @@ class StepRunner:
     def _run_llm_step(self, node: Node):
         """Delega ao LLM, valida resultado, avanca ou retenta."""
         state = self.state_mgr.state
-        task_prompt = build_task_prompt(node, {})
+        state_dict = {**state.__dict__, "_project_root": self.project_root}
+        task_prompt = build_task_prompt(node, state_dict)
 
         # Hyper-mode: enriquecer prompt com docs existentes
-        if node.type in ("discovery", "document"):
+        if node.type in ("discovery", "document", "retro"):
             existing = scan_existing_docs(self.project_root)
             if existing:
                 task_prompt = hyper_mode_prompt(existing, task_prompt)

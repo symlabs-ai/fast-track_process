@@ -425,7 +425,7 @@ nodes:
   # ================================================================
 
   - id: ft.feedback.01.retro_note
-    type: document
+    type: retro
     title: "Retro Note"
     executor: llm_coach
     sprint: sprint-08-feedback
@@ -433,7 +433,12 @@ nodes:
       - project/docs/retro.md
     validators:
       - file_exists: project/docs/retro.md
-      - min_lines: 10
+      - min_lines: 50
+      - has_sections:
+          - Problemas Encontrados
+          - Gaps de Detecção
+          - Dívidas Técnicas
+          - Integração
     next: ft.audit.01.forgebase
 
   # ================================================================

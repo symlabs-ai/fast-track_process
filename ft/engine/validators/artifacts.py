@@ -105,3 +105,17 @@ def coverage_min(min_pct: int, project_root: str = ".") -> tuple[bool, str]:
                     return True, f"coverage_min: {pct}% (min {min_pct}%)"
                 return False, f"coverage_min FAIL: {pct}% < {min_pct}%"
     return False, f"coverage_min FAIL: nao consegui extrair cobertura do output"
+
+
+def read_artifact(path: str, key: str, pattern: str, project_root: str = ".") -> tuple[bool, str]:
+    """Le arquivo e extrai valor via regex. Detail tem formato 'read_artifact: key=value'."""
+    import re as _re
+    full = Path(project_root) / path
+    if not full.exists():
+        return False, f"read_artifact FAIL: {path} nao encontrado"
+    content = full.read_text()
+    match = _re.search(pattern, content, _re.IGNORECASE | _re.MULTILINE)
+    if not match:
+        return False, f"read_artifact FAIL: padrao nao encontrado em {path}"
+    value = match.group(1).strip().lower()
+    return True, f"read_artifact: {key}={value}"

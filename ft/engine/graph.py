@@ -85,6 +85,8 @@ class ProcessGraph:
             value = state.get(node.condition)
             if value in node.branches:
                 return node.branches[value]
+            if "_default" in node.branches:
+                return node.branches["_default"]
             # Fallback para next
             return node.next
 

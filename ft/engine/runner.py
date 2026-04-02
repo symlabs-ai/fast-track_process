@@ -43,6 +43,7 @@ class ValidationResult:
     retryable: bool
     feedback: str | None
     items: list[ValidationItem] = field(default_factory=list)
+    artifacts: dict[str, str] = field(default_factory=dict)
 
 
 # Mapeamento de validadores disponiveis
@@ -57,6 +58,8 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "gate_delivery": gates.gate_delivery,
     "gate_smoke": gates.gate_smoke,
     "gate_mvp": gates.gate_mvp,
+    "gate_frontend": gates.gate_frontend,
+    "read_artifact": val.read_artifact,
     # Test validators (Phase 3)
     "coverage_per_file": test_val.coverage_per_file,
     "tests_exist": test_val.tests_exist,
@@ -74,6 +77,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
 def run_validators(node: Node, project_root: str) -> ValidationResult:
     """Roda todos os validadores de um node. Retorna resultado agregado."""
     items = []
+    extra_artifacts: dict[str, str] = {}
 
     for validator_spec in node.validators:
         for name, args in validator_spec.items():
@@ -82,8 +86,19 @@ def run_validators(node: Node, project_root: str) -> ValidationResult:
                 items.append(ValidationItem(name=name, passed=False, detail=f"Validador desconhecido: {name}"))
                 continue
 
+            # read_artifact — caso especial: args como dict com path/key/pattern
+            if name == "read_artifact" and isinstance(args, dict):
+                passed, detail = fn(**args, project_root=project_root)
+                if name == "read_artifact" and passed:
+                    try:
+                        kv = detail.split(": ", 1)[-1]
+                        if "=" in kv:
+                            k, v = kv.split("=", 1)
+                            extra_artifacts[k.strip()] = v.strip()
+                    except Exception:
+                        pass
             # Gate validators compostos — recebem args como dict
-            if name.startswith("gate_") and isinstance(args, dict):
+            elif name.startswith("gate_") and isinstance(args, dict):
                 passed, detail = fn(**args, project_root=project_root)
             elif name.startswith("gate_") and isinstance(args, bool) and args is True:
                 # gate_delivery: true → usa outputs do node
@@ -124,6 +139,7 @@ def run_validators(node: Node, project_root: str) -> ValidationResult:
         retryable=retryable,
         feedback=feedback,
         items=items,
+        artifacts=extra_artifacts,
     )
 
 
@@ -463,6 +479,9 @@ class StepRunner:
         self._print_validation(validation)
 
         if validation.passed:
+            if validation.artifacts:
+                for k, v in validation.artifacts.items():
+                    self.state_mgr.record_artifact(k, v)
             next_id = self.graph.resolve_next(node.id)
             self.state_mgr.advance(node.id, next_id, "PASS")
             print(f"  GATE PASS → proximo: {next_id}")

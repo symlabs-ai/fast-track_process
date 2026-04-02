@@ -1,8 +1,9 @@
 # Fast Track Process V2 — formato de grafo para ft engine
-# Mapeamento completo: 19 steps, 9 fases, validators deterministicos
+# Mapeamento completo: 28 steps, 10 fases, validators deterministicos
+# v0.8.0: suporte a frontend/PWA com decision node por interface_type
 
 id: fast_track_v2
-version: "0.7.0"
+version: "0.8.0"
 title: "ForgeProcess — Fast Track V2"
 
 nodes:
@@ -81,9 +82,23 @@ nodes:
     outputs:
       - project/docs/tech_stack.md
     requires_approval: true
+    prompt: |
+      Proponha o Tech Stack para o projeto com base no PRD e na hipotese.
+      OBRIGATORIO: inclua uma linha no formato exato:
+        interface_type: <valor>
+      onde <valor> e um de: cli_only, api, ui, mixed
+      - cli_only: apenas CLI, sem interface grafica ou web
+      - api: apenas REST/GraphQL, sem frontend proprio
+      - ui: inclui interface web/PWA/mobile
+      - mixed: CLI + interface web
+
+      Produza o documento project/docs/tech_stack.md com todas as secoes usuais
+      (linguagem, frameworks, dependencias, deploy) mais a linha interface_type.
     validators:
       - file_exists: project/docs/tech_stack.md
       - min_lines: 10
+      - has_sections:
+          - interface_type
     next: ft.plan.03.diagrams
 
   - id: ft.plan.03.diagrams
@@ -107,17 +122,110 @@ nodes:
       - file_exists: project/docs/TASK_LIST.md
       - file_exists: project/docs/tech_stack.md
       - file_exists: project/docs/diagrams/architecture.md
+    next: ft.plan.detect_interface
+
+  - id: ft.plan.detect_interface
+    type: gate
+    title: "Detectar Interface Type"
+    executor: python
+    sprint: sprint-02-planning
+    validators:
+      - read_artifact:
+          path: project/docs/tech_stack.md
+          key: interface_type
+          pattern: 'interface_type:\s*(\w+)'
+    next: decision.interface_type
+
+  - id: decision.interface_type
+    type: decision
+    title: "Requer Frontend?"
+    executor: python
+    sprint: sprint-02-planning
+    condition: interface_type
+    branches:
+      cli_only: ft.tdd.02.red
+      api: ft.tdd.02.red
+      _default: ft.frontend.01.scaffold
     next: ft.tdd.02.red
 
   # ================================================================
-  # Fase 3: TDD
+  # Fase 3: Frontend/PWA (apenas quando interface_type = ui ou mixed)
+  # ================================================================
+
+  - id: ft.frontend.01.scaffold
+    type: build
+    title: "Scaffold Frontend"
+    executor: llm_coder
+    sprint: sprint-03-frontend
+    outputs:
+      - frontend/package.json
+      - frontend/public/manifest.json
+    prompt: |
+      Crie a estrutura base do projeto frontend com suporte a PWA.
+      Baseie-se no tech_stack.md para escolher o framework.
+
+      Estrutura minima obrigatoria:
+        frontend/
+          package.json             dependencias e scripts npm (build, dev, preview)
+          vite.config.js           bundler config
+          public/
+            manifest.json          PWA manifest com: name, short_name, start_url, display, theme_color, background_color, icons
+            index.html             HTML base com <link rel="manifest">
+          src/
+            main.js                entry point
+
+      NAO implemente telas ainda. Apenas o scaffold funcional.
+      Ao final diga DONE e liste os arquivos criados.
+    validators:
+      - file_exists: frontend/package.json
+      - file_exists: frontend/public/manifest.json
+    next: ft.frontend.02.implement
+
+  - id: ft.frontend.02.implement
+    type: build
+    title: "Implementar Frontend"
+    executor: llm_coder
+    sprint: sprint-03-frontend
+    outputs:
+      - frontend/src/
+    prompt: |
+      Implemente as telas e funcionalidades do frontend com base nas User Stories do PRD.
+
+      Diretrizes:
+      - Cada User Story que envolve interface deve ter ao menos uma tela/componente
+      - Use o framework definido no tech_stack.md e o scaffold existente em frontend/
+      - Service worker deve cachear assets estaticos (cache-first)
+      - UI responsiva, mobile-first
+      - Conecte ao backend via fetch/axios nos endpoints da API
+
+      Produza os arquivos em frontend/src/.
+      Ao final diga DONE e liste os arquivos criados.
+    validators:
+      - file_exists: frontend/src/
+      - min_lines: 50
+    next: gate.frontend
+
+  - id: gate.frontend
+    type: gate
+    title: "Gate Frontend"
+    executor: python
+    sprint: sprint-03-frontend
+    validators:
+      - file_exists: frontend/package.json
+      - file_exists: frontend/public/manifest.json
+      - file_exists: frontend/src/
+      - gate_frontend: true
+    next: ft.tdd.02.red
+
+  # ================================================================
+  # Fase 4: TDD
   # ================================================================
 
   - id: ft.tdd.02.red
     type: test_red
     title: "Red — Escrever Testes"
     executor: llm_coder
-    sprint: sprint-03-tdd
+    sprint: sprint-04-tdd
     outputs:
       - tests/
     validators:
@@ -129,7 +237,7 @@ nodes:
     type: test_green
     title: "Green — Implementar"
     executor: llm_coder
-    sprint: sprint-03-tdd
+    sprint: sprint-04-tdd
     outputs:
       - src/
     validators:
@@ -140,20 +248,20 @@ nodes:
     type: gate
     title: "Gate TDD"
     executor: python
-    sprint: sprint-03-tdd
+    sprint: sprint-04-tdd
     validators:
       - tests_pass: true
     next: ft.delivery.01.self_review
 
   # ================================================================
-  # Fase 4: Delivery
+  # Fase 5: Delivery
   # ================================================================
 
   - id: ft.delivery.01.self_review
     type: refactor
     title: "Self-Review"
     executor: llm_coder
-    sprint: sprint-04-delivery
+    sprint: sprint-05-delivery
     outputs:
       - src/
     validators:
@@ -165,7 +273,7 @@ nodes:
     type: refactor
     title: "Refactor"
     executor: llm_coder
-    sprint: sprint-04-delivery
+    sprint: sprint-05-delivery
     outputs:
       - src/
     validators:
@@ -176,7 +284,7 @@ nodes:
     type: gate
     title: "Gate de Delivery"
     executor: python
-    sprint: sprint-04-delivery
+    sprint: sprint-05-delivery
     validators:
       - gate_delivery: true
     outputs:
@@ -184,14 +292,14 @@ nodes:
     next: ft.smoke.01.cli_run
 
   # ================================================================
-  # Fase 5: Smoke
+  # Fase 6: Smoke
   # ================================================================
 
   - id: ft.smoke.01.cli_run
     type: build
     title: "Smoke CLI Run"
     executor: llm_coder
-    sprint: sprint-05-smoke
+    sprint: sprint-06-smoke
     outputs:
       - project/docs/smoke-report.md
     validators:
@@ -203,20 +311,20 @@ nodes:
     type: gate
     title: "Gate de Smoke"
     executor: python
-    sprint: sprint-05-smoke
+    sprint: sprint-06-smoke
     validators:
       - gate_smoke: true
     next: ft.e2e.01.cli_validation
 
   # ================================================================
-  # Fase 6: E2E
+  # Fase 7: E2E
   # ================================================================
 
   - id: ft.e2e.01.cli_validation
     type: build
     title: "E2E CLI Validation"
     executor: llm_coder
-    sprint: sprint-06-e2e
+    sprint: sprint-07-e2e
     outputs:
       - tests/e2e/
     validators:
@@ -228,20 +336,20 @@ nodes:
     type: gate
     title: "Gate E2E"
     executor: python
-    sprint: sprint-06-e2e
+    sprint: sprint-07-e2e
     validators:
       - tests_pass: true
     next: ft.feedback.01.retro_note
 
   # ================================================================
-  # Fase 7: Feedback
+  # Fase 8: Feedback
   # ================================================================
 
   - id: ft.feedback.01.retro_note
     type: document
     title: "Retro Note"
     executor: llm_coach
-    sprint: sprint-07-feedback
+    sprint: sprint-08-feedback
     outputs:
       - project/docs/retro.md
     validators:
@@ -250,14 +358,14 @@ nodes:
     next: ft.audit.01.forgebase
 
   # ================================================================
-  # Fase 8: Auditoria
+  # Fase 9: Auditoria
   # ================================================================
 
   - id: ft.audit.01.forgebase
     type: build
     title: "Auditoria ForgeBase"
     executor: llm_coder
-    sprint: sprint-08-audit
+    sprint: sprint-09-audit
     outputs:
       - project/docs/forgebase-audit.md
     validators:
@@ -270,7 +378,7 @@ nodes:
     type: gate
     title: "Gate de Auditoria"
     executor: python
-    sprint: sprint-08-audit
+    sprint: sprint-09-audit
     validators:
       - file_exists: project/docs/forgebase-audit.md
       - tests_pass: true
@@ -278,14 +386,14 @@ nodes:
     next: ft.handoff.01.specs
 
   # ================================================================
-  # Fase 9: Handoff
+  # Fase 10: Handoff
   # ================================================================
 
   - id: ft.handoff.01.specs
     type: document
     title: "Gerar SPEC.md"
     executor: llm_coach
-    sprint: sprint-09-handoff
+    sprint: sprint-10-handoff
     outputs:
       - project/docs/SPEC.md
       - CHANGELOG.md
@@ -299,13 +407,34 @@ nodes:
     type: gate
     title: "Gate MVP"
     executor: python
-    sprint: sprint-09-handoff
+    sprint: sprint-10-handoff
     validators:
       - file_exists: project/docs/PRD.md
       - file_exists: project/docs/TASK_LIST.md
       - file_exists: project/docs/SPEC.md
       - file_exists: CHANGELOG.md
       - tests_pass: true
+    next: decision.mvp_frontend
+
+  - id: decision.mvp_frontend
+    type: decision
+    title: "Verificar Frontend no MVP?"
+    executor: python
+    sprint: sprint-10-handoff
+    condition: interface_type
+    branches:
+      cli_only: ft.end
+      api: ft.end
+      _default: gate.mvp.frontend
+    next: ft.end
+
+  - id: gate.mvp.frontend
+    type: gate
+    title: "Gate MVP Frontend"
+    executor: python
+    sprint: sprint-10-handoff
+    validators:
+      - gate_frontend: true
     next: ft.end
 
   - id: ft.end

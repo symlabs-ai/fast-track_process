@@ -126,3 +126,25 @@ def gate_e2e_all_pass(
     if failed:
         return False, f"gate_e2e_all_pass FAIL: cenários falharam: {', '.join(failed)}"
     return True, f"gate_e2e_all_pass: PASS — {len(scenarios)} cenários OK"
+
+
+def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
+    """Gate de frontend — verifica estrutura minima de PWA."""
+    import json
+    failures = []
+    for path in ["frontend/package.json", "frontend/public/manifest.json", "frontend/src/"]:
+        full = Path(project_root) / path
+        if not full.exists():
+            failures.append(f"{path} nao encontrado")
+    manifest = Path(project_root) / "frontend/public/manifest.json"
+    if manifest.exists():
+        try:
+            data = json.loads(manifest.read_text())
+            for field in ("name", "start_url", "display"):
+                if field not in data:
+                    failures.append(f"manifest.json sem campo '{field}'")
+        except Exception:
+            failures.append("manifest.json invalido")
+    if failures:
+        return False, f"gate_frontend FAIL: {'; '.join(failures)}"
+    return True, "gate_frontend: estrutura PWA OK"

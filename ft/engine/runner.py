@@ -60,6 +60,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "gate_smoke": gates.gate_smoke,
     "gate_mvp": gates.gate_mvp,
     "gate_frontend": gates.gate_frontend,
+    "gate_server_starts": gates.gate_server_starts,
     "read_artifact": val.read_artifact,
     # Test validators (Phase 3)
     "coverage_per_file": test_val.coverage_per_file,

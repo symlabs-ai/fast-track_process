@@ -128,6 +128,82 @@ def gate_e2e_all_pass(
     return True, f"gate_e2e_all_pass: PASS — {len(scenarios)} cenários OK"
 
 
+def gate_server_starts(
+    project_root: str = ".",
+    skip_if_interface: str | None = None,
+) -> tuple[bool, str]:
+    """Verifica que o backend tem entry point HTTP e consegue iniciar.
+
+    skip_if_interface: se o artifacts/interface_type bater com esse valor, pula o gate.
+    """
+    import subprocess
+    import time
+
+    # Verificar interface_type salvo nos artefatos
+    if skip_if_interface:
+        itype_file = Path(project_root) / "project/docs/tech_stack.md"
+        if itype_file.exists():
+            content = itype_file.read_text().lower()
+            if skip_if_interface.lower() in content:
+                return True, f"gate_server_starts: pulado (interface_type={skip_if_interface})"
+        # Também checar engine_state
+        state_file = Path(project_root) / "project/state/engine_state.yml"
+        if state_file.exists():
+            state_content = state_file.read_text()
+            if f"interface_type: {skip_if_interface}" in state_content:
+                return True, f"gate_server_starts: pulado (interface_type={skip_if_interface})"
+
+    root = Path(project_root)
+
+    # Procura entry points conhecidos
+    candidates = [
+        "backend/main.py", "src/main.py", "main.py",
+        "backend/app.py", "src/app.py", "app.py",
+        "backend/server.py", "src/server.py", "server.py",
+    ]
+    entry = next((c for c in candidates if (root / c).exists()), None)
+    if not entry:
+        return False, "gate_server_starts FAIL: nenhum entry point HTTP encontrado (main.py / app.py / server.py)"
+
+    # Verifica que tem FastAPI ou Flask no arquivo
+    content = (root / entry).read_text()
+    if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =")):
+        return False, f"gate_server_starts FAIL: {entry} nao parece um servidor HTTP (FastAPI/Flask nao encontrado)"
+
+    # Tenta subir o servidor em porta temporaria e bater em /health ou /
+    try:
+        proc = subprocess.Popen(
+            ["python", "-m", "uvicorn", entry.replace("/", ".").replace(".py", "") + ":app",
+             "--host", "127.0.0.1", "--port", "18765", "--timeout-keep-alive", "1"],
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        time.sleep(3)
+        check = subprocess.run(
+            ["curl", "-sf", "http://127.0.0.1:18765/health"],
+            capture_output=True, timeout=5,
+        )
+        proc.terminate()
+        proc.wait(timeout=5)
+        if check.returncode == 0:
+            return True, f"gate_server_starts: {entry} sobe e responde em /health"
+        # Tenta / como fallback
+        check2 = subprocess.run(
+            ["curl", "-sf", "http://127.0.0.1:18765/"],
+            capture_output=True, timeout=5,
+        )
+        proc2_ok = check2.returncode == 0
+        return (True, f"gate_server_starts: {entry} sobe OK") if proc2_ok else \
+               (False, f"gate_server_starts FAIL: {entry} sobe mas nao responde em / nem /health")
+    except Exception as exc:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        return False, f"gate_server_starts FAIL: erro ao iniciar servidor — {exc}"
+
+
 def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     """Gate de frontend — verifica estrutura minima de PWA."""
     import json

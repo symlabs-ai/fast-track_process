@@ -7,7 +7,13 @@ from __future__ import annotations
 
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
+
+
+def _normalize(text: str) -> str:
+    """Remove diacritics for accent-insensitive matching."""
+    return unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode("ascii").lower()
 
 
 def file_exists(path: str, project_root: str = ".") -> tuple[bool, str]:
@@ -35,7 +41,8 @@ def has_sections(path: str, sections: list[str], project_root: str = ".") -> tup
     if not full.exists():
         return False, f"has_sections FAIL: {path} nao existe"
     content = full.read_text()
-    missing = [s for s in sections if s.lower() not in content.lower()]
+    norm_content = _normalize(content)
+    missing = [s for s in sections if _normalize(s) not in norm_content]
     if not missing:
         return True, f"has_sections: {path} tem todas as {len(sections)} secoes"
     return False, f"has_sections FAIL: {path} faltam secoes: {missing}"

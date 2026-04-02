@@ -364,6 +364,8 @@ nodes:
     sprint: sprint-05-delivery
     validators:
       - gate_delivery: true
+      - gate_server_starts:
+          skip_if_interface: cli_only
     outputs:
       - src/
     next: ft.smoke.01.cli_run

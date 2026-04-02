@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.3] - 2026-04-02
+
+- feat: `gate_kb_review` — gate final pre-liberação que verifica pitfalls P0 da KB (SM4: frontend ausente, SM5: HTTP server ausente, vite proxy ausente, interface_type inconsistente)
+- feat: KB-mode — injeta lições de `kb/avaliacao_e2e_*.md` no prompt de nodes `build` e `retro`
+- feat: `scan_kb_lessons` + `kb_lessons_prompt` em `stakeholder.py`
+- feat: node `gate.kb_review` no YAML entre `gate.mvp` e `decision.mvp_frontend`
+- feat: `avaliacao_e2e_service_mate_5.md` — KB entry do ciclo SM5 (nota 6/10)
+
 ## [v0.8.2] - 2026-04-02
 
 - feat: activity logging com `_log_activity` + geração automática de `servicemate_log.md`

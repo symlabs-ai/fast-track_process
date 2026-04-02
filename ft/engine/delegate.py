@@ -57,7 +57,7 @@ REGRAS:
         cwd=project_root,
         capture_output=True,
         text=True,
-        timeout=600,  # 10 min max
+        timeout=1800,  # 30 min max (projetos complexos)
     )
 
     output = result.stdout or ""

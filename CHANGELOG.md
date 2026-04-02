@@ -4,43 +4,37 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [v0.7.5] - 2026-04-01
+## [v0.8.0] - 2026-04-02
 
-- fix: `advance()` faz auto-unblock quando estado estava `blocked` — elimina crash ao retomar após gate BLOCK
-- fix: timeout do delegate aumentado de 600s para 1800s — projetos reais (ex: ServiceMate) precisam de mais tempo no TDD green
-- e2e: `service_mate_4` validado de ponta a ponta — 22/22 nodes, 283 testes, gate MVP aprovado
+### Novas funcionalidades
 
----
+- **Frontend/PWA Support**: Processo V2 agora detecta `interface_type` do `tech_stack.md` e roteia projetos UI/mixed por `sprint-03-frontend` antes do TDD. Projetos `cli_only`/`api` pulam o frontend e vão direto para TDD.
+- **sprint-03-frontend**: Três novos nodes — `ft.frontend.01.scaffold` (estrutura PWA + manifest.json), `ft.frontend.02.implement` (telas e componentes), `gate.frontend` (valida estrutura mínima de PWA).
+- **decision nodes por interface_type**: `decision.interface_type` após planning e `decision.mvp_frontend` no handoff garantem que o gate MVP exige frontend apenas quando o projeto pede UI.
+- **Validador `read_artifact`**: Lê valor via regex de qualquer arquivo e grava em `state.artifacts` para uso em decision nodes. Padrão `key=value` propagado automaticamente.
+- **Validador `gate_frontend`**: Verifica estrutura mínima de PWA — `package.json`, `manifest.json` com campos obrigatórios (`name`, `start_url`, `display`), `frontend/src/`.
+- **`_default` em branches**: Decision nodes suportam a chave especial `_default` como fallback quando nenhum branch explícito casa com o valor da condição.
 
-## [v0.7.4] - 2026-04-01
+### Melhorias
 
-- feat: `pyproject.toml` — `ft-engine` instalável via `pip install -e .` com entry point `ft`
-- feat: extração do engine para `~/dev/tools/ft-engine` — repo standalone, 88 testes OK
-- chore: backlog atualizado para 48/50 (96%)
+- **Processo V2**: 30 nodes, 10 sprints (era 23 nodes, 9 sprints). `ft.plan.02.tech_stack` agora exige `interface_type` no documento gerado.
+- **`ValidationResult.artifacts`**: Validators com side-effects de state (como `read_artifact`) propagam artifacts de volta ao runner sem quebrar a interface dos demais validators.
+- **`ft` binary (`~/.local/bin/ft`)**: Roteia subcomandos `continue/status/approve/reject/graph` para o engine CLI v0.7+, sem aviso de sincronia desnecessário.
+- **`pip install -e .`**: `pyproject.toml` adicionado — `ft-engine` instalável como pacote Python com entry point `ft`.
 
----
+### Correções
 
-## [v0.7.3] - 2026-04-01
+- **`advance()` auto-unblock**: Estado `blocked` é limpo automaticamente quando uma validação passa, eliminando crash `RuntimeError: Estado bloqueado` ao retomar após gate BLOCK.
+- **Race condition no lock**: `StateManager.load(check_lock=True)` verifica se o PID do lock ainda está vivo e lança `StateLockError`, impedindo dois `ft continue` simultâneos.
+- **Timeout do delegate**: Aumentado de 600s para 1800s — projetos reais com implementações complexas (ServiceMate) precisam de mais tempo no TDD green.
+- **Gate `ft.mdd.03.validacao`**: Adicionado `outputs` ao node para que `min_lines` tenha caminho correto.
 
-- feat: E2E Fast Track V2 completo — 22/22 nodes PASS, 297 testes passando, gate MVP aprovado
-- feat: SPEC.md gerado (ft.handoff.01.specs) — documentação completa da interface pública do ft engine
-- feat: E2E CLI Validation (sprint-06-e2e) — 285 testes E2E passando
-- feat: Auditoria ForgeBase (sprint-08-audit) — lint limpo, gate.audit PASS
+### Outros
 
----
-
-## [v0.7.2] - 2026-04-01
-
-- fix: prevenir race condition quando dois processos `ft continue` rodam simultaneamente — `StateManager.load(check_lock=True)` verifica se o PID do lock ainda está vivo e lança `StateLockError`
-- fix: gate `ft.mdd.03.validacao` no Fast Track V2 — adicionado `outputs` ao node para `min_lines` ter caminho correto
-- e2e: Fast Track V2 validado em 15/22 nodes (sprints 1–5 completas), bloqueado por quota de LLM
-
----
-
-## [v0.7.1] - 2026-04-01
-
-- feat: add Sprint Expert Gate — node type `review` com veredicto APPROVED/REJECTED determinístico via parse do relatório LLM
-- feat: unit tests do engine — 88 testes cobrindo graph (91%), state (97%), artifacts (97%), stakeholder (76%), validators e runner
+- `pyproject.toml` adicionado ao repo — `pip install -e ".[dev]"` funciona
+- Engine extraído para `~/dev/tools/ft-engine` como repo standalone
+- `kb/` criado com avaliações de runs E2E (service_mate_4: 4/10, causa raiz e ação documentadas)
+- 88 testes unitários do engine mantidos passando
 
 ---
 

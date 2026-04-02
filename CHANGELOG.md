@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.2] - 2026-04-02
+
+- feat: activity logging com `_log_activity` + geração automática de `servicemate_log.md`
+- feat: node `ft.frontend.03.prd_review` — valida conformidade do frontend com o PRD
+- feat: processo V2 com 31 nodes
+
 ## [v0.8.1] - 2026-04-02
 
 - fix: scaffold prompt agora especifica `index.html` na raiz do Vite (não em `public/`)

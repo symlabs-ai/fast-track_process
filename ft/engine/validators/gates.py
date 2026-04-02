@@ -167,7 +167,7 @@ def gate_server_starts(
 
     # Verifica que tem FastAPI ou Flask no arquivo
     content = (root / entry).read_text()
-    if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =")):
+    if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =", "uvicorn", "import app")):
         return False, f"gate_server_starts FAIL: {entry} nao parece um servidor HTTP (FastAPI/Flask nao encontrado)"
 
     # Tenta subir o servidor em porta temporaria e bater em /health ou /
@@ -258,7 +258,7 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
             )
         else:
             content = (root / entry).read_text()
-            if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =")):
+            if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =", "uvicorn", "import app")):
                 failures.append(
                     f"KB-SM5: {entry} existe mas não parece servidor HTTP "
                     f"(FastAPI/Flask/Starlette não encontrado)"

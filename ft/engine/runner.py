@@ -504,8 +504,8 @@ class StepRunner:
                 task_prompt = hyper_mode_prompt(existing, task_prompt)
                 print(f"  Hyper-mode: {len(existing)} docs existentes carregados")
 
-        # KB-mode: injetar lições de runs anteriores em nodes de build e retro
-        if node.type in ("build", "retro"):
+        # KB-mode: injetar lições de runs anteriores em nodes de build, refactor e retro
+        if node.type in ("build", "refactor", "retro"):
             itype = state_dict.get("artifacts", {}).get("interface_type") or state_dict.get("interface_type")
             lessons = scan_kb_lessons(self._ft_root, interface_type=itype)
             if lessons:

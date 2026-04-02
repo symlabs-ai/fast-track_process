@@ -328,11 +328,45 @@ nodes:
     sprint: sprint-04-tdd
     validators:
       - tests_pass: true
-    next: ft.delivery.01.self_review
+    next: ft.delivery.00.entrypoint
 
   # ================================================================
   # Fase 5: Delivery
   # ================================================================
+
+  - id: ft.delivery.00.entrypoint
+    type: build
+    title: "Criar Entry Point HTTP"
+    executor: llm_coder
+    sprint: sprint-05-delivery
+    outputs:
+      - main.py
+    prompt: |
+      Crie o entry point HTTP do projeto: main.py na raiz.
+
+      Leia obrigatoriamente:
+        - project/docs/tech_stack.md   (interface_type e stack)
+        - project/docs/PRD.md          (seção 8.6 Contrato de Integração HTTP)
+        - src/                         (domínio existente para registrar os routers)
+
+      SE interface_type for cli_only: escreva main.py mínimo com `if __name__ == '__main__': pass`
+      e encerre com DONE.
+
+      SE interface_type for api ou mixed:
+        1. Instancie `app = FastAPI(title="<nome do projeto>")`
+        2. Inclua todos os routers existentes em src/ (via `app.include_router`)
+        3. Adicione `GET /health` retornando `{"status": "ok"}`
+        4. Configure CORS para `http://localhost:5173` (se mixed)
+        5. Adicione bloco `if __name__ == '__main__': uvicorn.run(app, host='0.0.0.0', port=8000)`
+
+      O arquivo deve ser inicializável com:
+        uvicorn main:app --host 0.0.0.0 --port 8000
+
+      Ao final diga DONE e mostre as rotas registradas.
+    validators:
+      - file_exists: main.py
+      - tests_pass: true
+    next: ft.delivery.01.self_review
 
   - id: ft.delivery.01.self_review
     type: refactor

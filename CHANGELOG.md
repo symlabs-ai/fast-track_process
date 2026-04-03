@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.8] - 2026-04-03
+
+- feat: `ft.handoff.02.plano_voo` — node que gera `project/docs/plano_de_voo.md` com veredicto ITERATE/RELEASE_CANDIDATE, débitos, correções obrigatórias e comandos de init para o próximo ciclo
+- feat: `setup_env.sh --from-project` — copia plano_de_voo.md do ciclo anterior para o novo projeto; hyper-mode injeta automaticamente
+- fix: `scan_kb_lessons()` agora extrai apenas seções "Lições para o Processo" (genéricas) — remove injeção de detalhes específicos de projeto
+
 ## [v0.8.7] - 2026-04-03
 
 - feat: `ft.plan.05.api_contract` — node no planning que define contrato canônico de API (nomes de endpoints, idioma único) como fonte de verdade para frontend e backend

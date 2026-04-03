@@ -4,6 +4,16 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.4] - 2026-04-02
+
+- feat: `avaliacao_e2e_service_mate_6.md` — KB entry SM6 (nota 6.5/10): mismatch de rotas API (inglês vs. português), deep links sem URL change, Catálogo ausente
+- feat: `ft.prd.rewrite` node obrigatório no handoff — PRD reescrito com aprendizados do ciclo (seções 8.5 e 8.6)
+- feat: `ft.delivery.00.entrypoint` — node dedicado para criação do `main.py` HTTP antes da fase de delivery
+- fix: `gate_server_starts` aceita `uvicorn` e `import app` como indicadores de HTTP server
+- fix: `ft.prd.rewrite` adicionado `next: ft.handoff.01.specs` que estava faltando
+- feat: `environment/` — pasta local gitignored para configurações de workspace (gateway.md)
+- fix: gateway é opcional no `ft init` — remover aviso incorreto
+
 ## [v0.8.3] - 2026-04-02
 
 - feat: `gate_kb_review` — gate final pre-liberação que verifica pitfalls P0 da KB (SM4: frontend ausente, SM5: HTTP server ausente, vite proxy ausente, interface_type inconsistente)

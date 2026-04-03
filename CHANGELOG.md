@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.7] - 2026-04-03
+
+- feat: `ft.plan.05.api_contract` — node no planning que define contrato canônico de API (nomes de endpoints, idioma único) como fonte de verdade para frontend e backend
+- feat: `ft.frontend.02.implement` e `ft.delivery.00.entrypoint` referenciam `api_contract.md` e exigem BrowserRouter com URL paths
+- feat: `gate_kb_review` pitfall KB-P4 — detecta frontend sem BrowserRouter/Route path (deep links quebrados)
+- feat: `gate_kb_review` pitfall KB-P5 — detecta `frontend-prd-review.md` com veredicto REJECTED não resolvido
+- feat: `gate.planning` exige `api_contract.md` como artefato obrigatório
+
 ## [v0.8.6] - 2026-04-03
 
 - fix: `StateManager.advance()` agora levanta `RuntimeError` quando estado está bloqueado — remove auto-unblock silencioso; 273 testes passando

@@ -111,6 +111,39 @@ nodes:
     validators:
       - file_exists: project/docs/diagrams/architecture.md
       - min_lines: 5
+    next: ft.plan.04.test_data
+
+  - id: ft.plan.04.test_data
+    type: document
+    title: "Gerar Massa de Dados para Aceitação"
+    executor: llm_coach
+    sprint: sprint-02-planning
+    outputs:
+      - project/docs/test_data.md
+    prompt: |
+      Com base nas User Stories do PRD, gere uma massa de dados de teste realista
+      para validar a API e o frontend de ponta a ponta.
+
+      Leia obrigatoriamente:
+        - project/docs/PRD.md         (user stories e entidades do domínio)
+        - project/docs/TASK_LIST.md   (funcionalidades a implementar)
+
+      Produza project/docs/test_data.md com dados inventados mas realistas,
+      cobrindo TODAS as entidades do domínio. Para cada entidade:
+        - mínimo 3 registros
+        - variação de estados (ex: cobrança pendente, vencida, paga)
+        - dados que exercitem edge cases das user stories
+
+      Formato obrigatório por entidade:
+        ## <NomeEntidade>
+        ### Registro 1
+        - campo: valor
+        ...
+
+      Ao final diga DONE e liste as entidades e a quantidade de registros gerados.
+    validators:
+      - file_exists: project/docs/test_data.md
+      - min_lines: 30
     next: gate.planning
 
   - id: gate.planning
@@ -122,6 +155,7 @@ nodes:
       - file_exists: project/docs/TASK_LIST.md
       - file_exists: project/docs/tech_stack.md
       - file_exists: project/docs/diagrams/architecture.md
+      - file_exists: project/docs/test_data.md
     next: ft.plan.detect_interface
 
   - id: ft.plan.detect_interface
@@ -402,11 +436,72 @@ nodes:
           skip_if_interface: cli_only
     outputs:
       - src/
-    next: ft.smoke.01.cli_run
+    next: ft.acceptance.01.cli
 
   # ================================================================
-  # Fase 6: Smoke
+  # Fase 6: Smoke + Acceptance CLI
   # ================================================================
+
+  - id: ft.acceptance.01.cli
+    type: build
+    title: "Acceptance Test CLI — Validar API com Massa de Dados"
+    executor: llm_coder
+    sprint: sprint-06-smoke
+    outputs:
+      - project/docs/acceptance-cli-report.md
+    prompt: |
+      Execute os testes de aceitação da API usando a massa de dados de teste.
+
+      Leia obrigatoriamente:
+        - project/docs/test_data.md     (massa de dados para inserção)
+        - project/docs/tech_stack.md    (interface_type e stack)
+
+      SE interface_type for cli_only:
+        Rode a CLI com os dados de test_data.md como argumentos, verificando
+        cada operação. Escreva project/docs/acceptance-cli-report.md com os
+        resultados e encerre com DONE.
+
+      SE interface_type for api ou mixed:
+        1. Descubra os endpoints disponíveis: GET http://localhost:8000/openapi.json
+        2. Para cada entidade em test_data.md:
+           a. Identifique o endpoint de criação correto (POST)
+           b. Faça POST com cada registro da entidade
+           c. Verifique que o registro persistiu (GET e compare campos-chave)
+           d. Documente: endpoint, payload, status code, resultado PASS ou FAIL
+        3. Escreva project/docs/acceptance-cli-report.md:
+
+          # Acceptance CLI Report
+
+          ## Resumo
+          - Total: N registros testados
+          - PASS: X  |  FAIL: Y
+
+          ## Resultados por Entidade
+          ### <Entidade>
+          - [PASS] POST /endpoint — <identificador do registro> — 201
+          - [FAIL] POST /endpoint — <identificador> — 404 (endpoint não existe)
+
+          ## Falhas Encontradas
+          - endpoint, payload enviado, resposta recebida, causa provável
+
+      REGRA CRÍTICA: Se qualquer POST retornar 404 ou 422 inesperado, marque
+      como [FAIL]. Não minta nos resultados — o gate vai bloquear se houver FAIL.
+      É melhor bloquear agora e corrigir o backend do que descobrir no E2E do frontend.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: project/docs/acceptance-cli-report.md
+      - min_lines: 20
+    next: gate.acceptance.cli
+
+  - id: gate.acceptance.cli
+    type: gate
+    title: "Gate Acceptance CLI"
+    executor: python
+    sprint: sprint-06-smoke
+    validators:
+      - gate_acceptance_cli: true
+    next: ft.smoke.01.cli_run
 
   - id: ft.smoke.01.cli_run
     type: build

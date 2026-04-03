@@ -304,6 +304,29 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
     )
 
 
+def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
+    """Gate de acceptance CLI — verifica que o relatório existe e não tem FAILs."""
+    import re
+
+    report = Path(project_root) / "project/docs/acceptance-cli-report.md"
+    if not report.exists():
+        return False, "gate_acceptance_cli FAIL: acceptance-cli-report.md não encontrado"
+
+    content = report.read_text()
+    lines = [l for l in content.splitlines() if l.strip()]
+    if len(lines) < 10:
+        return False, f"gate_acceptance_cli FAIL: relatório muito curto ({len(lines)} linhas)"
+
+    fail_lines = [l.strip() for l in content.splitlines() if re.search(r'\[FAIL\]', l)]
+    if fail_lines:
+        preview = "; ".join(fail_lines[:3])
+        return False, (
+            f"gate_acceptance_cli FAIL: {len(fail_lines)} falha(s) na API — {preview}"
+        )
+
+    return True, "gate_acceptance_cli: PASS — todos os registros aceitos pela API"
+
+
 def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     """Gate de frontend — verifica estrutura minima de PWA."""
     import json

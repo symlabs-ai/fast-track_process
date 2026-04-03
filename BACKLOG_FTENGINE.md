@@ -135,3 +135,15 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 | 6. Fast Track Completo | 6 | 6 | 100% |
 | 7. Polish e Extracao | 7 | 6 | 86% |
 | **Total** | **50** | **48** | **96%** |
+
+---
+
+## [SM8] Engine local no scaffold causa divergência
+
+**Problema:** `ft init` cria `ft/` dentro do projeto (cópia do engine). Quando o processo roda com `cd <projeto> && python -m ft.cli.main`, o Python carrega `./ft` (local, desatualizado) em vez do engine central no `PYTHONPATH`.
+
+**Impacto:** alterações no engine central (gates, runner) não são refletidas nos projetos existentes. No SM8, causou 2 bloqueios manuais que não existiriam com engine global.
+
+**Solução:** remover `ft/` do template no repo `forgebase`. O engine deve ser instalado globalmente (pip ou PYTHONPATH) e nunca copiado para dentro do projeto. O `ft run` deve ser chamado com `PYTHONPATH=/path/to/fast-track python -m ft.cli.main` para garantir isolamento.
+
+**Workaround atual:** sincronizar manualmente `cp ft/engine/validators/gates.py <projeto>/ft/engine/validators/gates.py` quando o engine é atualizado.

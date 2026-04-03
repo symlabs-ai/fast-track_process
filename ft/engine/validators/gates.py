@@ -206,13 +206,16 @@ def gate_server_starts(
 
 def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
     """
-    Gate final de liberação — verifica que o projeto não repete pitfalls P0
-    já documentados na KB de runs anteriores.
+    Gate final de liberação — verifica que o projeto não repete pitfalls
+    documentados na KB de runs anteriores.
 
     Checks derivados das avaliações:
-      SM4: interface_type=ui/mixed → frontend deve existir (package.json + index.html)
-      SM5: interface_type=mixed/api → entry point HTTP deve existir (FastAPI/Flask)
-      SM5: interface_type=mixed → vite.config.js deve ter proxy para backend
+      SM4:    interface_type=ui/mixed → frontend deve existir (package.json + index.html)
+      SM5:    interface_type=mixed/api → entry point HTTP deve existir (FastAPI/Flask)
+      SM5:    interface_type=mixed → vite.config.js deve ter proxy para backend
+      SM5:    interface_type=ui + Python backend = provável mixed
+      SM6-P4: frontend sem BrowserRouter/Route path → deep links quebrados
+      SM6-P5: frontend-prd-review.md com REJECTED → nav contract não validado
     """
     # Derivar ft_root a partir de gates.py: ft/engine/validators/gates.py → 4 níveis acima
     ft_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -285,12 +288,46 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
         py_files_exist = any(list(d.glob("**/*.py")) for d in backend_dirs)
         frontend_exists = (root / "frontend").is_dir()
         if frontend_exists and py_files_exist:
-            # frontend + código Python backend = mixed, não ui
             failures.append(
                 "KB-SM5: interface_type=ui mas existem frontend/ E src/ com Python — "
                 "provável interface_type=mixed; sem essa correção gate_server_starts não "
                 "verificará se o backend HTTP está funcional"
             )
+
+    # ── Pitfall SM6-P4: routing sem URL change — deep links quebrados ──────────
+    if interface_type in ("ui", "mixed"):
+        frontend_src = root / "frontend/src"
+        if frontend_src.is_dir():
+            import re as _re
+            path_routing_found = False
+            for f in list(frontend_src.rglob("*.jsx")) + list(frontend_src.rglob("*.tsx")) + list(frontend_src.rglob("*.js")):
+                try:
+                    content = f.read_text(errors="ignore")
+                    if _re.search(r'(BrowserRouter|HashRouter|createBrowserRouter|<Route\s+path=)', content):
+                        path_routing_found = True
+                        break
+                except Exception:
+                    continue
+            if not path_routing_found:
+                failures.append(
+                    "KB-P4: frontend sem roteamento baseado em URL (BrowserRouter/Route path não encontrado) — "
+                    "deep links e navegação direta por URL não funcionarão; "
+                    "use BrowserRouter com <Route path=...> para cada tela"
+                )
+
+    # ── Pitfall SM6-P5: prd_review REJECTED sem correção posterior ──────────────
+    if interface_type in ("ui", "mixed"):
+        prd_review = root / "project/docs/frontend-prd-review.md"
+        if prd_review.exists():
+            import re as _re
+            review_content = prd_review.read_text()
+            # Verifica se o veredicto final é REJECTED (não APPROVED)
+            if _re.search(r'Veredicto:\s*REJECTED', review_content, _re.IGNORECASE):
+                failures.append(
+                    "KB-P5: frontend-prd-review.md com veredicto REJECTED — "
+                    "conformidade de navegação (nav contract) não foi validada; "
+                    "corrija os itens rejeitados antes de liberar"
+                )
 
     if failures:
         return False, (

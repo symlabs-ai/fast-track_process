@@ -144,6 +144,53 @@ nodes:
     validators:
       - file_exists: project/docs/test_data.md
       - min_lines: 30
+    next: ft.plan.05.api_contract
+
+  - id: ft.plan.05.api_contract
+    type: document
+    title: "Definir Contrato de API"
+    executor: llm_coach
+    sprint: sprint-02-planning
+    outputs:
+      - project/docs/api_contract.md
+    requires_approval: true
+    prompt: |
+      Defina o contrato de API do projeto ANTES de qualquer código ser escrito.
+      Este documento é a fonte de verdade — frontend e backend DEVEM seguir
+      esses nomes de endpoint exatamente, sem desvios.
+
+      Leia obrigatoriamente:
+        - project/docs/PRD.md         (entidades e user stories)
+        - project/docs/tech_stack.md  (interface_type e stack)
+        - project/docs/test_data.md   (entidades da massa de dados)
+
+      SE interface_type for cli_only:
+        Escreva um api_contract.md mínimo indicando que não há API HTTP
+        e encerre com DONE.
+
+      SE interface_type for api ou mixed:
+        Produza project/docs/api_contract.md com todos os endpoints HTTP.
+
+        REGRAS OBRIGATÓRIAS:
+        1. Escolha UM idioma para os paths (o mesmo do PRD) e use-o em TODOS
+           os endpoints — NUNCA misture português e inglês nos paths
+        2. Use substantivos no plural para coleções (ex: /clientes, não /cliente)
+        3. Inclua SEMPRE: GET /health retornando {"status": "ok"}
+        4. Nomes de path devem ser lowercase sem acentos (ex: /cobrancas, não /cobranças)
+
+        Formato obrigatório por recurso:
+
+          ## <NomeRecurso>
+          | Método | Path | Descrição | Request Body | Response |
+          |--------|------|-----------|--------------|----------|
+          | POST   | /recurso | criar | {campo: tipo} | {id, ...} |
+          | GET    | /recurso | listar | — | [{...}] |
+          | GET    | /recurso/{id} | buscar por ID | — | {...} |
+
+        Ao final diga DONE e liste o total de endpoints definidos.
+    validators:
+      - file_exists: project/docs/api_contract.md
+      - min_lines: 20
     next: gate.planning
 
   - id: gate.planning
@@ -156,6 +203,7 @@ nodes:
       - file_exists: project/docs/tech_stack.md
       - file_exists: project/docs/diagrams/architecture.md
       - file_exists: project/docs/test_data.md
+      - file_exists: project/docs/api_contract.md
     next: ft.plan.detect_interface
 
   - id: ft.plan.detect_interface
@@ -250,16 +298,23 @@ nodes:
     prompt: |
       Implemente as telas e funcionalidades do frontend com base nas User Stories do PRD.
 
+      Leia obrigatoriamente antes de implementar:
+        - project/docs/PRD.md            (user stories e contrato de navegação)
+        - project/docs/api_contract.md   (FONTE DE VERDADE dos endpoints — use EXATAMENTE esses paths)
+
       Diretrizes:
       - Cada User Story que envolve interface deve ter ao menos uma tela/componente
       - NAVEGACAO OBRIGATORIA: toda secao do PRD que possui tela dedicada DEVE aparecer
         no bottom navigation bar (ou em menu lateral com rotulo textual visivel).
         E proibido usar apenas icones sem texto ou acoes escondidas no AppBar para
         secoes principais. O usuario deve identificar todas as telas sem explorar a UI.
+      - ROTEAMENTO COM URL: use BrowserRouter com <Route path="..."> para cada tela —
+        cada tela deve ter uma URL própria (ex: /clientes, /agenda) para que deep links
+        e navegação direta funcionem
       - Use o framework definido no tech_stack.md e o scaffold existente em frontend/
       - Service worker deve cachear assets estaticos (cache-first)
       - UI responsiva, mobile-first
-      - Conecte ao backend via fetch/axios nos endpoints da API
+      - Conecte ao backend via fetch/axios usando EXATAMENTE os paths do api_contract.md
 
       Produza os arquivos em frontend/src/.
       Ao final diga DONE e liste os arquivos criados.
@@ -379,9 +434,10 @@ nodes:
       Crie o entry point HTTP do projeto: main.py na raiz.
 
       Leia obrigatoriamente:
-        - project/docs/tech_stack.md   (interface_type e stack)
-        - project/docs/PRD.md          (seção 8.6 Contrato de Integração HTTP)
-        - src/                         (domínio existente para registrar os routers)
+        - project/docs/tech_stack.md     (interface_type e stack)
+        - project/docs/api_contract.md   (FONTE DE VERDADE dos endpoints — implemente EXATAMENTE esses paths)
+        - project/docs/PRD.md            (seção 8.6 Contrato de Integração HTTP)
+        - src/                           (domínio existente para registrar os routers)
 
       SE interface_type for cli_only: escreva main.py mínimo com `if __name__ == '__main__': pass`
       e encerre com DONE.

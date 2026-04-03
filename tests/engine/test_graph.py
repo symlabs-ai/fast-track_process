@@ -172,7 +172,7 @@ class TestLoadGraph:
 
     def test_load_fast_track_v2(self):
         g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
-        assert len(g.nodes) == 37
+        assert len(g.nodes) == 38
         assert len(g.get_sprints()) == 10
 
     def test_missing_file_raises(self):

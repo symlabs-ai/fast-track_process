@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.9] - 2026-04-03
+
+- chore: validação E2E retroativa SM6 — `ft.handoff.02.plano_voo` executado sobre SM6; `plano_de_voo.md` gerado com veredicto ITERATE e 7 débitos (DT-01..DT-07) para SM7
+
+---
+
 ## [v0.8.8] - 2026-04-03
 
 - feat: `ft.handoff.02.plano_voo` — node que gera `project/docs/plano_de_voo.md` com veredicto ITERATE/RELEASE_CANDIDATE, débitos, correções obrigatórias e comandos de init para o próximo ciclo

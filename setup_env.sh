@@ -99,7 +99,30 @@ else
   echo "!! Aviso: pre-commit não encontrado no ambiente, algo deu errado na instalação."
 fi
 
-# 7. Criar environment/gateway.md a partir do template se não existir
+# 7. Copiar plano_de_voo.md do projeto anterior (se --from-project for fornecido)
+#    Uso: bash setup_env.sh --from-project /caminho/para/projeto-anterior
+FROM_PROJECT=""
+for arg in "$@"; do
+  case $arg in
+    --from-project=*) FROM_PROJECT="${arg#*=}" ;;
+    --from-project)   shift; FROM_PROJECT="${1:-}" ;;
+  esac
+done
+
+if [ -n "${FROM_PROJECT}" ]; then
+  PREV_PLANO="${FROM_PROJECT}/project/docs/plano_de_voo.md"
+  if [ -f "${PREV_PLANO}" ]; then
+    TARGET_DOCS="${ROOT_DIR}/project/docs"
+    mkdir -p "${TARGET_DOCS}"
+    cp "${PREV_PLANO}" "${TARGET_DOCS}/plano_de_voo.md"
+    echo "==> Plano de voo copiado de ${PREV_PLANO} → project/docs/plano_de_voo.md"
+    echo "    (será injetado automaticamente no contexto dos agentes pelo hyper-mode)"
+  else
+    echo "!! Aviso: --from-project especificado mas ${PREV_PLANO} não encontrado."
+  fi
+fi
+
+# 8. Criar environment/gateway.md a partir do template se não existir
 ENV_DIR="${ROOT_DIR}/environment"
 GATEWAY_FILE="${ENV_DIR}/gateway.md"
 GATEWAY_EXAMPLE="${ENV_DIR}/gateway.example.md"

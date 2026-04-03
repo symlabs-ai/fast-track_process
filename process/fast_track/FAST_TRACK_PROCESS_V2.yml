@@ -725,6 +725,82 @@ nodes:
       - file_exists: project/docs/SPEC.md
       - file_exists: CHANGELOG.md
       - min_lines: 20
+    next: ft.handoff.02.plano_voo
+
+  - id: ft.handoff.02.plano_voo
+    type: document
+    title: "Gerar Plano de Voo — Próximo Ciclo"
+    executor: llm_coach
+    sprint: sprint-10-handoff
+    outputs:
+      - project/docs/plano_de_voo.md
+    prompt: |
+      Você é o product coach responsável por encerrar este ciclo e preparar
+      o contexto para o próximo. Seu produto é o plano_de_voo.md — ele será
+      o ÚNICO documento lido por um agente em sessão completamente limpa
+      antes de iniciar o próximo ciclo. Ele tem que ser suficiente.
+
+      LEIA obrigatoriamente:
+        - project/docs/PRD.md                    (produto evoluído deste ciclo)
+        - project/docs/TASK_LIST.md              (o que foi vs. não foi implementado)
+        - project/docs/retro.md                  (problemas encontrados)
+        - project/docs/forgebase-audit.md        (auditoria técnica)
+        - project/docs/acceptance-cli-report.md  (resultados de integração API)
+        - project/docs/frontend-prd-review.md    (se existir — conformidade de UI)
+        - project/state/engine_state.yml         (gate_log — o que foi forçado)
+
+      PASSO 1 — Determine o veredicto:
+        RELEASE_CANDIDATE se TODOS estes critérios forem verdadeiros:
+          - acceptance-cli-report.md sem nenhum [FAIL]
+          - frontend-prd-review.md com veredicto APPROVED (ou não existe)
+          - Nenhum gate com status "REJECTED(forced)" no engine_state gate_log
+          - Todos os testes unitários passando
+        ITERATE em qualquer outro caso.
+
+      PASSO 2 — Produza project/docs/plano_de_voo.md com EXATAMENTE estas seções:
+
+        # Plano de Voo — <Nome do Projeto> — Ciclo <N+1>
+
+        ## Veredicto: ITERATE  (ou RELEASE_CANDIDATE)
+        <justificativa em 2-3 linhas>
+
+        ## O que foi entregue neste ciclo
+        - lista das funcionalidades implementadas e validadas
+
+        ## Débitos para o próximo ciclo
+        - lista do que NÃO foi implementado ou falhou na validação
+
+        ## Correções obrigatórias (erros detectados que devem ser corrigidos)
+        - <erro específico>: <como corrigir — instrução direta ao coder>
+        (Seja específico: "chame /api/clientes, não /api/clients" é melhor que
+        "corrija o mismatch de rotas")
+
+        ## Contexto de arquitetura
+        - interface_type: <valor>
+        - Stack: <resumo da stack>
+        - Entry point: <main.py ou equivalente>
+        - Proxy Vite: <configuração se mixed>
+
+        ## Comandos para iniciar o próximo ciclo
+        ```bash
+        mkdir -p <pasta_projeto_novo>/project/docs
+        cp project/docs/PRD.md <pasta_projeto_novo>/project/docs/PRD.md
+        cp project/docs/plano_de_voo.md <pasta_projeto_novo>/project/docs/plano_de_voo.md
+        ft run <pasta_projeto_novo>
+        ```
+
+      REGRA: O plano_de_voo.md deve ser autocontido. Um agente que leu APENAS
+      este arquivo deve saber o que construir, o que evitar e como iniciar.
+      Não referencie arquivos externos sem incluir o conteúdo relevante inline.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: project/docs/plano_de_voo.md
+      - min_lines: 30
+      - has_sections:
+          - Veredicto
+          - Débitos
+          - Correções obrigatórias
     next: gate.mvp
 
   - id: gate.mvp

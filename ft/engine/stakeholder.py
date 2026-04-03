@@ -95,7 +95,7 @@ def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
     if not evals:
         return ""
 
-    parts = ["LIÇÕES DE RUNS ANTERIORES (Process KB):"]
+    parts = ["LIÇÕES DE RUNS ANTERIORES (Process KB — padrões genéricos):"]
 
     for path in evals[-2:]:  # últimas 2 avaliações
         try:
@@ -105,17 +105,16 @@ def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
 
         lines = content.splitlines()
         title_line = next((l for l in lines if l.startswith("# ")), path.stem)
-        nota_line = next((l for l in lines if "Nota:" in l), "")
+        nota_line = next((l for l in lines if "Nota:" in l or "nota" in l.lower()), "")
 
-        # Extrair seções relevantes
+        # Extrair APENAS seções genéricas (lições de processo, não detalhes de projeto)
+        # "O que falhou" e "Causa Raiz" são específicos de projeto — não injetar
         sections_to_extract = [
-            "O que falhou",
-            "Causa Raiz",
+            "Lições para o Processo",
             "Lições para Próximos",
-            "Correções Aplicadas",
         ]
 
-        extracted = [f"\n### {title_line.lstrip('# ')} {nota_line}"]
+        extracted = [f"\n### Lições de {title_line.lstrip('# ')} {nota_line}"]
         in_section = False
         section_lines: list[str] = []
 
@@ -126,7 +125,7 @@ def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
                 in_section = True
                 section_lines = [line]
             elif in_section:
-                if line.startswith("## ") and not any(s.lower() in line.lower() for s in sections_to_extract):
+                if line.startswith("## "):
                     extracted.extend(section_lines[:15])
                     in_section = False
                     section_lines = []
@@ -136,7 +135,9 @@ def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
         if section_lines:
             extracted.extend(section_lines[:15])
 
-        parts.extend(extracted)
+        # Só adiciona se extraiu algo além do header
+        if len(extracted) > 1:
+            parts.extend(extracted)
 
     if interface_type and interface_type not in ("cli_only", "api"):
         parts.append(

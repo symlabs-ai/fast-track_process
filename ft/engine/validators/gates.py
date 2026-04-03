@@ -155,13 +155,27 @@ def gate_server_starts(
 
     root = Path(project_root)
 
-    # Procura entry points conhecidos
+    # Procura entry points conhecidos — raiz tem prioridade sobre src/
+    # (src/main.py pode ser scaffold interno, não o servidor HTTP)
+    http_keywords = ("FastAPI", "Flask", "Starlette", "uvicorn", "import app")
     candidates = [
-        "backend/main.py", "src/main.py", "main.py",
-        "backend/app.py", "src/app.py", "app.py",
-        "backend/server.py", "src/server.py", "server.py",
+        "main.py",
+        "app.py",
+        "server.py",
+        "backend/main.py",
+        "backend/app.py",
+        "backend/server.py",
+        "src/backend/app/main.py",
+        "src/main.py",
+        "src/app.py",
+        "src/server.py",
     ]
-    entry = next((c for c in candidates if (root / c).exists()), None)
+    entry = next(
+        (c for c in candidates
+         if (root / c).exists()
+         and any(kw in (root / c).read_text(errors="ignore") for kw in http_keywords)),
+        None,
+    )
     if not entry:
         return False, "gate_server_starts FAIL: nenhum entry point HTTP encontrado (main.py / app.py / server.py)"
 
@@ -248,12 +262,25 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
 
     # ── Pitfall SM5: sem entry point HTTP apesar de interface_type exigir server ──
     if interface_type in ("mixed", "api"):
+        _http_kw = ("FastAPI", "Flask", "Starlette", "uvicorn", "import app")
         http_candidates = [
-            "backend/main.py", "src/main.py", "main.py",
-            "backend/app.py", "src/app.py", "app.py",
-            "backend/server.py", "src/server.py", "server.py",
+            "main.py",
+            "app.py",
+            "server.py",
+            "backend/main.py",
+            "backend/app.py",
+            "backend/server.py",
+            "src/backend/app/main.py",
+            "src/main.py",
+            "src/app.py",
+            "src/server.py",
         ]
-        entry = next((c for c in http_candidates if (root / c).exists()), None)
+        entry = next(
+            (c for c in http_candidates
+             if (root / c).exists()
+             and any(kw in (root / c).read_text(errors="ignore") for kw in _http_kw)),
+            None,
+        )
         if not entry:
             failures.append(
                 f"KB-SM5: interface_type={interface_type} exige servidor HTTP, "

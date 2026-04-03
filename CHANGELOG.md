@@ -4,6 +4,10 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.6] - 2026-04-03
+
+- fix: `StateManager.advance()` agora levanta `RuntimeError` quando estado está bloqueado — remove auto-unblock silencioso; 273 testes passando
+
 ## [v0.8.5] - 2026-04-03
 
 - feat: `ft.plan.04.test_data` — node no planning que gera massa de dados realista para aceitação (project/docs/test_data.md)

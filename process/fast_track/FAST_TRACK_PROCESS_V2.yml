@@ -560,6 +560,7 @@ nodes:
           - Hipotese
           - User Stories
           - interface_type
+    next: ft.handoff.01.specs
 
   - id: ft.handoff.01.specs
     type: document

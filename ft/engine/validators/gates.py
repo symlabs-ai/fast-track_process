@@ -364,6 +364,62 @@ def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
     return True, "gate_acceptance_cli: PASS — todos os registros aceitos pela API"
 
 
+def gate_pulse_instrumented(project_root: str = ".") -> tuple[bool, str]:
+    """Gate de ForgeBase Pulse — bloqueia se nenhum track estiver instrumentado no código.
+
+    Procura referências ao SDK do ForgeBase Pulse em src/ e frontend/src/:
+    - UseCaseRunner (track de negócio)
+    - track-infra / track-erro / track-negocio / track-perf / track-dx
+    - forge_pulse / forgepulse / ForgeBase (import direto)
+
+    Se interface_type=cli_only, verifica apenas src/.
+    Se nenhuma referência encontrada, retorna FAIL com orientação de implementação.
+    """
+    import re
+
+    root = Path(project_root)
+    patterns = [
+        r'UseCaseRunner',
+        r'track-infra',
+        r'track-erro',
+        r'track-negocio',
+        r'track-perf',
+        r'track-dx',
+        r'forge_pulse',
+        r'forgepulse',
+        r'ForgeBase',
+    ]
+    combined = re.compile("|".join(patterns))
+
+    search_dirs = []
+    for candidate in ("src", "backend", "frontend/src"):
+        d = root / candidate
+        if d.is_dir():
+            search_dirs.append(d)
+
+    found_in = []
+    for search_dir in search_dirs:
+        for ext in ("*.py", "*.js", "*.jsx", "*.ts", "*.tsx"):
+            for f in search_dir.rglob(ext):
+                try:
+                    if combined.search(f.read_text(errors="ignore")):
+                        found_in.append(str(f.relative_to(root)))
+                        break
+                except Exception:
+                    continue
+        if found_in:
+            break
+
+    if not found_in:
+        return False, (
+            "gate_pulse_instrumented FAIL: nenhum track do ForgeBase Pulse encontrado em src/ "
+            "nem frontend/src/. Implemente ao menos track-infra e track-negocio antes do gate.audit. "
+            "Ver plano_de_voo.md §Correções obrigatórias para a ordem de implementação recomendada."
+        )
+
+    return True, f"gate_pulse_instrumented: PASS — Pulse encontrado em {found_in[0]}"
+
+
 def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     """Gate de frontend — verifica estrutura minima de PWA."""
     import json

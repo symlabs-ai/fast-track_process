@@ -92,6 +92,12 @@ nodes:
       - ui: inclui interface web/PWA/mobile
       - mixed: CLI + interface web
 
+      REGRA CRITICA: se o projeto tem backend Python/Node/Go/etc. E um frontend
+      separado (React, Vue, HTML), o interface_type DEVE ser `mixed` — nunca `ui`.
+      `ui` so e valido para projetos 100% frontend sem backend proprio (ex: SPA
+      consumindo APIs de terceiros). Quando houver backend proprio + frontend,
+      use `mixed` obrigatoriamente, independentemente do que o PRD disser.
+
       Produza o documento project/docs/tech_stack.md com todas as secoes usuais
       (linguagem, frameworks, dependencias, deploy) mais a linha interface_type.
     validators:
@@ -443,11 +449,18 @@ nodes:
       e encerre com DONE.
 
       SE interface_type for api ou mixed:
-        1. Instancie `app = FastAPI(title="<nome do projeto>")`
-        2. Inclua todos os routers existentes em src/ (via `app.include_router`)
-        3. Adicione `GET /health` retornando `{"status": "ok"}`
-        4. Configure CORS para `http://localhost:5173` (se mixed)
-        5. Adicione bloco `if __name__ == '__main__': uvicorn.run(app, host='0.0.0.0', port=8000)`
+        1. OBRIGATORIO — adicione sys.path no topo do arquivo, ANTES de qualquer import:
+             import sys
+             from pathlib import Path
+             sys.path.insert(0, str(Path(__file__).parent / "src"))
+           Sem isso, `from backend.app.*` falha quando o processo sobe via `uvicorn main:app`.
+        2. Instancie `app = FastAPI(title="<nome do projeto>")`
+        3. Inclua todos os routers existentes em src/ (via `app.include_router`)
+        4. Adicione `GET /health` retornando `{"status": "ok"}` — OBRIGATORIO na raiz (/health),
+           NAO em /api/health. O gate_server_starts testa exatamente http://host/health.
+           Se quiser expor tambem em /api/health, adicione os dois decorators no mesmo handler.
+        5. Configure CORS para `http://localhost:5173` (se mixed)
+        6. Adicione bloco `if __name__ == '__main__': uvicorn.run(app, host='0.0.0.0', port=8000)`
 
       O arquivo deve ser inicializável com:
         uvicorn main:app --host 0.0.0.0 --port 8000
@@ -637,6 +650,36 @@ nodes:
     sprint: sprint-09-audit
     outputs:
       - project/docs/forgebase-audit.md
+    prompt: |
+      Execute a auditoria ForgeBase do projeto e produza project/docs/forgebase-audit.md.
+
+      Leia obrigatoriamente:
+        - project/docs/tech_stack.md
+        - project/docs/PRD.md
+        - src/ ou backend/ (código do servidor)
+        - frontend/src/ (se existir)
+
+      A auditoria DEVE cobrir obrigatoriamente:
+
+      1. ESTRUTURA: lint limpo, imports organizados, sem código morto óbvio
+      2. TESTES: cobertura estimada, testes unitários e smoke presentes
+      3. SEGURANÇA: sem secrets hardcodados, sem SQL injection, sem XSS evidente
+      4. FORGEBASE PULSE — OBRIGATORIO: verificar se os 5 tracks estão instrumentados:
+         - track-infra: endpoint /health após verificar DB
+         - track-erro: handler de HTTPException
+         - track-negocio: endpoints de criação/atualização de entidades principais
+         - track-perf: middleware com tempo de resposta
+         - track-dx: handler global de Exception
+         Se algum track estiver ausente, DOCUMENTE quais faltam e IMPLEMENTE os que
+         faltam antes de fechar a auditoria. O gate_pulse_instrumented vai bloquear
+         se nenhum track for encontrado no código.
+
+      Produza project/docs/forgebase-audit.md com:
+        - Resultado por categoria (PASS / FAIL / PARCIAL)
+        - Lista dos 5 tracks do Pulse: status de cada um
+        - Débitos técnicos identificados (prioridade P0/P1/P2)
+
+      Ao final diga DONE.
     validators:
       - file_exists: project/docs/forgebase-audit.md
       - min_lines: 20
@@ -652,6 +695,7 @@ nodes:
       - file_exists: project/docs/forgebase-audit.md
       - tests_pass: true
       - lint_clean: true
+      - gate_pulse_instrumented: true
     next: ft.prd.rewrite
 
   # ================================================================

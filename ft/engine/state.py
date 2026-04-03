@@ -159,9 +159,7 @@ class StateManager:
         """Avanca estado apos validacao PASS."""
         s = self.state
         if s.node_status == "blocked":
-            # Auto-unblock: se a validacao passou, o bloqueio anterior foi resolvido
-            s.node_status = "ready"
-            s.blocked_reason = None
+            raise RuntimeError(f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance().")
         s.completed_nodes.append(completed_node)
         s.gate_log[completed_node] = gate_result
         s.current_node = next_node

@@ -1,4 +1,8 @@
 {
+
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://symgateway.symlabs.ai/u/sk-sym_6qiZfj516Ya0awNtjggDg1YH4IU0XDnlsSOR2rg7/p/anthropic-max/s/fast-track"
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -31,13 +35,31 @@
         ]
       }
     ],
-    "PostBash": [
+    "PostToolUse": [
       {
-        "matcher": "git commit",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "ft validate state 2>&1 | tail -3"
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q 'ft_state.yml'; then ft validate state 2>&1 | tail -5; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q 'mvp_status.*entregue'; then echo '⚠️  MVP gate check:' && ft validate gate mvp 2>&1 | tail -15; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q 'git commit'; then ft validate state 2>&1 | tail -3; fi"
           }
         ]
       }

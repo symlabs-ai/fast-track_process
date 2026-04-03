@@ -4,6 +4,13 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.5] - 2026-04-03
+
+- feat: `ft.plan.04.test_data` — node no planning que gera massa de dados realista para aceitação (project/docs/test_data.md)
+- feat: `ft.acceptance.01.cli` — acceptance test CLI First: insere test_data via API e valida respostas antes de tocar no frontend
+- feat: `gate.acceptance.cli` com `gate_acceptance_cli` — bloqueia se qualquer [FAIL] no relatório
+- feat: `gate.planning` agora exige `test_data.md` como pré-requisito
+
 ## [v0.8.4] - 2026-04-02
 
 - feat: `avaliacao_e2e_service_mate_6.md` — KB entry SM6 (nota 6.5/10): mismatch de rotas API (inglês vs. português), deep links sem URL change, Catálogo ausente

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ft-engine"
-version = "0.8.4"
+version = "0.8.5"
 description = "Deterministic process engine for solo dev + AI workflows"
 readme = "docs/ft_engine_usage.md"
 license = { text = "MIT" }

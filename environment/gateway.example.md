@@ -8,6 +8,7 @@
 - **Gateway URL**: https://symgateway.symlabs.ai  ← nunca staging
 - **Workspace**: <nome do workspace, ex: "Symlabs [DEV]">
 - **API Key**: <nome da sua key, ex: "palhano">
+- **ANTHROPIC_BASE_URL**: https://symgateway.symlabs.ai/u/<sk-sym_SUA_KEY>/p/anthropic-max
 
 ## Como registrar um novo projeto
 

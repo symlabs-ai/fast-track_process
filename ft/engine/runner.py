@@ -360,10 +360,44 @@ class StepRunner:
         self._check_environment()
 
     def _check_environment(self):
-        """Lê environment/ se existir. Gateway é opcional — sem aviso se ausente."""
+        """Lê environment/gateway.md e provisiona CLAUDE.md + .claude/settings.local.json."""
+        import re
+        import json
+
         gateway_file = Path(self._ft_root) / "environment" / "gateway.md"
-        if gateway_file.exists():
-            print(f"  Environment: gateway.md carregado")
+        if not gateway_file.exists():
+            return
+
+        content = gateway_file.read_text()
+        print(f"  Environment: gateway.md carregado")
+
+        root = Path(self._ft_root)
+
+        # Extrair ANTHROPIC_BASE_URL do gateway.md
+        m = re.search(r"\*\*ANTHROPIC_BASE_URL\*\*\s*:\s*(\S+)", content)
+        base_url = m.group(1) if m else None
+
+        # Criar CLAUDE.md com gateway_project se não existir
+        claude_md = root / "CLAUDE.md"
+        project_name = root.name
+        if not claude_md.exists():
+            claude_md.write_text(f"gateway_project: {project_name}\n")
+            print(f"  Criado: CLAUDE.md (gateway_project: {project_name})")
+        else:
+            existing = claude_md.read_text()
+            if "gateway_project" not in existing:
+                claude_md.write_text(f"gateway_project: {project_name}\n{existing}")
+                print(f"  Atualizado: CLAUDE.md (gateway_project: {project_name})")
+
+        # Criar .claude/settings.local.json se ANTHROPIC_BASE_URL disponível
+        if base_url:
+            dot_claude = root / ".claude"
+            dot_claude.mkdir(exist_ok=True)
+            settings_file = dot_claude / "settings.local.json"
+            if not settings_file.exists():
+                settings = {"env": {"ANTHROPIC_BASE_URL": base_url}}
+                settings_file.write_text(json.dumps(settings, indent=2) + "\n")
+                print(f"  Criado: .claude/settings.local.json (ANTHROPIC_BASE_URL configurado)")
 
     def run(self, mode: str = "step"):
         """

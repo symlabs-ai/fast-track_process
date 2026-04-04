@@ -49,12 +49,12 @@ def has_sections(path: str, sections: list[str], project_root: str = ".") -> tup
 
 
 def min_user_stories(path: str, n: int, project_root: str = ".") -> tuple[bool, str]:
-    """Conta user stories no formato ### US- ou ### US ou ## US."""
+    """Conta user stories nos formatos: ### US- / ## US- / **US- / US-XX."""
     full = Path(project_root) / path
     if not full.exists():
         return False, f"min_user_stories FAIL: {path} nao existe"
     content = full.read_text()
-    count = len(re.findall(r'###?\s+US[-\s]', content, re.IGNORECASE))
+    count = len(re.findall(r'(?:###?\s+US[-\s]|\*\*US-|^US-\d)', content, re.IGNORECASE | re.MULTILINE))
     if count >= n:
         return True, f"min_user_stories: {path} tem {count} user stories (min {n})"
     return False, f"min_user_stories FAIL: {path} tem {count} user stories (min {n})"

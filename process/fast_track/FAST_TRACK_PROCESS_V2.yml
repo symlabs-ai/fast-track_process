@@ -401,36 +401,47 @@ nodes:
       conformidade com o PRD do projeto. Sua tarefa e: APROVAR ou REJEITAR.
 
       PASSO 1 — Leia obrigatoriamente:
-        - project/docs/PRD.md  (especialmente secao "Contrato de Navegacao UI")
-        - frontend/src/components/Layout.jsx
-        - frontend/src/App.jsx
+        - project/docs/PRD.md  (todos os requisitos funcionais e de navegacao)
+        - frontend/src/App.jsx  (rotas implementadas)
+        - frontend/src/  (componentes relevantes de navegacao e layout)
 
-      PASSO 2 — Verifique cada item da checklist abaixo:
+      PASSO 2 — Derive a checklist a partir do PRD lido.
+        NÃO use uma checklist fixa. Para cada requisito de frontend presente no PRD,
+        crie um item verificável. Exemplos do que buscar no PRD:
+          - Quais rotas/páginas são exigidas?
+          - Qual é a estrutura de navegação definida (bottom nav, sidebar, tabs)?
+          - Quantos e quais itens de navegação o PRD especifica?
+          - Existem componentes globais exigidos (FAB, header, etc.)?
+          - Quais fluxos de autenticação são necessários?
+          - Existem páginas públicas (sem login)?
+        Use APENAS itens que consigues rastrear diretamente ao PRD.
+        Se o PRD não menciona algo, não adicione na checklist.
 
-        [ ] Bottom nav tem exatamente 5 itens na ordem correta (conforme PRD secao 8.5)
-        [ ] Assistente NAO esta no bottom nav (e FAB flutuante)
-        [ ] FAB do Assistente existe no Layout com posicao fixed acima dos FABs de pagina
-        [ ] Catalogo esta acessivel diretamente no bottom nav
-        [ ] Todas as rotas do PRD estao mapeadas no App.jsx
-        [ ] Empty states nao duplicam o botao do FAB
+      PASSO 3 — Para cada item da checklist derivada, verifique o código e marque:
+        - [x] item passou — breve justificativa com arquivo/linha
+        - [ ] item falhou — descreva o que está ausente ou incorreto
 
-      PASSO 3 — Escreva um relatorio em project/docs/frontend-prd-review.md com:
+      PASSO 4 — Escreva o relatório em project/docs/frontend-prd-review.md:
 
         # Frontend PRD Review
 
         ## Veredicto: APPROVED  (ou REJECTED)
 
         ## Checklist
-        - [x] ou [ ] item: observacao
+        - [x] ou [ ] item rastreável ao PRD: observação
 
         ## Problemas Encontrados (se REJECTED)
-        - descricao do problema e o que precisa ser corrigido
+        - descrição do problema, referência ao requisito no PRD, o que precisa ser corrigido
 
         ## Conformidades (sempre listar)
-        - o que foi implementado corretamente
+        - o que foi implementado corretamente em relação ao PRD
 
-      REGRA: Se qualquer item da checklist falhar, o veredicto DEVE ser REJECTED.
-      Apenas responda APPROVED se TODOS os itens passarem.
+        ## Observação Final
+        - Seções do PRD utilizadas como fonte da checklist
+
+      REGRA: Só rejeite por itens que estejam explicitamente no PRD.
+      Não invente requisitos. Se o PRD não especifica, marque N/A ou omita o item.
+      Apenas responda APPROVED se todos os itens rastreáveis ao PRD passarem.
     validators:
       - file_exists: project/docs/frontend-prd-review.md
       - min_lines: 10

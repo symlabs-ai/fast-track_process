@@ -99,14 +99,19 @@ else
   echo "!! Aviso: pre-commit não encontrado no ambiente, algo deu errado na instalação."
 fi
 
-# 7. Copiar plano_de_voo.md do projeto anterior (se --from-project for fornecido)
-#    Uso: bash setup_env.sh --from-project /caminho/para/projeto-anterior
+# 7. Parsear argumentos opcionais
 FROM_PROJECT=""
-for arg in "$@"; do
+GATEWAY_KEY=""
+i=1
+while [ $i -le $# ]; do
+  arg="${!i}"
   case $arg in
     --from-project=*) FROM_PROJECT="${arg#*=}" ;;
-    --from-project)   shift; FROM_PROJECT="${1:-}" ;;
+    --from-project)   i=$((i+1)); FROM_PROJECT="${!i:-}" ;;
+    --key=*)          GATEWAY_KEY="${arg#*=}" ;;
+    --key)            i=$((i+1)); GATEWAY_KEY="${!i:-}" ;;
   esac
+  i=$((i+1))
 done
 
 if [ -n "${FROM_PROJECT}" ]; then
@@ -122,17 +127,34 @@ if [ -n "${FROM_PROJECT}" ]; then
   fi
 fi
 
-# 8. Criar environment/gateway.md a partir do template se não existir
-ENV_DIR="${ROOT_DIR}/environment"
-GATEWAY_FILE="${ENV_DIR}/gateway.md"
-GATEWAY_EXAMPLE="${ENV_DIR}/gateway.example.md"
+# 8. Provisionar CLAUDE.md + .claude/settings.local.json (se --key fornecida)
+#    A key deriva automaticamente a ANTHROPIC_BASE_URL.
+#    Uso: bash setup_env.sh --key sk-sym_SUA_KEY
+if [ -n "${GATEWAY_KEY}" ]; then
+  BASE_URL="https://symgateway.symlabs.ai/u/${GATEWAY_KEY}/p/anthropic-max"
+  PROJECT_NAME="$(basename "${ROOT_DIR}")"
 
-if [ ! -f "${GATEWAY_FILE}" ] && [ -f "${GATEWAY_EXAMPLE}" ]; then
-  echo "==> Criando environment/gateway.md a partir do template..."
-  cp "${GATEWAY_EXAMPLE}" "${GATEWAY_FILE}"
-  echo "!! ATENÇÃO: Preencha ${GATEWAY_FILE} com os dados do seu workspace antes de rodar ft init."
-elif [ -f "${GATEWAY_FILE}" ]; then
-  echo "==> environment/gateway.md já existe."
+  # CLAUDE.md
+  CLAUDE_FILE="${ROOT_DIR}/CLAUDE.md"
+  if [ ! -f "${CLAUDE_FILE}" ]; then
+    printf 'gateway_project: %s\n' "${PROJECT_NAME}" > "${CLAUDE_FILE}"
+    echo "==> Criado: CLAUDE.md (gateway_project: ${PROJECT_NAME})"
+  elif ! grep -q "gateway_project" "${CLAUDE_FILE}"; then
+    printf 'gateway_project: %s\n' "${PROJECT_NAME}" | cat - "${CLAUDE_FILE}" > /tmp/_claude_md_tmp && mv /tmp/_claude_md_tmp "${CLAUDE_FILE}"
+    echo "==> Atualizado: CLAUDE.md (gateway_project: ${PROJECT_NAME})"
+  else
+    echo "==> CLAUDE.md já contém gateway_project."
+  fi
+
+  # .claude/settings.local.json
+  DOT_CLAUDE="${ROOT_DIR}/.claude"
+  mkdir -p "${DOT_CLAUDE}"
+  SETTINGS_FILE="${DOT_CLAUDE}/settings.local.json"
+  printf '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "%s"\n  }\n}\n' "${BASE_URL}" > "${SETTINGS_FILE}"
+  echo "==> Criado: .claude/settings.local.json (ANTHROPIC_BASE_URL configurado)"
+else
+  echo "!! Aviso: --key não fornecida. CLAUDE.md e settings.local.json não foram criados."
+  echo "   Use: bash setup_env.sh --key sk-sym_SUA_KEY"
 fi
 
 cat <<EOF

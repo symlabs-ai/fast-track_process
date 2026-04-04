@@ -8,7 +8,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from ft.engine.runner import StepRunner
+from ft.engine.runner import StepRunner, provision_environment
 
 
 def find_project_root() -> Path:
@@ -100,6 +100,14 @@ def cmd_graph(args):
     runner.status(full=True)
 
 
+def cmd_setup_env(args):
+    """Provisiona CLAUDE.md e .claude/settings.local.json a partir de uma API key."""
+    project_root = Path(args.project) if args.project else find_project_root()
+    provision_environment(project_root=project_root, key=args.key)
+    print(f"  Projeto: {project_root}")
+    print(f"  gateway_project: {project_root.name}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="ft",
@@ -133,6 +141,11 @@ def main():
     # graph
     sub.add_parser("graph", help="Mostrar grafo com status")
 
+    # setup-env
+    se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json")
+    se.add_argument("key", help="API key do SymGateway (sk-sym_...)")
+    se.add_argument("--project", help="Diretório do projeto (default: CWD ou raiz detectada)")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -147,6 +160,8 @@ def main():
         cmd_reject(args)
     elif args.command == "graph":
         cmd_graph(args)
+    elif args.command == "setup-env":
+        cmd_setup_env(args)
     else:
         parser.print_help()
 

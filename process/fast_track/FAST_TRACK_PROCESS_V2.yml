@@ -673,7 +673,11 @@ nodes:
         resultados e encerre com DONE.
 
       SE interface_type for api ou mixed:
-        1. Descubra os endpoints disponíveis: GET http://localhost:8000/openapi.json
+        0. Leia main.py para descobrir a porta do servidor (linha `uvicorn.run(..., port=XXXX)`).
+           Se o servidor não estiver rodando, inicie-o com:
+           `SECRET_KEY=dev-test-key nohup python -m uvicorn main:app --host 127.0.0.1 --port XXXX &`
+           e aguarde 3 segundos. Use SEMPRE o DB limpo (delete service_mate.db se existir antes de iniciar).
+        1. Descubra os endpoints: GET http://localhost:XXXX/openapi.json
         2. Para cada entidade em test_data.md:
            a. Identifique o endpoint de criação correto (POST)
            b. Faça POST com cada registro da entidade
@@ -698,6 +702,11 @@ nodes:
       REGRA CRÍTICA: Se qualquer POST retornar 404 ou 422 inesperado, marque
       como [FAIL]. Não minta nos resultados — o gate vai bloquear se houver FAIL.
       É melhor bloquear agora e corrigir o backend do que descobrir no E2E do frontend.
+
+      REGRA DADOS: Sempre comece com banco de dados limpo. Antes de inserir qualquer
+      registro, verifique se o banco já tem dados (GET /api/v1/prestadores). Se tiver,
+      isso é dado stale de execução anterior — deve-se deletar o arquivo service_mate.db,
+      reiniciar o servidor, e só então semear os dados do test_data.md.
 
       Ao final diga DONE.
     validators:

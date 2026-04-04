@@ -6,6 +6,7 @@ Retorna (passed: bool, detail: str).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ft.engine.validators.artifacts import (
@@ -185,11 +186,24 @@ def gate_server_starts(
         return False, f"gate_server_starts FAIL: {entry} nao parece um servidor HTTP (FastAPI/Flask nao encontrado)"
 
     # Tenta subir o servidor em porta temporaria e bater em /health ou /
+    # Carrega variáveis do .env se existir (necessário para SECRET_KEY e similares)
+    import os as _os
+    gate_env = _os.environ.copy()
+    env_file = Path(project_root) / ".env"
+    if env_file.exists():
+        for env_line in env_file.read_text().splitlines():
+            env_line = env_line.strip()
+            if env_line and not env_line.startswith("#") and "=" in env_line:
+                k, _, v = env_line.partition("=")
+                gate_env.setdefault(k.strip(), v.strip())
+    # Garante SECRET_KEY mínimo para não travar em projetos FastAPI
+    gate_env.setdefault("SECRET_KEY", "gate-test-secret-key")
     try:
         proc = subprocess.Popen(
             ["python", "-m", "uvicorn", entry.replace("/", ".").replace(".py", "") + ":app",
              "--host", "127.0.0.1", "--port", "18765", "--timeout-keep-alive", "1"],
             cwd=project_root,
+            env=gate_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

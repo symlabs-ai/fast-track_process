@@ -645,6 +645,7 @@ nodes:
     title: "Acceptance Test CLI — Validar API com Massa de Dados"
     executor: llm_coder
     sprint: sprint-06-smoke
+    max_turns: 80
     outputs:
       - project/docs/acceptance-cli-report.md
     prompt: |

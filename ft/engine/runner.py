@@ -711,6 +711,15 @@ class StepRunner:
         if not allowed:
             allowed = ["project/docs/"]
 
+        # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
+        early_check = run_validators(node, self.project_root)
+        if early_check.passed:
+            print(f"  Expert Review: artefatos já existem e validators OK — pulando LLM")
+            for output_path in node.outputs:
+                self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+            self._advance(node, early_check)
+            return
+
         print(f"  Expert Review ({node.executor})...")
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
         self.state_mgr.save()

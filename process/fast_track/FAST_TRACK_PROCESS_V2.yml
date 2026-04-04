@@ -441,6 +441,7 @@ nodes:
     title: "Screenshot Review — Validação Visual do Frontend"
     executor: llm_coder
     sprint: sprint-03-frontend
+    max_turns: 100
     outputs:
       - project/docs/screenshot-review.md
       - project/docs/screenshots/

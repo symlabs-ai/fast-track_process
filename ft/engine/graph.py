@@ -30,6 +30,8 @@ class Node:
     prompt: str | None = None
     # Parallel group — nodes com mesmo grupo rodam em paralelo
     parallel_group: str | None = None
+    # Override do limite de turns do LLM para nodes complexos
+    max_turns: int | None = None
 
 
 class ProcessGraph:
@@ -171,6 +173,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             sprint=node_raw.get("sprint"),
             prompt=node_raw.get("prompt"),
             parallel_group=node_raw.get("parallel_group"),
+            max_turns=node_raw.get("max_turns"),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

@@ -550,6 +550,7 @@ nodes:
     title: "Green — Implementar"
     executor: llm_coder
     sprint: sprint-04-tdd
+    max_turns: 100
     outputs:
       - src/
     validators:

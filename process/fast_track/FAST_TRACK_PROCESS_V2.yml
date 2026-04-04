@@ -210,6 +210,53 @@ nodes:
       - file_exists: project/docs/diagrams/architecture.md
       - file_exists: project/docs/test_data.md
       - file_exists: project/docs/api_contract.md
+    next: ft.plan.05b.ui_criteria
+
+  - id: ft.plan.05b.ui_criteria
+    type: document
+    title: "Gerar Critérios Visuais de UI"
+    executor: llm_coach
+    sprint: sprint-02-planning
+    outputs:
+      - project/docs/ui_criteria.md
+    requires_approval: true
+    prompt: |
+      Gere o arquivo project/docs/ui_criteria.md para o projeto atual.
+
+      PASSO 1 — Leia obrigatoriamente:
+        - project/docs/PRD.md          (especialmente a seção Contrato de Navegação UI)
+        - project/docs/tech_stack.md   (para verificar interface_type)
+
+      PASSO 2 — Se interface_type for cli_only ou api:
+        Crie um ui_criteria.md mínimo com o conteúdo abaixo e encerre com DONE:
+          # UI Criteria — <nome do projeto>
+          interface_type: <valor> — sem frontend, critérios visuais não aplicáveis.
+
+      PASSO 3 — Se interface_type for ui ou mixed:
+        Gere project/docs/ui_criteria.md com este formato exato:
+
+          # UI Criteria — <nome do projeto>
+
+          ## Critérios obrigatórios (bloqueiam — LLM tenta corrigir se falharem)
+          - [ ] C1: Todas as rotas carregam sem erro (sem tela branca, sem "Cannot GET")
+          - [ ] C2: Navegação principal visível em todas as telas
+          - [ ] C6: Conteúdo ou empty state presente (sem página em branco)
+          <adicione critérios específicos derivados do PRD — ex: FAB do Assistente, se previsto>
+
+          ## Critérios de qualidade (bloqueiam — LLM tenta corrigir se falharem)
+          - [ ] C3: Cada item do nav tem ícone acima do label
+          - [ ] C4: Estado ativo distinguível dos inativos
+          - [ ] C7: Layout sem overflow horizontal em viewport mobile (390px)
+          <adicione critérios de qualidade específicos do produto, se houver>
+
+        REGRA: Derive critérios do PRD — não invente. Se o PRD menciona FAB do Assistente,
+        adicione como critério. Se menciona badges de status, adicione. Se nada específico,
+        os 7 padrão acima são suficientes.
+
+        Ao final diga DONE.
+    validators:
+      - file_exists: project/docs/ui_criteria.md
+      - min_lines: 5
     next: ft.plan.detect_interface
 
   - id: ft.plan.detect_interface
@@ -387,6 +434,86 @@ nodes:
     validators:
       - file_exists: project/docs/frontend-prd-review.md
       - min_lines: 10
+    next: ft.frontend.04.screenshot_review
+
+  - id: ft.frontend.04.screenshot_review
+    type: review
+    title: "Screenshot Review — Validação Visual do Frontend"
+    executor: llm_coder
+    sprint: sprint-03-frontend
+    outputs:
+      - project/docs/screenshot-review.md
+      - project/docs/screenshots/
+    requires_approval: true
+    prompt: |
+      Você é um revisor visual de frontend. Capture screenshots de todas as rotas,
+      avalie contra os critérios do projeto e corrija falhas encontradas.
+
+      PASSO 1 — Preparação
+        Leia:
+          - project/docs/ui_criteria.md   (critérios visuais do projeto)
+          - frontend/src/App.jsx           (rotas definidas via <Route path=...>)
+        Se ui_criteria.md não existir, use estes critérios mínimos:
+          - C1: Rota carrega sem erro (sem tela branca, sem "Cannot GET")
+          - C2: Navegação principal visível
+          - C6: Conteúdo ou empty state presente
+          - C7: Layout sem overflow horizontal em viewport mobile (390px)
+
+      PASSO 2 — Build e serve do frontend
+        Execute na raiz do projeto:
+          cd frontend && npm run build
+          npx serve -s dist -l 4173 &
+          sleep 2
+
+      PASSO 3 — Capture screenshots com Playwright
+        Instale se necessário:
+          pip install playwright && playwright install chromium
+        Para CADA rota definida em App.jsx (<Route path=...>):
+          - Crie e execute um script Python temporário que:
+            * Abre a rota em http://localhost:4173<path> com Playwright
+            * Viewport: 390×844 (mobile)
+            * Aguarda 1s após load para renderização completa
+            * Salva em project/docs/screenshots/<slug>.png
+              (slug = path sem leading slash; "/" → "index")
+          - Confirme que o arquivo PNG foi criado
+
+      PASSO 4 — Avalie cada screenshot
+        Use a ferramenta Read em cada PNG (são imagens — avalie visualmente).
+        Para cada critério em ui_criteria.md, marque: PASS ou FAIL com observação.
+
+      PASSO 5 — Corrija falhas
+        Para cada critério que falhou:
+          - Identifique o arquivo responsável (Layout.jsx, App.jsx, CSS, etc.)
+          - Aplique a correção mínima necessária
+          - Rebuilde: cd frontend && npm run build
+          - Recapture apenas as rotas afetadas
+          - Reavalie o critério
+
+      PASSO 6 — Gere o relatório
+        Crie project/docs/screenshot-review.md com este formato:
+
+          # Screenshot Review — <nome do projeto>
+          Data: <hoje>
+
+          | Rota | Screenshot | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+          |------|-----------|----|----|----|----|----|----|-----|
+          | /    | screenshots/index.png | ✅ | ✅ | ✅ | ✅ | N/A | ✅ | ✅ |
+          | ...  | ...                   | ...                        |
+
+          ## Correções Aplicadas
+          - <arquivo>: <descrição da correção>
+          (se nenhuma: "Nenhuma correção necessária")
+
+          Veredicto: APPROVED
+
+        REGRA: O Veredicto só pode ser APPROVED se TODOS os critérios listados
+        em ui_criteria.md estiverem marcados com ✅ (ou N/A se não aplicável).
+        Se algum critério permanece ❌ após as tentativas de correção, escreva
+        Veredicto: REJECTED e descreva o bloqueador.
+        Encerre dizendo DONE.
+    validators:
+      - file_exists: project/docs/screenshot-review.md
+      - screenshot_review_passed: true
     next: ft.tdd.02.red
 
   # ================================================================

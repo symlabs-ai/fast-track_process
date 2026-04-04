@@ -447,6 +447,31 @@ def gate_pulse_instrumented(project_root: str = ".") -> tuple[bool, str]:
     return True, f"gate_pulse_instrumented: PASS — Pulse encontrado em {found_in[0]}"
 
 
+def screenshot_review_passed(project_root: str = ".") -> tuple[bool, str]:
+    """Verifica que o relatório de screenshot review existe e contém Veredicto: APPROVED
+    sem critérios não avaliados (linhas com '[ ]').
+    """
+    import re
+
+    report = Path(project_root) / "project/docs/screenshot-review.md"
+    if not report.exists():
+        return False, "screenshot_review_passed FAIL: screenshot-review.md não encontrado"
+
+    content = report.read_text()
+
+    if not re.search(r"Veredicto:\s*APPROVED", content, re.IGNORECASE):
+        return False, "screenshot_review_passed FAIL: veredicto não é APPROVED"
+
+    pending = [l.strip() for l in content.splitlines() if re.search(r'\[ \]', l)]
+    if pending:
+        preview = "; ".join(pending[:3])
+        return False, (
+            f"screenshot_review_passed FAIL: {len(pending)} critério(s) não avaliado(s) — {preview}"
+        )
+
+    return True, "screenshot_review_passed: PASS — veredicto APPROVED, todos os critérios avaliados"
+
+
 def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     """Gate de frontend — verifica estrutura minima de PWA."""
     import json

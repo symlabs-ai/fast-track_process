@@ -717,7 +717,8 @@ class StepRunner:
             print(f"  Expert Review: artefatos já existem e validators OK — pulando LLM")
             for output_path in node.outputs:
                 self.state_mgr.record_artifact(Path(output_path).stem, output_path)
-            self._advance(node, early_check)
+            next_id = node.next
+            self.state_mgr.advance(node.id, next_id, "PASS")
             return
 
         print(f"  Expert Review ({node.executor})...")

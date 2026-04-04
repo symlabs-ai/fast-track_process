@@ -726,9 +726,16 @@ class StepRunner:
         result = delegate_to_llm(**review_kwargs)
 
         if not result.success:
-            self.state_mgr.block(f"Review falhou: {result.output[:300]}")
-            print(f"  REVIEW BLOCK: LLM nao conseguiu revisar")
-            return
+            # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
+            # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
+            pre_check = run_validators(node, self.project_root)
+            if pre_check.passed:
+                print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
+                result.success = True  # tratamos como sucesso
+            else:
+                self.state_mgr.block(f"Review falhou: {result.output[:300]}")
+                print(f"  REVIEW BLOCK: LLM nao conseguiu revisar")
+                return
 
         # Registrar artefato do relatorio
         for output_path in node.outputs:

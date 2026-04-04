@@ -715,11 +715,15 @@ class StepRunner:
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
         self.state_mgr.save()
 
-        result = delegate_to_llm(
+        review_kwargs: dict = dict(
             task=task_prompt,
             project_root=self.project_root,
             allowed_paths=allowed,
         )
+        if node.max_turns is not None:
+            review_kwargs["max_turns"] = node.max_turns
+
+        result = delegate_to_llm(**review_kwargs)
 
         if not result.success:
             self.state_mgr.block(f"Review falhou: {result.output[:300]}")

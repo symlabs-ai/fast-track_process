@@ -445,6 +445,7 @@ nodes:
     outputs:
       - project/docs/screenshot-review.md
       - project/docs/screenshots/
+      - frontend/src/
     requires_approval: true
     prompt: |
       Você é um revisor visual de frontend. Capture screenshots de todas as rotas,

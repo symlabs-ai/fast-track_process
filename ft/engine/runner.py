@@ -409,7 +409,7 @@ Produza o relatorio em: {outputs_str}
     elif node.type == "retro":
         # Injeta o activity log e state para análise real
         activity_log = ""
-        log_path = Path(state_dict.get("_project_root", ".")) / "servicemate_log.md"
+        log_path = Path(state_dict.get("_project_root", ".")) / self._log_filename
         if log_path.exists():
             activity_log = log_path.read_text()
 
@@ -498,6 +498,8 @@ class StepRunner:
         self._auto_approve = False
         # Raiz do repo fast-track — derivada do process_path (sobe 3 níveis)
         self._ft_root = str(Path(process_path).resolve().parent.parent.parent)
+        # Nome do log derivado da pasta do projeto (ex: pokemon_log.md)
+        self._log_filename = f"{Path(self.project_root).name}_log.md"
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
@@ -508,13 +510,13 @@ class StepRunner:
         self._node_attempts[node_id] = self._node_attempts.get(node_id, 0) + 1
 
     def _init_log(self):
-        """Cria servicemate_log.md com frontmatter YAML e cabeçalho da tabela.
+        """Cria <projeto>_log.md com frontmatter YAML e cabeçalho da tabela.
 
         Chamado em init_state() — garante que o log existe antes do primeiro node.
         """
         import importlib.metadata as _im
 
-        log_path = Path(self.project_root) / "servicemate_log.md"
+        log_path = Path(self.project_root) / self._log_filename
         if log_path.exists():
             return  # já inicializado (retomada de run)
 
@@ -552,14 +554,14 @@ class StepRunner:
         """
         ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"  # [{ts_str}] {event_id} (system) → {result}: {summary}")
-        log_path = Path(self.project_root) / "servicemate_log.md"
+        log_path = Path(self.project_root) / self._log_filename
         entry = f"| {ts_str} | `{event_id}` | {title} |  | system |  |  | {result} | {summary} |\n"
         with log_path.open("a") as f:
             f.write(entry)
 
     def _log_activity(self, node_id: str, title: str, node_type: str, result: str,
                       summary: str, sprint: str | None = None):
-        """Registra atividade no terminal e em servicemate_log.md.
+        """Registra atividade no terminal e em <projeto>_log.md.
 
         Colunas extras para análise/ML:
           sprint     — sprint à qual o node pertence (feature do grafo)
@@ -580,7 +582,7 @@ class StepRunner:
         meta = f"  # [{ts_str}] {node_id} ({node_type}) → {result}: {summary}"
         print(meta)
 
-        log_path = Path(self.project_root) / "servicemate_log.md"
+        log_path = Path(self.project_root) / self._log_filename
         entry = (
             f"| {ts_str} | `{node_id}` | {title} | {sprint_label} | {node_type} "
             f"| {attempt} | {duration_s} | {result} | {summary} |\n"

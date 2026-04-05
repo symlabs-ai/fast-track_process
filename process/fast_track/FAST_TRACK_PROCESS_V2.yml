@@ -1,9 +1,11 @@
 # Fast Track Process V2 — formato de grafo para ft engine
 # Mapeamento completo: 28 steps, 10 fases, validators deterministicos
 # v0.8.0: suporte a frontend/PWA com decision node por interface_type
+# v0.8.17: gate_pulse_instrumented adicionado a ft.audit.01.forgebase; prompt reestruturado
+#           para implementação-first; REGRA DADOS generalizada (sem hardcode de .db filename)
 
 id: fast_track_v2
-version: "0.8.0"
+version: "0.8.17"
 title: "ForgeProcess — Fast Track V2"
 
 nodes:
@@ -35,6 +37,32 @@ nodes:
     outputs:
       - project/docs/PRD.md
     requires_approval: true
+    prompt: |
+      Você é o product coach responsável por redigir o PRD do produto.
+
+      Com base na hipótese disponível em project/docs/hipotese.md, produza o arquivo
+      project/docs/PRD.md com as seguintes seções obrigatórias:
+
+      ## Hipotese
+      (resumo da hipótese de produto)
+
+      ## Visao
+      (visão do produto, problema, público-alvo e solução)
+
+      ## User Stories
+      (mínimo 3 user stories no formato exato abaixo — obrigatório)
+
+      ### US-01 — <título>
+      **Como** <persona>, **quero** <ação>, **para** <benefício>.
+
+      ### US-02 — <título>
+      ...
+
+      ### US-03 — <título>
+      ...
+
+      IMPORTANTE: as user stories DEVEM usar o formato `### US-XX` (heading nível 3 com prefixo US-).
+      Sem esse formato, a validação falhará.
     validators:
       - file_exists: project/docs/PRD.md
       - min_lines: 30
@@ -704,9 +732,10 @@ nodes:
       É melhor bloquear agora e corrigir o backend do que descobrir no E2E do frontend.
 
       REGRA DADOS: Sempre comece com banco de dados limpo. Antes de inserir qualquer
-      registro, verifique se o banco já tem dados (GET /api/v1/prestadores). Se tiver,
-      isso é dado stale de execução anterior — deve-se deletar o arquivo service_mate.db,
-      reiniciar o servidor, e só então semear os dados do test_data.md.
+      registro, verifique se o banco já tem dados (GET no endpoint de listagem principal).
+      Se tiver dados, isso é dado stale de execução anterior — deve-se parar o servidor,
+      deletar o arquivo de banco (ex: *.db, *.sqlite), reiniciar o servidor, e só então
+      semear os dados do test_data.md. NUNCA teste contra dados de um projeto anterior.
 
       Ao final diga DONE.
     validators:
@@ -799,42 +828,43 @@ nodes:
     title: "Auditoria ForgeBase"
     executor: llm_coder
     sprint: sprint-09-audit
+    max_turns: 80
     outputs:
       - project/docs/forgebase-audit.md
     prompt: |
-      Este step tem DUAS fases obrigatórias: AUDITORIA e IMPLEMENTAÇÃO.
-      Não diga DONE até completar as duas.
+      ATENÇÃO: Este step exige IMPLEMENTAÇÃO de código, não apenas documentação.
+      O gate seguinte vai rodar `gate_pulse_instrumented` no código — ele falha se
+      os tracks não existirem fisicamente nos arquivos. Escrever "IMPLEMENTADO" no
+      documento sem escrever o código NÃO passa o gate.
 
-      === FASE 1: AUDITORIA ===
+      === PASSO 1: LEITURA OBRIGATÓRIA ===
 
-      Leia obrigatoriamente antes de qualquer outra coisa:
+      Leia antes de qualquer outra coisa:
         - project/docs/tech_stack.md
         - project/docs/PRD.md
-        - src/ ou backend/ (código do servidor)
+        - src/ ou backend/ (código do servidor — leia o entry point completo)
         - frontend/src/ (se existir)
 
-      Avalie e documente em project/docs/forgebase-audit.md:
+      === PASSO 2: VERIFICAR FORGEBASE PULSE NO CÓDIGO ===
 
-      1. ESTRUTURA: lint limpo, imports organizados, sem código morto óbvio
-      2. TESTES: cobertura estimada, testes unitários e smoke presentes
-      3. SEGURANÇA: sem secrets hardcodados, sem SQL injection, sem XSS evidente
-      4. FORGEBASE PULSE: verificar se cada um dos 5 tracks está no código:
-         - track-infra:    /health que verifica DB (SELECT 1 ou equivalente)
-         - track-erro:     @app.exception_handler(HTTPException)
-         - track-negocio:  endpoints de criação/atualização de entidades principais
-         - track-perf:     middleware que mede tempo de resposta (X-Process-Time-Ms)
-         - track-dx:       @app.exception_handler(Exception) para erros 500
+      Grep nos arquivos (src/ ou backend/) para cada um dos 5 tracks:
+        - track-infra:    /health com SELECT 1 ou equivalente (verifica DB)
+        - track-erro:     @app.exception_handler(HTTPException)
+        - track-negocio:  endpoints de criação/atualização de entidades principais
+        - track-perf:     middleware com X-Process-Time-Ms (time.monotonic)
+        - track-dx:       @app.exception_handler(Exception) para erros 500
 
-      Para cada track, registre no documento: IMPLEMENTADO (arquivo:linha) ou AUSENTE.
+      Para cada track: anote IMPLEMENTADO (arquivo:linha) ou AUSENTE.
 
-      === FASE 2: IMPLEMENTAÇÃO (OBRIGATÓRIA SE HOUVER TRACKS AUSENTES) ===
+      === PASSO 3: IMPLEMENTAR TRACKS AUSENTES (obrigatório) ===
 
-      Para cada track marcado como AUSENTE na Fase 1:
-        - IMPLEMENTE o track no código agora (não documente apenas — escreva o código)
-        - Adicione em main.py (FastAPI) ou equivalente no entry point do servidor
-        - Confirme a implementação relendo o arquivo modificado
+      Para CADA track AUSENTE — escreva o código agora, não pule esta etapa:
+        1. Abra o entry point do servidor (main.py ou equivalente)
+        2. Adicione o código do track ausente
+        3. Salve o arquivo
+        4. Releia o arquivo para confirmar que o código está lá
 
-      Referência de implementação para FastAPI (adapte ao projeto):
+      Referência FastAPI (adapte ao stack do projeto):
 
         import time
         from fastapi import Request
@@ -860,17 +890,34 @@ nodes:
         async def global_exception_handler(request: Request, exc: Exception):
             return JSONResponse(status_code=500, content={"detail": "Erro interno do servidor"})
 
-      === VERIFICAÇÃO FINAL (antes de dizer DONE) ===
+        # track-infra (health)
+        @app.get("/health")
+        async def health():
+            # execute SELECT 1 no banco aqui
+            return {"status": "ok"}
 
-      Após implementar, releia o entry point do servidor e confirme que os 5 tracks
-      estão presentes no código. Atualize project/docs/forgebase-audit.md com o
-      status final de cada track: IMPLEMENTADO (arquivo:linha).
+      === PASSO 4: AUDITORIA GERAL ===
 
-      Só diga DONE quando todos os tracks ausentes estiverem implementados no código.
+      Documente em project/docs/forgebase-audit.md usando o template:
+      1. ESTRUTURA: lint limpo, imports organizados, sem código morto
+      2. TESTES: cobertura estimada, unitários e smoke presentes
+      3. SEGURANÇA: sem secrets hardcodados, sem SQL injection, sem XSS
+      4. FORGEBASE PULSE: status final de cada track (IMPLEMENTADO arquivo:linha)
+
+      === PASSO 5: VERIFICAÇÃO FINAL ===
+
+      Antes de dizer DONE:
+        1. Releia o entry point do servidor
+        2. Confirme visualmente que os 5 tracks estão no código
+        3. Atualize o documento com o status final
+        4. Só então diga DONE
+
+      Se qualquer track ainda estiver AUSENTE, volte ao Passo 3.
     validators:
       - file_exists: project/docs/forgebase-audit.md
       - min_lines: 20
       - tests_pass: true
+      - gate_pulse_instrumented: true
     next: gate.audit
 
   - id: gate.audit

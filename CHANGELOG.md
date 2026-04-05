@@ -4,6 +4,25 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.26] - 2026-04-05
+
+- feat(cli): instalação editable agora expõe `ft` como CLI do template/processo e `ft-engine` como CLI do motor determinístico, eliminando a duplicidade entre cópia global e código local
+- feat(logging): run log da engine agora usa nome derivado do projeto (`<projeto>_log.md`) em vez de `servicemate_log.md` hardcoded
+- fix: `ft.mdd.02.prd` agora recebe prompt explícito com seções obrigatórias e formato canônico de `### US-XX`, reduzindo falhas de validação no PRD
+- fix: `ft.audit.01.forgebase` agora é implementação-first, com `gate_pulse_instrumented: true` no próprio nó e `max_turns: 80`
+- fix: `ft.acceptance.01.cli` generaliza a limpeza de banco stale para `*.db` e `*.sqlite`, sem hardcode de nome de arquivo
+
+---
+
+## [v0.8.17] - 2026-04-05
+
+- fix: `ft.audit.01.forgebase` — adicionado `gate_pulse_instrumented: true` nos validators do próprio nó; LLM agora falha no nó se não implementar os tracks (antes só falhava em `gate.audit`)
+- fix: `ft.audit.01.forgebase` — prompt reestruturado para implementação-first (passos numerados, track-infra com código de referência, verificação final explícita)
+- fix: `ft.audit.01.forgebase` — `max_turns: 80` adicionado
+- fix: `ft.acceptance.01.cli` — REGRA DADOS generalizada: sem hardcode de `service_mate.db`; instrução genérica para deletar `*.db` / `*.sqlite`
+
+---
+
 ## [v0.8.9] - 2026-04-03
 
 - chore: validação E2E retroativa SM6 — `ft.handoff.02.plano_voo` executado sobre SM6; `plano_de_voo.md` gerado com veredicto ITERATE e 7 débitos (DT-01..DT-07) para SM7

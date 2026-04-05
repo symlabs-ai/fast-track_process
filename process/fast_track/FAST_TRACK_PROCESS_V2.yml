@@ -802,35 +802,71 @@ nodes:
     outputs:
       - project/docs/forgebase-audit.md
     prompt: |
-      Execute a auditoria ForgeBase do projeto e produza project/docs/forgebase-audit.md.
+      Este step tem DUAS fases obrigatórias: AUDITORIA e IMPLEMENTAÇÃO.
+      Não diga DONE até completar as duas.
 
-      Leia obrigatoriamente:
+      === FASE 1: AUDITORIA ===
+
+      Leia obrigatoriamente antes de qualquer outra coisa:
         - project/docs/tech_stack.md
         - project/docs/PRD.md
         - src/ ou backend/ (código do servidor)
         - frontend/src/ (se existir)
 
-      A auditoria DEVE cobrir obrigatoriamente:
+      Avalie e documente em project/docs/forgebase-audit.md:
 
       1. ESTRUTURA: lint limpo, imports organizados, sem código morto óbvio
       2. TESTES: cobertura estimada, testes unitários e smoke presentes
       3. SEGURANÇA: sem secrets hardcodados, sem SQL injection, sem XSS evidente
-      4. FORGEBASE PULSE — OBRIGATORIO: verificar se os 5 tracks estão instrumentados:
-         - track-infra: endpoint /health após verificar DB
-         - track-erro: handler de HTTPException
-         - track-negocio: endpoints de criação/atualização de entidades principais
-         - track-perf: middleware com tempo de resposta
-         - track-dx: handler global de Exception
-         Se algum track estiver ausente, DOCUMENTE quais faltam e IMPLEMENTE os que
-         faltam antes de fechar a auditoria. O gate_pulse_instrumented vai bloquear
-         se nenhum track for encontrado no código.
+      4. FORGEBASE PULSE: verificar se cada um dos 5 tracks está no código:
+         - track-infra:    /health que verifica DB (SELECT 1 ou equivalente)
+         - track-erro:     @app.exception_handler(HTTPException)
+         - track-negocio:  endpoints de criação/atualização de entidades principais
+         - track-perf:     middleware que mede tempo de resposta (X-Process-Time-Ms)
+         - track-dx:       @app.exception_handler(Exception) para erros 500
 
-      Produza project/docs/forgebase-audit.md com:
-        - Resultado por categoria (PASS / FAIL / PARCIAL)
-        - Lista dos 5 tracks do Pulse: status de cada um
-        - Débitos técnicos identificados (prioridade P0/P1/P2)
+      Para cada track, registre no documento: IMPLEMENTADO (arquivo:linha) ou AUSENTE.
 
-      Ao final diga DONE.
+      === FASE 2: IMPLEMENTAÇÃO (OBRIGATÓRIA SE HOUVER TRACKS AUSENTES) ===
+
+      Para cada track marcado como AUSENTE na Fase 1:
+        - IMPLEMENTE o track no código agora (não documente apenas — escreva o código)
+        - Adicione em main.py (FastAPI) ou equivalente no entry point do servidor
+        - Confirme a implementação relendo o arquivo modificado
+
+      Referência de implementação para FastAPI (adapte ao projeto):
+
+        import time
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+        from fastapi.exceptions import HTTPException
+
+        # track-perf
+        @app.middleware("http")
+        async def process_time_middleware(request: Request, call_next):
+            start = time.monotonic()
+            response = await call_next(request)
+            elapsed_ms = round((time.monotonic() - start) * 1000, 2)
+            response.headers["X-Process-Time-Ms"] = str(elapsed_ms)
+            return response
+
+        # track-erro
+        @app.exception_handler(HTTPException)
+        async def http_exception_handler(request: Request, exc: HTTPException):
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+        # track-dx
+        @app.exception_handler(Exception)
+        async def global_exception_handler(request: Request, exc: Exception):
+            return JSONResponse(status_code=500, content={"detail": "Erro interno do servidor"})
+
+      === VERIFICAÇÃO FINAL (antes de dizer DONE) ===
+
+      Após implementar, releia o entry point do servidor e confirme que os 5 tracks
+      estão presentes no código. Atualize project/docs/forgebase-audit.md com o
+      status final de cada track: IMPLEMENTADO (arquivo:linha).
+
+      Só diga DONE quando todos os tracks ausentes estiverem implementados no código.
     validators:
       - file_exists: project/docs/forgebase-audit.md
       - min_lines: 20

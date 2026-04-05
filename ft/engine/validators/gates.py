@@ -406,59 +406,65 @@ def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
 
 
 def gate_pulse_instrumented(project_root: str = ".") -> tuple[bool, str]:
-    """Gate de ForgeBase Pulse — bloqueia se nenhum track estiver instrumentado no código.
+    """Gate de ForgeBase Pulse — exige todos os 5 tracks obrigatórios no código.
 
-    Procura referências ao SDK do ForgeBase Pulse em src/ e frontend/src/:
-    - UseCaseRunner (track de negócio)
-    - track-infra / track-erro / track-negocio / track-perf / track-dx
-    - forge_pulse / forgepulse / ForgeBase (import direto)
+    Verifica individualmente cada track em src/ e backend/:
+    - track-infra:   /health com verificação de DB
+    - track-erro:    exception_handler(HTTPException)
+    - track-negocio: UseCaseRunner ou endpoints de criação/atualização
+    - track-perf:    middleware de tempo (X-Process-Time-Ms)
+    - track-dx:      exception_handler(Exception) para erros 500
 
-    Se interface_type=cli_only, verifica apenas src/.
-    Se nenhuma referência encontrada, retorna FAIL com orientação de implementação.
+    PASS somente quando todos os 5 tracks estiverem presentes.
     """
     import re
 
     root = Path(project_root)
-    patterns = [
-        r'UseCaseRunner',
-        r'track-infra',
-        r'track-erro',
-        r'track-negocio',
-        r'track-perf',
-        r'track-dx',
-        r'forge_pulse',
-        r'forgepulse',
-        r'ForgeBase',
-    ]
-    combined = re.compile("|".join(patterns))
+
+    # Cada track tem seus padrões de detecção independentes
+    tracks = {
+        "track-infra": [r'track-infra', r'/health', r'SELECT 1', r'select 1'],
+        "track-negocio": [r'track-negocio', r'UseCaseRunner', r'forgepulse', r'forge_pulse'],
+        "track-erro": [r'track-erro', r'exception_handler\(HTTPException\)', r'HTTPException.*handler'],
+        "track-perf": [r'track-perf', r'X-Process-Time-Ms', r'process_time_middleware', r'time\.monotonic'],
+        "track-dx": [r'track-dx', r'exception_handler\(Exception\)', r'global_exception_handler'],
+    }
 
     search_dirs = []
-    for candidate in ("src", "backend", "frontend/src"):
+    for candidate in ("src", "backend"):
         d = root / candidate
         if d.is_dir():
             search_dirs.append(d)
 
-    found_in = []
-    for search_dir in search_dirs:
-        for ext in ("*.py", "*.js", "*.jsx", "*.ts", "*.tsx"):
-            for f in search_dir.rglob(ext):
+    def _search_track(patterns: list[str]) -> bool:
+        combined = re.compile("|".join(patterns))
+        for search_dir in search_dirs:
+            for f in search_dir.rglob("*.py"):
                 try:
                     if combined.search(f.read_text(errors="ignore")):
-                        found_in.append(str(f.relative_to(root)))
-                        break
+                        return True
                 except Exception:
                     continue
-        if found_in:
-            break
+        return False
 
-    if not found_in:
+    missing = []
+    present = []
+    for track_name, patterns in tracks.items():
+        if _search_track(patterns):
+            present.append(track_name)
+        else:
+            missing.append(track_name)
+
+    if missing:
+        missing_str = ", ".join(missing)
+        present_str = ", ".join(present) if present else "nenhum"
         return False, (
-            "gate_pulse_instrumented FAIL: nenhum track do ForgeBase Pulse encontrado em src/ "
-            "nem frontend/src/. Implemente ao menos track-infra e track-negocio antes do gate.audit. "
-            "Ver plano_de_voo.md §Correções obrigatórias para a ordem de implementação recomendada."
+            f"gate_pulse_instrumented FAIL: tracks ausentes: [{missing_str}]. "
+            f"Presentes: [{present_str}]. "
+            f"Implemente os tracks ausentes em main.py (entry point do servidor) antes do gate.audit."
         )
 
-    return True, f"gate_pulse_instrumented: PASS — Pulse encontrado em {found_in[0]}"
+    return True, f"gate_pulse_instrumented: PASS — todos os 5 tracks do ForgeBase Pulse implementados"
 
 
 def screenshot_review_passed(project_root: str = ".") -> tuple[bool, str]:

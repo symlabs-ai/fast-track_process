@@ -380,6 +380,56 @@ class StepRunner:
         self._node_start_times[node_id] = datetime.now()
         self._node_attempts[node_id] = self._node_attempts.get(node_id, 0) + 1
 
+    def _init_log(self):
+        """Cria servicemate_log.md com frontmatter YAML e cabeçalho da tabela.
+
+        Chamado em init_state() — garante que o log existe antes do primeiro node.
+        """
+        import importlib.metadata as _im
+
+        log_path = Path(self.project_root) / "servicemate_log.md"
+        if log_path.exists():
+            return  # já inicializado (retomada de run)
+
+        try:
+            ft_version = _im.version("ft-engine")
+        except Exception:
+            ft_version = "dev"
+
+        state_dict: dict = {}
+        try:
+            state_dict = self.state_mgr.load().__dict__
+        except Exception:
+            pass
+
+        ts = datetime.now()
+        run_meta = (
+            "---\n"
+            f"project: {Path(self.project_root).name}\n"
+            f"ft_version: {ft_version}\n"
+            f"process_variant: {self.graph.meta.get('id', 'unknown')}\n"
+            f"cycle: {state_dict.get('cycle', 'cycle-01')}\n"
+            f"interface_type: {state_dict.get('interface_type', 'unknown')}\n"
+            f"run_date: {ts.strftime('%Y-%m-%d')}\n"
+            "---\n\n"
+            "# Run Log\n\n"
+            "| timestamp | node_id | title | sprint | type | attempt | duration_s | result | summary |\n"
+            "|-----------|---------|-------|--------|------|---------|------------|--------|---------|\n"
+        )
+        log_path.write_text(run_meta)
+
+    def _log_event(self, event_id: str, title: str, result: str, summary: str):
+        """Loga um evento de sistema (init, environment) na mesma tabela do run log.
+
+        Usa type=system e sprint/attempt/duration vazios — distingue de nodes de processo.
+        """
+        ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"  # [{ts_str}] {event_id} (system) → {result}: {summary}")
+        log_path = Path(self.project_root) / "servicemate_log.md"
+        entry = f"| {ts_str} | `{event_id}` | {title} |  | system |  |  | {result} | {summary} |\n"
+        with log_path.open("a") as f:
+            f.write(entry)
+
     def _log_activity(self, node_id: str, title: str, node_type: str, result: str,
                       summary: str, sprint: str | None = None):
         """Registra atividade no terminal e em servicemate_log.md.
@@ -404,36 +454,6 @@ class StepRunner:
         print(meta)
 
         log_path = Path(self.project_root) / "servicemate_log.md"
-
-        if not log_path.exists():
-            # Cabeçalho com metadados da run (frontmatter YAML)
-            state_dict = {}
-            try:
-                state_dict = self.state_mgr.load().__dict__
-            except Exception:
-                pass
-
-            import importlib.metadata as _im
-            try:
-                ft_version = _im.version("ft-engine")
-            except Exception:
-                ft_version = "dev"
-
-            run_meta = (
-                "---\n"
-                f"project: {Path(self.project_root).name}\n"
-                f"ft_version: {ft_version}\n"
-                f"process_variant: {self.graph.meta.get('id', 'unknown')}\n"
-                f"cycle: {state_dict.get('cycle', 'cycle-01')}\n"
-                f"interface_type: {state_dict.get('interface_type', 'unknown')}\n"
-                f"run_date: {ts.strftime('%Y-%m-%d')}\n"
-                "---\n\n"
-                "# Run Log\n\n"
-                "| timestamp | node_id | title | sprint | type | attempt | duration_s | result | summary |\n"
-                "|-----------|---------|-------|--------|------|---------|------------|--------|---------|\n"
-            )
-            log_path.write_text(run_meta)
-
         entry = (
             f"| {ts_str} | `{node_id}` | {title} | {sprint_label} | {node_type} "
             f"| {attempt} | {duration_s} | {result} | {summary} |\n"
@@ -449,6 +469,13 @@ class StepRunner:
         print(f"Estado inicializado. Processo: {self.graph.meta.get('title', '?')}")
         print(f"  Primeiro node: {first.id} ({first.title})")
         print(f"  Total de steps: {total}")
+        self._init_log()
+        self._log_event(
+            "INIT",
+            "Inicialização do processo",
+            "PASS",
+            f"process={self.graph.meta.get('id', '?')} nodes={total} first={first.id}",
+        )
         self._check_environment()
 
     def _check_environment(self):
@@ -457,6 +484,7 @@ class StepRunner:
 
         gateway_file = Path(self._ft_root) / "environment" / "gateway.md"
         if not gateway_file.exists():
+            self._log_event("ENV", "Ambiente", "SKIP", "gateway.md ausente — sem provisionamento")
             return
 
         content = gateway_file.read_text()
@@ -470,6 +498,8 @@ class StepRunner:
             project_root=Path(self.project_root),
             base_url=base_url,
         )
+        gateway_host = base_url.split("/")[2] if base_url else "none"
+        self._log_event("ENV", "Ambiente", "PASS", f"gateway={gateway_host} CLAUDE.md provisionado")
 
     def run(self, mode: str = "step"):
         """

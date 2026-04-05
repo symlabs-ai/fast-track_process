@@ -371,20 +371,73 @@ class StepRunner:
         self._auto_approve = False
         # Raiz do repo fast-track — derivada do process_path (sobe 3 níveis)
         self._ft_root = str(Path(process_path).resolve().parent.parent.parent)
+        # Tracking para log enriquecido
+        self._node_start_times: dict[str, datetime] = {}   # node_id → início
+        self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
 
-    def _log_activity(self, node_id: str, title: str, node_type: str, result: str, summary: str):
-        """Registra atividade no terminal e em servicemate_log.md."""
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        meta = f"  # [{ts}] {node_id} ({node_type}) → {result}: {summary}"
+    def _mark_node_start(self, node_id: str):
+        """Registra o instante de início de um node (para cálculo de duração)."""
+        self._node_start_times[node_id] = datetime.now()
+        self._node_attempts[node_id] = self._node_attempts.get(node_id, 0) + 1
+
+    def _log_activity(self, node_id: str, title: str, node_type: str, result: str,
+                      summary: str, sprint: str | None = None):
+        """Registra atividade no terminal e em servicemate_log.md.
+
+        Colunas extras para análise/ML:
+          sprint     — sprint à qual o node pertence (feature do grafo)
+          type       — tipo do node (gate/build/decision/review/…)
+          attempt    — número da tentativa (1 = primeira, 2+ = retry)
+          duration_s — segundos decorridos desde _mark_node_start()
+        """
+        ts = datetime.now()
+        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
+
+        attempt = self._node_attempts.get(node_id, 1)
+
+        start = self._node_start_times.get(node_id)
+        duration_s = round((ts - start).total_seconds(), 1) if start else ""
+
+        sprint_label = sprint or ""
+
+        meta = f"  # [{ts_str}] {node_id} ({node_type}) → {result}: {summary}"
         print(meta)
+
         log_path = Path(self.project_root) / "servicemate_log.md"
-        entry = f"| {ts} | `{node_id}` | {title} | {result} | {summary} |\n"
+
         if not log_path.exists():
-            log_path.write_text(
-                "# ServiceMate Activity Log\n\n"
-                "| Timestamp | Node | Título | Resultado | Resumo |\n"
-                "|-----------|------|--------|-----------|--------|\n"
+            # Cabeçalho com metadados da run (frontmatter YAML)
+            state_dict = {}
+            try:
+                state_dict = self.state_mgr.load().__dict__
+            except Exception:
+                pass
+
+            import importlib.metadata as _im
+            try:
+                ft_version = _im.version("ft-engine")
+            except Exception:
+                ft_version = "dev"
+
+            run_meta = (
+                "---\n"
+                f"project: {Path(self.project_root).name}\n"
+                f"ft_version: {ft_version}\n"
+                f"process_variant: {self.graph.meta.get('id', 'unknown')}\n"
+                f"cycle: {state_dict.get('cycle', 'cycle-01')}\n"
+                f"interface_type: {state_dict.get('interface_type', 'unknown')}\n"
+                f"run_date: {ts.strftime('%Y-%m-%d')}\n"
+                "---\n\n"
+                "# Run Log\n\n"
+                "| timestamp | node_id | title | sprint | type | attempt | duration_s | result | summary |\n"
+                "|-----------|---------|-------|--------|------|---------|------------|--------|---------|\n"
             )
+            log_path.write_text(run_meta)
+
+        entry = (
+            f"| {ts_str} | `{node_id}` | {title} | {sprint_label} | {node_type} "
+            f"| {attempt} | {duration_s} | {result} | {summary} |\n"
+        )
         with log_path.open("a") as f:
             f.write(entry)
 
@@ -473,6 +526,9 @@ class StepRunner:
             print(f"  Tipo: {node.type} | Executor: {node.executor}{sprint_label}")
             print(f"{'─'*50}")
 
+            self._mark_node_start(node_id)
+            node_sprint = node.sprint or None
+
             # Review node — expert gate via LLM
             if node.type == "review":
                 self._run_review(node)
@@ -490,9 +546,11 @@ class StepRunner:
                     break
                 state = self.state_mgr.load()
                 if state.node_status == "blocked":
-                    self._log_activity(node_id, node.title, "gate", "BLOCKED", state.blocked_reason or "gate falhou")
+                    self._log_activity(node_id, node.title, "gate", "BLOCKED",
+                                       state.blocked_reason or "gate falhou", sprint=node_sprint)
                     break
-                self._log_activity(node_id, node.title, "gate", "PASS", f"→ {self.graph.resolve_next(node_id) or 'fim'}")
+                self._log_activity(node_id, node.title, "gate", "PASS",
+                                   f"→ {self.graph.resolve_next(node_id) or 'fim'}", sprint=node_sprint)
                 continue
 
             # Decision node — avaliar condicao e seguir branch
@@ -501,7 +559,8 @@ class StepRunner:
                 if mode == "step":
                     break
                 state = self.state_mgr.load()
-                self._log_activity(node_id, node.title, "decision", "ROUTED", f"→ {state.current_node}")
+                self._log_activity(node_id, node.title, "decision", "ROUTED",
+                                   f"→ {state.current_node}", sprint=node_sprint)
                 continue
 
             # Parallel group — fan-out/fan-in
@@ -529,10 +588,12 @@ class StepRunner:
             # Checar se ficou bloqueado ou aguardando aprovacao
             state = self.state_mgr.load()
             if state.node_status == "blocked":
-                self._log_activity(node_id, node.title, node.type, "BLOCKED", state.blocked_reason or "bloqueado")
+                self._log_activity(node_id, node.title, node.type, "BLOCKED",
+                                   state.blocked_reason or "bloqueado", sprint=node_sprint)
                 break
             if state.node_status == "awaiting_approval":
-                self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL", "aguardando aprovacao humana")
+                self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL",
+                                   "aguardando aprovacao humana", sprint=node_sprint)
                 if self._auto_approve:
                     next_id = self.graph.resolve_next(state.current_node)
                     self.state_mgr.advance(state.current_node, next_id)
@@ -540,7 +601,9 @@ class StepRunner:
                 else:
                     break
             else:
-                self._log_activity(node_id, node.title, node.type, "PASS", f"concluido → {self.graph.resolve_next(node_id) or 'fim'}")
+                self._log_activity(node_id, node.title, node.type, "PASS",
+                                   f"concluido → {self.graph.resolve_next(node_id) or 'fim'}",
+                                   sprint=node_sprint)
 
             if mode == "step":
                 break

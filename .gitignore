@@ -21,6 +21,8 @@ __pycache__/
 # Environment — configuração local (cada usuário tem o seu, não commitar)
 environment/gateway.md
 environment/*.local.md
+.claude/scheduled_tasks.lock
+/*_log.md
 
 # Fast Track — processo estatico
 # No template: process/ esta commitado (e o fonte)

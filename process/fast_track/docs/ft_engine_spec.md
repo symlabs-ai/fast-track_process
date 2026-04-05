@@ -448,15 +448,15 @@ def validate(node, state):
 ft init <nome> [--gateway provider:apikey] [--remote url]
 
 # Executar o processo — loop principal
-ft continue                     # avanca ate o proximo BLOCK ou fim
-ft continue --step              # avanca exatamente 1 step
-ft continue --sprint            # avanca ate o fim da sprint atual
-ft continue --mvp               # avanca ate o MVP (modo autonomo)
+ft-engine continue              # avanca ate o proximo BLOCK ou fim
+ft-engine continue --step       # avanca exatamente 1 step
+ft-engine continue --sprint     # avanca ate o fim da sprint atual
+ft-engine continue --mvp        # avanca ate o MVP (modo autonomo)
 
 # Consultar estado
-ft status                       # estado atual: no, fase, progresso
-ft status --full                # estado detalhado com artefatos e gates
-ft graph                        # mostra o grafo com BLOCKED/READY/DONE
+ft-engine status                # estado atual: no, fase, progresso
+ft-engine status --full         # estado detalhado com artefatos e gates
+ft-engine graph                 # mostra o grafo com BLOCKED/READY/DONE
 
 # Validacao manual
 ft validate state               # valida ft_state.yml
@@ -464,9 +464,9 @@ ft validate gate <id>           # roda gate especifico
 ft validate all                 # roda todos os validadores do no atual
 
 # Interacao com stakeholder
-ft approve                      # aprovar artefato pendente de aprovacao
-ft reject --reason "..."        # rejeitar com motivo
-ft answer "..."                 # responder pergunta do processo
+ft-engine approve               # aprovar artefato pendente de aprovacao
+ft-engine reject --reason "..." # rejeitar com motivo
+ft-engine answer "..."          # responder pergunta do processo
 
 # Operacional
 ft update                       # atualizar engine
@@ -481,28 +481,28 @@ $ ft init sym_builder --gateway anthropic:sk-sym_abc123
   Projeto criado. Processo: Fast Track v1.0
   Estado: ft.mdd.01.hipotese (READY)
 
-$ ft continue
+$ ft-engine continue
   [ft.mdd.01.hipotese] Delegando ao LLM (ft_coach)...
   → Hipotese gerada: project/docs/hipotese.md
   → Validacao: file_exists PASS, min_lines PASS
   → AGUARDANDO APROVACAO do stakeholder
-  Rode: ft approve (ou ft reject --reason "...")
+  Rode: ft-engine approve (ou ft-engine reject --reason "...")
 
-$ ft approve
+$ ft-engine approve
   [ft.mdd.01.hipotese] PASS → avancando
   [ft.mdd.02.prd] Delegando ao LLM (ft_coach)...
   → PRD gerado: project/docs/PRD.md
   → Validacao: file_exists PASS, has_sections PASS, min_user_stories PASS (8 encontradas)
   → AGUARDANDO APROVACAO do stakeholder
 
-$ ft approve
+$ ft-engine approve
   [ft.mdd.02.prd] PASS → avancando
   [ft.mdd.03.validacao] Validando PRD...
   → Validacao automatica: PASS
   [ft.plan.01.task_list] Delegando ao LLM (ft_coach)...
   ...
 
-$ ft continue --sprint
+$ ft-engine continue --sprint
   [sprint-01] Delegando 8 tasks ao LLM (forge_coder)...
   → T-01: PASS (testes: 12, cobertura: 92%)
   → T-02: PASS (testes: 28, cobertura: 88%)
@@ -513,7 +513,7 @@ $ ft continue --sprint
   → Gate sprint: PASS
   → Avancando para sprint-02...
 
-$ ft continue --mvp
+$ ft-engine continue --mvp
   [sprint-02] ... [sprint-08] ...
   [gate.smoke] Rodando smoke test... PASS
   [gate.e2e] Rodando E2E... PASS
@@ -579,13 +579,13 @@ Apos limite, o no vai para BLOCKED e o motor para, pedindo intervencao humana.
 - Step runner com resolve_next + delegate + validate
 - Validadores: file_exists, min_lines, tests_pass, coverage_min
 - LLM executor via Claude Code subagent
-- Comandos: `ft continue`, `ft status`, `ft approve`
+- Comandos: `ft-engine continue`, `ft-engine status`, `ft-engine approve`
 
 ### Fase 2: Gates e Sprints
 - Gate validators compostos (gate.delivery, gate.smoke, gate.mvp)
 - Sprint scoping (agrupar tasks, delegar sprint inteira)
 - Retry com feedback
-- Comando: `ft continue --sprint`
+- Comando: `ft-engine continue --sprint`
 
 ### Fase 3: TDD Loop
 - Red/green validation (tests_fail → tests_pass)
@@ -600,7 +600,7 @@ Apos limite, o no vai para BLOCKED e o motor para, pedindo intervencao humana.
 
 ### Fase 5: Stakeholder Intelligence
 - Discovery interativo (hipotese, PRD)
-- Approval workflow (approve/reject/answer)
+- Approval workflow (approve/reject)
 - Hyper-mode (absorver docs existentes)
 
 ---
@@ -621,13 +621,10 @@ ft/
       tests.py            # tests_pass, tests_fail, coverage_min
       code.py             # lint_clean, types_clean, dead_code
       gates.py            # gate.delivery, gate.smoke, gate.mvp
-    stakeholder.py        # Input humano (approve, reject, answer)
+    stakeholder.py        # Input humano (approve, reject)
   cli/
     __init__.py
-    main.py               # Argparse → comandos
-    continue_cmd.py       # ft continue
-    status_cmd.py         # ft status
-    approve_cmd.py        # ft approve/reject/answer
+    main.py               # Argparse → comandos do ft-engine
 ```
 
 ---
@@ -640,5 +637,5 @@ ft/
 | Validadores falham em edge cases | Validadores sao Python puro — testaveis, debugaveis, evoluiveis |
 | LLM nao consegue resolver apos N retries | Motor para com BLOCKED, pede intervencao humana |
 | Performance — subagente demora | Paralelismo (fase 4) + sprint-level delegation |
-| Lock de estado impede debug | `ft status --full` mostra tudo; `ft validate` roda manualmente |
+| Lock de estado impede debug | `ft-engine status --full` mostra tudo; `ft validate` roda manualmente |
 | Processo YAML fica complexo | Manter expressividade minima. Compilador NL→YAML no futuro. |

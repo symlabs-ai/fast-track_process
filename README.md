@@ -43,13 +43,14 @@ git push -u origin main
 O Fast Track agora inclui um **motor determinístico Python** que substitui a orquestração por LLM:
 
 ```bash
-ft init                      # inicializar processo
-ft continue --sprint         # rodar sprint completa
-ft approve                   # aprovar artefato pendente
-ft status --full             # ver grafo com progresso
+ft-engine init               # inicializar engine_state.yml
+ft-engine continue --sprint  # rodar sprint completa
+ft-engine approve            # aprovar artefato pendente
+ft-engine status --full      # ver grafo com progresso
 ```
 
 O LLM só executa tarefas de construção — o Python controla todo o fluxo, validações e gates.
+Neste repositório, `ft` é a CLI do template/processo; `ft-engine` é a CLI do motor determinístico.
 
 - **Guia completo**: [`docs/ft_engine_usage.md`](docs/ft_engine_usage.md)
 - **Processo V2**: `process/fast_track/FAST_TRACK_PROCESS_V2.yml`

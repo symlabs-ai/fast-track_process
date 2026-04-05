@@ -21,10 +21,10 @@ O LLM nunca decide sobre o processo — só constrói.
 
 ```bash
 # No projeto Fast Track
-pip install -e ".[engine]"  # ou: pip install pyyaml
+pip install -e .
 
 # Verificar
-ft --help
+ft-engine --help
 ```
 
 ---
@@ -32,15 +32,15 @@ ft --help
 ## Comandos
 
 ```bash
-ft init                    # Inicializar/resetar estado do processo
-ft continue                # Avançar 1 step
-ft continue --sprint       # Avançar até fim da sprint atual
-ft continue --mvp          # Modo autônomo até MVP ou BLOCK
-ft status                  # Status resumido
-ft status --full           # Grafo completo agrupado por sprint
-ft approve                 # Aprovar artefato pendente
-ft reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
-ft reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
+ft-engine init                    # Inicializar/resetar estado do processo
+ft-engine continue                # Avançar 1 step
+ft-engine continue --sprint       # Avançar até fim da sprint atual
+ft-engine continue --mvp          # Modo autônomo até MVP ou BLOCK
+ft-engine status                  # Status resumido
+ft-engine status --full           # Grafo completo agrupado por sprint
+ft-engine approve                 # Aprovar artefato pendente
+ft-engine reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
+ft-engine reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
 ```
 
 ### Opção `--process`
@@ -48,7 +48,7 @@ ft reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
 Especificar YAML de processo manualmente:
 
 ```bash
-ft --process process/fast_track/FAST_TRACK_PROCESS_V2.yml continue --sprint
+ft-engine --process process/fast_track/FAST_TRACK_PROCESS_V2.yml continue --sprint
 ```
 
 Sem `--process`, o engine procura automaticamente (ordem de prioridade):
@@ -75,7 +75,7 @@ nodes:
     sprint: sprint-01        # opcional — agrupa nodes por sprint
     outputs:
       - project/docs/requisitos.md
-    requires_approval: true  # opcional — pausa para ft approve
+    requires_approval: true  # opcional — pausa para ft-engine approve
     validators:
       - file_exists: project/docs/requisitos.md
       - min_lines: 20
@@ -222,15 +222,15 @@ O engine faz **auto-commit** após PASS em cada fase:
 
 ```bash
 # Rodar sprint por sprint
-ft init
-ft continue --sprint    # sprint-01-discovery
-ft approve              # aprovar artefatos pendentes
-ft continue --sprint    # sprint-02-tdd
-ft continue --sprint    # sprint-03-quality
+ft-engine init
+ft-engine continue --sprint    # sprint-01-discovery
+ft-engine approve              # aprovar artefatos pendentes
+ft-engine continue --sprint    # sprint-02-tdd
+ft-engine continue --sprint    # sprint-03-quality
 ...
 
 # Ou modo autônomo
-ft continue --mvp       # roda tudo até MVP ou BLOCK
+ft-engine continue --mvp       # roda tudo até MVP ou BLOCK
 ```
 
 O sprint report é gerado automaticamente ao cruzar boundaries de sprint.
@@ -310,14 +310,14 @@ pip install -e .
 
 **BLOCKED após validação**
 ```bash
-ft status           # ver motivo do block
-ft init             # resetar e recomeçar (perde progresso)
+ft-engine status    # ver motivo do block
+ft-engine init      # resetar e recomeçar (perde progresso)
 ```
 
 **Artefato rejeitado pelo stakeholder**
 ```bash
-ft reject "feedback específico"    # reenvia ao LLM com o motivo
-ft reject --no-retry "motivo"      # bloqueia sem retry
+ft-engine reject "feedback específico"    # reenvia ao LLM com o motivo
+ft-engine reject --no-retry "motivo"      # bloqueia sem retry
 ```
 
 **LLM não encontrado**

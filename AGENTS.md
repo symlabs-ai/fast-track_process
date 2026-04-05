@@ -121,6 +121,9 @@ por task, e gera o sprint-report ao final. Todo o contexto pesado vive e morre d
 Ferramenta de validação determinística em `process/fast_track/tools/ft.py`. Data-driven — lê o YAML
 do processo e schemas em runtime.
 
+Neste repositório, `ft` aponta para esta CLI do processo/template. A CLI do motor determinístico
+fica disponível separadamente como `ft-engine`.
+
 ```bash
 ft <command>
 ```

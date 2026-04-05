@@ -21,7 +21,8 @@ dev = [
 ]
 
 [project.scripts]
-ft = "ft.cli.main:main"
+ft = "ft.cli.template_main:main"
+ft-engine = "ft.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ft"]

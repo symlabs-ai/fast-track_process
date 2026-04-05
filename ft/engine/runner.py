@@ -32,17 +32,144 @@ from ft.engine.stakeholder import (
 # Environment provisioning
 # ---------------------------------------------------------------------------
 
-def provision_environment(project_root: Path, base_url: str | None = None, key: str | None = None) -> None:
+SYMGATEWAY_BASE = "https://symgateway.symlabs.ai"
+
+
+def _gateway_request(method: str, path: str, admin_key: str,
+                      payload: dict | None = None) -> dict | None:
+    """Faz uma requisição HTTP para o SymGateway com a admin key. Retorna JSON ou None."""
+    import urllib.request
+    import urllib.error
+    import json
+
+    url = f"{SYMGATEWAY_BASE}{path}"
+    data = json.dumps(payload).encode() if payload else None
+    req = urllib.request.Request(
+        url, data=data,
+        headers={
+            "Authorization": f"Bearer {admin_key}",
+            "Content-Type": "application/json",
+        },
+        method=method,
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _register_gateway_project(admin_key: str, project_name: str,
+                               user_key: str | None = None) -> None:
+    """Registra o projeto no SymGateway e vincula a key do usuário.
+
+    Fluxo:
+      1. POST /projects           — cria projeto (idempotente via 409)
+      2. GET /api-keys            — resolve UUID da user_key pelo prefix
+      3. POST /projects/{id}/api-keys/link — vincula user_key ao projeto
+    """
+    import urllib.error
+    import json
+
+    # 1. Criar projeto
+    project_id = None
+    try:
+        resp = _gateway_request("POST", "/projects", admin_key, {
+            "name": project_name,
+            "slug": project_name,
+            "folder_name": project_name,
+        })
+        project_id = resp["id"]
+        print(f"  Gateway: projeto '{project_name}' registrado")
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            print(f"  Gateway: projeto '{project_name}' já existe — ok")
+            # Buscar ID do projeto existente via GET /projects
+            try:
+                projects = _gateway_request("GET", "/projects", admin_key)
+                match = next((p for p in projects if p["folder_name"] == project_name), None)
+                if match:
+                    project_id = match["id"]
+            except Exception:
+                pass
+        elif e.code == 403:
+            raise PermissionError(
+                f"Gateway: key sem permissão para criar projetos (role admin necessária).\n"
+                f"  → Passe uma admin key com: ft run ... --admin-key <sk-sym_admin_...>"
+            )
+        else:
+            body = e.read().decode(errors="ignore")
+            print(f"  Gateway AVISO: registro falhou HTTP {e.code} — {body[:120]}")
+            return
+    except Exception as e:
+        print(f"  Gateway AVISO: não foi possível registrar projeto — {e}")
+        return
+
+    # 2 + 3. Vincular user_key ao projeto
+    if not user_key or not project_id:
+        return
+
+    try:
+        keys = _gateway_request("GET", "/api-keys", admin_key)
+        # Encontrar UUID da user_key pelo prefix (a key começa com o prefix)
+        # key_prefix in gateway has "sk-" prefix; user_key may omit it
+        key_uuid = next(
+            (k["id"] for k in keys
+             if user_key.startswith(k["key_prefix"])
+             or user_key.startswith(k["key_prefix"].removeprefix("sk-"))),
+            None,
+        )
+        if not key_uuid:
+            print(f"  Gateway AVISO: key do usuário não encontrada na listagem — link não feito")
+            return
+
+        _gateway_request("POST", f"/projects/{project_id}/api-keys/link",
+                         admin_key, {"api_key_id": key_uuid})
+        print(f"  Gateway: key do usuário vinculada ao projeto '{project_name}'")
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            print(f"  Gateway: key já vinculada ao projeto — ok")
+        else:
+            body = e.read().decode(errors="ignore")
+            print(f"  Gateway AVISO: link da key falhou HTTP {e.code} — {body[:120]}")
+    except Exception as e:
+        print(f"  Gateway AVISO: não foi possível vincular key — {e}")
+
+
+def _read_gateway_md() -> dict[str, str]:
+    """Lê environment/gateway.md do ft-root e extrai campos **KEY**: value."""
+    import re
+    gateway_file = Path(__file__).resolve().parent.parent.parent / "environment" / "gateway.md"
+    if not gateway_file.exists():
+        return {}
+    fields: dict[str, str] = {}
+    for line in gateway_file.read_text().splitlines():
+        m = re.match(r"-\s+\*\*([^*]+)\*\*\s*:\s*(\S+)", line)
+        if m:
+            fields[m.group(1).strip()] = m.group(2).strip()
+    return fields
+
+
+def provision_environment(project_root: Path, base_url: str | None = None,
+                          key: str | None = None, admin_key: str | None = None) -> None:
     """Cria CLAUDE.md e .claude/settings.local.json no project_root.
 
-    Pode receber base_url diretamente ou derivá-la de key.
+    key       — key do usuário (LLMs); usada para montar ANTHROPIC_BASE_URL
+    admin_key — key admin para registrar projeto no Gateway (opcional;
+                lido automaticamente de environment/gateway.md se não fornecido)
     """
     import json
 
     if key and not base_url:
-        base_url = f"https://symgateway.symlabs.ai/u/{key}/p/anthropic-max"
+        base_url = f"{SYMGATEWAY_BASE}/u/{key}/p/anthropic-max"
 
     project_name = project_root.name
+
+    # Admin key: parâmetro > gateway.md > fallback para user key
+    if not admin_key:
+        gw = _read_gateway_md()
+        admin_key = gw.get("GATEWAY_ADMIN_KEY")
+
+    reg_key = admin_key or key
+    if reg_key:
+        _register_gateway_project(reg_key, project_name, user_key=key)
 
     # CLAUDE.md — garante gateway_project na primeira linha
     claude_md = project_root / "CLAUDE.md"
@@ -641,6 +768,34 @@ class StepRunner:
     def _run_llm_step(self, node: Node):
         """Delega ao LLM, valida resultado, avanca ou retenta."""
         state = self.state_mgr.state
+
+        # Pre-seed check: se todos os outputs já existem e os validators passam,
+        # pula delegação ao LLM — o artefato foi fornecido externamente (ex: --hipotese).
+        if node.outputs:
+            all_exist = all(
+                (Path(self.project_root) / o).exists() for o in node.outputs
+            )
+            if all_exist:
+                validation = run_validators(node, self.project_root)
+                if validation.passed:
+                    print(f"  Artefato pré-existente detectado — pulando LLM")
+                    self._log_event(
+                        f"SEED:{node.id}",
+                        f"Artefato pré-existente: {node.title}",
+                        "PASS",
+                        f"outputs={', '.join(node.outputs)}",
+                    )
+                    for output_path in node.outputs:
+                        self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+                    if node.requires_approval and not self._auto_approve:
+                        print(f"  AGUARDANDO APROVACAO — rode: ft approve")
+                        self.state_mgr.set_pending_approval(node.id)
+                        return
+                    next_id = self.graph.resolve_next(node.id)
+                    self.state_mgr.advance(node.id, next_id)
+                    print(f"  PASS (pre-seed) → proximo: {next_id}")
+                    return
+
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
 

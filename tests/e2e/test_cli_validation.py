@@ -222,11 +222,12 @@ class TestInit:
         assert result.returncode == 0
         assert (tmp_path / "project" / "state" / "engine_state.yml").exists()
 
-    def test_no_yaml_exits_nonzero(self, tmp_path):
-        """Without any process YAML, ft init exits with an error."""
+    def test_no_local_yaml_uses_canonical(self, tmp_path):
+        """Without a local process YAML, ft init uses the canonical FAST_TRACK_PROCESS_V2.yml."""
         (tmp_path / "project" / "state").mkdir(parents=True)
         result = run_ft(["init"], cwd=tmp_path)
-        assert result.returncode != 0
+        assert result.returncode == 0
+        assert "sprint" in result.stdout.lower()
 
     def test_missing_process_file_exits_nonzero(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)

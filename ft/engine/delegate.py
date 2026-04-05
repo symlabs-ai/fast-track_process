@@ -61,6 +61,17 @@ REGRAS:
     )
 
     output = result.stdout or ""
+
+    # Detectar erro 403 do SymGateway e dar mensagem acionável
+    if "403" in output and "not found in workspace" in output:
+        import re
+        m = re.search(r"folder_name='([^']+)'", output)
+        folder = m.group(1) if m else "este projeto"
+        raise RuntimeError(
+            f"Gateway 403: projeto '{folder}' não está registrado no SymGateway.\n"
+            f"  → Registre em https://symgateway.symlabs.ai com folder_name='{folder}'"
+        )
+
     success = result.returncode == 0 and "BLOCKED" not in output
 
     # Extrair arquivos criados/modificados do git status

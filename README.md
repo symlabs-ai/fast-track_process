@@ -47,6 +47,7 @@ ft-engine init               # inicializar engine_state.yml
 ft-engine continue --sprint  # rodar sprint completa
 ft-engine approve            # aprovar artefato pendente
 ft-engine status --full      # ver grafo com progresso
+ft-engine continue --codex   # usar Codex CLI em vez de Claude
 ```
 
 O LLM só executa tarefas de construção — o Python controla todo o fluxo, validações e gates.

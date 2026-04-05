@@ -11,6 +11,20 @@ from pathlib import Path
 from ft.engine.runner import StepRunner, provision_environment
 
 
+def add_llm_engine_flags(parser):
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--claude", action="store_true", help="Usar Claude CLI para delegação LLM")
+    group.add_argument("--codex", action="store_true", help="Usar Codex CLI para delegação LLM")
+
+
+def resolve_llm_engine(args) -> str | None:
+    if getattr(args, "codex", False):
+        return "codex"
+    if getattr(args, "claude", False):
+        return "claude"
+    return None
+
+
 def find_project_root() -> Path:
     """Encontra a raiz do projeto subindo ate achar project/state/."""
     current = Path.cwd()
@@ -49,7 +63,7 @@ def find_process_yaml(root: Path) -> Path | None:
     return None
 
 
-def get_runner(process: str | None = None) -> StepRunner:
+def get_runner(process: str | None = None, llm_engine: str | None = None) -> StepRunner:
     root = find_project_root()
     state_path = root / "project" / "state" / "engine_state.yml"
 
@@ -65,11 +79,12 @@ def get_runner(process: str | None = None) -> StepRunner:
         process_path=process_path,
         state_path=state_path,
         project_root=root,
+        llm_engine=llm_engine,
     )
 
 
 def cmd_init(args):
-    runner = get_runner(args.process)
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     # Limpar estado anterior se existir
     if runner.state_mgr.path.exists():
         runner.state_mgr.path.unlink()
@@ -81,7 +96,7 @@ def cmd_init(args):
 
 
 def cmd_continue(args):
-    runner = get_runner(args.process)
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
 
     # Inicializar estado se nao existe
     state = runner.state_mgr.load()
@@ -93,12 +108,12 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
-    runner = get_runner(args.process)
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     runner.status(full=args.full)
 
 
 def cmd_approve(args):
-    runner = get_runner(args.process)
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     runner.approve()
     # Continuar automaticamente apos aprovacao
     if not args.no_continue:
@@ -106,12 +121,12 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
-    runner = get_runner(args.process)
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     runner.reject(args.reason, retry=not args.no_retry)
 
 
 def cmd_graph(args):
-    runner = get_runner(args.process)
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     runner.status(full=True)
 
 
@@ -123,7 +138,7 @@ def cmd_setup_env(args):
     print(f"  gateway_project: {project_root.name}")
 
 
-def _normalize_hipotese(hipotese_path: Path, project_root: Path) -> None:
+def _normalize_hipotese(hipotese_path: Path, project_root: Path, llm_engine: str = "claude") -> None:
     """Verifica se hipotese.md está no formato correto; corrige via LLM se não estiver.
 
     Critérios obrigatórios (espelham os validators do node ft.mdd.01.hipotese):
@@ -171,7 +186,8 @@ Escreva o arquivo corrigido em: project/docs/hipotese.md
 Ao final diga DONE."""
 
     result = delegate_to_llm(task=prompt, project_root=str(project_root),
-                             allowed_paths=["project/docs/"], max_turns=5)
+                             allowed_paths=["project/docs/"], max_turns=5,
+                             llm_engine=llm_engine)
 
     if not result.success:
         print(f"  AVISO: LLM não conseguiu corrigir hipotese.md — o processo vai solicitar reescrita")
@@ -205,10 +221,13 @@ def cmd_run(args):
             sys.exit(1)
 
     state_path = project_root / "project" / "state" / "engine_state.yml"
+    llm_engine = resolve_llm_engine(args)
+
     runner = StepRunner(
         process_path=process_path,
         state_path=state_path,
         project_root=project_root,
+        llm_engine=llm_engine,
     )
 
     # Provisionar ambiente antes do init
@@ -243,7 +262,7 @@ def cmd_run(args):
         dst = dst_docs / "hipotese.md"
         shutil.copy(src, dst)
         print(f"  hipotese.md copiado de {src}")
-        _normalize_hipotese(dst, project_root)
+        _normalize_hipotese(dst, project_root, llm_engine=llm_engine or "claude")
 
     # Init + run MVP
     runner.init_state()
@@ -259,29 +278,35 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # init
-    sub.add_parser("init", help="Inicializar/resetar estado do processo")
+    init = sub.add_parser("init", help="Inicializar/resetar estado do processo")
+    add_llm_engine_flags(init)
 
     # continue
     cont = sub.add_parser("continue", help="Avancar no processo")
+    add_llm_engine_flags(cont)
     cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
     cont.add_argument("--sprint", action="store_true", help="Avancar ate fim da sprint")
     cont.add_argument("--mvp", action="store_true", help="Avancar ate MVP (modo autonomo)")
 
     # status
     st = sub.add_parser("status", help="Estado atual")
+    add_llm_engine_flags(st)
     st.add_argument("--full", "-f", action="store_true", help="Mostrar grafo e artefatos")
 
     # approve
     ap = sub.add_parser("approve", help="Aprovar artefato pendente")
+    add_llm_engine_flags(ap)
     ap.add_argument("--no-continue", action="store_true", help="Nao continuar automaticamente")
 
     # reject
     rj = sub.add_parser("reject", help="Rejeitar artefato pendente")
+    add_llm_engine_flags(rj)
     rj.add_argument("reason", help="Motivo da rejeicao")
     rj.add_argument("--no-retry", action="store_true", help="Nao reenviar ao LLM apos rejeicao")
 
     # graph
-    sub.add_parser("graph", help="Mostrar grafo com status")
+    graph = sub.add_parser("graph", help="Mostrar grafo com status")
+    add_llm_engine_flags(graph)
 
     # setup-env
     se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json")
@@ -290,6 +315,7 @@ def main():
 
     # run — bootstrap completo: cria projeto, provisiona, init, continue --mvp
     ru = sub.add_parser("run", help="Bootstrap completo de um novo projeto até MVP")
+    add_llm_engine_flags(ru)
     ru.add_argument("project", help="Caminho do diretório do projeto (criado se não existir)")
     ru.add_argument("--key", help="API key do SymGateway (sk-sym_...)")
     ru.add_argument("--process", help="YAML do processo (default: FAST_TRACK_PROCESS_V2.yml)")

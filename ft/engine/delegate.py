@@ -1,14 +1,12 @@
 """
-LLM Executor — interface para chamar Claude Code como executor de construcao.
+LLM Executor — interface para chamar Claude Code ou Codex como executor de construcao.
 O LLM so constroi. Nao decide nada sobre o processo.
 """
 
 from __future__ import annotations
 
 import subprocess
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass
@@ -19,14 +17,46 @@ class DelegateResult:
     files_modified: list[str]
 
 
+def _build_executor_command(
+    llm_engine: str,
+    prompt: str,
+    project_root: str,
+    max_turns: int,
+) -> list[str]:
+    """Monta o comando do executor não-interativo com bypass habilitado."""
+    engine = llm_engine.lower().strip()
+
+    if engine == "claude":
+        return [
+            "claude",
+            "--print",
+            "--dangerously-skip-permissions",
+            "--max-turns", str(max_turns),
+            "-p", prompt,
+        ]
+
+    if engine == "codex":
+        return [
+            "codex",
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "-C", project_root,
+            prompt,
+        ]
+
+    raise ValueError(f"Executor LLM desconhecido: {llm_engine}")
+
+
 def delegate_to_llm(
     task: str,
     project_root: str = ".",
     allowed_paths: list[str] | None = None,
     max_turns: int = 50,
+    llm_engine: str = "claude",
 ) -> DelegateResult:
     """
-    Chama o Claude Code CLI como subprocesso para executar uma tarefa de construcao.
+    Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
 
     O LLM recebe um prompt restritivo: so pode escrever nos paths permitidos,
     nao pode editar ft_state.yml, nao pode tomar decisoes de processo.
@@ -45,15 +75,11 @@ REGRAS:
 - Se encontrar um problema que nao consegue resolver, diga BLOCKED e explique o motivo
 """
 
-    # Chamar Claude Code CLI em modo nao-interativo
+    cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns)
+
+    # Chamar executor em modo nao-interativo
     result = subprocess.run(
-        [
-            "claude",
-            "--print",
-            "--dangerously-skip-permissions",
-            "--max-turns", str(max_turns),
-            "-p", prompt,
-        ],
+        cmd,
         cwd=project_root,
         capture_output=True,
         text=True,
@@ -104,6 +130,7 @@ def delegate_with_feedback(
     feedback: str,
     project_root: str = ".",
     allowed_paths: list[str] | None = None,
+    llm_engine: str = "claude",
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -119,4 +146,5 @@ Nao modifique o que ja esta funcionando."""
         task=retry_task,
         project_root=project_root,
         allowed_paths=allowed_paths,
+        llm_engine=llm_engine,
     )

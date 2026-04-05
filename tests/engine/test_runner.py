@@ -45,6 +45,17 @@ class TestInitState:
         state = runner_v2.state_mgr.load()
         assert state.metrics["steps_total"] == 5
 
+    def test_init_persists_selected_llm_engine(self, tmp_path):
+        runner = StepRunner(
+            process_path="process/test_process_v2.yml",
+            state_path=tmp_path / "state.yml",
+            project_root=".",
+            llm_engine="codex",
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        assert state.llm_engine == "codex"
+
 
 # ---------------------------------------------------------------------------
 # approve / reject

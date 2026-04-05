@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [Unreleased]
+
+- feat(engine): `ft-engine` agora permite escolher o executor LLM por comando com `--claude` ou `--codex`
+- feat(engine): a escolha do executor é persistida em `project/state/engine_state.yml` (`llm_engine`) e reaplicada em `continue`, `approve`, `reject`, `status` e `run`
+- feat(engine): delegação para Codex usa `codex exec --dangerously-bypass-approvals-and-sandbox`, mantendo execução autônoma sem prompts de permissão
+
+---
+
 ## [v0.8.26] - 2026-04-05
 
 - feat(cli): instalação editable agora expõe `ft` como CLI do template/processo e `ft-engine` como CLI do motor determinístico, eliminando a duplicidade entre cópia global e código local

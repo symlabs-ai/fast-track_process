@@ -31,9 +31,20 @@ class TestStateManager:
     def test_init_from_graph(self, initialized_state):
         state = initialized_state.load()
         assert state.process_id == "test_proc"
+        assert state.llm_engine == "claude"
         assert state.current_node == "node.01"
         assert state.node_status == "ready"
         assert state.metrics["steps_total"] == 5
+
+    def test_init_from_graph_with_custom_llm_engine(self, tmp_state):
+        tmp_state.init_from_graph(
+            {"id": "test_proc", "version": "1.0.0"},
+            first_node_id="node.01",
+            total_steps=5,
+            llm_engine="codex",
+        )
+        state = tmp_state.load()
+        assert state.llm_engine == "codex"
 
     def test_save_sets_lock(self, initialized_state):
         state = initialized_state.load()

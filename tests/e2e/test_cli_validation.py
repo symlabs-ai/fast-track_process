@@ -153,6 +153,12 @@ class TestHelpAndUsage:
         output = result.stdout + result.stderr
         assert "--process" in output or "-p" in output
 
+    def test_init_help_mentions_llm_engine_flags(self, tmp_path):
+        result = run_ft(["init", "--help"], cwd=tmp_path)
+        output = result.stdout + result.stderr
+        assert "--claude" in output
+        assert "--codex" in output
+
     def test_no_args_shows_usage(self, tmp_path):
         result = run_ft([], cwd=tmp_path)
         output = result.stdout + result.stderr
@@ -228,6 +234,12 @@ class TestInit:
         result = run_ft(["init"], cwd=tmp_path)
         assert result.returncode == 0
         assert "sprint" in result.stdout.lower()
+
+    def test_codex_flag_persists_engine_choice(self, ft_project):
+        result = run_ft(["init", "--codex"], cwd=ft_project)
+        assert result.returncode == 0
+        state_file = ft_project / "project" / "state" / "engine_state.yml"
+        assert "llm_engine: codex" in state_file.read_text()
 
     def test_missing_process_file_exits_nonzero(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)

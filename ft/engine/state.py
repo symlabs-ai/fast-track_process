@@ -19,6 +19,7 @@ class EngineState:
     """Estado do motor. Serializado em ft_state.yml."""
     process_id: str = ""
     version: str = "0.1.0"
+    llm_engine: str = "claude"
     current_node: str | None = None
     node_status: str = "ready"  # ready | delegated | validating | done | blocked
     completed_nodes: list[str] = field(default_factory=list)
@@ -81,6 +82,7 @@ class StateManager:
             self._state = EngineState(
                 process_id=raw.get("process_id", ""),
                 version=raw.get("version", "0.1.0"),
+                llm_engine=raw.get("llm_engine", "claude"),
                 current_node=raw.get("current_node"),
                 node_status=raw.get("node_status", "ready"),
                 completed_nodes=raw.get("completed_nodes", []),
@@ -113,6 +115,7 @@ class StateManager:
         data = {
             "process_id": self._state.process_id,
             "version": self._state.version,
+            "llm_engine": self._state.llm_engine,
             "current_node": self._state.current_node,
             "node_status": self._state.node_status,
             "completed_nodes": self._state.completed_nodes,
@@ -137,11 +140,18 @@ class StateManager:
             return self.load()
         return self._state
 
-    def init_from_graph(self, graph_meta: dict[str, Any], first_node_id: str, total_steps: int):
+    def init_from_graph(
+        self,
+        graph_meta: dict[str, Any],
+        first_node_id: str,
+        total_steps: int,
+        llm_engine: str = "claude",
+    ):
         """Inicializa estado a partir de um grafo de processo."""
         self._state = EngineState(
             process_id=graph_meta.get("id", "unknown"),
             version=graph_meta.get("version", "0.1.0"),
+            llm_engine=llm_engine,
             current_node=first_node_id,
             node_status="ready",
             metrics={

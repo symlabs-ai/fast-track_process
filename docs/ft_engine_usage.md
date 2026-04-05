@@ -11,8 +11,9 @@ O Python controla o fluxo; o LLM executa apenas tarefas de construção.
 YAML de processo → ft engine → LLM executa → validadores Python → avança
 ```
 
-O engine lê um processo definido em YAML, executa cada step delegando ao LLM via `claude --print`,
-valida os artefatos produzidos com verificações determinísticas (Python puro) e só avança se tudo passar.
+O engine lê um processo definido em YAML, executa cada step delegando ao LLM via CLI configurada
+(`claude` ou `codex`), valida os artefatos produzidos com verificações determinísticas (Python puro)
+e só avança se tudo passar.
 O LLM nunca decide sobre o processo — só constrói.
 
 ---
@@ -42,6 +43,25 @@ ft-engine approve                 # Aprovar artefato pendente
 ft-engine reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
 ft-engine reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
 ```
+
+### Seleção do executor LLM
+
+Por padrão, o engine usa `claude`. Você pode trocar o executor por comando:
+
+```bash
+ft-engine init --codex
+ft-engine continue --codex --sprint
+ft-engine run ~/dev/projects/examples/pokemon --hipotese ~/dev/projects/examples/pokemon.md --codex
+```
+
+Ou definir o default por ambiente:
+
+```bash
+export FT_LLM_ENGINE=codex
+```
+
+O executor selecionado é persistido em `project/state/engine_state.yml`, então `status`,
+`approve` e `reject` continuam usando o mesmo engine nas execuções seguintes.
 
 ### Opção `--process`
 
@@ -277,7 +297,7 @@ ft/
     graph.py          # DAG parser — YAML → nodes → resolve_next
     state.py          # StateManager — único escritor de engine_state.yml
     runner.py         # StepRunner — loop principal
-    delegate.py       # LLM executor via claude CLI
+    delegate.py       # LLM executor via Claude/Codex CLI
     git_ops.py        # auto_commit após PASS
     parallel.py       # ParallelRunner — worktrees + fan-out/fan-in
     stakeholder.py    # hyper-mode, approval/rejection helpers
@@ -321,7 +341,9 @@ ft-engine reject --no-retry "motivo"      # bloqueia sem retry
 ```
 
 **LLM não encontrado**
-O engine usa `claude` CLI. Certifique-se de que está instalado e autenticado:
+O engine usa a CLI selecionada (`claude` por default, ou `codex` com `--codex` / `FT_LLM_ENGINE=codex`).
+Certifique-se de que o binário escolhido está instalado:
 ```bash
 claude --version
+codex --version
 ```

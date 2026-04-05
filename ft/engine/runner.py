@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any
 
@@ -491,10 +492,17 @@ MAX_RETRIES = 3
 class StepRunner:
     """Motor deterministico. Roda o loop principal."""
 
-    def __init__(self, process_path: str | Path, state_path: str | Path, project_root: str | Path = "."):
+    def __init__(
+        self,
+        process_path: str | Path,
+        state_path: str | Path,
+        project_root: str | Path = ".",
+        llm_engine: str | None = None,
+    ):
         self.graph = load_graph(process_path)
         self.state_mgr = StateManager(state_path)
         self.project_root = str(Path(project_root).resolve())
+        self._llm_engine_override = llm_engine.lower().strip() if llm_engine else None
         self._auto_approve = False
         # Raiz do repo fast-track — derivada do process_path (sobe 3 níveis)
         self._ft_root = str(Path(process_path).resolve().parent.parent.parent)
@@ -503,6 +511,22 @@ class StepRunner:
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
+
+    def _resolve_llm_engine(self, state: Any | None = None) -> str:
+        """Resolve o executor LLM efetivo para esta run."""
+        if self._llm_engine_override:
+            return self._llm_engine_override
+        if state is not None and getattr(state, "llm_engine", None):
+            return state.llm_engine
+        env_engine = os.environ.get("FT_LLM_ENGINE", "").strip().lower()
+        return env_engine or "claude"
+
+    def _persist_llm_engine(self, state: Any) -> None:
+        """Persiste override no estado para comandos subsequentes do projeto."""
+        effective = self._resolve_llm_engine(state)
+        if getattr(state, "llm_engine", None) != effective:
+            state.llm_engine = effective
+            self.state_mgr.save()
 
     def _mark_node_start(self, node_id: str):
         """Registra o instante de início de um node (para cálculo de duração)."""
@@ -594,7 +618,12 @@ class StepRunner:
         """Inicializa estado a partir do grafo."""
         first = self.graph.first_node()
         total = len([n for n in self.graph.nodes.values() if n.type != "end"])
-        self.state_mgr.init_from_graph(self.graph.meta, first.id, total)
+        self.state_mgr.init_from_graph(
+            self.graph.meta,
+            first.id,
+            total,
+            llm_engine=self._resolve_llm_engine(),
+        )
         print(f"Estado inicializado. Processo: {self.graph.meta.get('title', '?')}")
         print(f"  Primeiro node: {first.id} ({first.title})")
         print(f"  Total de steps: {total}")
@@ -645,6 +674,8 @@ class StepRunner:
         except StateLockError as e:
             print(f"  ERRO: {e}")
             return
+
+        self._persist_llm_engine(state)
 
         if state.current_node is None:
             print("Processo nao inicializado. Rode: ft init")
@@ -835,6 +866,7 @@ class StepRunner:
             task=task_prompt,
             project_root=self.project_root,
             allowed_paths=allowed,
+            llm_engine=self._resolve_llm_engine(state),
         )
         if node.max_turns is not None:
             delegate_kwargs["max_turns"] = node.max_turns
@@ -879,6 +911,7 @@ class StepRunner:
                     feedback=validation.feedback or "",
                     project_root=self.project_root,
                     allowed_paths=allowed,
+                    llm_engine=self._resolve_llm_engine(state),
                 )
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
@@ -997,6 +1030,7 @@ class StepRunner:
             task=task_prompt,
             project_root=self.project_root,
             allowed_paths=allowed,
+            llm_engine=self._resolve_llm_engine(state),
         )
         if node.max_turns is not None:
             review_kwargs["max_turns"] = node.max_turns
@@ -1032,6 +1066,7 @@ class StepRunner:
                     feedback=validation.feedback or "",
                     project_root=self.project_root,
                     allowed_paths=allowed,
+                    llm_engine=self._resolve_llm_engine(state),
                 )
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
                 validation = run_validators(node, self.project_root)
@@ -1092,7 +1127,11 @@ class StepRunner:
 
         par = ParallelRunner(project_root=self.project_root, max_slots=2)
         try:
-            results = par.run_parallel(tasks, delegate_to_llm)
+            llm_engine = self._resolve_llm_engine(self.state_mgr.state)
+            results = par.run_parallel(
+                tasks,
+                lambda **kwargs: delegate_to_llm(llm_engine=llm_engine, **kwargs),
+            )
         except ValueError as e:
             self.state_mgr.block(str(e))
             print(f"  PARALLEL BLOCK: {e}")
@@ -1158,6 +1197,7 @@ class StepRunner:
     def approve(self):
         """Stakeholder aprova artefato pendente."""
         state = self.state_mgr.load()
+        self._persist_llm_engine(state)
         if not state.pending_approval:
             print("Nenhuma aprovacao pendente.")
             return
@@ -1174,6 +1214,7 @@ class StepRunner:
         Se retry=True, reenvia ao LLM com feedback do motivo.
         """
         state = self.state_mgr.load()
+        self._persist_llm_engine(state)
         if not state.pending_approval:
             print("Nenhuma rejeicao pendente.")
             return
@@ -1202,6 +1243,7 @@ class StepRunner:
                 feedback=f"REJEITADO PELO STAKEHOLDER: {reason}",
                 project_root=self.project_root,
                 allowed_paths=allowed,
+                llm_engine=self._resolve_llm_engine(state),
             )
             state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 

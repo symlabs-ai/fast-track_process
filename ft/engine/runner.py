@@ -135,14 +135,20 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None) 
                 # Ex: min_lines: 10 → min_lines(path, 10, project_root)
                 # path vem do primeiro output do node
                 path = node.outputs[0] if node.outputs else ""
-                passed, detail = fn(path, args, project_root=project_root)
+                if not path:
+                    passed, detail = False, f"{name} FAIL: node sem outputs — não é possível inferir o path do artefato"
+                else:
+                    passed, detail = fn(path, args, project_root=project_root)
             elif isinstance(args, str):
                 # Ex: file_exists: path → file_exists(path, project_root)
                 passed, detail = fn(args, project_root=project_root)
             elif isinstance(args, list):
                 # Ex: has_sections: [A, B, C] → has_sections(path, [A,B,C], project_root)
                 path = node.outputs[0] if node.outputs else ""
-                passed, detail = fn(path, args, project_root=project_root)
+                if not path:
+                    passed, detail = False, f"{name} FAIL: node sem outputs — não é possível inferir o path do artefato"
+                else:
+                    passed, detail = fn(path, args, project_root=project_root)
             else:
                 passed, detail = False, f"Args nao suportados para {name}: {args}"
 

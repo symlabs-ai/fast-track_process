@@ -957,6 +957,8 @@ nodes:
     title: "Gate E2E Browser"
     executor: python
     sprint: sprint-07-e2e
+    outputs:
+      - docs/e2e-browser-report.md
     validators:
       - file_exists: docs/e2e-browser-report.md
       - has_sections:

@@ -21,6 +21,7 @@ from ft.engine.validators import code as code_val
 from ft.engine.validators import review as review_val
 from ft.engine.git_ops import auto_commit
 from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
+from ft.engine import ui
 from ft.engine.parallel import ParallelRunner, check_independence
 from ft.engine.stakeholder import (
     scan_existing_docs, should_skip_node,
@@ -714,9 +715,9 @@ class StepRunner:
             total,
             llm_engine=self._resolve_llm_engine(),
         )
-        print(f"Estado inicializado. Processo: {self.graph.meta.get('title', '?')}")
-        print(f"  Primeiro node: {first.id} ({first.title})")
-        print(f"  Total de steps: {total}")
+        print(ui.init_banner(
+            self.graph.meta.get("title", "?"), first.id, first.title, total,
+        ))
         self._init_log()
         self._log_event(
             "INIT",
@@ -739,7 +740,7 @@ class StepRunner:
         try:
             state = self.state_mgr.load(check_lock=True)
         except StateLockError as e:
-            print(f"  ERRO: {e}")
+            print(ui.fail(str(e)))
             return
 
         self._persist_llm_engine(state)
@@ -765,27 +766,26 @@ class StepRunner:
             node = self.graph.get_node(node_id)
 
             if node.type == "end":
-                print(f"\n{'='*50}")
-                print(f"  PROCESSO COMPLETO")
-                print(f"  Steps: {state.metrics['steps_completed']}/{state.metrics['steps_total']}")
-                print(f"{'='*50}")
+                print(ui.process_complete(
+                    state.metrics['steps_completed'], state.metrics['steps_total'],
+                ))
                 self._fire_hooks("on_deliver")
                 self._advance_state(node_id, None)
                 break
 
             # Sprint boundary check — para se mudou de sprint
             if mode == "sprint" and start_sprint and node.sprint != start_sprint:
-                print(f"\n  Sprint {start_sprint} completa → proximo: {node_id} (sprint {node.sprint})")
+                print(ui.sprint_complete(start_sprint))
+                print(ui.info(f"Próximo: {node_id} (sprint {node.sprint})"))
                 self._generate_sprint_report(start_sprint, state)
                 break
 
             step_num = len(state.completed_nodes) + 1
             step_total = state.metrics.get("steps_total", "?")
-            print(f"\n{'─'*50}")
-            print(f"  [{step_num}/{step_total}] {node.title}")
-            sprint_label = f" | Sprint: {node.sprint}" if node.sprint else ""
-            print(f"  Node: {node_id} | Tipo: {node.type} | Executor: {node.executor}{sprint_label}")
-            print(f"{'─'*50}")
+            print(ui.step_card(
+                step_num, step_total, node.title,
+                node_id, node.type, node.executor, node.sprint,
+            ))
 
             self._mark_node_start(node_id)
             self._fire_hooks("on_node_start")
@@ -886,7 +886,7 @@ class StepRunner:
             if all_exist:
                 validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
                 if validation.passed:
-                    print(f"  Artefato já existe e é válido — pulando etapa")
+                    print(ui.success("Artefato já existe e é válido — pulando etapa"))
                     self._log_event(
                         f"SEED:{node.id}",
                         f"Artefato pré-existente: {node.title}",
@@ -896,12 +896,12 @@ class StepRunner:
                     for output_path in node.outputs:
                         self.state_mgr.record_artifact(Path(output_path).stem, output_path)
                     if node.requires_approval and not self._auto_approve:
-                        print(f"  AGUARDANDO APROVACAO — rode: ft approve")
+                        print(ui.awaiting_approval())
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
                     self._advance_state(node.id, next_id)
-                    print(f"  PASS (pre-seed) → proximo: {next_id}")
+                    print(ui.step_pass(next_id, "PASS (pre-seed)"))
                     return
 
         state_dict = {**state.__dict__, "_project_root": self.project_root}
@@ -925,7 +925,7 @@ class StepRunner:
         # Determinar paths permitidos
         allowed = self._resolve_allowed_paths(node)
 
-        print(f"  Delegando ao LLM ({node.executor})...")
+        print(ui.info(f"Delegando ao LLM ({node.executor})..."))
         state.node_status = "delegated"
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
         log_path = self._start_llm_log(state, node.id, "run")
@@ -948,7 +948,7 @@ class StepRunner:
             self._clear_active_llm_log(state)
 
         if not result.success:
-            print(f"  LLM reportou BLOCKED: {result.output[:200]}")
+            print(ui.fail(f"LLM reportou BLOCKED: {result.output[:200]}"))
             self.state_mgr.block(f"LLM falhou: {result.output[:500]}")
             return
 
@@ -958,7 +958,7 @@ class StepRunner:
             self.state_mgr.record_artifact(name, output_path)
 
         # Validar
-        print(f"  Validando...")
+        print(ui.info("Validando..."))
         validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         self._print_validation(validation)
 
@@ -967,19 +967,19 @@ class StepRunner:
             self._maybe_auto_commit(node)
 
             if node.requires_approval and not self._auto_approve:
-                print(f"  AGUARDANDO APROVACAO — rode: ft approve")
+                print(ui.awaiting_approval())
                 self.state_mgr.set_pending_approval(node.id)
                 return
 
             next_id = self.graph.resolve_next(node.id)
             self._advance_state(node.id, next_id)
-            print(f"  PASS → proximo: {next_id}")
+            print(ui.step_pass(next_id))
             return
 
         # Retry
         if validation.retryable:
             for retry in range(1, MAX_RETRIES + 1):
-                print(f"  RETRY {retry}/{MAX_RETRIES}...")
+                print(ui.retry(retry, MAX_RETRIES))
                 retry_log_path = self._start_llm_log(state, node.id, f"retry-{retry}")
                 self.state_mgr.save()
                 try:
@@ -1003,21 +1003,21 @@ class StepRunner:
                     self._maybe_auto_commit(node)
 
                     if node.requires_approval:
-                        print(f"  AGUARDANDO APROVACAO — rode: ft approve")
+                        print(ui.awaiting_approval())
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
                     self._advance_state(node.id, next_id)
-                    print(f"  PASS (retry {retry}) → proximo: {next_id}")
+                    print(ui.step_pass(next_id, f"PASS (retry {retry})"))
                     return
 
         # Esgotou retries
         self.state_mgr.block(f"Validacao falhou apos {MAX_RETRIES} tentativas: {validation.feedback}")
-        print(f"  BLOCK: validacao falhou apos {MAX_RETRIES} tentativas")
+        print(ui.step_block(f"validação falhou após {MAX_RETRIES} tentativas"))
 
     def _run_gate(self, node: Node):
         """Roda gate — validacao pura sem LLM."""
-        print(f"  Rodando gate...")
+        print(ui.info("Rodando gate..."))
         validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         self._print_validation(validation)
 
@@ -1028,13 +1028,13 @@ class StepRunner:
             next_id = self.graph.resolve_next(node.id)
             self._advance_state(node.id, next_id, "PASS")
             self._fire_hooks("on_gate_pass")
-            print(f"  GATE PASS → proximo: {next_id}")
+            print(ui.gate_pass(next_id))
         else:
             self.state_mgr.block(f"Gate falhou: {validation.feedback}")
             self.state_mgr.state.gate_log[node.id] = "BLOCK"
             self.state_mgr.save()
             self._fire_hooks("on_gate_fail")
-            print(f"  GATE BLOCK: {validation.feedback}")
+            print(ui.gate_block(validation.feedback or "validação falhou"))
 
     def _maybe_auto_commit(self, node: Node):
         """Auto-commit apos PASS em nodes de build/test_green/refactor."""
@@ -1056,9 +1056,9 @@ class StepRunner:
             project_root=self.project_root,
         )
         if success:
-            print(f"  COMMIT: {detail}")
+            print(ui.success(f"COMMIT: {detail}"))
         else:
-            print(f"  COMMIT SKIP: {detail}")
+            print(ui.dim(f"COMMIT SKIP: {detail}"))
 
     def _run_decision(self, node: Node):
         """Roda decision node — avalia condicao e segue branch."""
@@ -1087,7 +1087,7 @@ class StepRunner:
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
         early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         if early_check.passed:
-            print(f"  Expert Review: artefatos já existem e validação OK — pulando etapa")
+            print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
             for output_path in node.outputs:
                 self.state_mgr.record_artifact(Path(output_path).stem, output_path)
             next_id = node.next
@@ -1349,7 +1349,7 @@ class StepRunner:
                 validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
                 self._print_validation(validation)
                 if validation.passed:
-                    print(f"  AGUARDANDO APROVACAO — rode: ft approve")
+                    print(ui.awaiting_approval())
                     self.state_mgr.set_pending_approval(node.id)
                     return
             # Se retry falhou, bloquear
@@ -1369,23 +1369,21 @@ class StepRunner:
         if state.current_node:
             current_sprint = self.graph.sprint_of(state.current_node)
 
-        print(f"\n{'━'*50}")
-        print(f"  Processo: {state.process_id} v{state.version}")
-        print(f"  LLM engine: {state.llm_engine}")
-        print(f"  Node atual: {state.current_node}")
-        print(f"  Status: {state.node_status}")
+        print(ui.header(f"{state.process_id} v{state.version}"))
+        print(ui.info(f"LLM engine: {state.llm_engine}"))
+        print(ui.info(f"Node atual: {state.current_node}"))
+        print(ui.info(f"Status: {state.node_status}"))
         if current_sprint:
-            print(f"  Sprint: {current_sprint}")
-        print(f"  Progresso: {state.metrics['steps_completed']}/{state.metrics['steps_total']}")
+            print(ui.info(f"Sprint: {current_sprint}"))
+        print(ui.info(f"Progresso: {state.metrics['steps_completed']}/{state.metrics['steps_total']}"))
         if state.active_llm_log:
-            print(f"  LLM log ativo: {state.active_llm_log}")
+            print(ui.dim(f"LLM log ativo: {state.active_llm_log}"))
         elif state.last_llm_log:
-            print(f"  Último LLM log: {state.last_llm_log}")
+            print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:
-            print(f"  BLOCKED: {state.blocked_reason}")
+            print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
         if state.pending_approval:
-            print(f"  AGUARDANDO APROVACAO: {state.pending_approval}")
-        print(f"{'━'*50}")
+            print(ui.warn(f"AGUARDANDO APROVAÇÃO: {state.pending_approval}"))
 
         if full:
             # Agrupar por sprint
@@ -1428,5 +1426,7 @@ class StepRunner:
     @staticmethod
     def _print_validation(v: ValidationResult):
         for item in v.items:
-            icon = "[ok]" if item.passed else "[FAIL]"
-            print(f"    {icon} {item.detail}")
+            if item.passed:
+                print(ui.validator_ok(item.detail))
+            else:
+                print(ui.validator_fail(item.detail))

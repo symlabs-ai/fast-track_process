@@ -3,9 +3,12 @@
 # v0.8.0: suporte a frontend/PWA com decision node por interface_type
 # v0.8.17: gate_pulse_instrumented adicionado a ft.audit.01.forgebase; prompt reestruturado
 #           para implementação-first; REGRA DADOS generalizada (sem hardcode de .db filename)
+# v0.8.18: acceptance CLI de API passa a ser pulado para interface_type=ui
+# v0.8.19: ft.prd.rewrite passa a preservar Hipotese/Visao/User Stories via baseline
+#           determinístico; reescrita automática não pode alterar visão/escopo sem stakeholder
 
 id: fast_track_v2
-version: "0.8.17"
+version: "0.8.19"
 title: "ForgeProcess — Fast Track V2"
 
 nodes:
@@ -674,6 +677,17 @@ nodes:
           skip_if_interface: cli_only
     outputs:
       - src/
+    next: decision.acceptance.cli
+
+  - id: decision.acceptance.cli
+    type: decision
+    title: "Requer Acceptance de API/CLI?"
+    executor: python
+    sprint: sprint-06-smoke
+    condition: interface_type
+    branches:
+      ui: ft.smoke.01.cli_run
+      _default: ft.acceptance.01.cli
     next: ft.acceptance.01.cli
 
   # ================================================================
@@ -688,30 +702,57 @@ nodes:
     max_turns: 80
     outputs:
       - project/docs/acceptance-cli-report.md
+    write_scope:
+      - main.py
+      - src/
+      - tests/
+      - project/docs/
     prompt: |
       Execute os testes de aceitação da API usando a massa de dados de teste.
+      ESTE STEP É IMPLEMENTAÇÃO-FIRST: se a API falhar, corrija o backend e reexecute
+      os testes no mesmo step. Não pare no primeiro FAIL.
 
       Leia obrigatoriamente:
         - project/docs/test_data.md     (massa de dados para inserção)
         - project/docs/tech_stack.md    (interface_type e stack)
+        - project/docs/api_contract.md  (FONTE DE VERDADE dos endpoints HTTP)
+        - main.py                       (entry point atual do servidor)
+        - src/                          (domínio e routers existentes)
 
       SE interface_type for cli_only:
         Rode a CLI com os dados de test_data.md como argumentos, verificando
         cada operação. Escreva project/docs/acceptance-cli-report.md com os
         resultados e encerre com DONE.
 
+      SE interface_type for ui:
+        Escreva um relatório mínimo em project/docs/acceptance-cli-report.md dizendo
+        que o acceptance de API foi pulado porque interface_type=ui e encerre com DONE.
+
       SE interface_type for api ou mixed:
         0. Leia main.py para descobrir a porta do servidor (linha `uvicorn.run(..., port=XXXX)`).
            Se o servidor não estiver rodando, inicie-o com:
            `SECRET_KEY=dev-test-key nohup python -m uvicorn main:app --host 127.0.0.1 --port XXXX &`
-           e aguarde 3 segundos. Use SEMPRE o DB limpo (delete service_mate.db se existir antes de iniciar).
-        1. Descubra os endpoints: GET http://localhost:XXXX/openapi.json
-        2. Para cada entidade em test_data.md:
+           e aguarde 3 segundos.
+        1. Garanta AMBIENTE LIMPO antes de cada rodada:
+           - pare o servidor anterior se estiver rodando
+           - delete arquivos `*.db` e `*.sqlite` do projeto, se existirem
+           - reinicie o servidor
+        2. Descubra os endpoints: GET http://localhost:XXXX/openapi.json
+        3. Rode a aceitação para cada entidade em test_data.md:
            a. Identifique o endpoint de criação correto (POST)
            b. Faça POST com cada registro da entidade
            c. Verifique que o registro persistiu (GET e compare campos-chave)
            d. Documente: endpoint, payload, status code, resultado PASS ou FAIL
-        3. Escreva project/docs/acceptance-cli-report.md:
+
+        4. REGRA DE AUTO-CORREÇÃO:
+           - se qualquer POST retornar 404, 422 inesperado ou não persistir, NÃO pare
+           - corrija o backend imediatamente para aderir EXATAMENTE ao api_contract.md
+           - edite `main.py` e/ou `src/` quantas vezes forem necessárias
+           - reinicie o servidor
+           - rode a aceitação inteira novamente a partir do banco limpo
+           - repita até o relatório ficar sem FAILs ou até esgotar o budget de turns
+
+        5. Só escreva o relatório final depois da última rodada executada:
 
           # Acceptance CLI Report
 
@@ -727,9 +768,8 @@ nodes:
           ## Falhas Encontradas
           - endpoint, payload enviado, resposta recebida, causa provável
 
-      REGRA CRÍTICA: Se qualquer POST retornar 404 ou 422 inesperado, marque
-      como [FAIL]. Não minta nos resultados — o gate vai bloquear se houver FAIL.
-      É melhor bloquear agora e corrigir o backend do que descobrir no E2E do frontend.
+      REGRA CRÍTICA: o relatório deve refletir a ÚLTIMA rodada executada. Se ainda houver
+      FAILs após tentar corrigir, registre os FAILs reais — não minta.
 
       REGRA DADOS: Sempre comece com banco de dados limpo. Antes de inserir qualquer
       registro, verifique se o banco já tem dados (GET no endpoint de listagem principal).
@@ -831,6 +871,11 @@ nodes:
     max_turns: 80
     outputs:
       - project/docs/forgebase-audit.md
+    write_scope:
+      - main.py
+      - src/
+      - tests/
+      - project/docs/
     prompt: |
       ATENÇÃO: Este step exige IMPLEMENTAÇÃO de código, não apenas documentação.
       O gate seguinte vai rodar `gate_pulse_instrumented` no código — ele falha se
@@ -958,6 +1003,14 @@ nodes:
       OBJETIVO: produzir uma versão evoluída de project/docs/PRD.md que:
 
       1. MANTÉM toda a substância do PRD original (hipótese, user stories, modelo de negócio)
+         - REGRA CRÍTICA: as seções `## Hipotese`, `## Visao` e `## User Stories`
+           são IMUTÁVEIS neste step.
+         - Você NÃO pode mudar visão do produto, escopo prometido, público-alvo,
+           proposta central, ou user stories sem decisão explícita do stakeholder.
+         - Use os aprendizados do ciclo apenas para:
+           a) adicionar contratos e clarificações em novas seções
+           b) registrar decisões emergentes de implementação
+           c) documentar ambiguidades e débitos sem reescrever a visão base
       2. CORRIGE gaps identificados na retro e no review:
          - Adiciona ou corrige seções que o ciclo revelou como ausentes ou ambíguas
          - Documenta decisões que emergiram durante a implementação
@@ -989,6 +1042,13 @@ nodes:
           - Hipotese
           - User Stories
           - interface_type
+      - sections_unchanged:
+          path: project/docs/PRD.md
+          snapshot_path: project/state/prd_rewrite_baseline.md
+          sections:
+            - Hipotese
+            - Visao
+            - User Stories
     next: ft.handoff.01.specs
 
   - id: ft.handoff.01.specs

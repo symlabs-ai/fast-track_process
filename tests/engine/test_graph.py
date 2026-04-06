@@ -22,6 +22,7 @@ def make_graph(nodes_data: list[dict]) -> ProcessGraph:
             title=n.get("title", n["id"]),
             executor=n.get("executor", "python"),
             outputs=n.get("outputs", []),
+            write_scope=n.get("write_scope", []),
             next=n.get("next"),
             sprint=n.get("sprint"),
             parallel_group=n.get("parallel_group"),
@@ -172,8 +173,28 @@ class TestLoadGraph:
 
     def test_load_fast_track_v2(self):
         g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
-        assert len(g.nodes) == 41
+        assert len(g.nodes) == 42
         assert len(g.get_sprints()) == 10
+
+    def test_load_fast_track_v2_routes_ui_around_acceptance_cli(self):
+        g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
+        assert g.resolve_next("decision.acceptance.cli", {"interface_type": "ui"}) == "ft.smoke.01.cli_run"
+        assert g.resolve_next("decision.acceptance.cli", {"interface_type": "api"}) == "ft.acceptance.01.cli"
+
+    def test_load_fast_track_v2_audit_has_explicit_write_scope(self):
+        g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
+        audit = g.get_node("ft.audit.01.forgebase")
+        assert "main.py" in audit.write_scope
+        assert "project/docs/" in audit.write_scope
+
+    def test_load_fast_track_v2_prd_rewrite_preserves_immutable_sections(self):
+        g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
+        rewrite = g.get_node("ft.prd.rewrite")
+        validator = next(v["sections_unchanged"] for v in rewrite.validators if "sections_unchanged" in v)
+
+        assert validator["path"] == "project/docs/PRD.md"
+        assert validator["snapshot_path"] == "project/state/prd_rewrite_baseline.md"
+        assert validator["sections"] == ["Hipotese", "Visao", "User Stories"]
 
     def test_missing_file_raises(self):
         with pytest.raises(FileNotFoundError):

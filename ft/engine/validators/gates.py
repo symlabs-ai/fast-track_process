@@ -386,6 +386,12 @@ def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
     """Gate de acceptance CLI — verifica que o relatório existe e não tem FAILs."""
     import re
 
+    tech_stack = Path(project_root) / "project/docs/tech_stack.md"
+    if tech_stack.exists():
+        match = re.search(r"interface_type:\s*(\w+)", tech_stack.read_text())
+        if match and match.group(1).lower() == "ui":
+            return True, "gate_acceptance_cli: pulado (interface_type=ui)"
+
     report = Path(project_root) / "project/docs/acceptance-cli-report.md"
     if not report.exists():
         return False, "gate_acceptance_cli FAIL: acceptance-cli-report.md não encontrado"

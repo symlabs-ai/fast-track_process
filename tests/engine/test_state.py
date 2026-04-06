@@ -46,6 +46,16 @@ class TestStateManager:
         state = tmp_state.load()
         assert state.llm_engine == "codex"
 
+    def test_persists_active_and_last_llm_logs(self, initialized_state):
+        state = initialized_state.load()
+        state.active_llm_log = "project/state/llm_logs/current.jsonl"
+        state.last_llm_log = "project/state/llm_logs/last.jsonl"
+        initialized_state.save()
+
+        reloaded = initialized_state.load()
+        assert reloaded.active_llm_log == "project/state/llm_logs/current.jsonl"
+        assert reloaded.last_llm_log == "project/state/llm_logs/last.jsonl"
+
     def test_save_sets_lock(self, initialized_state):
         state = initialized_state.load()
         assert state._lock is not None

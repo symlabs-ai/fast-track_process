@@ -20,6 +20,8 @@ class EngineState:
     process_id: str = ""
     version: str = "0.1.0"
     llm_engine: str = "claude"
+    active_llm_log: str | None = None
+    last_llm_log: str | None = None
     current_node: str | None = None
     node_status: str = "ready"  # ready | delegated | validating | done | blocked
     completed_nodes: list[str] = field(default_factory=list)
@@ -83,6 +85,8 @@ class StateManager:
                 process_id=raw.get("process_id", ""),
                 version=raw.get("version", "0.1.0"),
                 llm_engine=raw.get("llm_engine", "claude"),
+                active_llm_log=raw.get("active_llm_log"),
+                last_llm_log=raw.get("last_llm_log"),
                 current_node=raw.get("current_node"),
                 node_status=raw.get("node_status", "ready"),
                 completed_nodes=raw.get("completed_nodes", []),
@@ -116,6 +120,8 @@ class StateManager:
             "process_id": self._state.process_id,
             "version": self._state.version,
             "llm_engine": self._state.llm_engine,
+            "active_llm_log": self._state.active_llm_log,
+            "last_llm_log": self._state.last_llm_log,
             "current_node": self._state.current_node,
             "node_status": self._state.node_status,
             "completed_nodes": self._state.completed_nodes,

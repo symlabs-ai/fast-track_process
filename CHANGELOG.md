@@ -9,6 +9,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 - feat(engine): `ft-engine` agora permite escolher o executor LLM por comando com `--claude` ou `--codex`
 - feat(engine): a escolha do executor é persistida em `project/state/engine_state.yml` (`llm_engine`) e reaplicada em `continue`, `approve`, `reject`, `status` e `run`
 - feat(engine): delegação para Codex usa `codex exec --dangerously-bypass-approvals-and-sandbox`, mantendo execução autônoma sem prompts de permissão
+- feat(engine): logs nativos do Codex agora são capturados em JSONL por step em `project/state/llm_logs/`, com ponteiro visível em `ft-engine status`
+- fix(process): nodes podem declarar `write_scope` explícito no YAML; `ft.acceptance.01.cli` e `ft.audit.01.forgebase` agora podem corrigir código real em vez de só documentar bloqueios
+- fix(process): `ft.acceptance.01.cli` virou implementação-first para `api/mixed`, reexecutando a aceitação após corrigir backend até ficar verde ou esgotar turns
+- fix(process): projetos `interface_type: ui` agora pulam `ft.acceptance.01.cli` e seguem direto para `ft.smoke.01.cli_run`
+- fix(process): `ft.prd.rewrite` agora cria baseline determinístico e bloqueia mudanças automáticas em `Hipotese`, `Visao` e `User Stories`; visão e escopo só mudam com decisão explícita do stakeholder
+- fix(engine): reexecução bem-sucedida de node bloqueado agora limpa o bloqueio antes de avançar, permitindo recuperar gates e reviews sem reset manual
 
 ---
 

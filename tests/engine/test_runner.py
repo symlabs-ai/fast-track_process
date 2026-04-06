@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from ft.engine.graph import load_graph
-from ft.engine.runner import StepRunner, run_validators, ValidationResult
+from ft.engine.runner import StepRunner, run_validators, ValidationResult, build_task_prompt
 from ft.engine.delegate import DelegateResult
 
 
@@ -56,6 +56,61 @@ class TestInitState:
         state = runner.state_mgr.load()
         assert state.llm_engine == "codex"
 
+    def test_explicit_write_scope_overrides_output_derived_paths(self, runner_v2):
+        from ft.engine.graph import Node
+
+        node = Node(
+            id="x",
+            type="build",
+            title="X",
+            outputs=["project/docs/report.md"],
+            write_scope=["main.py", "project/docs/"],
+        )
+        assert runner_v2._resolve_allowed_paths(node) == ["main.py", "project/docs/"]
+
+    def test_init_cleans_validator_snapshots(self, tmp_path):
+        project_root = tmp_path / "project_root"
+        project_root.mkdir()
+        stale_snapshot = project_root / "project" / "state" / "prd_rewrite_baseline.md"
+        stale_snapshot.parent.mkdir(parents=True)
+        stale_snapshot.write_text("stale")
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.prd.rewrite
+    type: document
+    title: Rewrite
+    executor: llm_coach
+    outputs:
+      - project/docs/PRD.md
+    validators:
+      - sections_unchanged:
+          path: project/docs/PRD.md
+          snapshot_path: project/state/prd_rewrite_baseline.md
+          sections:
+            - Hipotese
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=project_root / "project" / "state" / "engine_state.yml",
+            project_root=project_root,
+        )
+
+        runner.init_state()
+
+        assert not stale_snapshot.exists()
+
 
 # ---------------------------------------------------------------------------
 # approve / reject
@@ -85,6 +140,61 @@ class TestApproveReject:
         assert "Rejeitado" in state.blocked_reason
 
 
+class TestRewriteGuard:
+    def test_rewrite_node_with_immutable_sections_still_delegates(self, tmp_path):
+        project_root = tmp_path / "project_root"
+        docs = project_root / "project" / "docs"
+        docs.mkdir(parents=True)
+        (docs / "PRD.md").write_text(
+            "# PRD\n\n## Hipotese\nBase.\n\n## Visao\nBase.\n\n## User Stories\n### US-01\nBase.\n"
+        )
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.prd.rewrite
+    type: document
+    title: Rewrite
+    executor: llm_coach
+    outputs:
+      - project/docs/PRD.md
+    validators:
+      - sections_unchanged:
+          path: project/docs/PRD.md
+          snapshot_path: project/state/prd_rewrite_baseline.md
+          sections:
+            - Hipotese
+            - Visao
+            - User Stories
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=project_root / "project" / "state" / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.prd.rewrite")
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            return_value=DelegateResult(success=True, output="DONE", files_created=[], files_modified=[]),
+        ) as delegate_mock:
+            runner._run_llm_step(node)
+
+        assert delegate_mock.called
+        assert not (project_root / "project" / "state" / "prd_rewrite_baseline.md").exists()
+
+
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -109,6 +219,32 @@ class TestStatus:
         runner_v2.status()
         out = capsys.readouterr().out
         assert "test block reason" in out
+
+    def test_status_shows_active_llm_log(self, runner_v2, capsys):
+        runner_v2.init_state()
+        state = runner_v2.state_mgr.load()
+        state.node_status = "delegated"
+        state.active_llm_log = "project/state/llm_logs/current.jsonl"
+        state.last_llm_log = "project/state/llm_logs/last.jsonl"
+        runner_v2.state_mgr.save()
+
+        runner_v2.status()
+        out = capsys.readouterr().out
+        assert "LLM log ativo" in out
+        assert "project/state/llm_logs/current.jsonl" in out
+
+    def test_status_syncs_process_version_from_graph(self, runner_v2, capsys):
+        runner_v2.init_state()
+        state = runner_v2.state_mgr.load()
+        state.version = "0.1.0"
+        runner_v2.state_mgr.save()
+
+        runner_v2.status()
+        out = capsys.readouterr().out
+        assert "v0.2.0" in out
+
+        refreshed = runner_v2.state_mgr.load()
+        assert refreshed.version == "0.2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +273,30 @@ class TestRunGate:
         state = runner.state_mgr.load()
         assert state.node_status == "ready"
         assert "gate.01.discovery" in state.completed_nodes
+
+    def test_gate_can_recover_from_blocked_state(self, tmp_path):
+        """Gate reexecutado com sucesso deve limpar o bloqueio e avançar."""
+        (Path(".") / "project/docs/hipotese.md").write_text("x" * 100)
+        (Path(".") / "project/docs/PRD.md").write_text("x" * 100)
+
+        runner = StepRunner(
+            process_path="process/test_process_v2.yml",
+            state_path=tmp_path / "state.yml",
+            project_root=".",
+        )
+        runner.init_state()
+        runner.state_mgr.advance("step.01.hipotese", "step.02.prd")
+        runner.state_mgr.advance("step.02.prd", "gate.01.discovery")
+        runner.state_mgr.block("falha antiga")
+
+        node = runner.graph.get_node("gate.01.discovery")
+        runner._run_gate(node)
+
+        state = runner.state_mgr.load()
+        assert state.node_status == "ready"
+        assert state.blocked_reason is None
+        assert state.current_node == "step.03.implementacao"
+        assert state.gate_log["gate.01.discovery"] == "PASS"
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +369,61 @@ class TestRunValidators:
         )
         result = run_validators(node, str(tmp_path))
         assert not result.retryable
+
+    def test_sections_unchanged_validator_supports_dict_args(self, tmp_path):
+        from ft.engine.graph import Node
+
+        docs = tmp_path / "project" / "docs"
+        state = tmp_path / "project" / "state"
+        docs.mkdir(parents=True)
+        state.mkdir(parents=True)
+        (docs / "PRD.md").write_text(
+            "# PRD\n\n## Hipotese\nBase.\n\n## Visao\nBase.\n\n## User Stories\n### US-01\nBase.\n"
+        )
+        (state / "prd_rewrite_baseline.md").write_text(
+            "# PRD\n\n## Hipotese\nBase.\n\n## Visao\nBase.\n\n## User Stories\n### US-01\nBase.\n"
+        )
+
+        node = Node(
+            id="ft.prd.rewrite",
+            type="document",
+            title="Rewrite",
+            executor="llm_coach",
+            outputs=["project/docs/PRD.md"],
+            validators=[{
+                "sections_unchanged": {
+                    "path": "project/docs/PRD.md",
+                    "snapshot_path": "project/state/prd_rewrite_baseline.md",
+                    "sections": ["Hipotese", "Visao", "User Stories"],
+                }
+            }],
+        )
+
+        result = run_validators(node, str(tmp_path))
+
+        assert result.passed
+
+
+# ---------------------------------------------------------------------------
+# build_task_prompt
+# ---------------------------------------------------------------------------
+
+class TestBuildTaskPrompt:
+    def test_retro_prompt_reads_project_log_without_self(self, tmp_path):
+        project_root = tmp_path / "pokemon"
+        project_root.mkdir()
+        (project_root / "pokemon_log.md").write_text("# Run Log\nretro input\n")
+
+        from ft.engine.graph import Node
+
+        node = Node(
+            id="retro.01",
+            type="retro",
+            title="Retro",
+            outputs=["project/docs/retro.md"],
+        )
+
+        prompt = build_task_prompt(node, {"_project_root": str(project_root)})
+
+        assert "retro input" in prompt
+        assert "project/docs/retro.md" in prompt

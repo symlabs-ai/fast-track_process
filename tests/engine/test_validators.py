@@ -4,8 +4,9 @@ import pytest
 from pathlib import Path
 
 from ft.engine.validators.artifacts import (
-    file_exists, min_lines, has_sections, min_user_stories,
+    file_exists, min_lines, has_sections, min_user_stories, sections_unchanged,
 )
+from ft.engine.validators.gates import gate_acceptance_cli
 from ft.engine.parallel import check_independence
 
 
@@ -99,6 +100,63 @@ class TestMinUserStories:
         assert "FAIL" in detail
 
 
+class TestSectionsUnchanged:
+    def test_passes_when_immutable_sections_are_identical(self, tmp_path):
+        current = tmp_path / "project" / "docs" / "PRD.md"
+        snapshot = tmp_path / "project" / "state" / "prd_rewrite_baseline.md"
+        current.parent.mkdir(parents=True)
+        snapshot.parent.mkdir(parents=True)
+
+        baseline = (
+            "# PRD\n\n"
+            "## Hipotese\nTexto base.\n\n"
+            "## Visao\nVisao original.\n\n"
+            "## User Stories\n### US-01 — Fluxo\nHistoria original.\n\n"
+            "## 8.5 Contrato de Navegacao UI\nNovo contrato.\n"
+        )
+        current.write_text(baseline + "\n## 8.6 Contrato de Integracao HTTP\nHealth e proxy.\n")
+        snapshot.write_text(baseline)
+
+        passed, detail = sections_unchanged(
+            "project/docs/PRD.md",
+            "project/state/prd_rewrite_baseline.md",
+            ["Hipotese", "Visao", "User Stories"],
+            str(tmp_path),
+        )
+
+        assert passed
+        assert "secoes preservadas" in detail
+
+    def test_fails_when_vision_changes(self, tmp_path):
+        current = tmp_path / "project" / "docs" / "PRD.md"
+        snapshot = tmp_path / "project" / "state" / "prd_rewrite_baseline.md"
+        current.parent.mkdir(parents=True)
+        snapshot.parent.mkdir(parents=True)
+
+        snapshot.write_text(
+            "# PRD\n\n"
+            "## Hipotese\nTexto base.\n\n"
+            "## Visao\nVisao original.\n\n"
+            "## User Stories\n### US-01 — Fluxo\nHistoria original.\n"
+        )
+        current.write_text(
+            "# PRD\n\n"
+            "## Hipotese\nTexto base.\n\n"
+            "## Visao\nVisao reescrita com novo escopo.\n\n"
+            "## User Stories\n### US-01 — Fluxo\nHistoria original.\n"
+        )
+
+        passed, detail = sections_unchanged(
+            "project/docs/PRD.md",
+            "project/state/prd_rewrite_baseline.md",
+            ["Hipotese", "Visao", "User Stories"],
+            str(tmp_path),
+        )
+
+        assert not passed
+        assert "Visao" in detail
+
+
 # ---------------------------------------------------------------------------
 # parallel — independence check
 # ---------------------------------------------------------------------------
@@ -118,3 +176,29 @@ class TestCheckIndependence:
             ["src/a.py", "src/shared.py"],
             ["src/b.py", "src/shared.py"]
         ) is False
+
+
+# ---------------------------------------------------------------------------
+# gates
+# ---------------------------------------------------------------------------
+
+class TestGateAcceptanceCli:
+    def test_skip_for_ui_projects(self, tmp_path):
+        docs = tmp_path / "project" / "docs"
+        docs.mkdir(parents=True)
+        (docs / "tech_stack.md").write_text("interface_type: ui\n")
+
+        passed, detail = gate_acceptance_cli(str(tmp_path))
+
+        assert passed
+        assert "pulado" in detail
+
+    def test_fail_without_report_for_api_projects(self, tmp_path):
+        docs = tmp_path / "project" / "docs"
+        docs.mkdir(parents=True)
+        (docs / "tech_stack.md").write_text("interface_type: api\n")
+
+        passed, detail = gate_acceptance_cli(str(tmp_path))
+
+        assert not passed
+        assert "acceptance-cli-report.md" in detail

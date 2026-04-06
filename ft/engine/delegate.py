@@ -5,8 +5,12 @@ O LLM so constroi. Nao decide nada sobre o processo.
 
 from __future__ import annotations
 
+import json
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -41,11 +45,125 @@ def _build_executor_command(
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
+            "--json",
             "-C", project_root,
             prompt,
         ]
 
     raise ValueError(f"Executor LLM desconhecido: {llm_engine}")
+
+
+def _write_log_preamble(log_path: str, llm_engine: str, cmd: list[str], prompt: str) -> None:
+    """Escreve cabeçalho útil para inspeção de um step delegado."""
+    path = Path(log_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with path.open("w", encoding="utf-8") as f:
+        f.write(f"# LLM Delegate Log\n")
+        f.write(f"started_at: {started_at}\n")
+        f.write(f"llm_engine: {llm_engine}\n")
+        f.write(f"command: {' '.join(cmd)}\n")
+        f.write("\n## Prompt\n\n")
+        f.write(prompt)
+        if not prompt.endswith("\n"):
+            f.write("\n")
+        f.write("\n## Output\n\n")
+
+
+def _format_stream_line(llm_engine: str, line: str) -> str:
+    """Formata linhas do stream para observação humana no terminal."""
+    text = line.rstrip()
+    if llm_engine != "codex":
+        return text
+
+    if not text.startswith("{"):
+        return text
+
+    try:
+        event = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    event_type = event.get("type", "unknown")
+    if event_type == "thread.started":
+        return f"event thread.started thread_id={event.get('thread_id')}"
+    if event_type == "turn.started":
+        return "event turn.started"
+    if event_type == "turn.completed":
+        usage = event.get("usage", {})
+        return (
+            "event turn.completed "
+            f"input_tokens={usage.get('input_tokens', 0)} "
+            f"output_tokens={usage.get('output_tokens', 0)}"
+        )
+    if event_type == "item.completed":
+        item = event.get("item", {})
+        item_type = item.get("type")
+        if item_type == "agent_message":
+            return f"agent_message {item.get('text', '').strip()}"
+        return f"item.completed type={item_type}"
+    if event_type == "error":
+        return f"error {event.get('message', text)}"
+
+    return f"event {event_type}"
+
+
+def _extract_codex_output(raw_output: str) -> str:
+    """Extrai a resposta final do agent a partir do stream JSONL do Codex."""
+    messages: list[str] = []
+    errors: list[str] = []
+
+    for line in raw_output.splitlines():
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+
+        if event.get("type") == "item.completed":
+            item = event.get("item", {})
+            if item.get("type") == "agent_message" and item.get("text"):
+                messages.append(item["text"])
+        elif event.get("type") == "error":
+            errors.append(json.dumps(event, ensure_ascii=False))
+
+    if messages:
+        return "\n\n".join(messages)
+    if errors:
+        return "\n".join(errors)
+    return raw_output
+
+
+def _stream_process_output(
+    proc: subprocess.Popen,
+    llm_engine: str,
+    log_path: str | None = None,
+    stream_prefix: str | None = None,
+) -> str:
+    """Consome stdout/stderr combinado do subprocesso, gravando em arquivo e espelhando no terminal."""
+    chunks: list[str] = []
+    stream = proc.stdout
+    assert stream is not None
+
+    log_file = None
+    try:
+        if log_path:
+            log_file = Path(log_path).open("a", encoding="utf-8")
+
+        for line in iter(stream.readline, ""):
+            chunks.append(line)
+            if log_file:
+                log_file.write(line)
+                log_file.flush()
+            if stream_prefix:
+                print(f"  {stream_prefix} {_format_stream_line(llm_engine, line)}")
+    finally:
+        if log_file:
+            log_file.close()
+
+    return "".join(chunks)
 
 
 def delegate_to_llm(
@@ -54,6 +172,8 @@ def delegate_to_llm(
     allowed_paths: list[str] | None = None,
     max_turns: int = 50,
     llm_engine: str = "claude",
+    log_path: str | None = None,
+    stream_prefix: str | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -77,16 +197,56 @@ REGRAS:
 
     cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns)
 
-    # Chamar executor em modo nao-interativo
-    result = subprocess.run(
+    if log_path and llm_engine != "codex":
+        _write_log_preamble(log_path, llm_engine, cmd, prompt)
+    elif log_path:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+
+    # Chamar executor em modo nao-interativo, com streaming para arquivo.
+    proc = subprocess.Popen(
         cmd,
         cwd=project_root,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        timeout=1800,  # 30 min max (projetos complexos)
+        bufsize=1,
     )
+    output_holder: dict[str, str] = {"output": ""}
+    reader = threading.Thread(
+        target=lambda: output_holder.__setitem__(
+            "output",
+            _stream_process_output(
+                proc,
+                llm_engine=llm_engine,
+                log_path=log_path,
+                stream_prefix=stream_prefix,
+            ),
+        ),
+        daemon=True,
+    )
+    reader.start()
 
-    output = result.stdout or ""
+    try:
+        returncode = proc.wait(timeout=1800)  # 30 min max (projetos complexos)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        reader.join(timeout=5)
+        timeout_msg = "\n[TIMEOUT] Executor excedeu 1800 segundos.\n"
+        output = output_holder["output"] + timeout_msg
+        if log_path:
+            with Path(log_path).open("a", encoding="utf-8") as f:
+                f.write(timeout_msg)
+        return DelegateResult(
+            success=False,
+            output=output,
+            files_created=[],
+            files_modified=[],
+        )
+
+    reader.join(timeout=5)
+
+    raw_output = output_holder["output"]
+    output = _extract_codex_output(raw_output) if llm_engine == "codex" else raw_output
 
     # Detectar erro 403 do SymGateway e dar mensagem acionável
     if "403" in output and "not found in workspace" in output:
@@ -98,7 +258,7 @@ REGRAS:
             f"  → Registre em https://symgateway.symlabs.ai com folder_name='{folder}'"
         )
 
-    success = result.returncode == 0 and "BLOCKED" not in output
+    success = returncode == 0 and "BLOCKED" not in output
 
     # Extrair arquivos criados/modificados do git status
     git_result = subprocess.run(

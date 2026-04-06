@@ -18,6 +18,7 @@ class Node:
     title: str
     executor: str = "python"
     outputs: list[str] = field(default_factory=list)
+    write_scope: list[str] = field(default_factory=list)
     requires_approval: bool = False
     validators: list[dict[str, Any]] = field(default_factory=list)
     next: str | None = None
@@ -165,6 +166,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             title=node_raw.get("title", node_raw["id"]),
             executor=node_raw.get("executor", "python"),
             outputs=node_raw.get("outputs", []),
+            write_scope=node_raw.get("write_scope", []),
             requires_approval=node_raw.get("requires_approval", False),
             validators=validators,
             next=node_raw.get("next"),

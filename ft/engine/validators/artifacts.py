@@ -16,6 +16,58 @@ def _normalize(text: str) -> str:
     return unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode("ascii").lower()
 
 
+def _normalize_block(text: str) -> str:
+    """Normaliza bloco de texto para comparação determinística."""
+    return "\n".join(line.rstrip() for line in text.strip().splitlines())
+
+
+def _extract_markdown_section(content: str, section: str) -> str | None:
+    """Extrai uma seção Markdown pelo heading, incluindo subseções internas."""
+    lines = content.splitlines()
+    in_code_block = False
+    target_start = None
+    target_level = None
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+
+        match = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if not match:
+            continue
+
+        level = len(match.group(1))
+        title = match.group(2).strip()
+        if _normalize(title) == _normalize(section):
+            target_start = idx
+            target_level = level
+            break
+
+    if target_start is None or target_level is None:
+        return None
+
+    in_code_block = False
+    target_end = len(lines)
+    for idx in range(target_start + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+
+        match = re.match(r"^(#{1,6})\s+(.*)$", lines[idx])
+        if match and len(match.group(1)) <= target_level:
+            target_end = idx
+            break
+
+    return "\n".join(lines[target_start:target_end]).strip()
+
+
 def file_exists(path: str, project_root: str = ".") -> tuple[bool, str]:
     """Verifica se arquivo existe."""
     full = Path(project_root) / path
@@ -126,3 +178,48 @@ def read_artifact(path: str, key: str, pattern: str, project_root: str = ".") ->
         return False, f"read_artifact FAIL: padrao nao encontrado em {path}"
     value = match.group(1).strip().lower()
     return True, f"read_artifact: {key}={value}"
+
+
+def sections_unchanged(
+    path: str,
+    snapshot_path: str,
+    sections: list[str],
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Garante que seções críticas permaneçam idênticas ao baseline."""
+    current_full = Path(project_root) / path
+    snapshot_full = Path(project_root) / snapshot_path
+
+    if not current_full.exists():
+        return False, f"sections_unchanged FAIL: {path} nao encontrado"
+    if not snapshot_full.exists():
+        return False, f"sections_unchanged FAIL: baseline ausente em {snapshot_path}"
+
+    current_content = current_full.read_text()
+    snapshot_content = snapshot_full.read_text()
+    changed: list[str] = []
+
+    for section in sections:
+        current_section = _extract_markdown_section(current_content, section)
+        snapshot_section = _extract_markdown_section(snapshot_content, section)
+
+        if snapshot_section is None:
+            return False, (
+                f"sections_unchanged FAIL: secao '{section}' ausente no baseline {snapshot_path}"
+            )
+        if current_section is None:
+            return False, f"sections_unchanged FAIL: secao '{section}' ausente em {path}"
+
+        if _normalize_block(current_section) != _normalize_block(snapshot_section):
+            changed.append(section)
+
+    if changed:
+        return False, (
+            "sections_unchanged FAIL: secoes imutaveis alteradas sem aprovacao do stakeholder: "
+            f"{changed}"
+        )
+
+    return True, (
+        "sections_unchanged: secoes preservadas "
+        f"({', '.join(sections)})"
+    )

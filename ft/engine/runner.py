@@ -219,6 +219,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "min_lines": val.min_lines,
     "has_sections": val.has_sections,
     "min_user_stories": val.min_user_stories,
+    "sections_unchanged": val.sections_unchanged,
     "tests_pass": val.tests_pass,
     "tests_fail": val.tests_fail,
     "coverage_min": val.coverage_min,
@@ -278,6 +279,8 @@ def run_validators(node: Node, project_root: str) -> ValidationResult:
                     passed, detail = fn(outputs=node.outputs, project_root=project_root)
                 else:
                     passed, detail = fn(project_root=project_root)
+            elif isinstance(args, dict):
+                passed, detail = fn(**args, project_root=project_root)
             # Validadores simples
             elif isinstance(args, bool) and args is True:
                 # Ex: tests_pass: true → tests_pass(project_root)
@@ -410,7 +413,8 @@ Produza o relatorio em: {outputs_str}
     elif node.type == "retro":
         # Injeta o activity log e state para análise real
         activity_log = ""
-        log_path = Path(state_dict.get("_project_root", ".")) / self._log_filename
+        project_root = Path(state_dict.get("_project_root", ".")).resolve()
+        log_path = project_root / f"{project_root.name}_log.md"
         if log_path.exists():
             activity_log = log_path.read_text()
 
@@ -528,6 +532,123 @@ class StepRunner:
             state.llm_engine = effective
             self.state_mgr.save()
 
+    def _sync_process_meta(self, state: Any) -> None:
+        """Mantém process_id/version do estado alinhados ao grafo canônico carregado."""
+        expected_id = self.graph.meta.get("id", state.process_id)
+        expected_version = self.graph.meta.get("version", state.version)
+        if state.process_id != expected_id or state.version != expected_version:
+            state.process_id = expected_id
+            state.version = expected_version
+            self.state_mgr.save()
+
+    def _llm_log_dir(self) -> Path:
+        """Diretório persistente para logs detalhados do executor LLM."""
+        return self.state_mgr.path.parent / "llm_logs"
+
+    def _display_path(self, path: Path) -> str:
+        """Formata path relativo ao projeto quando possível."""
+        try:
+            return str(path.resolve().relative_to(Path(self.project_root).resolve()))
+        except ValueError:
+            return str(path)
+
+    def _build_llm_log_path(self, node_id: str, phase: str) -> Path:
+        """Gera nome estável e legível para um log de step delegado."""
+        safe_node = node_id.replace("/", "-")
+        safe_phase = phase.replace("/", "-")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        suffix = ".jsonl" if self._resolve_llm_engine(self.state_mgr.state) == "codex" else ".log"
+        return self._llm_log_dir() / f"{stamp}__{safe_node}__{safe_phase}{suffix}"
+
+    def _resolve_allowed_paths(self, node: Node) -> list[str]:
+        """Resolve o escopo de escrita efetivo do node."""
+        if node.write_scope:
+            return list(dict.fromkeys(node.write_scope))
+
+        allowed = []
+        for output in node.outputs:
+            parent = str(Path(output).parent)
+            if parent not in allowed:
+                allowed.append(parent)
+        if allowed:
+            return allowed
+
+        return ["src/", "tests/", "project/docs/"]
+
+    def _start_llm_log(self, state: Any, node_id: str, phase: str) -> str:
+        """Registra no estado o log ativo para a delegação corrente."""
+        log_path = self._build_llm_log_path(node_id, phase)
+        rel = self._display_path(log_path)
+        state.active_llm_log = rel
+        state.last_llm_log = rel
+        print(f"  LLM log: {rel}")
+        return str(log_path)
+
+    def _clear_active_llm_log(self, state: Any) -> None:
+        """Limpa referência ao log ativo após a conclusão do subprocesso."""
+        if getattr(state, "active_llm_log", None):
+            state.active_llm_log = None
+            self.state_mgr.save()
+
+    def _validator_snapshot_specs(self, node: Node) -> list[dict[str, Any]]:
+        """Extrai configurações de snapshot usadas por validadores do node."""
+        specs: list[dict[str, Any]] = []
+        for validator_spec in node.validators:
+            config = validator_spec.get("sections_unchanged")
+            if isinstance(config, dict):
+                specs.append(config)
+        return specs
+
+    def _prepare_validator_snapshots(self, node: Node) -> None:
+        """Cria baselines determinísticos antes de steps que reescrevem artefatos."""
+        for spec in self._validator_snapshot_specs(node):
+            source_path = spec.get("path")
+            snapshot_path = spec.get("snapshot_path")
+            if not source_path or not snapshot_path:
+                continue
+
+            source = Path(self.project_root) / source_path
+            snapshot = Path(self.project_root) / snapshot_path
+            if snapshot.exists() or not source.exists():
+                continue
+
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.write_text(source.read_text())
+            print(f"  Snapshot baseline: {self._display_path(snapshot)}")
+
+    def _clear_validator_snapshots(self, node_id: str) -> None:
+        """Remove baselines temporários após sucesso do node."""
+        try:
+            node = self.graph.get_node(node_id)
+        except KeyError:
+            return
+
+        for spec in self._validator_snapshot_specs(node):
+            snapshot_path = spec.get("snapshot_path")
+            if not snapshot_path:
+                continue
+            snapshot = Path(self.project_root) / snapshot_path
+            if snapshot.exists():
+                snapshot.unlink()
+
+    def _reset_validator_snapshots(self) -> None:
+        """Limpa snapshots órfãos ao reinicializar um projeto."""
+        for node in self.graph.nodes.values():
+            for spec in self._validator_snapshot_specs(node):
+                snapshot_path = spec.get("snapshot_path")
+                if not snapshot_path:
+                    continue
+                snapshot = Path(self.project_root) / snapshot_path
+                if snapshot.exists():
+                    snapshot.unlink()
+
+    def _advance_state(self, completed_node: str, next_node: str | None, gate_result: str = "PASS") -> None:
+        """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
+        if self.state_mgr.state.node_status == "blocked":
+            self.state_mgr.unblock()
+        self.state_mgr.advance(completed_node, next_node, gate_result)
+        self._clear_validator_snapshots(completed_node)
+
     def _mark_node_start(self, node_id: str):
         """Registra o instante de início de um node (para cálculo de duração)."""
         self._node_start_times[node_id] = datetime.now()
@@ -616,6 +737,7 @@ class StepRunner:
 
     def init_state(self):
         """Inicializa estado a partir do grafo."""
+        self._reset_validator_snapshots()
         first = self.graph.first_node()
         total = len([n for n in self.graph.nodes.values() if n.type != "end"])
         self.state_mgr.init_from_graph(
@@ -676,6 +798,7 @@ class StepRunner:
             return
 
         self._persist_llm_engine(state)
+        self._sync_process_meta(state)
 
         if state.current_node is None:
             print("Processo nao inicializado. Rode: ft init")
@@ -701,7 +824,7 @@ class StepRunner:
                 print(f"  PROCESSO COMPLETO")
                 print(f"  Steps: {state.metrics['steps_completed']}/{state.metrics['steps_total']}")
                 print(f"{'='*50}")
-                self.state_mgr.advance(node_id, None)
+                self._advance_state(node_id, None)
                 break
 
             # Sprint boundary check — para se mudou de sprint
@@ -786,7 +909,7 @@ class StepRunner:
                                    "aguardando aprovacao humana", sprint=node_sprint)
                 if self._auto_approve:
                     next_id = self.graph.resolve_next(state.current_node)
-                    self.state_mgr.advance(state.current_node, next_id)
+                    self._advance_state(state.current_node, next_id)
                     state = self.state_mgr.load()
                 else:
                     break
@@ -801,11 +924,12 @@ class StepRunner:
     def _run_llm_step(self, node: Node):
         """Delega ao LLM, valida resultado, avanca ou retenta."""
         state = self.state_mgr.state
+        self._prepare_validator_snapshots(node)
 
         # Pre-seed check: se todos os outputs já existem e os validators passam,
         # pula delegação ao LLM — o artefato foi fornecido externamente (ex: --hipotese).
         # NÃO aplica a build nodes: um scaffold de passo anterior não conta como implementação.
-        if node.outputs and node.type not in ("build",):
+        if node.outputs and node.type not in ("build",) and not self._validator_snapshot_specs(node):
             all_exist = all(
                 (Path(self.project_root) / o).exists() for o in node.outputs
             )
@@ -826,7 +950,7 @@ class StepRunner:
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
-                    self.state_mgr.advance(node.id, next_id)
+                    self._advance_state(node.id, next_id)
                     print(f"  PASS (pre-seed) → proximo: {next_id}")
                     return
 
@@ -849,17 +973,12 @@ class StepRunner:
                 print(f"  KB-mode: lições de runs anteriores injetadas")
 
         # Determinar paths permitidos
-        allowed = []
-        for output in node.outputs:
-            parent = str(Path(output).parent)
-            if parent not in allowed:
-                allowed.append(parent)
-        if not allowed:
-            allowed = ["src/", "tests/", "project/docs/"]
+        allowed = self._resolve_allowed_paths(node)
 
         print(f"  Delegando ao LLM ({node.executor})...")
         state.node_status = "delegated"
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
+        log_path = self._start_llm_log(state, node.id, "run")
         self.state_mgr.save()
 
         delegate_kwargs: dict = dict(
@@ -867,11 +986,16 @@ class StepRunner:
             project_root=self.project_root,
             allowed_paths=allowed,
             llm_engine=self._resolve_llm_engine(state),
+            log_path=log_path,
+            stream_prefix=f"{self._resolve_llm_engine(state)}>",
         )
         if node.max_turns is not None:
             delegate_kwargs["max_turns"] = node.max_turns
 
-        result = delegate_to_llm(**delegate_kwargs)
+        try:
+            result = delegate_to_llm(**delegate_kwargs)
+        finally:
+            self._clear_active_llm_log(state)
 
         if not result.success:
             print(f"  LLM reportou BLOCKED: {result.output[:200]}")
@@ -898,7 +1022,7 @@ class StepRunner:
                 return
 
             next_id = self.graph.resolve_next(node.id)
-            self.state_mgr.advance(node.id, next_id)
+            self._advance_state(node.id, next_id)
             print(f"  PASS → proximo: {next_id}")
             return
 
@@ -906,13 +1030,20 @@ class StepRunner:
         if validation.retryable:
             for retry in range(1, MAX_RETRIES + 1):
                 print(f"  RETRY {retry}/{MAX_RETRIES}...")
-                result = delegate_with_feedback(
-                    original_task=task_prompt,
-                    feedback=validation.feedback or "",
-                    project_root=self.project_root,
-                    allowed_paths=allowed,
-                    llm_engine=self._resolve_llm_engine(state),
-                )
+                retry_log_path = self._start_llm_log(state, node.id, f"retry-{retry}")
+                self.state_mgr.save()
+                try:
+                    result = delegate_with_feedback(
+                        original_task=task_prompt,
+                        feedback=validation.feedback or "",
+                        project_root=self.project_root,
+                        allowed_paths=allowed,
+                        llm_engine=self._resolve_llm_engine(state),
+                        log_path=retry_log_path,
+                        stream_prefix=f"{self._resolve_llm_engine(state)}>",
+                    )
+                finally:
+                    self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
                 validation = run_validators(node, self.project_root)
@@ -926,7 +1057,7 @@ class StepRunner:
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
-                    self.state_mgr.advance(node.id, next_id)
+                    self._advance_state(node.id, next_id)
                     print(f"  PASS (retry {retry}) → proximo: {next_id}")
                     return
 
@@ -945,7 +1076,7 @@ class StepRunner:
                 for k, v in validation.artifacts.items():
                     self.state_mgr.record_artifact(k, v)
             next_id = self.graph.resolve_next(node.id)
-            self.state_mgr.advance(node.id, next_id, "PASS")
+            self._advance_state(node.id, next_id, "PASS")
             print(f"  GATE PASS → proximo: {next_id}")
         else:
             self.state_mgr.block(f"Gate falhou: {validation.feedback}")
@@ -989,7 +1120,7 @@ class StepRunner:
 
         next_id = self.graph.resolve_next(node.id, state_dict)
         if next_id:
-            self.state_mgr.advance(node.id, next_id)
+            self._advance_state(node.id, next_id)
             chosen = next_id
             print(f"  DECISION: condicao='{node.condition}' → {chosen}")
         else:
@@ -1004,13 +1135,7 @@ class StepRunner:
         state = self.state_mgr.state
         task_prompt = build_task_prompt(node, {})
 
-        allowed = []
-        for output in node.outputs:
-            parent = str(Path(output).parent)
-            if parent not in allowed:
-                allowed.append(parent)
-        if not allowed:
-            allowed = ["project/docs/"]
+        allowed = self._resolve_allowed_paths(node)
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
         early_check = run_validators(node, self.project_root)
@@ -1019,11 +1144,12 @@ class StepRunner:
             for output_path in node.outputs:
                 self.state_mgr.record_artifact(Path(output_path).stem, output_path)
             next_id = node.next
-            self.state_mgr.advance(node.id, next_id, "PASS")
+            self._advance_state(node.id, next_id, "PASS")
             return
 
         print(f"  Expert Review ({node.executor})...")
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
+        review_log_path = self._start_llm_log(state, node.id, "review")
         self.state_mgr.save()
 
         review_kwargs: dict = dict(
@@ -1031,11 +1157,16 @@ class StepRunner:
             project_root=self.project_root,
             allowed_paths=allowed,
             llm_engine=self._resolve_llm_engine(state),
+            log_path=review_log_path,
+            stream_prefix=f"{self._resolve_llm_engine(state)}>",
         )
         if node.max_turns is not None:
             review_kwargs["max_turns"] = node.max_turns
 
-        result = delegate_to_llm(**review_kwargs)
+        try:
+            result = delegate_to_llm(**review_kwargs)
+        finally:
+            self._clear_active_llm_log(state)
 
         if not result.success:
             # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
@@ -1061,13 +1192,20 @@ class StepRunner:
         if not validation.passed:
             if validation.retryable:
                 print(f"  REVIEW: validadores falharam, retentando...")
-                result2 = delegate_with_feedback(
-                    original_task=task_prompt,
-                    feedback=validation.feedback or "",
-                    project_root=self.project_root,
-                    allowed_paths=allowed,
-                    llm_engine=self._resolve_llm_engine(state),
-                )
+                retry_log_path = self._start_llm_log(state, node.id, "review-retry")
+                self.state_mgr.save()
+                try:
+                    result2 = delegate_with_feedback(
+                        original_task=task_prompt,
+                        feedback=validation.feedback or "",
+                        project_root=self.project_root,
+                        allowed_paths=allowed,
+                        llm_engine=self._resolve_llm_engine(state),
+                        log_path=retry_log_path,
+                        stream_prefix=f"{self._resolve_llm_engine(state)}>",
+                    )
+                finally:
+                    self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
                 validation = run_validators(node, self.project_root)
                 self._print_validation(validation)
@@ -1106,7 +1244,7 @@ class StepRunner:
         # APPROVED ou APPROVED WITH NOTES
         verdict = "APPROVED WITH NOTES" if "WITH NOTES" in output_upper else "APPROVED"
         next_id = self.graph.resolve_next(node.id)
-        self.state_mgr.advance(node.id, next_id, verdict)
+        self._advance_state(node.id, next_id, verdict)
         print(f"  REVIEW {verdict} → proximo: {next_id}")
 
     def _run_parallel_group(self, nodes: list[Node]):
@@ -1117,12 +1255,13 @@ class StepRunner:
 
         tasks = []
         for n in nodes:
-            allowed = [str(Path(o).parent) for o in n.outputs] or ["src/", "tests/"]
+            allowed = self._resolve_allowed_paths(n)
             tasks.append({
                 "node_id": n.id,
                 "task_prompt": build_task_prompt(n, {}),
                 "allowed_paths": allowed,
                 "outputs": n.outputs,
+                "log_path": str(self._build_llm_log_path(n.id, "parallel")),
             })
 
         par = ParallelRunner(project_root=self.project_root, max_slots=2)
@@ -1130,7 +1269,11 @@ class StepRunner:
             llm_engine = self._resolve_llm_engine(self.state_mgr.state)
             results = par.run_parallel(
                 tasks,
-                lambda **kwargs: delegate_to_llm(llm_engine=llm_engine, **kwargs),
+                lambda **kwargs: delegate_to_llm(
+                    llm_engine=llm_engine,
+                    stream_prefix=f"{llm_engine}>",
+                    **kwargs,
+                ),
             )
         except ValueError as e:
             self.state_mgr.block(str(e))
@@ -1167,7 +1310,7 @@ class StepRunner:
             self._print_validation(validation)
             if validation.passed:
                 next_id = self.graph.resolve_next(node.id)
-                self.state_mgr.advance(node.id, next_id)
+                self._advance_state(node.id, next_id)
                 print(f"  PARALLEL PASS: {node.id} → {next_id}")
             else:
                 self.state_mgr.block(
@@ -1198,6 +1341,7 @@ class StepRunner:
         """Stakeholder aprova artefato pendente."""
         state = self.state_mgr.load()
         self._persist_llm_engine(state)
+        self._sync_process_meta(state)
         if not state.pending_approval:
             print("Nenhuma aprovacao pendente.")
             return
@@ -1205,7 +1349,7 @@ class StepRunner:
         node_id = state.pending_approval
         node = self.graph.get_node(node_id)
         next_id = self.graph.resolve_next(node_id)
-        self.state_mgr.advance(node_id, next_id)
+        self._advance_state(node_id, next_id)
         print(f"  APROVADO: {node_id} → proximo: {next_id}")
 
     def reject(self, reason: str, retry: bool = True):
@@ -1215,6 +1359,7 @@ class StepRunner:
         """
         state = self.state_mgr.load()
         self._persist_llm_engine(state)
+        self._sync_process_meta(state)
         if not state.pending_approval:
             print("Nenhuma rejeicao pendente.")
             return
@@ -1229,22 +1374,28 @@ class StepRunner:
             original_prompt = build_task_prompt(node, {})
             retry_prompt = build_rejection_prompt(original_prompt, reason)
 
-            allowed = [str(Path(o).parent) for o in node.outputs] or ["src/", "project/docs/"]
+            allowed = self._resolve_allowed_paths(node)
             print(f"  Reenviando ao LLM com feedback da rejeicao...")
 
             # Desbloquear estado para retry
             state.node_status = "ready"
             state.pending_approval = None
             state.blocked_reason = None
+            retry_log_path = self._start_llm_log(state, node.id, "stakeholder-retry")
             self.state_mgr.save()
 
-            result = delegate_with_feedback(
-                original_task=original_prompt,
-                feedback=f"REJEITADO PELO STAKEHOLDER: {reason}",
-                project_root=self.project_root,
-                allowed_paths=allowed,
-                llm_engine=self._resolve_llm_engine(state),
-            )
+            try:
+                result = delegate_with_feedback(
+                    original_task=original_prompt,
+                    feedback=f"REJEITADO PELO STAKEHOLDER: {reason}",
+                    project_root=self.project_root,
+                    allowed_paths=allowed,
+                    llm_engine=self._resolve_llm_engine(state),
+                    log_path=retry_log_path,
+                    stream_prefix=f"{self._resolve_llm_engine(state)}>",
+                )
+            finally:
+                self._clear_active_llm_log(state)
             state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
             if result.success:
@@ -1262,6 +1413,7 @@ class StepRunner:
     def status(self, full: bool = False):
         """Mostra estado atual."""
         state = self.state_mgr.load()
+        self._sync_process_meta(state)
         completed = set(state.completed_nodes)
         node_status = self.graph.get_status(completed)
 
@@ -1272,11 +1424,16 @@ class StepRunner:
 
         print(f"\n{'━'*50}")
         print(f"  Processo: {state.process_id} v{state.version}")
+        print(f"  LLM engine: {state.llm_engine}")
         print(f"  Node atual: {state.current_node}")
         print(f"  Status: {state.node_status}")
         if current_sprint:
             print(f"  Sprint: {current_sprint}")
         print(f"  Progresso: {state.metrics['steps_completed']}/{state.metrics['steps_total']}")
+        if state.active_llm_log:
+            print(f"  LLM log ativo: {state.active_llm_log}")
+        elif state.last_llm_log:
+            print(f"  Último LLM log: {state.last_llm_log}")
         if state.blocked_reason:
             print(f"  BLOCKED: {state.blocked_reason}")
         if state.pending_approval:

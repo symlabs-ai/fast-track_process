@@ -228,12 +228,12 @@ class TestInit:
         assert result.returncode == 0
         assert (tmp_path / "project" / "state" / "engine_state.yml").exists()
 
-    def test_no_local_yaml_uses_canonical(self, tmp_path):
-        """Without a local process YAML, ft init uses the canonical FAST_TRACK_PROCESS_V2.yml."""
+    def test_no_local_yaml_gives_clear_error(self, tmp_path):
+        """Without a local process YAML, ft init gives a clear error with guidance."""
         (tmp_path / "project" / "state").mkdir(parents=True)
         result = run_ft(["init"], cwd=tmp_path)
-        assert result.returncode == 0
-        assert "sprint" in result.stdout.lower()
+        assert result.returncode == 1
+        assert "ft init --template" in result.stdout
 
     def test_codex_flag_persists_engine_choice(self, ft_project):
         result = run_ft(["init", "--codex"], cwd=ft_project)

@@ -248,15 +248,14 @@ REGRAS:
     raw_output = output_holder["output"]
     output = _extract_codex_output(raw_output) if llm_engine == "codex" else raw_output
 
-    # Detectar erro 403 do SymGateway e dar mensagem acionável
-    if "403" in output and "not found in workspace" in output:
-        import re
-        m = re.search(r"folder_name='([^']+)'", output)
-        folder = m.group(1) if m else "este projeto"
-        raise RuntimeError(
-            f"Gateway 403: projeto '{folder}' não está registrado no SymGateway.\n"
-            f"  → Registre em https://symgateway.symlabs.ai com folder_name='{folder}'"
-        )
+    # Detectar erro 403 de gateway (integração opcional)
+    try:
+        from ft.integrations.symgateway import check_gateway_403
+        gw_msg = check_gateway_403(output)
+        if gw_msg:
+            raise RuntimeError(gw_msg)
+    except ImportError:
+        pass
 
     success = returncode == 0 and "BLOCKED" not in output
 

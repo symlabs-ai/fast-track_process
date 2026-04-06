@@ -133,7 +133,7 @@
   ```
   O engine executa `subprocess.run(script, check=True)` no momento do hook. Se falhar, bloqueia como um gate. O engine não sabe o que o script faz.
 - **Entrega**: Hook runner no engine + `environment.yml` schema + momentos definidos (on_init, on_env_setup, on_node_start, on_node_end, on_gate_pass, on_gate_fail, on_cycle_end, on_deliver).
-- **Status**: proposto
+- **Status**: concluido
 - **Prioridade**: Alta
 
 ### BL-15: RunMode — `isolated` vs `continuous`
@@ -165,5 +165,5 @@
 | BL-11 | Anti-patterns doc | Baixa | concluido |
 | BL-12 | Separação Base / Ambiente | Alta | concluido |
 | BL-13 | Estrutura `process/`, `docs/`, `runs/` | Alta | concluido |
-| BL-14 | Environment Hooks | Alta | proposto |
+| BL-14 | Environment Hooks | Alta | concluido |
 | BL-15 | RunMode isolated/continuous | Média | proposto |

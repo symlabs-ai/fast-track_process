@@ -380,6 +380,10 @@ def cmd_run(args):
     else:
         print(f"  Sem --key: usando ANTHROPIC_API_KEY do ambiente")
 
+    # Disparar hooks on_env_setup se definidos no environment.yml
+    from ft.engine.hooks import run_hooks
+    run_hooks("on_env_setup", str(project_root))
+
     import shutil
 
     # Copiar plano_de_voo do ciclo anterior se fornecido

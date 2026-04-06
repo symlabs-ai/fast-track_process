@@ -20,6 +20,7 @@ from ft.engine.validators import tests as test_val
 from ft.engine.validators import code as code_val
 from ft.engine.validators import review as review_val
 from ft.engine.git_ops import auto_commit
+from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
 from ft.engine.parallel import ParallelRunner, check_independence
 from ft.engine.stakeholder import (
     scan_existing_docs, should_skip_node,
@@ -356,6 +357,8 @@ class StepRunner:
         self._kb_path = os.environ.get("FT_KB_PATH")
         # Nome do log derivado da pasta do projeto (ex: pokemon_log.md)
         self._log_filename = f"{Path(self.project_root).name}_log.md"
+        # Environment hooks
+        self._environment = load_environment(self.project_root)
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
@@ -598,6 +601,13 @@ class StepRunner:
             self.state_mgr.save()
         self._clear_validator_snapshots(completed_node)
 
+    def _fire_hooks(self, event: str) -> bool:
+        """Dispara hooks para um evento. Retorna True se todos passaram (ou nenhum)."""
+        results = run_hooks(event, self.project_root, self._environment)
+        if not results:
+            return True
+        return hooks_all_passed(results)
+
     def _mark_node_start(self, node_id: str):
         """Registra o instante de início de um node (para cálculo de duração)."""
         self._node_start_times[node_id] = datetime.now()
@@ -705,6 +715,7 @@ class StepRunner:
             "PASS",
             f"process={self.graph.meta.get('id', '?')} nodes={total} first={first.id}",
         )
+        self._fire_hooks("on_init")
 
     def run(self, mode: str = "step"):
         """
@@ -749,6 +760,7 @@ class StepRunner:
                 print(f"  PROCESSO COMPLETO")
                 print(f"  Steps: {state.metrics['steps_completed']}/{state.metrics['steps_total']}")
                 print(f"{'='*50}")
+                self._fire_hooks("on_deliver")
                 self._advance_state(node_id, None)
                 break
 
@@ -765,6 +777,7 @@ class StepRunner:
             print(f"{'─'*50}")
 
             self._mark_node_start(node_id)
+            self._fire_hooks("on_node_start")
             node_sprint = node.sprint or None
 
             # Review node — expert gate via LLM
@@ -839,6 +852,7 @@ class StepRunner:
                 else:
                     break
             else:
+                self._fire_hooks("on_node_end")
                 self._log_activity(node_id, node.title, node.type, "PASS",
                                    f"concluido → {self.graph.resolve_next(node_id) or 'fim'}",
                                    sprint=node_sprint)
@@ -1002,11 +1016,13 @@ class StepRunner:
                     self.state_mgr.record_artifact(k, v)
             next_id = self.graph.resolve_next(node.id)
             self._advance_state(node.id, next_id, "PASS")
+            self._fire_hooks("on_gate_pass")
             print(f"  GATE PASS → proximo: {next_id}")
         else:
             self.state_mgr.block(f"Gate falhou: {validation.feedback}")
             self.state_mgr.state.gate_log[node.id] = "BLOCK"
             self.state_mgr.save()
+            self._fire_hooks("on_gate_fail")
             print(f"  GATE BLOCK: {validation.feedback}")
 
     def _maybe_auto_commit(self, node: Node):

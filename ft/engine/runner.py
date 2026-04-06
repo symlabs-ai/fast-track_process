@@ -360,8 +360,10 @@ class StepRunner:
         self._kb_path = os.environ.get("FT_KB_PATH")
         # Nome do log derivado da pasta do projeto (ex: pokemon_log.md)
         self._log_filename = f"{Path(self.project_root).name}_log.md"
-        # Environment hooks
+        # Environment config + hooks
         self._environment = load_environment(self.project_root)
+        self._max_node_retries = self._environment.get("max_node_retries", MAX_RETRIES)
+        self._max_gate_retries = self._environment.get("max_gate_retries", MAX_RETRIES)
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
@@ -978,8 +980,8 @@ class StepRunner:
 
         # Retry
         if validation.retryable:
-            for retry in range(1, MAX_RETRIES + 1):
-                print(ui.retry(retry, MAX_RETRIES))
+            for retry in range(1, self._max_node_retries + 1):
+                print(ui.retry(retry, self._max_node_retries))
                 retry_log_path = self._start_llm_log(state, node.id, f"retry-{retry}")
                 self.state_mgr.save()
                 try:
@@ -1012,29 +1014,76 @@ class StepRunner:
                     return
 
         # Esgotou retries
-        self.state_mgr.block(f"Validacao falhou apos {MAX_RETRIES} tentativas: {validation.feedback}")
-        print(ui.step_block(f"validação falhou após {MAX_RETRIES} tentativas"))
+        self.state_mgr.block(f"Validacao falhou apos {self._max_node_retries} tentativas: {validation.feedback}")
+        print(ui.step_block(f"validação falhou após {self._max_node_retries} tentativas"))
 
     def _run_gate(self, node: Node):
-        """Roda gate — validacao pura sem LLM."""
+        """Roda gate — validacao pura sem LLM. Em modo mvp, tenta corrigir via LLM."""
         print(ui.info("Rodando gate..."))
         validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         self._print_validation(validation)
 
         if validation.passed:
-            if validation.artifacts:
-                for k, v in validation.artifacts.items():
-                    self.state_mgr.record_artifact(k, v)
-            next_id = self.graph.resolve_next(node.id)
-            self._advance_state(node.id, next_id, "PASS")
-            self._fire_hooks("on_gate_pass")
-            print(ui.gate_pass(next_id))
-        else:
-            self.state_mgr.block(f"Gate falhou: {validation.feedback}")
-            self.state_mgr.state.gate_log[node.id] = "BLOCK"
-            self.state_mgr.save()
-            self._fire_hooks("on_gate_fail")
-            print(ui.gate_block(validation.feedback or "validação falhou"))
+            self._gate_accept(node, validation)
+            return
+
+        # Em modo mvp, tentar corrigir via LLM antes de bloquear
+        if self._auto_approve and self._max_gate_retries > 0:
+            for attempt in range(1, self._max_gate_retries + 1):
+                print(ui.retry(attempt, self._max_gate_retries))
+                print(ui.info(f"Gate falhou — delegando correção ao LLM..."))
+
+                state = self.state_mgr.state
+                feedback = validation.feedback or "gate falhou"
+                fix_prompt = (
+                    f"O gate '{node.title}' ({node.id}) falhou com o seguinte erro:\n\n"
+                    f"{feedback}\n\n"
+                    f"Corrija o problema para que o gate passe. "
+                    f"Analise o erro, identifique a causa raiz e faça as alterações necessárias.\n"
+                    f"Quando terminar, diga DONE."
+                )
+
+                log_path = self._start_llm_log(state, node.id, f"gate-fix-{attempt}")
+                self.state_mgr.save()
+                try:
+                    result = delegate_to_llm(
+                        task=fix_prompt,
+                        project_root=self.project_root,
+                        allowed_paths=["src/", "tests/", "docs/", "main.py", "app.py", "server.py", "frontend/"],
+                        llm_engine=self._resolve_llm_engine(state),
+                        log_path=log_path,
+                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
+                    )
+                finally:
+                    self._clear_active_llm_log(state)
+
+                # Re-validar
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+                self._print_validation(validation)
+
+                if validation.passed:
+                    print(ui.success(f"Gate corrigido na tentativa {attempt}"))
+                    self._gate_accept(node, validation)
+                    return
+
+            # Esgotou retries
+            print(ui.fail(f"Gate não corrigido após {self._max_gate_retries} tentativas"))
+
+        self.state_mgr.block(f"Gate falhou: {validation.feedback}")
+        self.state_mgr.state.gate_log[node.id] = "BLOCK"
+        self.state_mgr.save()
+        self._fire_hooks("on_gate_fail")
+        print(ui.gate_block(validation.feedback or "validação falhou"))
+
+    def _gate_accept(self, node: Node, validation: ValidationResult):
+        """Aceita um gate que passou — registra artefatos e avança."""
+        if validation.artifacts:
+            for k, v in validation.artifacts.items():
+                self.state_mgr.record_artifact(k, v)
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id, "PASS")
+        self._fire_hooks("on_gate_pass")
+        print(ui.gate_pass(next_id))
 
     def _maybe_auto_commit(self, node: Node):
         """Auto-commit apos PASS em nodes de build/test_green/refactor."""

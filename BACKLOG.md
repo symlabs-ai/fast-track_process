@@ -91,7 +91,7 @@
 - **Solução**: Separar em duas camadas:
   - **Base (framework)**: engine Python (`ft/`), conceitos (gate, nó, cycle, validator), schema do YAML, CLI. Instalável via `pip install ft-engine`. Não contém nenhum processo concreto.
   - **Ambiente (software house)**: processo YAML concreto, prompts, validators específicos, config de ambiente. Vive no repo do produto/ambiente, versionado com Git independente do framework.
-- **Entrega**: Engine carrega processo de `./process/` (relativo ao projeto) em vez de path hardcoded no repo central. O `FAST_TRACK_PROCESS_V2.yml` atual migra para template/exemplo.
+- **Entrega**: Engine carrega processo de `./process/` (relativo ao projeto) em vez de path hardcoded no repo central. O `FAST_TRACK_PROCESS_V2.yml` atual migra para template/exemplo. Inclui `ft validate process` para validar schema, grafo e semântica do YAML customizado (ver `docs/V3_ARCHITECTURE.md` §9).
 - **Status**: proposto
 - **Prioridade**: Alta
 

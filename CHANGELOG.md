@@ -4,6 +4,17 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.28] - 2026-04-06
+
+- feat(engine): BL-14 — environment hooks system (`ft/engine/hooks.py`)
+- feat(engine): Hooks disparam em on_init, on_env_setup, on_node_start, on_node_end, on_gate_pass, on_gate_fail, on_deliver
+- feat(engine): Scripts em `process/scripts/` executados via subprocess, bloqueiam se falhar
+- feat(engine): BL-15 — RunMode isolated vs continuous via `run_mode` em `environment.yml`
+- feat(cli): `ft run` em modo continuous usa `state/` na raiz e CycleManager avança ciclos
+- feat(engine): `_find_latest_state` prioriza continuous > isolated > legacy
+
+---
+
 ## [v0.8.27] - 2026-04-06
 
 - feat(engine): BL-13 — estrutura de projeto V3 com `process/`, `docs/`, `runs/`

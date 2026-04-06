@@ -1096,13 +1096,92 @@ class StepRunner:
             print(ui.fail(f"Gate não corrigido após {self._max_gate_retries} tentativas"))
 
         if is_engine_error:
-            print(ui.fail("Falha irreversível — erro de configuração do processo, não do código"))
-            print(ui.warn("Corrija o YAML do processo e rode: ft continue --mvp"))
+            # Tentar autofix antes de desistir
+            if self._try_autofix_gate(node, validation):
+                return
+            # Autofix não resolveu — explicar em linguagem clara
+            self._explain_gate_problem(node, validation)
+
         self.state_mgr.block(f"Gate falhou: {validation.feedback}")
         self.state_mgr.state.gate_log[node.id] = "BLOCK"
         self.state_mgr.save()
         self._fire_hooks("on_gate_fail")
         print(ui.gate_block(validation.feedback or "validação falhou"))
+
+    def _try_autofix_gate(self, node: Node, validation: ValidationResult) -> bool:
+        """Tenta autocorrigir erros de configuração do gate. Retorna True se resolveu."""
+        import yaml as _yaml
+
+        fixed = False
+
+        # Autofix: "node sem outputs" + tem file_exists no mesmo gate → copiar path
+        has_missing_outputs = any(
+            "node sem outputs" in (item.detail or "")
+            for item in validation.items if not item.passed
+        )
+        if has_missing_outputs and not node.outputs:
+            # Procurar path no file_exists do mesmo node
+            for spec in node.validators:
+                if "file_exists" in spec and isinstance(spec["file_exists"], str):
+                    inferred_path = spec["file_exists"]
+                    node.outputs = [inferred_path]
+                    print(ui.autofix_applied(
+                        f"outputs inferido de file_exists → [{inferred_path}]"
+                    ))
+                    fixed = True
+                    break
+
+        if not fixed:
+            return False
+
+        # Re-validar com o fix aplicado
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+        self._print_validation(validation)
+
+        if validation.passed:
+            print(ui.success("Autocorreção resolveu o problema"))
+            self._gate_accept(node, validation)
+            return True
+
+        return False
+
+    def _explain_gate_problem(self, node: Node, validation: ValidationResult) -> None:
+        """Explica o problema do gate em linguagem clara para o usuário."""
+        failed_items = [item for item in validation.items if not item.passed]
+        if not failed_items:
+            return
+
+        detail = failed_items[0].detail or ""
+
+        if "node sem outputs" in detail:
+            what = (
+                f"O gate \"{node.title}\" precisa verificar o conteúdo de um arquivo, "
+                f"mas não sabe qual arquivo verificar."
+            )
+            alternatives = [
+                f"Informar qual arquivo o gate deve verificar (provável: o mesmo do file_exists)",
+                f"Remover a verificação de conteúdo deste gate (menos seguro)",
+                f"Pular este gate e continuar o processo",
+            ]
+        elif "Validador desconhecido" in detail:
+            validator_name = detail.split(":")[-1].strip() if ":" in detail else "?"
+            what = (
+                f"O gate \"{node.title}\" usa uma verificação chamada \"{validator_name}\" "
+                f"que o sistema não reconhece. Pode ser um erro de digitação."
+            )
+            alternatives = [
+                f"Corrigir o nome da verificação no processo",
+                f"Remover essa verificação do gate",
+                f"Pular este gate e continuar o processo",
+            ]
+        else:
+            what = f"O gate \"{node.title}\" encontrou um problema de configuração: {detail}"
+            alternatives = [
+                "Investigar e corrigir o problema",
+                "Pular este gate e continuar o processo",
+            ]
+
+        print(ui.problem_explanation(what, alternatives, node.id))
 
     def _gate_accept(self, node: Node, validation: ValidationResult):
         """Aceita um gate que passou — registra artefatos e avança."""

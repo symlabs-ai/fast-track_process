@@ -272,6 +272,54 @@ def cmd_validate(args):
     sys.exit(0 if report.passed else 1)
 
 
+def cmd_fix(args):
+    """Delega ao LLM a correção de um problema descrito pelo usuário."""
+    from ft.engine.delegate import delegate_to_llm
+    from ft.engine import ui as _ui
+
+    root = find_project_root()
+    instruction = args.instruction
+
+    # Carregar estado para saber onde o processo parou
+    state_path = _find_latest_state(root)
+    blocked_context = ""
+    if state_path.exists():
+        import yaml
+        with open(state_path) as f:
+            state_data = yaml.safe_load(f) or {}
+        blocked = state_data.get("blocked_reason", "")
+        current = state_data.get("current_node", "")
+        if blocked:
+            blocked_context = (
+                f"\n\nCONTEXTO: O processo parou no node '{current}' com o erro:\n"
+                f"{blocked}\n"
+            )
+
+    prompt = (
+        f"O usuário pediu a seguinte correção:\n\n"
+        f"{instruction}\n"
+        f"{blocked_context}\n"
+        f"Analise o problema, faça as alterações necessárias nos arquivos do projeto, "
+        f"e diga DONE quando terminar."
+    )
+
+    print(_ui.info(f"Aplicando correção: {instruction}"))
+    llm_engine = resolve_llm_engine(args)
+    result = delegate_to_llm(
+        task=prompt,
+        project_root=str(root),
+        allowed_paths=["src/", "tests/", "docs/", "main.py", "app.py", "server.py",
+                        "frontend/", "process/"],
+        llm_engine=llm_engine or "claude",
+    )
+
+    if result.success:
+        print(_ui.success("Correção aplicada"))
+        print(_ui.info("Para continuar o processo: ft continue --mvp"))
+    else:
+        print(_ui.fail(f"LLM não conseguiu aplicar: {result.output[:300]}"))
+
+
 def cmd_setup_env(args):
     """Provisiona CLAUDE.md e .claude/settings.local.json a partir de uma API key."""
     project_root = Path(args.project) if args.project else find_project_root()
@@ -494,6 +542,11 @@ def main():
     # validate
     sub.add_parser("validate", help="Validar YAML do processo")
 
+    # fix
+    fx = sub.add_parser("fix", help="Corrigir problema descrito em linguagem natural")
+    add_llm_engine_flags(fx)
+    fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
+
     # setup-env
     se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json")
     se.add_argument("key", help="API key do SymGateway (sk-sym_...)")
@@ -531,6 +584,8 @@ def main():
             cmd_graph(args)
         elif args.command == "validate":
             cmd_validate(args)
+        elif args.command == "fix":
+            cmd_fix(args)
         elif args.command == "setup-env":
             cmd_setup_env(args)
         elif args.command == "run":

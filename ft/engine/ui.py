@@ -171,3 +171,37 @@ def validator_ok(detail: str) -> str:
 
 def validator_fail(detail: str) -> str:
     return f"    {RED}[fail]{RESET} {detail}"
+
+
+def autofix_applied(description: str) -> str:
+    return f"  {BOLD_GREEN}⚙ Autocorreção:{RESET} {description}"
+
+
+def problem_explanation(
+    what_happened: str,
+    alternatives: list[str],
+    node_id: str | None = None,
+) -> str:
+    """Mensagem amigável para erros que o engine não sabe autocorrigir."""
+    w = 54
+    line = "─" * w
+    lines = [
+        f"\n{BOLD_RED}{line}{RESET}",
+        f"  {BOLD_RED}Problema encontrado no processo{RESET}",
+        f"{BOLD_RED}{line}{RESET}",
+        f"",
+        f"  {BOLD_WHITE}O que aconteceu:{RESET}",
+        f"    {what_happened}",
+        f"",
+        f"  {BOLD_WHITE}Alternativas:{RESET}",
+    ]
+    for i, alt in enumerate(alternatives, 1):
+        lines.append(f"    {BOLD_YELLOW}{i}.{RESET} {alt}")
+    lines.append(f"")
+    lines.append(f"  {BOLD_WHITE}Para aplicar, use:{RESET}")
+    lines.append(f"    {BOLD_CYAN}ft fix \"{RESET}aplique a alternativa 1{BOLD_CYAN}\"{RESET}")
+    lines.append(f"")
+    lines.append(f"  {DIM}Ou descreva sua própria solução:{RESET}")
+    lines.append(f"    {BOLD_CYAN}ft fix \"{RESET}faça X e Y em vez disso{BOLD_CYAN}\"{RESET}")
+    lines.append(f"")
+    return "\n".join(lines)

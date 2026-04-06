@@ -5,6 +5,7 @@ ft engine CLI — comandos do motor deterministico.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -515,26 +516,68 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "init":
-        cmd_init(args)
-    elif args.command == "continue":
-        cmd_continue(args)
-    elif args.command == "status":
-        cmd_status(args)
-    elif args.command == "approve":
-        cmd_approve(args)
-    elif args.command == "reject":
-        cmd_reject(args)
-    elif args.command == "graph":
-        cmd_graph(args)
-    elif args.command == "validate":
-        cmd_validate(args)
-    elif args.command == "setup-env":
-        cmd_setup_env(args)
-    elif args.command == "run":
-        cmd_run(args)
-    else:
-        parser.print_help()
+    try:
+        if args.command == "init":
+            cmd_init(args)
+        elif args.command == "continue":
+            cmd_continue(args)
+        elif args.command == "status":
+            cmd_status(args)
+        elif args.command == "approve":
+            cmd_approve(args)
+        elif args.command == "reject":
+            cmd_reject(args)
+        elif args.command == "graph":
+            cmd_graph(args)
+        elif args.command == "validate":
+            cmd_validate(args)
+        elif args.command == "setup-env":
+            cmd_setup_env(args)
+        elif args.command == "run":
+            cmd_run(args)
+        else:
+            parser.print_help()
+    except KeyboardInterrupt:
+        print("\n  Interrompido pelo usuário.")
+        sys.exit(130)
+    except Exception as e:
+        if os.environ.get("FT_DEBUG"):
+            raise
+        _print_crash(e)
+        sys.exit(1)
+
+
+def _print_crash(exc: Exception) -> None:
+    """Formata exceção não-tratada de forma legível para o usuário."""
+    import traceback
+    from ft.engine.ui import BOLD_RED, RED, DIM, RESET, BOLD_WHITE, YELLOW
+
+    # Extrair traceback
+    tb = traceback.extract_tb(exc.__traceback__)
+
+    print(f"\n{BOLD_RED}{'━' * 54}{RESET}")
+    print(f"  {BOLD_RED}Erro inesperado{RESET}: {BOLD_WHITE}{type(exc).__name__}{RESET}")
+    print(f"  {RED}{exc}{RESET}")
+    print(f"{BOLD_RED}{'━' * 54}{RESET}")
+
+    if tb:
+        print(f"\n  {YELLOW}Onde aconteceu:{RESET}")
+        # Mostrar apenas os frames relevantes (do ft/, não de stdlib)
+        relevant = [f for f in tb if "/ft/" in f.filename or "test" in f.filename]
+        frames = relevant if relevant else tb[-3:]
+        for frame in frames:
+            # Simplificar path: mostrar a partir de ft/
+            path = frame.filename
+            for prefix in ("/ft/", "/tests/"):
+                idx = path.find(prefix)
+                if idx >= 0:
+                    path = path[idx + 1:]
+                    break
+            print(f"    {DIM}•{RESET} {path}:{frame.lineno} → {DIM}{frame.name}(){RESET}")
+            if frame.line:
+                print(f"      {DIM}{frame.line.strip()}{RESET}")
+
+    print(f"\n  {DIM}Para o traceback completo, rode com: FT_DEBUG=1 ft ...{RESET}\n")
 
 
 if __name__ == "__main__":

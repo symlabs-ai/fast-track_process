@@ -16,10 +16,10 @@ from typing import Any
 
 def scan_existing_docs(project_root: str) -> dict[str, str]:
     """
-    Scans project/docs/ para docs existentes.
+    Scans docs/ para docs existentes.
     Retorna {filename: content} dos docs encontrados.
     """
-    docs_dir = Path(project_root) / "project" / "docs"
+    docs_dir = Path(project_root) / "docs"
     if not docs_dir.exists():
         return {}
 

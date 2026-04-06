@@ -1,5 +1,5 @@
 """
-SessionTracker — rastreamento de sessões de agentes em project/docs/sessions/.
+SessionTracker — rastreamento de sessões de agentes em docs/sessions/.
 RF-18: sessões salvas com agente, node, timestamps e status.
 """
 

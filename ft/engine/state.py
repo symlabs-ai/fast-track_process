@@ -71,7 +71,7 @@ class StateManager:
         if pid and pid != os.getpid() and self._is_pid_alive(int(pid)):
             raise StateLockError(
                 f"ft engine ja esta rodando (PID {pid}). "
-                "Aguarde o termino ou delete project/state/engine_state.yml para resetar."
+                "Aguarde o termino ou delete engine_state.yml para resetar."
             )
 
     def load(self, check_lock: bool = False) -> EngineState:

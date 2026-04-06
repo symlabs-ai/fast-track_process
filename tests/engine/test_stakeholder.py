@@ -15,8 +15,8 @@ from ft.engine.stakeholder import (
 
 @pytest.fixture
 def docs_dir(tmp_path):
-    """Create a project/docs/ dir with some docs."""
-    d = tmp_path / "project" / "docs"
+    """Create a docs/ dir with some docs."""
+    d = tmp_path / "docs"
     d.mkdir(parents=True)
     (d / "hipotese.md").write_text("\n".join(["line"] * 15))
     (d / "PRD.md").write_text("\n".join(["line"] * 40))

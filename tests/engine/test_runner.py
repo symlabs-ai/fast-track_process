@@ -63,16 +63,17 @@ class TestInitState:
             id="x",
             type="build",
             title="X",
-            outputs=["project/docs/report.md"],
-            write_scope=["main.py", "project/docs/"],
+            outputs=["docs/report.md"],
+            write_scope=["main.py", "docs/"],
         )
-        assert runner_v2._resolve_allowed_paths(node) == ["main.py", "project/docs/"]
+        assert runner_v2._resolve_allowed_paths(node) == ["main.py", "docs/"]
 
     def test_init_cleans_validator_snapshots(self, tmp_path):
         project_root = tmp_path / "project_root"
         project_root.mkdir()
-        stale_snapshot = project_root / "project" / "state" / "prd_rewrite_baseline.md"
-        stale_snapshot.parent.mkdir(parents=True)
+        state_dir = project_root / "runs" / "01" / "state"
+        stale_snapshot = state_dir / "prd_rewrite_baseline.md"
+        state_dir.mkdir(parents=True)
         stale_snapshot.write_text("stale")
 
         process_path = tmp_path / "process.yml"
@@ -87,11 +88,11 @@ nodes:
     title: Rewrite
     executor: llm_coach
     outputs:
-      - project/docs/PRD.md
+      - docs/PRD.md
     validators:
       - sections_unchanged:
-          path: project/docs/PRD.md
-          snapshot_path: project/state/prd_rewrite_baseline.md
+          path: docs/PRD.md
+          snapshot_path: prd_rewrite_baseline.md
           sections:
             - Hipotese
     next: ft.end
@@ -103,7 +104,7 @@ nodes:
 
         runner = StepRunner(
             process_path=process_path,
-            state_path=project_root / "project" / "state" / "engine_state.yml",
+            state_path=state_dir / "engine_state.yml",
             project_root=project_root,
         )
 

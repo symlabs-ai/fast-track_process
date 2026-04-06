@@ -62,10 +62,10 @@ def copy_template(template_name: str, project_root: Path) -> Path:
 
 
 def find_project_root() -> Path:
-    """Encontra a raiz do projeto subindo ate achar project/state/."""
+    """Encontra a raiz do projeto subindo ate achar process/."""
     current = Path.cwd()
     for parent in [current, *current.parents]:
-        if (parent / "project" / "state").is_dir():
+        if (parent / "process").is_dir():
             return parent
     return current
 
@@ -111,9 +111,51 @@ def find_process_yaml(root: Path) -> Path | None:
     return None
 
 
+def _find_latest_state(root: Path) -> Path:
+    """Encontra o state mais recente em runs/ ou fallback para project/state/ (legado)."""
+    runs_dir = root / "runs"
+    if runs_dir.is_dir():
+        run_dirs = sorted(
+            [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()],
+            reverse=True,
+        )
+        for rd in run_dirs:
+            state = rd / "state" / "engine_state.yml"
+            if state.exists():
+                return state
+    # Fallback legado
+    legacy = root / "project" / "state" / "engine_state.yml"
+    if legacy.exists():
+        return legacy
+    # Default para novo run
+    return root / "runs" / "01" / "state" / "engine_state.yml"
+
+
+def _next_run_dir(project_root: Path) -> Path:
+    """Calcula e cria o próximo diretório de run em runs/."""
+    runs_dir = project_root / "runs"
+    runs_dir.mkdir(exist_ok=True)
+    existing = sorted(
+        [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+    )
+    next_num = int(existing[-1].name) + 1 if existing else 1
+    run_dir = runs_dir / f"{next_num:02d}"
+    run_dir.mkdir()
+    return run_dir
+
+
+def _ensure_runs_gitignore(project_root: Path) -> None:
+    """Cria runs/.gitignore se não existir."""
+    runs_dir = project_root / "runs"
+    runs_dir.mkdir(exist_ok=True)
+    gitignore = runs_dir / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text("*\n!.gitignore\n")
+
+
 def get_runner(process: str | None = None, llm_engine: str | None = None) -> StepRunner:
     root = find_project_root()
-    state_path = root / "project" / "state" / "engine_state.yml"
+    state_path = _find_latest_state(root)
 
     if process:
         process_path = Path(process)
@@ -136,10 +178,15 @@ def get_runner(process: str | None = None, llm_engine: str | None = None) -> Ste
 def cmd_init(args):
     # Copiar template se fornecido e processo não existe
     template = getattr(args, "template", None)
+    root = find_project_root()
     if template:
-        root = find_project_root()
         if not find_process_yaml(root):
             copy_template(template, root)
+
+    # Criar estrutura V3: process/, docs/, runs/
+    (root / "process").mkdir(exist_ok=True)
+    (root / "docs").mkdir(exist_ok=True)
+    _ensure_runs_gitignore(root)
 
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     # Limpar estado anterior se existir
@@ -270,11 +317,11 @@ Formato obrigatório:
 - Seção ## Oportunidade — descreva a oportunidade de mercado/negócio
 - Pode ter outras seções adicionais se o conteúdo original as tiver
 
-Escreva o arquivo corrigido em: project/docs/hipotese.md
+Escreva o arquivo corrigido em: docs/hipotese.md
 Ao final diga DONE."""
 
     result = delegate_to_llm(task=prompt, project_root=str(project_root),
-                             allowed_paths=["project/docs/"], max_turns=5,
+                             allowed_paths=["docs/"], max_turns=5,
                              llm_engine=llm_engine)
 
     if not result.success:
@@ -294,8 +341,11 @@ def cmd_run(args):
     """Bootstrap completo: cria projeto, provisiona ambiente, inicia e roda até MVP."""
     project_root = Path(args.project).resolve()
 
-    # Criar estrutura mínima
-    (project_root / "project" / "state").mkdir(parents=True, exist_ok=True)
+    # Criar estrutura V3: docs/, runs/<N>/
+    (project_root / "docs").mkdir(parents=True, exist_ok=True)
+    _ensure_runs_gitignore(project_root)
+    run_dir = _next_run_dir(project_root)
+    (run_dir / "state").mkdir(parents=True, exist_ok=True)
 
     # Resolver YAML do processo
     if args.process:
@@ -312,7 +362,7 @@ def cmd_run(args):
                 print("  Use: ft run . --template fast-track-v2")
                 sys.exit(1)
 
-    state_path = project_root / "project" / "state" / "engine_state.yml"
+    state_path = run_dir / "state" / "engine_state.yml"
     llm_engine = resolve_llm_engine(args)
 
     runner = StepRunner(
@@ -334,9 +384,9 @@ def cmd_run(args):
 
     # Copiar plano_de_voo do ciclo anterior se fornecido
     if args.from_project:
-        src = Path(args.from_project) / "project" / "docs" / "plano_de_voo.md"
+        src = Path(args.from_project) / "docs" / "plano_de_voo.md"
         if src.exists():
-            dst_docs = project_root / "project" / "docs"
+            dst_docs = project_root / "docs"
             dst_docs.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, dst_docs / "plano_de_voo.md")
             print(f"  plano_de_voo.md copiado de {args.from_project}")
@@ -349,7 +399,7 @@ def cmd_run(args):
         if not src.exists():
             print(f"ERRO: arquivo de hipótese não encontrado: {src}")
             sys.exit(1)
-        dst_docs = project_root / "project" / "docs"
+        dst_docs = project_root / "docs"
         dst_docs.mkdir(parents=True, exist_ok=True)
         dst = dst_docs / "hipotese.md"
         shutil.copy(src, dst)

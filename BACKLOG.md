@@ -113,7 +113,7 @@
       02/
   ```
 - **Entrega**: `ft init` cria essa estrutura. `ft run` cria subpasta em `runs/` automaticamente. `ft.prd.rewrite` e `ft.handoff` escrevem de volta em `docs/`.
-- **Status**: proposto
+- **Status**: concluido
 - **Prioridade**: Alta
 
 ### BL-14: Environment Hooks — Scripts executáveis por fase
@@ -164,6 +164,6 @@
 | BL-10 | Mover changelog | Baixa | concluido |
 | BL-11 | Anti-patterns doc | Baixa | concluido |
 | BL-12 | Separação Base / Ambiente | Alta | concluido |
-| BL-13 | Estrutura `process/`, `docs/`, `runs/` | Alta | proposto |
+| BL-13 | Estrutura `process/`, `docs/`, `runs/` | Alta | concluido |
 | BL-14 | Environment Hooks | Alta | proposto |
 | BL-15 | RunMode isolated/continuous | Média | proposto |

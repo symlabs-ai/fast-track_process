@@ -246,6 +246,90 @@ class TestStatus:
         refreshed = runner_v2.state_mgr.load()
         assert refreshed.version == "0.2.0"
 
+    def test_status_recomputes_progress_without_counting_end_node(self, runner_v2, capsys):
+        runner_v2.init_state()
+        runner_v2._advance_state("step.01.hipotese", "step.02.prd")
+        runner_v2._advance_state("step.02.prd", "gate.01.discovery")
+        runner_v2._advance_state("gate.01.discovery", "step.03.implementacao")
+        runner_v2._advance_state("step.03.implementacao", "gate.02.delivery")
+        runner_v2._advance_state("gate.02.delivery", "step.05.done")
+        runner_v2._advance_state("step.05.done", None)
+
+        runner_v2.status()
+        out = capsys.readouterr().out
+
+        assert "Progresso: 5/5" in out
+        refreshed = runner_v2.state_mgr.load()
+        assert refreshed.metrics["steps_completed"] == 5
+
+    def test_status_backfills_inserted_decision_nodes_when_branch_already_traversed(self, tmp_path, capsys):
+        project_root = tmp_path / "project_root"
+        project_root.mkdir()
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.2.0"
+title: "Decision Backfill"
+nodes:
+  - id: step.01
+    type: build
+    title: Step 01
+    executor: llm_coder
+    outputs:
+      - src/one.py
+    next: decision.01
+  - id: decision.01
+    type: decision
+    title: Decide
+    executor: python
+    condition: interface_type
+    branches:
+      ui: step.02
+      _default: step.02
+    next: step.02
+  - id: step.02
+    type: gate
+    title: Step 02
+    executor: python
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=project_root / "project" / "state" / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        state = runner.state_mgr.load()
+        state.version = "0.1.0"
+        state.completed_nodes = ["step.01", "step.02", "ft.end"]
+        state.gate_log = {"step.01": "PASS", "step.02": "PASS", "ft.end": "PASS"}
+        state.artifacts["interface_type"] = "ui"
+        state.current_node = None
+        state.node_status = "done"
+        state.metrics["steps_completed"] = 2
+        state.metrics["steps_total"] = 2
+        runner.state_mgr.save()
+
+        runner.status()
+        out = capsys.readouterr().out
+
+        assert "Progresso: 3/3" in out
+        refreshed = runner.state_mgr.load()
+        assert refreshed.version == "0.2.0"
+        assert "decision.01" in refreshed.completed_nodes
+        assert refreshed.completed_nodes == ["step.01", "decision.01", "step.02", "ft.end"]
+        assert refreshed.gate_log["decision.01"] == "PASS"
+        assert refreshed.metrics["steps_completed"] == 3
+        assert refreshed.metrics["steps_total"] == 3
+
 
 # ---------------------------------------------------------------------------
 # _run_gate

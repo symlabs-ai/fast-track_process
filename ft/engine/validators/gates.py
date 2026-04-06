@@ -241,7 +241,7 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
       SM4:    interface_type=ui/mixed → frontend deve existir (package.json + index.html)
       SM5:    interface_type=mixed/api → entry point HTTP deve existir (FastAPI/Flask)
       SM5:    interface_type=mixed → vite.config.js deve ter proxy para backend
-      SM5:    interface_type=ui + Python backend = provável mixed
+      SM5:    interface_type=ui + backend Python só é problema se a UI já depender de HTTP
       SM6-P4: frontend sem BrowserRouter/Route path → deep links quebrados
       SM6-P5: frontend-prd-review.md com REJECTED → nav contract não validado
     """
@@ -328,11 +328,40 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
         backend_dirs = [root / d for d in ("src", "backend") if (root / d).is_dir()]
         py_files_exist = any(list(d.glob("**/*.py")) for d in backend_dirs)
         frontend_exists = (root / "frontend").is_dir()
-        if frontend_exists and py_files_exist:
+        frontend_src = root / "frontend" / "src"
+        vite_cfg = root / "frontend" / "vite.config.js"
+
+        ui_depends_on_http = False
+        if vite_cfg.exists() and "proxy" in vite_cfg.read_text(errors="ignore"):
+            ui_depends_on_http = True
+
+        if frontend_src.is_dir() and not ui_depends_on_http:
+            http_markers = (
+                "fetch(",
+                "axios",
+                "ky(",
+                "useSWR",
+                "useQuery(",
+                "http://",
+                "https://",
+                "/api/",
+                "/savegames",
+                "/health",
+            )
+            for frontend_file in list(frontend_src.rglob("*.js")) + list(frontend_src.rglob("*.jsx")) + list(frontend_src.rglob("*.ts")) + list(frontend_src.rglob("*.tsx")):
+                try:
+                    content = frontend_file.read_text(errors="ignore")
+                except Exception:
+                    continue
+                if any(marker in content for marker in http_markers):
+                    ui_depends_on_http = True
+                    break
+
+        if frontend_exists and py_files_exist and ui_depends_on_http:
             failures.append(
-                "KB-SM5: interface_type=ui mas existem frontend/ E src/ com Python — "
-                "provável interface_type=mixed; sem essa correção gate_server_starts não "
-                "verificará se o backend HTTP está funcional"
+                "KB-SM5: interface_type=ui mas a UI ja depende de HTTP local "
+                "(proxy/fetch/endpoints detectados) alem de existir backend Python — "
+                "provável interface_type=mixed; reclassifique antes de liberar"
             )
 
     # ── Pitfall SM6-P4: routing sem URL change — deep links quebrados ──────────

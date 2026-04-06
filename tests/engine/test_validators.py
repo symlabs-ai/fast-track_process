@@ -6,7 +6,7 @@ from pathlib import Path
 from ft.engine.validators.artifacts import (
     file_exists, min_lines, has_sections, min_user_stories, sections_unchanged,
 )
-from ft.engine.validators.gates import gate_acceptance_cli
+from ft.engine.validators.gates import gate_acceptance_cli, gate_kb_review
 from ft.engine.parallel import check_independence
 
 
@@ -202,3 +202,65 @@ class TestGateAcceptanceCli:
 
         assert not passed
         assert "acceptance-cli-report.md" in detail
+
+
+class TestGateKbReview:
+    def test_ui_with_auxiliary_backend_and_no_http_dependency_passes(self, tmp_path):
+        docs = tmp_path / "project" / "docs"
+        frontend_src = tmp_path / "frontend" / "src"
+        src_dir = tmp_path / "src" / "pokemon"
+
+        docs.mkdir(parents=True)
+        frontend_src.mkdir(parents=True)
+        src_dir.mkdir(parents=True)
+
+        (docs / "tech_stack.md").write_text("interface_type: ui\n")
+        (tmp_path / "frontend" / "package.json").write_text("{}\n")
+        (tmp_path / "frontend" / "index.html").write_text("<!doctype html>\n")
+        (tmp_path / "frontend" / "vite.config.js").write_text(
+            "import { defineConfig } from 'vite'\n"
+            "export default defineConfig({ server: { host: true } })\n"
+        )
+        (frontend_src / "App.jsx").write_text(
+            "import { BrowserRouter, Route } from 'react-router-dom'\n"
+            "export default function App() { return <BrowserRouter><Route path='/' element={null} /></BrowserRouter> }\n"
+        )
+        (tmp_path / "main.py").write_text(
+            "from fastapi import FastAPI\napp = FastAPI()\n"
+        )
+        (src_dir / "api.py").write_text("def helper():\n    return 'ok'\n")
+
+        passed, detail = gate_kb_review(str(tmp_path))
+
+        assert passed
+        assert "PASS" in detail
+
+    def test_ui_with_frontend_http_dependency_and_backend_fails(self, tmp_path):
+        docs = tmp_path / "project" / "docs"
+        frontend_src = tmp_path / "frontend" / "src"
+        src_dir = tmp_path / "src" / "pokemon"
+
+        docs.mkdir(parents=True)
+        frontend_src.mkdir(parents=True)
+        src_dir.mkdir(parents=True)
+
+        (docs / "tech_stack.md").write_text("interface_type: ui\n")
+        (tmp_path / "frontend" / "package.json").write_text("{}\n")
+        (tmp_path / "frontend" / "index.html").write_text("<!doctype html>\n")
+        (tmp_path / "frontend" / "vite.config.js").write_text(
+            "import { defineConfig } from 'vite'\n"
+            "export default defineConfig({ server: { host: true } })\n"
+        )
+        (frontend_src / "App.jsx").write_text(
+            "import { BrowserRouter, Route } from 'react-router-dom'\n"
+            "export default function App() { fetch('/savegames'); return <BrowserRouter><Route path='/' element={null} /></BrowserRouter> }\n"
+        )
+        (tmp_path / "main.py").write_text(
+            "from fastapi import FastAPI\napp = FastAPI()\n"
+        )
+        (src_dir / "api.py").write_text("def helper():\n    return 'ok'\n")
+
+        passed, detail = gate_kb_review(str(tmp_path))
+
+        assert not passed
+        assert "provável interface_type=mixed" in detail

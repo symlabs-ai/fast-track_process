@@ -532,6 +532,96 @@ class StepRunner:
             state.llm_engine = effective
             self.state_mgr.save()
 
+    def _decision_state_dict(self, state: Any) -> dict[str, Any]:
+        """Constroi o contexto deterministico usado para resolver decisions."""
+        return {
+            "node_status": state.node_status,
+            "blocked_reason": state.blocked_reason,
+            **state.gate_log,
+            **{k: v for k, v in state.artifacts.items() if v},
+        }
+
+    def _predecessor_ids(self, node_id: str) -> list[str]:
+        """Retorna todos os predecessores imediatos de um node."""
+        predecessors: list[str] = []
+        for other_id, other_node in self.graph.nodes.items():
+            if other_node.next == node_id:
+                predecessors.append(other_id)
+            if other_node.branches:
+                for target in other_node.branches.values():
+                    if target == node_id:
+                        predecessors.append(other_id)
+        return predecessors
+
+    def _refresh_progress_metrics(self, state: Any) -> bool:
+        """Recalcula métricas de progresso a partir do grafo atual."""
+        total_steps = sum(1 for node in self.graph.nodes.values() if node.type != "end")
+        completed_steps = sum(
+            1
+            for node_id in state.completed_nodes
+            if node_id in self.graph.nodes and self.graph.get_node(node_id).type != "end"
+        )
+
+        changed = False
+        if state.metrics.get("steps_total") != total_steps:
+            state.metrics["steps_total"] = total_steps
+            changed = True
+        if state.metrics.get("steps_completed") != completed_steps:
+            state.metrics["steps_completed"] = completed_steps
+            changed = True
+        return changed
+
+    def _reconcile_state_with_graph(self, state: Any) -> bool:
+        """
+        Alinha estado persistido ao grafo atual.
+
+        Isso corrige drift de versão do processo e backfill seguro de decisions
+        inseridas depois que um projeto já havia avançado além delas.
+        """
+        changed = False
+
+        deduped_completed = list(dict.fromkeys(state.completed_nodes))
+        if deduped_completed != state.completed_nodes:
+            state.completed_nodes = deduped_completed
+            changed = True
+
+        completed = set(state.completed_nodes)
+        progress_frontier = set(completed)
+        if state.current_node:
+            progress_frontier.add(state.current_node)
+
+        decision_state = self._decision_state_dict(state)
+        for node in self.graph.nodes.values():
+            if node.type != "decision" or node.id in completed:
+                continue
+
+            predecessors = self._predecessor_ids(node.id)
+            if predecessors and not all(pred in completed for pred in predecessors):
+                continue
+
+            resolved_next = self.graph.resolve_next(node.id, decision_state)
+            if not resolved_next or resolved_next not in progress_frontier:
+                continue
+
+            state.completed_nodes.append(node.id)
+            state.gate_log.setdefault(node.id, "PASS")
+            completed.add(node.id)
+            progress_frontier.add(node.id)
+            changed = True
+
+        if self._refresh_progress_metrics(state):
+            changed = True
+
+        known_ids = {node.id for node in self.graph.nodes.values()}
+        ordered_known = [node.id for node in self.graph.nodes.values() if node.id in state.completed_nodes]
+        unknown_ids = [node_id for node_id in state.completed_nodes if node_id not in known_ids]
+        normalized_completed = ordered_known + unknown_ids
+        if normalized_completed != state.completed_nodes:
+            state.completed_nodes = normalized_completed
+            changed = True
+
+        return changed
+
     def _sync_process_meta(self, state: Any) -> None:
         """Mantém process_id/version do estado alinhados ao grafo canônico carregado."""
         expected_id = self.graph.meta.get("id", state.process_id)
@@ -539,6 +629,14 @@ class StepRunner:
         if state.process_id != expected_id or state.version != expected_version:
             state.process_id = expected_id
             state.version = expected_version
+            changed = True
+        else:
+            changed = False
+
+        if self._reconcile_state_with_graph(state):
+            changed = True
+
+        if changed:
             self.state_mgr.save()
 
     def _llm_log_dir(self) -> Path:
@@ -647,6 +745,9 @@ class StepRunner:
         if self.state_mgr.state.node_status == "blocked":
             self.state_mgr.unblock()
         self.state_mgr.advance(completed_node, next_node, gate_result)
+        state = self.state_mgr.state
+        if self._refresh_progress_metrics(state):
+            self.state_mgr.save()
         self._clear_validator_snapshots(completed_node)
 
     def _mark_node_start(self, node_id: str):
@@ -1111,12 +1212,7 @@ class StepRunner:
     def _run_decision(self, node: Node):
         """Roda decision node — avalia condicao e segue branch."""
         state = self.state_mgr.state
-        state_dict = {
-            "node_status": state.node_status,
-            "blocked_reason": state.blocked_reason,
-            **state.gate_log,
-            **{k: v for k, v in state.artifacts.items() if v},
-        }
+        state_dict = self._decision_state_dict(state)
 
         next_id = self.graph.resolve_next(node.id, state_dict)
         if next_id:

@@ -1,8 +1,14 @@
 """Unit tests for ft.engine.delegate command selection."""
 
 import pytest
+from unittest.mock import patch
 
-from ft.engine.delegate import _build_executor_command, _extract_codex_output
+from ft.engine.delegate import (
+    _build_executor_command,
+    _extract_codex_output,
+    DelegateResult,
+    delegate_with_feedback,
+)
 
 
 class TestBuildExecutorCommand:
@@ -36,3 +42,36 @@ class TestBuildExecutorCommand:
             '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}',
         ])
         assert _extract_codex_output(raw) == "DONE"
+
+
+class TestDelegateWithFeedback:
+    def test_forwards_retry_options_to_delegate(self):
+        expected = DelegateResult(
+            success=True,
+            output="DONE",
+            files_created=[],
+            files_modified=[],
+        )
+
+        with patch("ft.engine.delegate.delegate_to_llm", return_value=expected) as delegate_mock:
+            result = delegate_with_feedback(
+                original_task="escreva o PRD",
+                feedback="faltaram linhas",
+                project_root="/tmp/proj",
+                allowed_paths=["project/docs/"],
+                llm_engine="codex",
+                max_turns=12,
+                log_path="/tmp/proj/run.jsonl",
+                stream_prefix="codex>",
+            )
+
+        assert result is expected
+        delegate_mock.assert_called_once()
+        kwargs = delegate_mock.call_args.kwargs
+        assert "faltaram linhas" in kwargs["task"]
+        assert kwargs["project_root"] == "/tmp/proj"
+        assert kwargs["allowed_paths"] == ["project/docs/"]
+        assert kwargs["llm_engine"] == "codex"
+        assert kwargs["max_turns"] == 12
+        assert kwargs["log_path"] == "/tmp/proj/run.jsonl"
+        assert kwargs["stream_prefix"] == "codex>"

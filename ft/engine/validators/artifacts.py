@@ -42,7 +42,9 @@ def _extract_markdown_section(content: str, section: str) -> str | None:
 
         level = len(match.group(1))
         title = match.group(2).strip()
-        if _normalize(title) == _normalize(section):
+        norm_title = _normalize(title)
+        norm_section = _normalize(section)
+        if norm_title == norm_section or norm_section in norm_title:
             target_start = idx
             target_level = level
             break

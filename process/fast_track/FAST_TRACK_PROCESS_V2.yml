@@ -6,9 +6,12 @@
 # v0.8.18: acceptance CLI de API passa a ser pulado para interface_type=ui
 # v0.8.19: ft.prd.rewrite passa a preservar Hipotese/Visao/User Stories via baseline
 #           determinístico; reescrita automática não pode alterar visão/escopo sem stakeholder
+# v0.8.20: ft.e2e.02.browser adicionado após gate.e2e — valida UI com Playwright + seed
+#           real do test_data.md; gate.e2e.browser criado; E2E browser é gate final antes
+#           do handoff (CLI First → depois browser com dados reais)
 
 id: fast_track_v2
-version: "0.8.19"
+version: "0.8.20"
 title: "ForgeProcess — Fast Track V2"
 
 nodes:
@@ -836,6 +839,103 @@ nodes:
     sprint: sprint-07-e2e
     validators:
       - tests_pass: true
+    next: ft.e2e.02.browser
+
+  - id: ft.e2e.02.browser
+    type: build
+    title: "E2E Browser — Validação Visual com Dados Reais"
+    executor: llm_coder
+    sprint: sprint-07-e2e
+    max_turns: 60
+    outputs:
+      - project/docs/e2e-browser-report.md
+      - project/docs/screenshots/e2e/
+    prompt: |
+      Você é um engenheiro de qualidade responsável por validar a interface gráfica
+      do produto com dados reais usando Playwright + Chromium.
+
+      OBJETIVO: executar um fluxo E2E completo no browser, com seed dos dados do
+      test_data.md via API, e capturar screenshots de cada tela com dados visíveis.
+
+      PASSO 1 — Leia os dados de teste
+        - Leia project/docs/test_data.md para entender quais registros devem ser inseridos
+        - Esses dados são o "seed" oficial do ciclo — use-os exatamente
+
+      PASSO 2 — Suba o servidor e faça seed via API
+        - Inicie o servidor em background: `python main.py &` (ou uvicorn equivalente)
+        - Aguarde o /health retornar 200
+        - Insira os dados via API REST (curl ou httpx) seguindo o api_contract.md:
+            * Cadastre todos os clientes do test_data
+            * Cadastre todos os serviços do catálogo
+            * Cadastre todos os agendamentos
+            * Cadastre todas as cobranças
+        - Verifique que os dados foram inseridos com GET nos endpoints
+
+      PASSO 3 — Execute E2E com Playwright
+        Instale se necessário: `pip install playwright && playwright install chromium`
+
+        Para cada rota principal do sistema:
+          1. Abra http://localhost:5173 (ou porta do frontend)
+          2. Navegue para cada tela via URL ou clique no bottom nav
+          3. Aguarde os dados carregarem (wait_for_selector de algum item da lista)
+          4. Capture screenshot: `page.screenshot(path="project/docs/screenshots/e2e/<tela>.png")`
+          5. Valide que a tela NÃO está em empty state — deve mostrar dados reais
+
+        Rotas obrigatórias (use as rotas definidas no api_contract.md / ui_criteria.md):
+          - Tela inicial / dashboard
+          - Clientes (lista com pelo menos 1 cliente visível)
+          - Catálogo (lista com pelo menos 1 serviço visível)
+          - Agenda (lista com pelo menos 1 agendamento visível)
+          - Cobranças (lista com pelo menos 1 cobrança visível)
+
+      PASSO 4 — Gere o relatório
+        Crie project/docs/e2e-browser-report.md com:
+
+        ```markdown
+        # E2E Browser Report — <projeto>
+
+        **Data:** <data>
+        **Browser:** Chromium (Playwright)
+        **Seed:** <N> clientes, <N> serviços, <N> agendamentos, <N> cobranças
+
+        ## Resultados
+
+        | Tela | URL | Screenshot | Dados visíveis | Status |
+        |------|-----|-----------|----------------|--------|
+        | Dashboard | / | screenshots/e2e/index.png | Total pendente R$ X,XX | ✅ |
+        | Clientes | /clientes | screenshots/e2e/clientes.png | João Silva, Maria... | ✅ |
+        ...
+
+        ## Veredicto
+
+        PASS — todas as <N> telas validadas com dados reais
+        ```
+
+      REGRAS:
+        - Se o frontend não estiver rodando, suba com `npm run dev &` na pasta frontend/
+        - Não use dados fictícios: use exatamente os dados do test_data.md
+        - Cada screenshot deve mostrar dados reais (não empty state)
+        - Se uma tela falhar, registre FAIL no relatório e continue as demais
+        - Ao final diga DONE e liste os arquivos criados
+
+    validators:
+      - file_exists: project/docs/e2e-browser-report.md
+      - min_lines: 20
+      - has_sections:
+          - Resultados
+          - Veredicto
+    next: gate.e2e.browser
+
+  - id: gate.e2e.browser
+    type: gate
+    title: "Gate E2E Browser"
+    executor: python
+    sprint: sprint-07-e2e
+    validators:
+      - file_exists: project/docs/e2e-browser-report.md
+      - has_sections:
+          - Resultados
+          - Veredicto
     next: ft.feedback.01.retro_note
 
   # ================================================================

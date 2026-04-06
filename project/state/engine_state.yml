@@ -1,81 +1,26 @@
-process_id: fast_track_v2
-version: 0.7.0
-current_node: null
-node_status: done
-completed_nodes:
-- ft.mdd.01.hipotese
-- ft.mdd.02.prd
-- ft.mdd.03.validacao
-- ft.plan.01.task_list
-- ft.plan.02.tech_stack
-- ft.plan.03.diagrams
-- gate.planning
-- ft.tdd.02.red
-- ft.tdd.03.green
-- gate.tdd
-- ft.delivery.01.self_review
-- ft.delivery.02.refactor
-- gate.delivery
-- ft.smoke.01.cli_run
-- gate.smoke
-- ft.e2e.01.cli_validation
-- gate.e2e
-- ft.feedback.01.retro_note
-- ft.audit.01.forgebase
-- gate.audit
-- ft.handoff.01.specs
-- gate.mvp
-- ft.end
+process_id: test_process_v2
+version: 0.2.0
+llm_engine: claude
+active_llm_log: project/state/llm_logs/20260406-105554__step.01.hipotese__run.log
+last_llm_log: project/state/llm_logs/20260406-105554__step.01.hipotese__run.log
+current_node: step.01.hipotese
+node_status: delegated
+completed_nodes: []
 current_cycle: cycle-01
 current_sprint: null
 sprint_status: null
-gate_log:
-  ft.mdd.01.hipotese: PASS
-  ft.mdd.02.prd: PASS
-  ft.mdd.03.validacao: PASS
-  ft.plan.01.task_list: PASS
-  ft.plan.02.tech_stack: PASS
-  ft.plan.03.diagrams: PASS
-  gate.planning: PASS
-  ft.tdd.02.red: PASS
-  ft.tdd.03.green: PASS
-  gate.tdd: PASS
-  ft.delivery.01.self_review: PASS
-  ft.delivery.02.refactor: PASS
-  gate.delivery: PASS
-  ft.smoke.01.cli_run: PASS
-  gate.smoke: PASS
-  ft.e2e.01.cli_validation: PASS
-  gate.e2e: PASS
-  ft.feedback.01.retro_note: PASS
-  ft.audit.01.forgebase: PASS
-  gate.audit: PASS
-  ft.handoff.01.specs: PASS
-  gate.mvp: PASS
-  ft.end: PASS
-artifacts:
-  hipotese: project/docs/hipotese.md
-  PRD: project/docs/PRD.md
-  TASK_LIST: project/docs/TASK_LIST.md
-  tech_stack: project/docs/tech_stack.md
-  architecture: project/docs/diagrams/architecture.md
-  tests: tests/
-  src: src/
-  e2e: tests/e2e/
-  retro: project/docs/retro.md
-  forgebase-audit: project/docs/forgebase-audit.md
-  SPEC: project/docs/SPEC.md
-  CHANGELOG: CHANGELOG.md
+gate_log: {}
+artifacts: {}
 blocked_reason: null
 pending_approval: null
 metrics:
-  steps_completed: 23
-  steps_total: 22
+  steps_completed: 0
+  steps_total: 5
   tests_passing: 0
   coverage: 0
-  llm_calls: 18
+  llm_calls: 1
   tokens_used: 0
 _lock:
   owner: ft_engine
-  pid: 1575467
-  timestamp: '2026-04-01T22:22:27Z'
+  pid: 759516
+  timestamp: '2026-04-06T13:55:54Z'

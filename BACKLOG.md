@@ -84,6 +84,69 @@
 
 ---
 
+## Evolução Arquitetural — Fast Track V3
+
+### BL-12: Separação Base / Ambiente — Framework Architecture
+- **Problema**: O processo concreto (`FAST_TRACK_PROCESS_V2.yml`) vive no repo central junto com o engine. Customizações de domínio (ForgeBase Pulse, screenshot review, SymGateway) poluem o framework genérico. Qualquer pessoa que use o Fast Track herda regras que são específicas da Symlabs.
+- **Solução**: Separar em duas camadas:
+  - **Base (framework)**: engine Python (`ft/`), conceitos (gate, nó, cycle, validator), schema do YAML, CLI. Instalável via `pip install ft-engine`. Não contém nenhum processo concreto.
+  - **Ambiente (software house)**: processo YAML concreto, prompts, validators específicos, config de ambiente. Vive no repo do produto/ambiente, versionado com Git independente do framework.
+- **Entrega**: Engine carrega processo de `./process/` (relativo ao projeto) em vez de path hardcoded no repo central. O `FAST_TRACK_PROCESS_V2.yml` atual migra para template/exemplo.
+- **Status**: proposto
+- **Prioridade**: Alta
+
+### BL-13: Estrutura de Projeto — `process/`, `docs/`, `runs/`
+- **Problema**: Cada run (SM1, SM2...SM13) cria uma pasta isolada no mesmo nível, poluindo o diretório. Não há separação entre conhecimento que evolui (PRD, retro, processo) e artefatos descartáveis (código gerado, logs).
+- **Solução**: Estrutura padronizada por produto:
+  ```
+  service_mate/                  ← repo Git
+    process/
+      FAST_TRACK_PROCESS.yml     ← processo do domínio (evolui)
+      environment.yml            ← config do ambiente (SymGateway, portas, etc.)
+      scripts/                   ← hooks do ambiente
+    docs/
+      PRD.md                     ← evolui a cada run
+      plano_de_voo.md            ← handoff do último run
+      retro.md                   ← aprendizados acumulados
+    runs/                        ← .gitignore (descartável)
+      01/
+      02/
+  ```
+- **Entrega**: `ft init` cria essa estrutura. `ft run` cria subpasta em `runs/` automaticamente. `ft.prd.rewrite` e `ft.handoff` escrevem de volta em `docs/`.
+- **Status**: proposto
+- **Prioridade**: Alta
+
+### BL-14: Environment Hooks — Scripts executáveis por fase
+- **Problema**: O engine implementa integrações específicas (SymGateway, port-registry) em código Python. Cada novo ambiente exige mudanças no engine. Lógica de Bash/infra não pertence ao framework.
+- **Solução**: Sistema de hooks em `environment.yml`:
+  ```yaml
+  hooks:
+    on_init:
+      - ./scripts/register_gateway.sh
+      - ./scripts/setup_ports.sh
+    on_env_setup:
+      - ./scripts/provision_claude.sh
+    on_cycle_end:
+      - ./scripts/notify_telegram.sh
+    on_deliver:
+      - ./scripts/deploy_staging.sh
+  ```
+  O engine executa `subprocess.run(script, check=True)` no momento do hook. Se falhar, bloqueia como um gate. O engine não sabe o que o script faz.
+- **Entrega**: Hook runner no engine + `environment.yml` schema + momentos definidos (on_init, on_env_setup, on_node_start, on_node_end, on_gate_pass, on_gate_fail, on_cycle_end, on_deliver).
+- **Status**: proposto
+- **Prioridade**: Alta
+
+### BL-15: RunMode — `isolated` vs `continuous`
+- **Problema**: Hoje cada execução do processo é manual (criar pasta, copiar PRD, rodar `ft init`). O conceito de `CycleManager` existe no engine mas não é utilizado. Não há forma declarativa de escolher entre evoluir o mesmo código vs. começar do zero.
+- **Solução**: Dois modos configuráveis em `environment.yml`:
+  - **`isolated`** (padrão): cada `ft run` cria uma subpasta em `runs/N+1/`, gera código do zero a partir do PRD atual. Ao final, `ft.prd.rewrite` atualiza `docs/PRD.md`.
+  - **`continuous`**: `ft run` opera no mesmo diretório, o `CycleManager` avança `cycle-01 → cycle-02`. Git com tags por cycle. Código evolui incrementalmente.
+- **Entrega**: Flag `run_mode: isolated|continuous` em `environment.yml`. Engine adapta comportamento de `ft init`, `ft run` e `ft.end`.
+- **Status**: proposto
+- **Prioridade**: Média
+
+---
+
 ## Resumo
 
 | ID | Título | Prioridade | Status |
@@ -100,3 +163,7 @@
 | BL-09 | Eliminar git-dev.zip | Baixa | concluido |
 | BL-10 | Mover changelog | Baixa | concluido |
 | BL-11 | Anti-patterns doc | Baixa | concluido |
+| BL-12 | Separação Base / Ambiente | Alta | proposto |
+| BL-13 | Estrutura `process/`, `docs/`, `runs/` | Alta | proposto |
+| BL-14 | Environment Hooks | Alta | proposto |
+| BL-15 | RunMode isolated/continuous | Média | proposto |

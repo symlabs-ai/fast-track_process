@@ -291,6 +291,9 @@ def delegate_with_feedback(
     project_root: str = ".",
     allowed_paths: list[str] | None = None,
     llm_engine: str = "claude",
+    max_turns: int = 50,
+    log_path: str | None = None,
+    stream_prefix: str | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -307,4 +310,7 @@ Nao modifique o que ja esta funcionando."""
         project_root=project_root,
         allowed_paths=allowed_paths,
         llm_engine=llm_engine,
+        max_turns=max_turns,
+        log_path=log_path,
+        stream_prefix=stream_prefix,
     )

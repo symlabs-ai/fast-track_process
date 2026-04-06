@@ -4,6 +4,18 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.27] - 2026-04-06
+
+- feat(engine): BL-13 — estrutura de projeto V3 com `process/`, `docs/`, `runs/`
+- feat(cli): `ft init` cria `process/`, `docs/`, `runs/` e `runs/.gitignore` automaticamente
+- feat(cli): `ft run` cria subpasta `runs/<N>/` com state isolado por run
+- feat(engine): `find_project_root()` detecta raiz por `process/` (não mais `project/state/`)
+- feat(engine): state migrado de `project/state/` para `runs/<N>/state/` (descartável por run)
+- feat(engine): docs migrados de `project/docs/` para `docs/` (conhecimento que evolui)
+- feat(engine): fallback legado preservado para `project/state/` em projetos antigos
+
+---
+
 ## [Unreleased]
 
 - feat(engine): `ft-engine` agora permite escolher o executor LLM por comando com `--claude` ou `--codex`

@@ -142,7 +142,7 @@
   - **`isolated`** (padrão): cada `ft run` cria uma subpasta em `runs/N+1/`, gera código do zero a partir do PRD atual. Ao final, `ft.prd.rewrite` atualiza `docs/PRD.md`.
   - **`continuous`**: `ft run` opera no mesmo diretório, o `CycleManager` avança `cycle-01 → cycle-02`. Git com tags por cycle. Código evolui incrementalmente.
 - **Entrega**: Flag `run_mode: isolated|continuous` em `environment.yml`. Engine adapta comportamento de `ft init`, `ft run` e `ft.end`.
-- **Status**: proposto
+- **Status**: concluido
 - **Prioridade**: Média
 
 ---
@@ -166,4 +166,4 @@
 | BL-12 | Separação Base / Ambiente | Alta | concluido |
 | BL-13 | Estrutura `process/`, `docs/`, `runs/` | Alta | concluido |
 | BL-14 | Environment Hooks | Alta | concluido |
-| BL-15 | RunMode isolated/continuous | Média | proposto |
+| BL-15 | RunMode isolated/continuous | Média | concluido |

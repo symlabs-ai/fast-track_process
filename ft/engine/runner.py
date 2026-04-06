@@ -1033,8 +1033,16 @@ class StepRunner:
             self._gate_accept(node, validation)
             return
 
+        # Verificar se o erro é de configuração (não faz sentido delegar ao LLM)
+        _engine_errors = ("node sem outputs", "Validador desconhecido")
+        is_engine_error = any(
+            marker in (item.detail or "")
+            for item in validation.items if not item.passed
+            for marker in _engine_errors
+        )
+
         # Em modo mvp, tentar corrigir via LLM antes de bloquear
-        if self._auto_approve and self._max_gate_retries > 0:
+        if self._auto_approve and self._max_gate_retries > 0 and not is_engine_error:
             for attempt in range(1, self._max_gate_retries + 1):
                 print(ui.retry(attempt, self._max_gate_retries))
                 print(ui.info(f"Gate falhou — delegando correção ao LLM..."))
@@ -1075,6 +1083,8 @@ class StepRunner:
             # Esgotou retries
             print(ui.fail(f"Gate não corrigido após {self._max_gate_retries} tentativas"))
 
+        if is_engine_error:
+            print(ui.fail("Falha irreversível — erro de configuração do processo, não do código"))
         self.state_mgr.block(f"Gate falhou: {validation.feedback}")
         self.state_mgr.state.gate_log[node.id] = "BLOCK"
         self.state_mgr.save()

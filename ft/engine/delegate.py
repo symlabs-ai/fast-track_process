@@ -181,7 +181,7 @@ def delegate_to_llm(
     O LLM recebe um prompt restritivo: so pode escrever nos paths permitidos,
     nao pode editar ft_state.yml, nao pode tomar decisoes de processo.
     """
-    paths_str = ", ".join(allowed_paths) if allowed_paths else "src/, tests/, project/docs/"
+    paths_str = ", ".join(allowed_paths) if allowed_paths else "src/, tests/, docs/"
 
     prompt = f"""Voce e um executor de construcao. Sua unica tarefa:
 

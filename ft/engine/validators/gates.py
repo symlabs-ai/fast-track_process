@@ -18,6 +18,21 @@ from ft.engine.validators.artifacts import (
 )
 
 
+def _find_state_files(project_root: str) -> list[Path]:
+    """Retorna candidatos a engine_state.yml (run mais recente primeiro, depois legado)."""
+    root = Path(project_root)
+    candidates = []
+    runs_dir = root / "runs"
+    if runs_dir.is_dir():
+        for rd in sorted(
+            [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()],
+            reverse=True,
+        ):
+            candidates.append(rd / "state" / "engine_state.yml")
+    candidates.append(root / "project" / "state" / "engine_state.yml")
+    return candidates
+
+
 def gate_delivery(
     outputs: list[str],
     project_root: str = ".",
@@ -142,17 +157,17 @@ def gate_server_starts(
 
     # Verificar interface_type salvo nos artefatos
     if skip_if_interface:
-        itype_file = Path(project_root) / "project/docs/tech_stack.md"
+        itype_file = Path(project_root) / "docs/tech_stack.md"
         if itype_file.exists():
             content = itype_file.read_text().lower()
             if skip_if_interface.lower() in content:
                 return True, f"gate_server_starts: pulado (interface_type={skip_if_interface})"
-        # Também checar engine_state
-        state_file = Path(project_root) / "project/state/engine_state.yml"
-        if state_file.exists():
-            state_content = state_file.read_text()
-            if f"interface_type: {skip_if_interface}" in state_content:
-                return True, f"gate_server_starts: pulado (interface_type={skip_if_interface})"
+        # Também checar engine_state (procura no run mais recente ou legado)
+        for state_candidate in _find_state_files(project_root):
+            if state_candidate.exists():
+                state_content = state_candidate.read_text()
+                if f"interface_type: {skip_if_interface}" in state_content:
+                    return True, f"gate_server_starts: pulado (interface_type={skip_if_interface})"
 
     root = Path(project_root)
 
@@ -252,7 +267,7 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
 
     # Ler interface_type do tech_stack.md
     root = Path(project_root)
-    tech_stack = root / "project/docs/tech_stack.md"
+    tech_stack = root / "docs/tech_stack.md"
     interface_type = "unknown"
     if tech_stack.exists():
         import re
@@ -393,7 +408,7 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
 
     # ── Pitfall SM6-P5: prd_review REJECTED sem correção posterior ──────────────
     if interface_type in ("ui", "mixed"):
-        prd_review = root / "project/docs/frontend-prd-review.md"
+        prd_review = root / "docs/frontend-prd-review.md"
         if prd_review.exists():
             import re as _re
             review_content = prd_review.read_text()
@@ -421,13 +436,13 @@ def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
     """Gate de acceptance CLI — verifica que o relatório existe e não tem FAILs."""
     import re
 
-    tech_stack = Path(project_root) / "project/docs/tech_stack.md"
+    tech_stack = Path(project_root) / "docs/tech_stack.md"
     if tech_stack.exists():
         match = re.search(r"interface_type:\s*(\w+)", tech_stack.read_text())
         if match and match.group(1).lower() == "ui":
             return True, "gate_acceptance_cli: pulado (interface_type=ui)"
 
-    report = Path(project_root) / "project/docs/acceptance-cli-report.md"
+    report = Path(project_root) / "docs/acceptance-cli-report.md"
     if not report.exists():
         return False, "gate_acceptance_cli FAIL: acceptance-cli-report.md não encontrado"
 
@@ -514,7 +529,7 @@ def screenshot_review_passed(project_root: str = ".") -> tuple[bool, str]:
     """
     import re
 
-    report = Path(project_root) / "project/docs/screenshot-review.md"
+    report = Path(project_root) / "docs/screenshot-review.md"
     if not report.exists():
         return False, "screenshot_review_passed FAIL: screenshot-review.md não encontrado"
 

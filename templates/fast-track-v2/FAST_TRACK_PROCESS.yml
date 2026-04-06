@@ -25,10 +25,10 @@ nodes:
     executor: llm_coach
     sprint: sprint-01-mdd
     outputs:
-      - project/docs/hipotese.md
+      - docs/hipotese.md
     requires_approval: true
     validators:
-      - file_exists: project/docs/hipotese.md
+      - file_exists: docs/hipotese.md
       - min_lines: 10
       - has_sections:
           - Problema
@@ -41,13 +41,13 @@ nodes:
     executor: llm_coach
     sprint: sprint-01-mdd
     outputs:
-      - project/docs/PRD.md
+      - docs/PRD.md
     requires_approval: true
     prompt: |
       Você é o product coach responsável por redigir o PRD do produto.
 
-      Com base na hipótese disponível em project/docs/hipotese.md, produza o arquivo
-      project/docs/PRD.md com as seguintes seções obrigatórias:
+      Com base na hipótese disponível em docs/hipotese.md, produza o arquivo
+      docs/PRD.md com as seguintes seções obrigatórias:
 
       ## Hipotese
       (resumo da hipótese de produto)
@@ -70,7 +70,7 @@ nodes:
       IMPORTANTE: as user stories DEVEM usar o formato `### US-XX` (heading nível 3 com prefixo US-).
       Sem esse formato, a validação falhará.
     validators:
-      - file_exists: project/docs/PRD.md
+      - file_exists: docs/PRD.md
       - min_lines: 30
       - has_sections:
           - Hipotese
@@ -85,10 +85,10 @@ nodes:
     executor: python
     sprint: sprint-01-mdd
     outputs:
-      - project/docs/PRD.md
+      - docs/PRD.md
     validators:
-      - file_exists: project/docs/hipotese.md
-      - file_exists: project/docs/PRD.md
+      - file_exists: docs/hipotese.md
+      - file_exists: docs/PRD.md
       - min_lines: 30
     next: ft.plan.01.task_list
 
@@ -102,9 +102,9 @@ nodes:
     executor: llm_coach
     sprint: sprint-02-planning
     outputs:
-      - project/docs/TASK_LIST.md
+      - docs/TASK_LIST.md
     validators:
-      - file_exists: project/docs/TASK_LIST.md
+      - file_exists: docs/TASK_LIST.md
       - min_lines: 20
     next: ft.plan.02.tech_stack
 
@@ -114,7 +114,7 @@ nodes:
     executor: llm_coder
     sprint: sprint-02-planning
     outputs:
-      - project/docs/tech_stack.md
+      - docs/tech_stack.md
     requires_approval: true
     prompt: |
       Proponha o Tech Stack para o projeto com base no PRD e na hipotese.
@@ -132,10 +132,10 @@ nodes:
       consumindo APIs de terceiros). Quando houver backend proprio + frontend,
       use `mixed` obrigatoriamente, independentemente do que o PRD disser.
 
-      Produza o documento project/docs/tech_stack.md com todas as secoes usuais
+      Produza o documento docs/tech_stack.md com todas as secoes usuais
       (linguagem, frameworks, dependencias, deploy) mais a linha interface_type.
     validators:
-      - file_exists: project/docs/tech_stack.md
+      - file_exists: docs/tech_stack.md
       - min_lines: 10
       - has_sections:
           - interface_type
@@ -147,9 +147,9 @@ nodes:
     executor: llm_coder
     sprint: sprint-02-planning
     outputs:
-      - project/docs/diagrams/architecture.md
+      - docs/diagrams/architecture.md
     validators:
-      - file_exists: project/docs/diagrams/architecture.md
+      - file_exists: docs/diagrams/architecture.md
       - min_lines: 5
     next: ft.plan.04.test_data
 
@@ -159,16 +159,16 @@ nodes:
     executor: llm_coach
     sprint: sprint-02-planning
     outputs:
-      - project/docs/test_data.md
+      - docs/test_data.md
     prompt: |
       Com base nas User Stories do PRD, gere uma massa de dados de teste realista
       para validar a API e o frontend de ponta a ponta.
 
       Leia obrigatoriamente:
-        - project/docs/PRD.md         (user stories e entidades do domínio)
-        - project/docs/TASK_LIST.md   (funcionalidades a implementar)
+        - docs/PRD.md         (user stories e entidades do domínio)
+        - docs/TASK_LIST.md   (funcionalidades a implementar)
 
-      Produza project/docs/test_data.md com dados inventados mas realistas,
+      Produza docs/test_data.md com dados inventados mas realistas,
       cobrindo TODAS as entidades do domínio. Para cada entidade:
         - mínimo 3 registros
         - variação de estados (ex: cobrança pendente, vencida, paga)
@@ -182,7 +182,7 @@ nodes:
 
       Ao final diga DONE e liste as entidades e a quantidade de registros gerados.
     validators:
-      - file_exists: project/docs/test_data.md
+      - file_exists: docs/test_data.md
       - min_lines: 30
     next: ft.plan.05.api_contract
 
@@ -192,7 +192,7 @@ nodes:
     executor: llm_coach
     sprint: sprint-02-planning
     outputs:
-      - project/docs/api_contract.md
+      - docs/api_contract.md
     requires_approval: true
     prompt: |
       Defina o contrato de API do projeto ANTES de qualquer código ser escrito.
@@ -200,16 +200,16 @@ nodes:
       esses nomes de endpoint exatamente, sem desvios.
 
       Leia obrigatoriamente:
-        - project/docs/PRD.md         (entidades e user stories)
-        - project/docs/tech_stack.md  (interface_type e stack)
-        - project/docs/test_data.md   (entidades da massa de dados)
+        - docs/PRD.md         (entidades e user stories)
+        - docs/tech_stack.md  (interface_type e stack)
+        - docs/test_data.md   (entidades da massa de dados)
 
       SE interface_type for cli_only:
         Escreva um api_contract.md mínimo indicando que não há API HTTP
         e encerre com DONE.
 
       SE interface_type for api ou mixed:
-        Produza project/docs/api_contract.md com todos os endpoints HTTP.
+        Produza docs/api_contract.md com todos os endpoints HTTP.
 
         REGRAS OBRIGATÓRIAS:
         1. Escolha UM idioma para os paths (o mesmo do PRD) e use-o em TODOS
@@ -229,7 +229,7 @@ nodes:
 
         Ao final diga DONE e liste o total de endpoints definidos.
     validators:
-      - file_exists: project/docs/api_contract.md
+      - file_exists: docs/api_contract.md
       - min_lines: 20
     next: gate.planning
 
@@ -239,11 +239,11 @@ nodes:
     executor: python
     sprint: sprint-02-planning
     validators:
-      - file_exists: project/docs/TASK_LIST.md
-      - file_exists: project/docs/tech_stack.md
-      - file_exists: project/docs/diagrams/architecture.md
-      - file_exists: project/docs/test_data.md
-      - file_exists: project/docs/api_contract.md
+      - file_exists: docs/TASK_LIST.md
+      - file_exists: docs/tech_stack.md
+      - file_exists: docs/diagrams/architecture.md
+      - file_exists: docs/test_data.md
+      - file_exists: docs/api_contract.md
     next: ft.plan.05b.ui_criteria
 
   - id: ft.plan.05b.ui_criteria
@@ -252,14 +252,14 @@ nodes:
     executor: llm_coach
     sprint: sprint-02-planning
     outputs:
-      - project/docs/ui_criteria.md
+      - docs/ui_criteria.md
     requires_approval: true
     prompt: |
-      Gere o arquivo project/docs/ui_criteria.md para o projeto atual.
+      Gere o arquivo docs/ui_criteria.md para o projeto atual.
 
       PASSO 1 — Leia obrigatoriamente:
-        - project/docs/PRD.md          (especialmente a seção Contrato de Navegação UI)
-        - project/docs/tech_stack.md   (para verificar interface_type)
+        - docs/PRD.md          (especialmente a seção Contrato de Navegação UI)
+        - docs/tech_stack.md   (para verificar interface_type)
 
       PASSO 2 — Se interface_type for cli_only ou api:
         Crie um ui_criteria.md mínimo com o conteúdo abaixo e encerre com DONE:
@@ -267,7 +267,7 @@ nodes:
           interface_type: <valor> — sem frontend, critérios visuais não aplicáveis.
 
       PASSO 3 — Se interface_type for ui ou mixed:
-        Gere project/docs/ui_criteria.md com este formato exato:
+        Gere docs/ui_criteria.md com este formato exato:
 
           # UI Criteria — <nome do projeto>
 
@@ -289,7 +289,7 @@ nodes:
 
         Ao final diga DONE.
     validators:
-      - file_exists: project/docs/ui_criteria.md
+      - file_exists: docs/ui_criteria.md
       - min_lines: 5
     next: ft.plan.detect_interface
 
@@ -300,7 +300,7 @@ nodes:
     sprint: sprint-02-planning
     validators:
       - read_artifact:
-          path: project/docs/tech_stack.md
+          path: docs/tech_stack.md
           key: interface_type
           pattern: 'interface_type:\s*(\w+)'
     next: decision.interface_type
@@ -386,8 +386,8 @@ nodes:
       Implemente as telas e funcionalidades do frontend com base nas User Stories do PRD.
 
       Leia obrigatoriamente antes de implementar:
-        - project/docs/PRD.md            (user stories e contrato de navegação)
-        - project/docs/api_contract.md   (FONTE DE VERDADE dos endpoints — use EXATAMENTE esses paths)
+        - docs/PRD.md            (user stories e contrato de navegação)
+        - docs/api_contract.md   (FONTE DE VERDADE dos endpoints — use EXATAMENTE esses paths)
 
       Diretrizes:
       - Cada User Story que envolve interface deve ter ao menos uma tela/componente
@@ -428,14 +428,14 @@ nodes:
     executor: llm_coder
     sprint: sprint-03-frontend
     outputs:
-      - project/docs/frontend-prd-review.md
+      - docs/frontend-prd-review.md
     requires_approval: false
     prompt: |
       Voce e um arquiteto de software revisando se o frontend implementado esta em
       conformidade com o PRD do projeto. Sua tarefa e: APROVAR ou REJEITAR.
 
       PASSO 1 — Leia obrigatoriamente:
-        - project/docs/PRD.md  (todos os requisitos funcionais e de navegacao)
+        - docs/PRD.md  (todos os requisitos funcionais e de navegacao)
         - frontend/src/App.jsx  (rotas implementadas)
         - frontend/src/  (componentes relevantes de navegacao e layout)
 
@@ -455,7 +455,7 @@ nodes:
         - [x] item passou — breve justificativa com arquivo/linha
         - [ ] item falhou — descreva o que está ausente ou incorreto
 
-      PASSO 4 — Escreva o relatório em project/docs/frontend-prd-review.md:
+      PASSO 4 — Escreva o relatório em docs/frontend-prd-review.md:
 
         # Frontend PRD Review
 
@@ -477,7 +477,7 @@ nodes:
       Não invente requisitos. Se o PRD não especifica, marque N/A ou omita o item.
       Apenas responda APPROVED se todos os itens rastreáveis ao PRD passarem.
     validators:
-      - file_exists: project/docs/frontend-prd-review.md
+      - file_exists: docs/frontend-prd-review.md
       - min_lines: 10
     next: ft.frontend.04.screenshot_review
 
@@ -488,8 +488,8 @@ nodes:
     sprint: sprint-03-frontend
     max_turns: 100
     outputs:
-      - project/docs/screenshot-review.md
-      - project/docs/screenshots/
+      - docs/screenshot-review.md
+      - docs/screenshots/
       - frontend/src/
     requires_approval: true
     prompt: |
@@ -498,7 +498,7 @@ nodes:
 
       PASSO 1 — Preparação
         Leia:
-          - project/docs/ui_criteria.md   (critérios visuais do projeto)
+          - docs/ui_criteria.md   (critérios visuais do projeto)
           - frontend/src/App.jsx           (rotas definidas via <Route path=...>)
         Se ui_criteria.md não existir, use estes critérios mínimos:
           - C1: Rota carrega sem erro (sem tela branca, sem "Cannot GET")
@@ -520,7 +520,7 @@ nodes:
             * Abre a rota em http://localhost:4173<path> com Playwright
             * Viewport: 390×844 (mobile)
             * Aguarda 1s após load para renderização completa
-            * Salva em project/docs/screenshots/<slug>.png
+            * Salva em docs/screenshots/<slug>.png
               (slug = path sem leading slash; "/" → "index")
           - Confirme que o arquivo PNG foi criado
 
@@ -537,7 +537,7 @@ nodes:
           - Reavalie o critério
 
       PASSO 6 — Gere o relatório
-        Crie project/docs/screenshot-review.md com este formato:
+        Crie docs/screenshot-review.md com este formato:
 
           # Screenshot Review — <nome do projeto>
           Data: <hoje>
@@ -559,7 +559,7 @@ nodes:
         Veredicto: REJECTED e descreva o bloqueador.
         Encerre dizendo DONE.
     validators:
-      - file_exists: project/docs/screenshot-review.md
+      - file_exists: docs/screenshot-review.md
       - screenshot_review_passed: true
     next: ft.tdd.02.red
 
@@ -615,9 +615,9 @@ nodes:
       Crie o entry point HTTP do projeto: main.py na raiz.
 
       Leia obrigatoriamente:
-        - project/docs/tech_stack.md     (interface_type e stack)
-        - project/docs/api_contract.md   (FONTE DE VERDADE dos endpoints — implemente EXATAMENTE esses paths)
-        - project/docs/PRD.md            (seção 8.6 Contrato de Integração HTTP)
+        - docs/tech_stack.md     (interface_type e stack)
+        - docs/api_contract.md   (FONTE DE VERDADE dos endpoints — implemente EXATAMENTE esses paths)
+        - docs/PRD.md            (seção 8.6 Contrato de Integração HTTP)
         - src/                           (domínio existente para registrar os routers)
 
       SE interface_type for cli_only: escreva main.py mínimo com `if __name__ == '__main__': pass`
@@ -704,31 +704,31 @@ nodes:
     sprint: sprint-06-smoke
     max_turns: 80
     outputs:
-      - project/docs/acceptance-cli-report.md
+      - docs/acceptance-cli-report.md
     write_scope:
       - main.py
       - src/
       - tests/
-      - project/docs/
+      - docs/
     prompt: |
       Execute os testes de aceitação da API usando a massa de dados de teste.
       ESTE STEP É IMPLEMENTAÇÃO-FIRST: se a API falhar, corrija o backend e reexecute
       os testes no mesmo step. Não pare no primeiro FAIL.
 
       Leia obrigatoriamente:
-        - project/docs/test_data.md     (massa de dados para inserção)
-        - project/docs/tech_stack.md    (interface_type e stack)
-        - project/docs/api_contract.md  (FONTE DE VERDADE dos endpoints HTTP)
+        - docs/test_data.md     (massa de dados para inserção)
+        - docs/tech_stack.md    (interface_type e stack)
+        - docs/api_contract.md  (FONTE DE VERDADE dos endpoints HTTP)
         - main.py                       (entry point atual do servidor)
         - src/                          (domínio e routers existentes)
 
       SE interface_type for cli_only:
         Rode a CLI com os dados de test_data.md como argumentos, verificando
-        cada operação. Escreva project/docs/acceptance-cli-report.md com os
+        cada operação. Escreva docs/acceptance-cli-report.md com os
         resultados e encerre com DONE.
 
       SE interface_type for ui:
-        Escreva um relatório mínimo em project/docs/acceptance-cli-report.md dizendo
+        Escreva um relatório mínimo em docs/acceptance-cli-report.md dizendo
         que o acceptance de API foi pulado porque interface_type=ui e encerre com DONE.
 
       SE interface_type for api ou mixed:
@@ -782,7 +782,7 @@ nodes:
 
       Ao final diga DONE.
     validators:
-      - file_exists: project/docs/acceptance-cli-report.md
+      - file_exists: docs/acceptance-cli-report.md
       - min_lines: 20
     next: gate.acceptance.cli
 
@@ -801,9 +801,9 @@ nodes:
     executor: llm_coder
     sprint: sprint-06-smoke
     outputs:
-      - project/docs/smoke-report.md
+      - docs/smoke-report.md
     validators:
-      - file_exists: project/docs/smoke-report.md
+      - file_exists: docs/smoke-report.md
       - min_lines: 10
     next: gate.smoke
 
@@ -848,8 +848,8 @@ nodes:
     sprint: sprint-07-e2e
     max_turns: 60
     outputs:
-      - project/docs/e2e-browser-report.md
-      - project/docs/screenshots/e2e/
+      - docs/e2e-browser-report.md
+      - docs/screenshots/e2e/
     prompt: |
       Você é um engenheiro de qualidade responsável por validar a interface gráfica
       do produto com dados reais usando Playwright + Chromium.
@@ -858,7 +858,7 @@ nodes:
       test_data.md via API, e capturar screenshots de cada tela com dados visíveis.
 
       PASSO 1 — Leia os dados de teste
-        - Leia project/docs/test_data.md para entender quais registros devem ser inseridos
+        - Leia docs/test_data.md para entender quais registros devem ser inseridos
         - Esses dados são o "seed" oficial do ciclo — use-os exatamente
 
       PASSO 2 — Suba o servidor e faça seed via API
@@ -878,7 +878,7 @@ nodes:
           1. Abra http://localhost:5173 (ou porta do frontend)
           2. Navegue para cada tela via URL ou clique no bottom nav
           3. Aguarde os dados carregarem (wait_for_selector de algum item da lista)
-          4. Capture screenshot: `page.screenshot(path="project/docs/screenshots/e2e/<tela>.png")`
+          4. Capture screenshot: `page.screenshot(path="docs/screenshots/e2e/<tela>.png")`
           5. Valide que a tela NÃO está em empty state — deve mostrar dados reais
 
         Rotas obrigatórias (use as rotas definidas no api_contract.md / ui_criteria.md):
@@ -889,7 +889,7 @@ nodes:
           - Cobranças (lista com pelo menos 1 cobrança visível)
 
       PASSO 4 — Gere o relatório
-        Crie project/docs/e2e-browser-report.md com:
+        Crie docs/e2e-browser-report.md com:
 
         ```markdown
         # E2E Browser Report — <projeto>
@@ -919,7 +919,7 @@ nodes:
         - Ao final diga DONE e liste os arquivos criados
 
     validators:
-      - file_exists: project/docs/e2e-browser-report.md
+      - file_exists: docs/e2e-browser-report.md
       - min_lines: 20
       - has_sections:
           - Resultados
@@ -932,7 +932,7 @@ nodes:
     executor: python
     sprint: sprint-07-e2e
     validators:
-      - file_exists: project/docs/e2e-browser-report.md
+      - file_exists: docs/e2e-browser-report.md
       - has_sections:
           - Resultados
           - Veredicto
@@ -948,9 +948,9 @@ nodes:
     executor: llm_coach
     sprint: sprint-08-feedback
     outputs:
-      - project/docs/retro.md
+      - docs/retro.md
     validators:
-      - file_exists: project/docs/retro.md
+      - file_exists: docs/retro.md
       - min_lines: 50
       - has_sections:
           - Problemas Encontrados
@@ -970,12 +970,12 @@ nodes:
     sprint: sprint-09-audit
     max_turns: 80
     outputs:
-      - project/docs/forgebase-audit.md
+      - docs/forgebase-audit.md
     write_scope:
       - main.py
       - src/
       - tests/
-      - project/docs/
+      - docs/
     prompt: |
       ATENÇÃO: Este step exige IMPLEMENTAÇÃO de código, não apenas documentação.
       O gate seguinte vai rodar `gate_pulse_instrumented` no código — ele falha se
@@ -985,8 +985,8 @@ nodes:
       === PASSO 1: LEITURA OBRIGATÓRIA ===
 
       Leia antes de qualquer outra coisa:
-        - project/docs/tech_stack.md
-        - project/docs/PRD.md
+        - docs/tech_stack.md
+        - docs/PRD.md
         - src/ ou backend/ (código do servidor — leia o entry point completo)
         - frontend/src/ (se existir)
 
@@ -1043,7 +1043,7 @@ nodes:
 
       === PASSO 4: AUDITORIA GERAL ===
 
-      Documente em project/docs/forgebase-audit.md usando o template:
+      Documente em docs/forgebase-audit.md usando o template:
       1. ESTRUTURA: lint limpo, imports organizados, sem código morto
       2. TESTES: cobertura estimada, unitários e smoke presentes
       3. SEGURANÇA: sem secrets hardcodados, sem SQL injection, sem XSS
@@ -1059,7 +1059,7 @@ nodes:
 
       Se qualquer track ainda estiver AUSENTE, volte ao Passo 3.
     validators:
-      - file_exists: project/docs/forgebase-audit.md
+      - file_exists: docs/forgebase-audit.md
       - min_lines: 20
       - tests_pass: true
       - gate_pulse_instrumented: true
@@ -1071,7 +1071,7 @@ nodes:
     executor: python
     sprint: sprint-09-audit
     validators:
-      - file_exists: project/docs/forgebase-audit.md
+      - file_exists: docs/forgebase-audit.md
       - tests_pass: true
       - lint_clean: true
       - gate_pulse_instrumented: true
@@ -1087,20 +1087,20 @@ nodes:
     executor: llm_coach
     sprint: sprint-10-handoff
     outputs:
-      - project/docs/PRD.md
+      - docs/PRD.md
     requires_approval: true
     prompt: |
       Você é o product coach responsável por evoluir o PRD com base nos aprendizados
       do ciclo que acabou de ser concluído.
 
       LEIA obrigatoriamente antes de reescrever:
-        - project/docs/PRD.md              (versão atual — base para evolução)
-        - project/docs/retro.md            (problemas encontrados e gaps de detecção)
-        - project/docs/forgebase-audit.md  (auditoria técnica)
-        - project/docs/frontend-prd-review.md  (se existir — gaps de UI/navegação)
-        - project/docs/TASK_LIST.md        (o que foi e não foi implementado)
+        - docs/PRD.md              (versão atual — base para evolução)
+        - docs/retro.md            (problemas encontrados e gaps de detecção)
+        - docs/forgebase-audit.md  (auditoria técnica)
+        - docs/frontend-prd-review.md  (se existir — gaps de UI/navegação)
+        - docs/TASK_LIST.md        (o que foi e não foi implementado)
 
-      OBJETIVO: produzir uma versão evoluída de project/docs/PRD.md que:
+      OBJETIVO: produzir uma versão evoluída de docs/PRD.md que:
 
       1. MANTÉM toda a substância do PRD original (hipótese, user stories, modelo de negócio)
          - REGRA CRÍTICA: as seções `## Hipotese`, `## Visao` e `## User Stories`
@@ -1136,15 +1136,15 @@ nodes:
 
       Ao final diga DONE e liste o que foi alterado/adicionado.
     validators:
-      - file_exists: project/docs/PRD.md
+      - file_exists: docs/PRD.md
       - min_lines: 50
       - has_sections:
           - Hipotese
           - User Stories
           - interface_type
       - sections_unchanged:
-          path: project/docs/PRD.md
-          snapshot_path: project/state/prd_rewrite_baseline.md
+          path: docs/PRD.md
+          snapshot_path: prd_rewrite_baseline.md
           sections:
             - Hipotese
             - Visao
@@ -1157,10 +1157,10 @@ nodes:
     executor: llm_coach
     sprint: sprint-10-handoff
     outputs:
-      - project/docs/SPEC.md
+      - docs/SPEC.md
       - CHANGELOG.md
     validators:
-      - file_exists: project/docs/SPEC.md
+      - file_exists: docs/SPEC.md
       - file_exists: CHANGELOG.md
       - min_lines: 20
     next: ft.handoff.02.plano_voo
@@ -1171,7 +1171,7 @@ nodes:
     executor: llm_coach
     sprint: sprint-10-handoff
     outputs:
-      - project/docs/plano_de_voo.md
+      - docs/plano_de_voo.md
     prompt: |
       Você é o product coach responsável por encerrar este ciclo e preparar
       o contexto para o próximo. Seu produto é o plano_de_voo.md — ele será
@@ -1179,13 +1179,13 @@ nodes:
       antes de iniciar o próximo ciclo. Ele tem que ser suficiente.
 
       LEIA obrigatoriamente:
-        - project/docs/PRD.md                    (produto evoluído deste ciclo)
-        - project/docs/TASK_LIST.md              (o que foi vs. não foi implementado)
-        - project/docs/retro.md                  (problemas encontrados)
-        - project/docs/forgebase-audit.md        (auditoria técnica)
-        - project/docs/acceptance-cli-report.md  (resultados de integração API)
-        - project/docs/frontend-prd-review.md    (se existir — conformidade de UI)
-        - project/state/engine_state.yml         (gate_log — o que foi forçado)
+        - docs/PRD.md                    (produto evoluído deste ciclo)
+        - docs/TASK_LIST.md              (o que foi vs. não foi implementado)
+        - docs/retro.md                  (problemas encontrados)
+        - docs/forgebase-audit.md        (auditoria técnica)
+        - docs/acceptance-cli-report.md  (resultados de integração API)
+        - docs/frontend-prd-review.md    (se existir — conformidade de UI)
+        - engine_state.yml                        (gate_log — o que foi forçado)
 
       PASSO 1 — Determine o veredicto:
         RELEASE_CANDIDATE se TODOS estes critérios forem verdadeiros:
@@ -1195,7 +1195,7 @@ nodes:
           - Todos os testes unitários passando
         ITERATE em qualquer outro caso.
 
-      PASSO 2 — Produza project/docs/plano_de_voo.md com EXATAMENTE estas seções:
+      PASSO 2 — Produza docs/plano_de_voo.md com EXATAMENTE estas seções:
 
         # Plano de Voo — <Nome do Projeto> — Ciclo <N+1>
 
@@ -1222,8 +1222,8 @@ nodes:
         ## Comandos para iniciar o próximo ciclo
         ```bash
         mkdir -p <pasta_projeto_novo>/project/docs
-        cp project/docs/PRD.md <pasta_projeto_novo>/project/docs/PRD.md
-        cp project/docs/plano_de_voo.md <pasta_projeto_novo>/project/docs/plano_de_voo.md
+        cp docs/PRD.md <pasta_projeto_novo>/docs/PRD.md
+        cp docs/plano_de_voo.md <pasta_projeto_novo>/docs/plano_de_voo.md
         ft run <pasta_projeto_novo>
         ```
 
@@ -1233,7 +1233,7 @@ nodes:
 
       Ao final diga DONE.
     validators:
-      - file_exists: project/docs/plano_de_voo.md
+      - file_exists: docs/plano_de_voo.md
       - min_lines: 30
       - has_sections:
           - Veredicto
@@ -1247,9 +1247,9 @@ nodes:
     executor: python
     sprint: sprint-10-handoff
     validators:
-      - file_exists: project/docs/PRD.md
-      - file_exists: project/docs/TASK_LIST.md
-      - file_exists: project/docs/SPEC.md
+      - file_exists: docs/PRD.md
+      - file_exists: docs/TASK_LIST.md
+      - file_exists: docs/SPEC.md
       - file_exists: CHANGELOG.md
       - tests_pass: true
     next: gate.kb_review

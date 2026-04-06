@@ -28,10 +28,10 @@ class TestFileExists:
         assert "FAIL" in detail
 
     def test_nested_path(self, tmp_path):
-        d = tmp_path / "project" / "docs"
+        d = tmp_path / "docs"
         d.mkdir(parents=True)
         (d / "PRD.md").write_text("content")
-        passed, _ = file_exists("project/docs/PRD.md", str(tmp_path))
+        passed, _ = file_exists("docs/PRD.md", str(tmp_path))
         assert passed
 
 
@@ -102,8 +102,8 @@ class TestMinUserStories:
 
 class TestSectionsUnchanged:
     def test_passes_when_immutable_sections_are_identical(self, tmp_path):
-        current = tmp_path / "project" / "docs" / "PRD.md"
-        snapshot = tmp_path / "project" / "state" / "prd_rewrite_baseline.md"
+        current = tmp_path / "docs" / "PRD.md"
+        snapshot = tmp_path / "runs" / "01" / "state" / "prd_rewrite_baseline.md"
         current.parent.mkdir(parents=True)
         snapshot.parent.mkdir(parents=True)
 
@@ -118,8 +118,8 @@ class TestSectionsUnchanged:
         snapshot.write_text(baseline)
 
         passed, detail = sections_unchanged(
-            "project/docs/PRD.md",
-            "project/state/prd_rewrite_baseline.md",
+            "docs/PRD.md",
+            "runs/01/state/prd_rewrite_baseline.md",
             ["Hipotese", "Visao", "User Stories"],
             str(tmp_path),
         )
@@ -128,8 +128,8 @@ class TestSectionsUnchanged:
         assert "secoes preservadas" in detail
 
     def test_fails_when_vision_changes(self, tmp_path):
-        current = tmp_path / "project" / "docs" / "PRD.md"
-        snapshot = tmp_path / "project" / "state" / "prd_rewrite_baseline.md"
+        current = tmp_path / "docs" / "PRD.md"
+        snapshot = tmp_path / "runs" / "01" / "state" / "prd_rewrite_baseline.md"
         current.parent.mkdir(parents=True)
         snapshot.parent.mkdir(parents=True)
 
@@ -147,8 +147,8 @@ class TestSectionsUnchanged:
         )
 
         passed, detail = sections_unchanged(
-            "project/docs/PRD.md",
-            "project/state/prd_rewrite_baseline.md",
+            "docs/PRD.md",
+            "runs/01/state/prd_rewrite_baseline.md",
             ["Hipotese", "Visao", "User Stories"],
             str(tmp_path),
         )
@@ -184,7 +184,7 @@ class TestCheckIndependence:
 
 class TestGateAcceptanceCli:
     def test_skip_for_ui_projects(self, tmp_path):
-        docs = tmp_path / "project" / "docs"
+        docs = tmp_path / "docs"
         docs.mkdir(parents=True)
         (docs / "tech_stack.md").write_text("interface_type: ui\n")
 
@@ -194,7 +194,7 @@ class TestGateAcceptanceCli:
         assert "pulado" in detail
 
     def test_fail_without_report_for_api_projects(self, tmp_path):
-        docs = tmp_path / "project" / "docs"
+        docs = tmp_path / "docs"
         docs.mkdir(parents=True)
         (docs / "tech_stack.md").write_text("interface_type: api\n")
 
@@ -206,7 +206,7 @@ class TestGateAcceptanceCli:
 
 class TestGateKbReview:
     def test_ui_with_auxiliary_backend_and_no_http_dependency_passes(self, tmp_path):
-        docs = tmp_path / "project" / "docs"
+        docs = tmp_path / "docs"
         frontend_src = tmp_path / "frontend" / "src"
         src_dir = tmp_path / "src" / "pokemon"
 
@@ -236,7 +236,7 @@ class TestGateKbReview:
         assert "PASS" in detail
 
     def test_ui_with_frontend_http_dependency_and_backend_fails(self, tmp_path):
-        docs = tmp_path / "project" / "docs"
+        docs = tmp_path / "docs"
         frontend_src = tmp_path / "frontend" / "src"
         src_dir = tmp_path / "src" / "pokemon"
 

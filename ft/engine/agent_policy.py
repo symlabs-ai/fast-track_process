@@ -18,8 +18,8 @@ class AgentRole(Enum):
 
 
 _ALLOWED_PATHS: dict[AgentRole, list[str]] = {
-    AgentRole.FT_MANAGER: [".", "src", "tests", "project/docs", "ft"],
-    AgentRole.FT_COACH: ["project/docs"],
+    AgentRole.FT_MANAGER: [".", "src", "tests", "docs", "ft"],
+    AgentRole.FT_COACH: ["docs"],
     AgentRole.FT_GATEKEEPER: [],
     AgentRole.FT_ACCEPTANCE: ["tests"],
     AgentRole.FORGE_CODER: ["src", "tests"],

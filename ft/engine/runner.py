@@ -83,7 +83,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
 }
 
 
-def run_validators(node: Node, project_root: str) -> ValidationResult:
+def run_validators(node: Node, project_root: str, state_dir: str | None = None) -> ValidationResult:
     """Roda todos os validadores de um node. Retorna resultado agregado."""
     items = []
     extra_artifacts: dict[str, str] = {}
@@ -116,7 +116,15 @@ def run_validators(node: Node, project_root: str) -> ValidationResult:
                 else:
                     passed, detail = fn(project_root=project_root)
             elif isinstance(args, dict):
-                passed, detail = fn(**args, project_root=project_root)
+                # sections_unchanged: resolve snapshot_path relativo ao state_dir
+                if name == "sections_unchanged" and state_dir and "snapshot_path" in args:
+                    resolved_args = dict(args)
+                    resolved_args["snapshot_path"] = str(
+                        Path(state_dir) / args["snapshot_path"]
+                    )
+                    passed, detail = fn(**resolved_args, project_root=project_root)
+                else:
+                    passed, detail = fn(**args, project_root=project_root)
             # Validadores simples
             elif isinstance(args, bool) and args is True:
                 # Ex: tests_pass: true → tests_pass(project_root)
@@ -261,10 +269,10 @@ Produza o relatorio em: {outputs_str}
         return f"""Você é um agente de qualidade conduzindo uma retrospectiva honesta e técnica.
 
 LEIA obrigatoriamente antes de escrever:
-- project/docs/PRD.md
-- project/docs/TASK_LIST.md
-- project/docs/tech_stack.md
-- Todos os arquivos em project/docs/ (forgebase-audit.md, smoke-report.md, frontend-prd-review.md se existirem)
+- docs/PRD.md
+- docs/TASK_LIST.md
+- docs/tech_stack.md
+- Todos os arquivos em docs/ (forgebase-audit.md, smoke-report.md, frontend-prd-review.md se existirem)
 
 DADOS DO CICLO (injetados pelo motor):
 
@@ -507,7 +515,7 @@ class StepRunner:
         if allowed:
             return allowed
 
-        return ["src/", "tests/", "project/docs/"]
+        return ["src/", "tests/", "docs/"]
 
     def _start_llm_log(self, state: Any, node_id: str, phase: str) -> str:
         """Registra no estado o log ativo para a delegação corrente."""
@@ -533,6 +541,10 @@ class StepRunner:
                 specs.append(config)
         return specs
 
+    def _resolve_snapshot_path(self, snapshot_path: str) -> Path:
+        """Resolve snapshot_path relativo ao diretório de state (runs/<N>/state/)."""
+        return self.state_mgr.path.parent / snapshot_path
+
     def _prepare_validator_snapshots(self, node: Node) -> None:
         """Cria baselines determinísticos antes de steps que reescrevem artefatos."""
         for spec in self._validator_snapshot_specs(node):
@@ -542,7 +554,7 @@ class StepRunner:
                 continue
 
             source = Path(self.project_root) / source_path
-            snapshot = Path(self.project_root) / snapshot_path
+            snapshot = self._resolve_snapshot_path(snapshot_path)
             if snapshot.exists() or not source.exists():
                 continue
 
@@ -561,7 +573,7 @@ class StepRunner:
             snapshot_path = spec.get("snapshot_path")
             if not snapshot_path:
                 continue
-            snapshot = Path(self.project_root) / snapshot_path
+            snapshot = self._resolve_snapshot_path(snapshot_path)
             if snapshot.exists():
                 snapshot.unlink()
 
@@ -572,7 +584,7 @@ class StepRunner:
                 snapshot_path = spec.get("snapshot_path")
                 if not snapshot_path:
                     continue
-                snapshot = Path(self.project_root) / snapshot_path
+                snapshot = self._resolve_snapshot_path(snapshot_path)
                 if snapshot.exists():
                     snapshot.unlink()
 
@@ -847,7 +859,7 @@ class StepRunner:
                 (Path(self.project_root) / o).exists() for o in node.outputs
             )
             if all_exist:
-                validation = run_validators(node, self.project_root)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
                 if validation.passed:
                     print(f"  Artefato pré-existente detectado — pulando LLM")
                     self._log_event(
@@ -922,7 +934,7 @@ class StepRunner:
 
         # Validar
         print(f"  Validando...")
-        validation = run_validators(node, self.project_root)
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         self._print_validation(validation)
 
         if validation.passed:
@@ -959,7 +971,7 @@ class StepRunner:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
-                validation = run_validators(node, self.project_root)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
                 self._print_validation(validation)
 
                 if validation.passed:
@@ -981,7 +993,7 @@ class StepRunner:
     def _run_gate(self, node: Node):
         """Roda gate — validacao pura sem LLM."""
         print(f"  Rodando gate...")
-        validation = run_validators(node, self.project_root)
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         self._print_validation(validation)
 
         if validation.passed:
@@ -1046,7 +1058,7 @@ class StepRunner:
         allowed = self._resolve_allowed_paths(node)
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
-        early_check = run_validators(node, self.project_root)
+        early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         if early_check.passed:
             print(f"  Expert Review: artefatos já existem e validators OK — pulando LLM")
             for output_path in node.outputs:
@@ -1079,7 +1091,7 @@ class StepRunner:
         if not result.success:
             # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
             # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
-            pre_check = run_validators(node, self.project_root)
+            pre_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
             if pre_check.passed:
                 print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
@@ -1094,7 +1106,7 @@ class StepRunner:
             self.state_mgr.record_artifact(name, output_path)
 
         # Validar artefatos deterministicos
-        validation = run_validators(node, self.project_root)
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         self._print_validation(validation)
 
         if not validation.passed:
@@ -1115,7 +1127,7 @@ class StepRunner:
                 finally:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
-                validation = run_validators(node, self.project_root)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
                 self._print_validation(validation)
 
             if not validation.passed:
@@ -1214,7 +1226,7 @@ class StepRunner:
         # Validar e avançar todos os nodes do grupo
         for wt_result in results:
             node = self.graph.get_node(wt_result.node_id)
-            validation = run_validators(node, self.project_root)
+            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
             self._print_validation(validation)
             if validation.passed:
                 next_id = self.graph.resolve_next(node.id)
@@ -1307,7 +1319,7 @@ class StepRunner:
             state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
             if result.success:
-                validation = run_validators(node, self.project_root)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
                 self._print_validation(validation)
                 if validation.passed:
                     print(f"  AGUARDANDO APROVACAO — rode: ft approve")

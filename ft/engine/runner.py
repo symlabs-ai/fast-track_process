@@ -30,170 +30,6 @@ from ft.engine.stakeholder import (
 
 
 # ---------------------------------------------------------------------------
-# Environment provisioning
-# ---------------------------------------------------------------------------
-
-SYMGATEWAY_BASE = "https://symgateway.symlabs.ai"
-
-
-def _gateway_request(method: str, path: str, admin_key: str,
-                      payload: dict | None = None) -> dict | None:
-    """Faz uma requisição HTTP para o SymGateway com a admin key. Retorna JSON ou None."""
-    import urllib.request
-    import urllib.error
-    import json
-
-    url = f"{SYMGATEWAY_BASE}{path}"
-    data = json.dumps(payload).encode() if payload else None
-    req = urllib.request.Request(
-        url, data=data,
-        headers={
-            "Authorization": f"Bearer {admin_key}",
-            "Content-Type": "application/json",
-        },
-        method=method,
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
-
-
-def _register_gateway_project(admin_key: str, project_name: str,
-                               user_key: str | None = None) -> None:
-    """Registra o projeto no SymGateway e vincula a key do usuário.
-
-    Fluxo:
-      1. POST /projects           — cria projeto (idempotente via 409)
-      2. GET /api-keys            — resolve UUID da user_key pelo prefix
-      3. POST /projects/{id}/api-keys/link — vincula user_key ao projeto
-    """
-    import urllib.error
-    import json
-
-    # 1. Criar projeto
-    project_id = None
-    try:
-        resp = _gateway_request("POST", "/projects", admin_key, {
-            "name": project_name,
-            "slug": project_name,
-            "folder_name": project_name,
-        })
-        project_id = resp["id"]
-        print(f"  Gateway: projeto '{project_name}' registrado")
-    except urllib.error.HTTPError as e:
-        if e.code == 409:
-            print(f"  Gateway: projeto '{project_name}' já existe — ok")
-            # Buscar ID do projeto existente via GET /projects
-            try:
-                projects = _gateway_request("GET", "/projects", admin_key)
-                match = next((p for p in projects if p["folder_name"] == project_name), None)
-                if match:
-                    project_id = match["id"]
-            except Exception:
-                pass
-        elif e.code == 403:
-            raise PermissionError(
-                f"Gateway: key sem permissão para criar projetos (role admin necessária).\n"
-                f"  → Passe uma admin key com: ft run ... --admin-key <sk-sym_admin_...>"
-            )
-        else:
-            body = e.read().decode(errors="ignore")
-            print(f"  Gateway AVISO: registro falhou HTTP {e.code} — {body[:120]}")
-            return
-    except Exception as e:
-        print(f"  Gateway AVISO: não foi possível registrar projeto — {e}")
-        return
-
-    # 2 + 3. Vincular user_key ao projeto
-    if not user_key or not project_id:
-        return
-
-    try:
-        keys = _gateway_request("GET", "/api-keys", admin_key)
-        # Encontrar UUID da user_key pelo prefix (a key começa com o prefix)
-        # key_prefix in gateway has "sk-" prefix; user_key may omit it
-        key_uuid = next(
-            (k["id"] for k in keys
-             if user_key.startswith(k["key_prefix"])
-             or user_key.startswith(k["key_prefix"].removeprefix("sk-"))),
-            None,
-        )
-        if not key_uuid:
-            print(f"  Gateway AVISO: key do usuário não encontrada na listagem — link não feito")
-            return
-
-        _gateway_request("POST", f"/projects/{project_id}/api-keys/link",
-                         admin_key, {"api_key_id": key_uuid})
-        print(f"  Gateway: key do usuário vinculada ao projeto '{project_name}'")
-    except urllib.error.HTTPError as e:
-        if e.code == 409:
-            print(f"  Gateway: key já vinculada ao projeto — ok")
-        else:
-            body = e.read().decode(errors="ignore")
-            print(f"  Gateway AVISO: link da key falhou HTTP {e.code} — {body[:120]}")
-    except Exception as e:
-        print(f"  Gateway AVISO: não foi possível vincular key — {e}")
-
-
-def _read_gateway_md() -> dict[str, str]:
-    """Lê environment/gateway.md do ft-root e extrai campos **KEY**: value."""
-    import re
-    gateway_file = Path(__file__).resolve().parent.parent.parent / "environment" / "gateway.md"
-    if not gateway_file.exists():
-        return {}
-    fields: dict[str, str] = {}
-    for line in gateway_file.read_text().splitlines():
-        m = re.match(r"-\s+\*\*([^*]+)\*\*\s*:\s*(\S+)", line)
-        if m:
-            fields[m.group(1).strip()] = m.group(2).strip()
-    return fields
-
-
-def provision_environment(project_root: Path, base_url: str | None = None,
-                          key: str | None = None, admin_key: str | None = None) -> None:
-    """Cria CLAUDE.md e .claude/settings.local.json no project_root.
-
-    key       — key do usuário (LLMs); usada para montar ANTHROPIC_BASE_URL
-    admin_key — key admin para registrar projeto no Gateway (opcional;
-                lido automaticamente de environment/gateway.md se não fornecido)
-    """
-    import json
-
-    if key and not base_url:
-        base_url = f"{SYMGATEWAY_BASE}/u/{key}/p/anthropic-max"
-
-    project_name = project_root.name
-
-    # Admin key: parâmetro > gateway.md > fallback para user key
-    if not admin_key:
-        gw = _read_gateway_md()
-        admin_key = gw.get("GATEWAY_ADMIN_KEY")
-
-    reg_key = admin_key or key
-    if reg_key:
-        _register_gateway_project(reg_key, project_name, user_key=key)
-
-    # CLAUDE.md — garante gateway_project na primeira linha
-    claude_md = project_root / "CLAUDE.md"
-    if not claude_md.exists():
-        claude_md.write_text(f"gateway_project: {project_name}\n")
-        print(f"  Criado: CLAUDE.md (gateway_project: {project_name})")
-    else:
-        existing = claude_md.read_text()
-        if "gateway_project" not in existing:
-            claude_md.write_text(f"gateway_project: {project_name}\n{existing}")
-            print(f"  Atualizado: CLAUDE.md (gateway_project: {project_name})")
-
-    # .claude/settings.local.json
-    if base_url:
-        dot_claude = project_root / ".claude"
-        dot_claude.mkdir(exist_ok=True)
-        settings_file = dot_claude / "settings.local.json"
-        settings = {"env": {"ANTHROPIC_BASE_URL": base_url}}
-        settings_file.write_text(json.dumps(settings, indent=2) + "\n")
-        print(f"  Criado: .claude/settings.local.json (ANTHROPIC_BASE_URL configurado)")
-
-
-# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
@@ -508,8 +344,8 @@ class StepRunner:
         self.project_root = str(Path(project_root).resolve())
         self._llm_engine_override = llm_engine.lower().strip() if llm_engine else None
         self._auto_approve = False
-        # Raiz do repo fast-track — derivada do process_path (sobe 3 níveis)
-        self._ft_root = str(Path(process_path).resolve().parent.parent.parent)
+        # KB path: diretório com lições de runs anteriores (opcional)
+        self._kb_path = os.environ.get("FT_KB_PATH")
         # Nome do log derivado da pasta do projeto (ex: pokemon_log.md)
         self._log_filename = f"{Path(self.project_root).name}_log.md"
         # Tracking para log enriquecido
@@ -857,30 +693,6 @@ class StepRunner:
             "PASS",
             f"process={self.graph.meta.get('id', '?')} nodes={total} first={first.id}",
         )
-        self._check_environment()
-
-    def _check_environment(self):
-        """Lê environment/gateway.md e provisiona CLAUDE.md + .claude/settings.local.json no project_root."""
-        import re
-
-        gateway_file = Path(self._ft_root) / "environment" / "gateway.md"
-        if not gateway_file.exists():
-            self._log_event("ENV", "Ambiente", "SKIP", "gateway.md ausente — sem provisionamento")
-            return
-
-        content = gateway_file.read_text()
-        print(f"  Environment: gateway.md carregado")
-
-        # Extrair ANTHROPIC_BASE_URL do gateway.md
-        m = re.search(r"\*\*ANTHROPIC_BASE_URL\*\*\s*:\s*(\S+)", content)
-        base_url = m.group(1) if m else None
-
-        provision_environment(
-            project_root=Path(self.project_root),
-            base_url=base_url,
-        )
-        gateway_host = base_url.split("/")[2] if base_url else "none"
-        self._log_event("ENV", "Ambiente", "PASS", f"gateway={gateway_host} CLAUDE.md provisionado")
 
     def run(self, mode: str = "step"):
         """
@@ -1068,7 +880,7 @@ class StepRunner:
         # KB-mode: injetar lições de runs anteriores em nodes de build, refactor e retro
         if node.type in ("build", "refactor", "retro"):
             itype = state_dict.get("artifacts", {}).get("interface_type") or state_dict.get("interface_type")
-            lessons = scan_kb_lessons(self._ft_root, interface_type=itype)
+            lessons = scan_kb_lessons(self._kb_path, interface_type=itype) if self._kb_path else []
             if lessons:
                 task_prompt = kb_lessons_prompt(lessons, task_prompt)
                 print(f"  KB-mode: lições de runs anteriores injetadas")

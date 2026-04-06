@@ -232,10 +232,13 @@ def gate_server_starts(
         return False, f"gate_server_starts FAIL: erro ao iniciar servidor — {exc}"
 
 
-def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
+def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple[bool, str]:
     """
     Gate final de liberação — verifica que o projeto não repete pitfalls
     documentados na KB de runs anteriores.
+
+    kb_path: diretório com avaliações KB (env var FT_KB_PATH como fallback).
+             Se ausente, executa os pitfall checks sem KB.
 
     Checks derivados das avaliações:
       SM4:    interface_type=ui/mixed → frontend deve existir (package.json + index.html)
@@ -245,8 +248,7 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
       SM6-P4: frontend sem BrowserRouter/Route path → deep links quebrados
       SM6-P5: frontend-prd-review.md com REJECTED → nav contract não validado
     """
-    # Derivar ft_root a partir de gates.py: ft/engine/validators/gates.py → 4 níveis acima
-    ft_root = Path(__file__).resolve().parent.parent.parent.parent
+    import os
 
     # Ler interface_type do tech_stack.md
     root = Path(project_root)
@@ -258,8 +260,12 @@ def gate_kb_review(project_root: str = ".") -> tuple[bool, str]:
         if m:
             interface_type = m.group(1).lower()
 
-    # Verificar KB disponível
-    kb_dir = ft_root / "kb"
+    # Verificar KB disponível — usa param, env var ou fallback para engine repo
+    resolved_kb = kb_path or os.environ.get("FT_KB_PATH")
+    if resolved_kb:
+        kb_dir = Path(resolved_kb)
+    else:
+        kb_dir = Path(__file__).resolve().parent.parent.parent.parent / "kb"
     kb_entries = sorted(kb_dir.glob("avaliacao_e2e_*.md")) if kb_dir.exists() else []
     kb_count = len(kb_entries)
 

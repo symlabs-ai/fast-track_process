@@ -8,7 +8,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from ft.engine.runner import StepRunner, provision_environment
+from ft.engine.runner import StepRunner
+from ft.integrations.symgateway import provision_environment
 
 
 def add_llm_engine_flags(parser):
@@ -25,6 +26,41 @@ def resolve_llm_engine(args) -> str | None:
     return None
 
 
+def engine_root() -> Path:
+    """Raiz do repositório do engine (onde templates/ e kb/ vivem)."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def copy_template(template_name: str, project_root: Path) -> Path:
+    """Copia um template de processo para o projeto.
+
+    Retorna o path do YAML copiado.
+    """
+    import shutil
+
+    src_dir = engine_root() / "templates" / template_name
+    if not src_dir.is_dir():
+        available = [d.name for d in (engine_root() / "templates").iterdir() if d.is_dir()] if (engine_root() / "templates").is_dir() else []
+        print(f"ERRO: template '{template_name}' não encontrado.")
+        if available:
+            print(f"  Templates disponíveis: {', '.join(available)}")
+        sys.exit(1)
+
+    # Encontrar o YAML no template
+    yamls = list(src_dir.glob("*.yml"))
+    if not yamls:
+        print(f"ERRO: template '{template_name}' não contém nenhum arquivo .yml")
+        sys.exit(1)
+
+    dest_dir = project_root / "process"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = dest_dir / "FAST_TRACK_PROCESS.yml"
+    shutil.copy(yamls[0], dest)
+    print(f"  Template '{template_name}' copiado para process/FAST_TRACK_PROCESS.yml")
+    return dest
+
+
 def find_project_root() -> Path:
     """Encontra a raiz do projeto subindo ate achar project/state/."""
     current = Path.cwd()
@@ -35,29 +71,41 @@ def find_project_root() -> Path:
 
 
 def find_process_yaml(root: Path) -> Path | None:
-    """Encontra o YAML do processo.
+    """Encontra o YAML do processo no diretório do projeto.
 
-    Prioridade:
-      1. Processo de teste local (desenvolvimento do engine)
-      2. FAST_TRACK_PROCESS_V2.yml no fast-track repo (via __file__) — fonte canônica
-      3. YAML legado dentro do project_root (compatibilidade)
+    Prioridade (projeto-primeiro):
+      1. {root}/process/FAST_TRACK_PROCESS.yml (padrão V3)
+      2. {root}/process/*.yml (qualquer YAML solto em process/)
+      3. {root}/process/fast_track/FAST_TRACK_PROCESS_V2.yml (legacy)
     """
-    # 1. Processos de teste locais (desenvolvimento do engine)
-    for name in ("test_process_v2.yml", "test_process.yml"):
-        p = root / "process" / name
-        if p.exists():
-            return p
-
-    # 2. Fonte canônica: fast-track repo derivado da localização deste arquivo
-    ft_root = Path(__file__).resolve().parent.parent.parent
-    canonical = ft_root / "process" / "fast_track" / "FAST_TRACK_PROCESS_V2.yml"
+    # 1. Nome canônico em process/
+    canonical = root / "process" / "FAST_TRACK_PROCESS.yml"
     if canonical.exists():
         return canonical
 
-    # 3. Fallback legado: YAML dentro do project_root
+    # 2. Qualquer YAML em process/ (scan)
+    process_dir = root / "process"
+    if process_dir.is_dir():
+        yamls = sorted(process_dir.glob("*.yml"))
+        if len(yamls) == 1:
+            return yamls[0]
+        if len(yamls) > 1:
+            # Preferir o que tem "FAST_TRACK" no nome
+            for y in yamls:
+                if "FAST_TRACK" in y.name.upper():
+                    return y
+            return yamls[0]
+
+    # 3. Legacy: process/fast_track/ subdir
     for name in ("FAST_TRACK_PROCESS_V2.yml", "FAST_TRACK_PROCESS.yml"):
         p = root / "process" / "fast_track" / name
         if p.exists():
+            import warnings
+            warnings.warn(
+                f"Processo encontrado em path legado: {p.relative_to(root)}. "
+                f"Mova para process/FAST_TRACK_PROCESS.yml",
+                DeprecationWarning, stacklevel=2,
+            )
             return p
 
     return None
@@ -72,7 +120,9 @@ def get_runner(process: str | None = None, llm_engine: str | None = None) -> Ste
     else:
         process_path = find_process_yaml(root)
         if not process_path:
-            print("ERRO: Nenhum YAML de processo encontrado.")
+            print("ERRO: Nenhum YAML de processo encontrado em ./process/")
+            print("  Use: ft init --template fast-track-v2")
+            print("  Ou:  ft run . --template fast-track-v2")
             sys.exit(1)
 
     return StepRunner(
@@ -84,6 +134,13 @@ def get_runner(process: str | None = None, llm_engine: str | None = None) -> Ste
 
 
 def cmd_init(args):
+    # Copiar template se fornecido e processo não existe
+    template = getattr(args, "template", None)
+    if template:
+        root = find_project_root()
+        if not find_process_yaml(root):
+            copy_template(template, root)
+
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     # Limpar estado anterior se existir
     if runner.state_mgr.path.exists():
@@ -128,6 +185,37 @@ def cmd_reject(args):
 def cmd_graph(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
     runner.status(full=True)
+
+
+def cmd_validate(args):
+    """Valida o YAML do processo."""
+    from ft.engine.graph import load_graph
+    from ft.engine.process_validator import validate_process, format_report
+    from ft.engine.runner import VALIDATOR_REGISTRY
+
+    root = find_project_root()
+
+    if args.process:
+        process_path = Path(args.process)
+    else:
+        process_path = find_process_yaml(root)
+        if not process_path:
+            print("ERRO: Nenhum YAML de processo encontrado em ./process/")
+            sys.exit(1)
+
+    print(f"\nValidando {process_path.relative_to(root) if process_path.is_relative_to(root) else process_path}...\n")
+
+    try:
+        graph = load_graph(process_path)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"  \u274c Erro ao carregar YAML: {e}")
+        sys.exit(1)
+
+    report = validate_process(graph, VALIDATOR_REGISTRY)
+    total = len(graph.nodes)
+    print(format_report(report, total))
+
+    sys.exit(0 if report.passed else 1)
 
 
 def cmd_setup_env(args):
@@ -213,12 +301,16 @@ def cmd_run(args):
     if args.process:
         process_path = Path(args.process)
     else:
-        # Default: FAST_TRACK_PROCESS_V2.yml relativo ao repo fast-track
-        ft_root = Path(__file__).resolve().parent.parent.parent
-        process_path = ft_root / "process" / "fast_track" / "FAST_TRACK_PROCESS_V2.yml"
-        if not process_path.exists():
-            print(f"ERRO: processo padrão não encontrado em {process_path}")
-            sys.exit(1)
+        process_path = find_process_yaml(project_root)
+        if not process_path:
+            # Tentar copiar template se --template fornecido
+            template = getattr(args, "template", None)
+            if template:
+                process_path = copy_template(template, project_root)
+            else:
+                print("ERRO: Nenhum YAML de processo encontrado em ./process/")
+                print("  Use: ft run . --template fast-track-v2")
+                sys.exit(1)
 
     state_path = project_root / "project" / "state" / "engine_state.yml"
     llm_engine = resolve_llm_engine(args)
@@ -280,6 +372,7 @@ def main():
     # init
     init = sub.add_parser("init", help="Inicializar/resetar estado do processo")
     add_llm_engine_flags(init)
+    init.add_argument("--template", "-t", help="Template de processo a copiar (ex: fast-track-v2)")
 
     # continue
     cont = sub.add_parser("continue", help="Avancar no processo")
@@ -308,6 +401,9 @@ def main():
     graph = sub.add_parser("graph", help="Mostrar grafo com status")
     add_llm_engine_flags(graph)
 
+    # validate
+    sub.add_parser("validate", help="Validar YAML do processo")
+
     # setup-env
     se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json")
     se.add_argument("key", help="API key do SymGateway (sk-sym_...)")
@@ -325,6 +421,8 @@ def main():
                     help="API key admin do SymGateway para registrar o projeto (se --key não tiver role admin)")
     ru.add_argument("--hipotese", metavar="FILE",
                     help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)")
+    ru.add_argument("--template", "-t",
+                    help="Template de processo a copiar (ex: fast-track-v2)")
 
     args = parser.parse_args()
 
@@ -340,6 +438,8 @@ def main():
         cmd_reject(args)
     elif args.command == "graph":
         cmd_graph(args)
+    elif args.command == "validate":
+        cmd_validate(args)
     elif args.command == "setup-env":
         cmd_setup_env(args)
     elif args.command == "run":

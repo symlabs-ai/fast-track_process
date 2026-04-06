@@ -1043,17 +1043,29 @@ class StepRunner:
 
         # Em modo mvp, tentar corrigir via LLM antes de bloquear
         if self._auto_approve and self._max_gate_retries > 0 and not is_engine_error:
+            previous_errors: list[str] = []
             for attempt in range(1, self._max_gate_retries + 1):
                 print(ui.retry(attempt, self._max_gate_retries))
                 print(ui.info(f"Gate falhou — delegando correção ao LLM..."))
 
                 state = self.state_mgr.state
                 feedback = validation.feedback or "gate falhou"
+                previous_errors.append(feedback)
+
+                history_block = ""
+                if attempt > 1:
+                    history_block = (
+                        "\n\nTENTATIVAS ANTERIORES QUE NÃO RESOLVERAM:\n"
+                        + "\n".join(f"  - Tentativa {i+1}: {e}" for i, e in enumerate(previous_errors[:-1]))
+                        + "\n\nNÃO repita a mesma abordagem. Tente algo diferente.\n"
+                    )
+
                 fix_prompt = (
                     f"O gate '{node.title}' ({node.id}) falhou com o seguinte erro:\n\n"
                     f"{feedback}\n\n"
                     f"Corrija o problema para que o gate passe. "
-                    f"Analise o erro, identifique a causa raiz e faça as alterações necessárias.\n"
+                    f"Analise o erro, identifique a causa raiz e faça as alterações necessárias."
+                    f"{history_block}\n"
                     f"Quando terminar, diga DONE."
                 )
 
@@ -1085,6 +1097,7 @@ class StepRunner:
 
         if is_engine_error:
             print(ui.fail("Falha irreversível — erro de configuração do processo, não do código"))
+            print(ui.warn("Corrija o YAML do processo e rode: ft continue --mvp"))
         self.state_mgr.block(f"Gate falhou: {validation.feedback}")
         self.state_mgr.state.gate_log[node.id] = "BLOCK"
         self.state_mgr.save()

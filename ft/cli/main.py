@@ -112,7 +112,12 @@ def find_process_yaml(root: Path) -> Path | None:
 
 
 def _find_latest_state(root: Path) -> Path:
-    """Encontra o state mais recente em runs/ ou fallback para project/state/ (legado)."""
+    """Encontra o state mais recente. Prioridade: continuous > runs/ > legacy."""
+    # 1. Continuous mode: state/ na raiz do projeto
+    continuous = root / "state" / "engine_state.yml"
+    if continuous.exists():
+        return continuous
+    # 2. Isolated mode: runs/<N>/state/
     runs_dir = root / "runs"
     if runs_dir.is_dir():
         run_dirs = sorted(
@@ -123,7 +128,7 @@ def _find_latest_state(root: Path) -> Path:
             state = rd / "state" / "engine_state.yml"
             if state.exists():
                 return state
-    # Fallback legado
+    # 3. Fallback legado
     legacy = root / "project" / "state" / "engine_state.yml"
     if legacy.exists():
         return legacy
@@ -337,15 +342,33 @@ Ao final diga DONE."""
         print(f"  AVISO: hipotese.md ainda fora do formato após correção — o processo vai solicitar reescrita")
 
 
+def _resolve_run_mode(project_root: Path) -> str:
+    """Lê run_mode de environment.yml. Default: isolated."""
+    from ft.engine.hooks import load_environment
+    env = load_environment(str(project_root))
+    return env.get("run_mode", "isolated")
+
+
 def cmd_run(args):
     """Bootstrap completo: cria projeto, provisiona ambiente, inicia e roda até MVP."""
     project_root = Path(args.project).resolve()
-
-    # Criar estrutura V3: docs/, runs/<N>/
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
-    _ensure_runs_gitignore(project_root)
-    run_dir = _next_run_dir(project_root)
-    (run_dir / "state").mkdir(parents=True, exist_ok=True)
+
+    run_mode = _resolve_run_mode(project_root)
+
+    if run_mode == "continuous":
+        # Continuous: state no diretório do projeto, cycle manager avança ciclos
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path = state_dir / "engine_state.yml"
+        print(f"  RunMode: continuous")
+    else:
+        # Isolated (default): cada run em runs/<N>/
+        _ensure_runs_gitignore(project_root)
+        run_dir = _next_run_dir(project_root)
+        (run_dir / "state").mkdir(parents=True, exist_ok=True)
+        state_path = run_dir / "state" / "engine_state.yml"
+        print(f"  RunMode: isolated → {run_dir.relative_to(project_root)}")
 
     # Resolver YAML do processo
     if args.process:
@@ -362,7 +385,6 @@ def cmd_run(args):
                 print("  Use: ft run . --template fast-track-v2")
                 sys.exit(1)
 
-    state_path = run_dir / "state" / "engine_state.yml"
     llm_engine = resolve_llm_engine(args)
 
     runner = StepRunner(
@@ -411,7 +433,16 @@ def cmd_run(args):
         _normalize_hipotese(dst, project_root, llm_engine=llm_engine or "claude")
 
     # Init + run MVP
-    runner.init_state()
+    if run_mode == "continuous" and state_path.exists():
+        # Continuous mode with existing state: advance cycle
+        from ft.engine.cycle_manager import CycleManager
+        cm = CycleManager(state_path)
+        first = runner.graph.first_node()
+        cm.advance_cycle(first_node=first.id)
+        print(f"  Ciclo avançado: {cm.current_cycle()}")
+        runner._fire_hooks("on_cycle_end")
+    else:
+        runner.init_state()
     runner.run(mode="mvp")
 
 

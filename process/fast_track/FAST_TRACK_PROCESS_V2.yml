@@ -148,9 +148,35 @@ nodes:
     sprint: sprint-02-planning
     outputs:
       - docs/diagrams/architecture.md
+    prompt: |
+      Gere diagramas técnicos da arquitetura do projeto.
+
+      Leia obrigatoriamente:
+        - docs/PRD.md
+        - docs/TASK_LIST.md
+        - docs/tech_stack.md
+
+      FORMATO OBRIGATÓRIO:
+        - Todos os diagramas devem usar sintaxe Mermaid dentro de blocos ```mermaid
+        - NUNCA use ASCII art, box-drawing characters ou diagramas de texto livre
+        - Cada diagrama deve estar em um bloco de código Mermaid válido
+
+      Produza docs/diagrams/architecture.md com no mínimo:
+        1. Diagrama de componentes (graph TD ou flowchart)
+        2. Diagrama de fluxo de dados entre frontend, backend e storage
+        3. Diagrama de sequência do fluxo principal (sequenceDiagram)
+
+      Exemplo de formato esperado:
+
+      ## Componentes
+      ```mermaid
+      graph TD
+        A[Frontend] --> B[API]
+        B --> C[Database]
+      ```
     validators:
       - file_exists: docs/diagrams/architecture.md
-      - min_lines: 5
+      - min_lines: 10
     next: ft.plan.04.test_data
 
   - id: ft.plan.04.test_data

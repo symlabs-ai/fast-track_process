@@ -158,7 +158,7 @@ def _ensure_runs_gitignore(project_root: Path) -> None:
         gitignore.write_text("*\n!.gitignore\n")
 
 
-def get_runner(process: str | None = None, llm_engine: str | None = None) -> StepRunner:
+def get_runner(process: str | None = None, llm_engine: str | None = None, verbose: bool = False) -> StepRunner:
     root = find_project_root()
     state_path = _find_latest_state(root)
 
@@ -177,6 +177,7 @@ def get_runner(process: str | None = None, llm_engine: str | None = None) -> Ste
         state_path=state_path,
         project_root=root,
         llm_engine=llm_engine,
+        verbose=verbose,
     )
 
 
@@ -193,7 +194,7 @@ def cmd_init(args):
     (root / "docs").mkdir(exist_ok=True)
     _ensure_runs_gitignore(root)
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
     # Limpar estado anterior se existir
     if runner.state_mgr.path.exists():
         runner.state_mgr.path.unlink()
@@ -205,7 +206,7 @@ def cmd_init(args):
 
 
 def cmd_continue(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
 
     # Inicializar estado se nao existe
     state = runner.state_mgr.load()
@@ -217,12 +218,12 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
     runner.status(full=args.full)
 
 
 def cmd_approve(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
     runner.approve()
     # Continuar automaticamente apos aprovacao
     if not args.no_continue:
@@ -230,12 +231,12 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
     runner.reject(args.reason, retry=not args.no_retry)
 
 
 def cmd_graph(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
     runner.status(full=True)
 
 
@@ -392,6 +393,7 @@ def cmd_run(args):
         state_path=state_path,
         project_root=project_root,
         llm_engine=llm_engine,
+        verbose=getattr(args, "verbose", False),
     )
 
     # Provisionar ambiente antes do init
@@ -452,6 +454,8 @@ def main():
         description="ft engine — motor deterministico de processos"
     )
     parser.add_argument("--process", "-p", help="Path do YAML de processo")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Modo verboso: mostra output do LLM no terminal")
     sub = parser.add_subparsers(dest="command")
 
     # init

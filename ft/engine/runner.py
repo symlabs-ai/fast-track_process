@@ -347,12 +347,14 @@ class StepRunner:
         state_path: str | Path,
         project_root: str | Path = ".",
         llm_engine: str | None = None,
+        verbose: bool = False,
     ):
         self.graph = load_graph(process_path)
         self.state_mgr = StateManager(state_path)
         self.project_root = str(Path(project_root).resolve())
         self._llm_engine_override = llm_engine.lower().strip() if llm_engine else None
         self._auto_approve = False
+        self._verbose = verbose
         # KB path: diretório com lições de runs anteriores (opcional)
         self._kb_path = os.environ.get("FT_KB_PATH")
         # Nome do log derivado da pasta do projeto (ex: pokemon_log.md)
@@ -362,6 +364,13 @@ class StepRunner:
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
+
+    def _stream_prefix(self, engine: str | None = None) -> str | None:
+        """Retorna stream_prefix se verbose, None caso contrário."""
+        if not self._verbose:
+            return None
+        label = engine or self._resolve_llm_engine()
+        return f"{label}>"
 
     def _resolve_llm_engine(self, state: Any | None = None) -> str:
         """Resolve o executor LLM efetivo para esta run."""
@@ -770,10 +779,12 @@ class StepRunner:
                 self._generate_sprint_report(start_sprint, state)
                 break
 
+            step_num = len(state.completed_nodes) + 1
+            step_total = state.metrics.get("steps_total", "?")
             print(f"\n{'─'*50}")
-            print(f"  [{node_id}] {node.title}")
+            print(f"  [{step_num}/{step_total}] {node.title}")
             sprint_label = f" | Sprint: {node.sprint}" if node.sprint else ""
-            print(f"  Tipo: {node.type} | Executor: {node.executor}{sprint_label}")
+            print(f"  Node: {node_id} | Tipo: {node.type} | Executor: {node.executor}{sprint_label}")
             print(f"{'─'*50}")
 
             self._mark_node_start(node_id)
@@ -875,7 +886,7 @@ class StepRunner:
             if all_exist:
                 validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
                 if validation.passed:
-                    print(f"  Artefato pré-existente detectado — pulando LLM")
+                    print(f"  Artefato já existe e é válido — pulando etapa")
                     self._log_event(
                         f"SEED:{node.id}",
                         f"Artefato pré-existente: {node.title}",
@@ -926,7 +937,7 @@ class StepRunner:
             allowed_paths=allowed,
             llm_engine=self._resolve_llm_engine(state),
             log_path=log_path,
-            stream_prefix=f"{self._resolve_llm_engine(state)}>",
+            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
         )
         if node.max_turns is not None:
             delegate_kwargs["max_turns"] = node.max_turns
@@ -979,7 +990,7 @@ class StepRunner:
                         allowed_paths=allowed,
                         llm_engine=self._resolve_llm_engine(state),
                         log_path=retry_log_path,
-                        stream_prefix=f"{self._resolve_llm_engine(state)}>",
+                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -1076,7 +1087,7 @@ class StepRunner:
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
         early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
         if early_check.passed:
-            print(f"  Expert Review: artefatos já existem e validators OK — pulando LLM")
+            print(f"  Expert Review: artefatos já existem e validação OK — pulando etapa")
             for output_path in node.outputs:
                 self.state_mgr.record_artifact(Path(output_path).stem, output_path)
             next_id = node.next
@@ -1094,7 +1105,7 @@ class StepRunner:
             allowed_paths=allowed,
             llm_engine=self._resolve_llm_engine(state),
             log_path=review_log_path,
-            stream_prefix=f"{self._resolve_llm_engine(state)}>",
+            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
         )
         if node.max_turns is not None:
             review_kwargs["max_turns"] = node.max_turns
@@ -1138,7 +1149,7 @@ class StepRunner:
                         allowed_paths=allowed,
                         llm_engine=self._resolve_llm_engine(state),
                         log_path=retry_log_path,
-                        stream_prefix=f"{self._resolve_llm_engine(state)}>",
+                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -1207,7 +1218,7 @@ class StepRunner:
                 tasks,
                 lambda **kwargs: delegate_to_llm(
                     llm_engine=llm_engine,
-                    stream_prefix=f"{llm_engine}>",
+                    stream_prefix=self._stream_prefix(llm_engine),
                     **kwargs,
                 ),
             )
@@ -1328,7 +1339,7 @@ class StepRunner:
                     allowed_paths=allowed,
                     llm_engine=self._resolve_llm_engine(state),
                     log_path=retry_log_path,
-                    stream_prefix=f"{self._resolve_llm_engine(state)}>",
+                    stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                 )
             finally:
                 self._clear_active_llm_log(state)

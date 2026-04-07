@@ -88,16 +88,17 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
 def _resolve_validator_root(path: str, project_root: str, work_dir: str | None) -> str:
     """Resolve o root efetivo para um validator.
 
-    Paths que começam com docs/ ou process/ → project_root (conhecimento compartilhado)
-    Paths de código (src/, tests/, frontend/, *.py) → work_dir se disponível
+    Estratégia: se o arquivo existe no work_dir, usa work_dir.
+    Senão, usa project_root. Isso cobre tanto docs gerados pelo LLM
+    no run (runs/<N>/docs/) quanto docs compartilhados (docs/ na raiz).
     """
     if not work_dir or work_dir == project_root:
         return project_root
-    # Paths que vivem na raiz do projeto (compartilhados entre runs)
-    if path.startswith("docs/") or path.startswith("process/") or path == "CHANGELOG.md":
-        return project_root
-    # Paths de código → work_dir (run isolado)
-    return work_dir
+    # Se o arquivo existe no work_dir, usar work_dir (LLM escreveu lá)
+    if path and (Path(work_dir) / path).exists():
+        return work_dir
+    # Fallback para project_root (docs compartilhados, process/, etc.)
+    return project_root
 
 
 def run_validators(node: Node, project_root: str, state_dir: str | None = None, work_dir: str | None = None) -> ValidationResult:

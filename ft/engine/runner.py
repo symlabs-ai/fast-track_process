@@ -398,12 +398,14 @@ class StepRunner:
         self._environment = load_environment(self.project_root)
         self._max_node_retries = self._environment.get("max_node_retries", MAX_RETRIES)
         self._max_gate_retries = self._environment.get("max_gate_retries", MAX_RETRIES)
+        self._max_auto_fix = self._environment.get("max_auto_fix", 2)
         # Run mode: isolated → LLM trabalha em runs/<N>/, continuous → trabalha na raiz
         self._run_mode = self._environment.get("run_mode", "isolated")
         self._work_dir = self._resolve_work_dir()
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
+        self._auto_fix_counts: dict[str, int] = {}          # node_id → auto-fix attempts
 
     def _stream_prefix(self, engine: str | None = None) -> str | None:
         """Retorna stream_prefix se verbose, None caso contrário."""
@@ -908,6 +910,16 @@ class StepRunner:
                     break
                 state = self.state_mgr.load()
                 if state.node_status == "blocked":
+                    blocked_reason = state.blocked_reason or "gate falhou"
+                    fix_count = self._auto_fix_counts.get(node_id, 0)
+                    if mode == "mvp" and fix_count < self._max_auto_fix:
+                        self._auto_fix_counts[node_id] = fix_count + 1
+                        fixed = self._run_auto_fix(node, blocked_reason)
+                        state = self.state_mgr.load()
+                        if fixed:
+                            self._log_activity(node_id, node.title, "gate", "AUTO_FIXED",
+                                               f"corrigido automaticamente (tentativa {fix_count + 1})", sprint=node_sprint)
+                            continue
                     self._log_activity(node_id, node.title, "gate", "BLOCKED",
                                        state.blocked_reason or "gate falhou", sprint=node_sprint)
                     break
@@ -950,6 +962,16 @@ class StepRunner:
             # Checar se ficou bloqueado ou aguardando aprovacao
             state = self.state_mgr.load()
             if state.node_status == "blocked":
+                blocked_reason = state.blocked_reason or "bloqueado"
+                fix_count = self._auto_fix_counts.get(node_id, 0)
+                if mode == "mvp" and fix_count < self._max_auto_fix:
+                    self._auto_fix_counts[node_id] = fix_count + 1
+                    fixed = self._run_auto_fix(node, blocked_reason)
+                    state = self.state_mgr.load()
+                    if fixed:
+                        self._log_activity(node_id, node.title, node.type, "AUTO_FIXED",
+                                           f"corrigido automaticamente (tentativa {fix_count + 1})", sprint=node_sprint)
+                        continue
                 self._log_activity(node_id, node.title, node.type, "BLOCKED",
                                    state.blocked_reason or "bloqueado", sprint=node_sprint)
                 break
@@ -1126,6 +1148,65 @@ class StepRunner:
         # Esgotou retries
         self.state_mgr.block(f"Validacao falhou apos {self._max_node_retries} tentativas: {validation.feedback}")
         print(ui.step_block(f"validação falhou após {self._max_node_retries} tentativas"))
+
+    def _run_auto_fix(self, node: Node, blocked_reason: str) -> bool:
+        """Tenta corrigir automaticamente um node bloqueado (modo MVP).
+
+        Delega ao LLM o motivo do bloqueio para que ele corrija os artefatos.
+        Retorna True se os validators passarem após a correção.
+        """
+        state = self.state_mgr.load()
+        print(ui.info(f"Auto-fix: aplicando correção automática (tentativa {self._auto_fix_counts.get(node.id, 0) + 1}/{self._max_auto_fix})"))
+        print(ui.dim(f"  Motivo: {blocked_reason[:200]}"))
+
+        prompt = (
+            f"O processo travou no node '{node.id}' ({node.title}).\n\n"
+            f"ERRO:\n{blocked_reason}\n\n"
+            f"Analise o erro, identifique a causa raiz e corrija os arquivos necessários. "
+            f"Não altere arquivos de estado ou de processo. "
+            f"Quando terminar, diga DONE."
+        )
+
+        allowed = self._resolve_allowed_paths(node)
+        log_path = self._start_llm_log(state, node.id, f"auto-fix-{self._auto_fix_counts.get(node.id, 0) + 1}")
+        # Desbloquear antes de chamar o LLM
+        state.node_status = "ready"
+        state.blocked_reason = None
+        self.state_mgr.save()
+
+        try:
+            result = delegate_to_llm(
+                task=prompt,
+                project_root=self._work_dir,
+                allowed_paths=allowed,
+                llm_engine=self._resolve_llm_engine(state, node=node),
+                llm_model=self._resolve_llm_model(state, node=node),
+                log_path=log_path,
+                stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
+            )
+        finally:
+            self._clear_active_llm_log(state)
+
+        state = self.state_mgr.load()
+        state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
+        self.state_mgr.save()
+
+        if not result.success:
+            print(ui.fail("Auto-fix: LLM não conseguiu aplicar correção"))
+            return False
+
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        self._print_validation(validation)
+
+        if validation.passed:
+            print(ui.success("Auto-fix: correção aplicada — continuando"))
+            next_id = self.graph.resolve_next(node.id)
+            self._advance_state(node.id, next_id)
+            return True
+
+        print(ui.fail(f"Auto-fix: validators ainda falhando após correção"))
+        self.state_mgr.block(f"Auto-fix insuficiente: {validation.feedback}")
+        return False
 
     def _run_gate(self, node: Node):
         """Roda gate — validacao pura sem LLM. Em modo mvp, tenta corrigir via LLM."""

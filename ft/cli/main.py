@@ -309,6 +309,11 @@ def _next_run_dir(project_root: Path) -> Path:
         if not dst.exists():
             _shutil.copytree(claude_dir, dst)
 
+    # Copiar seed/ do projeto para o run dir (LLM roda com CWD=run dir)
+    seed_dir = project_root / "seed"
+    if seed_dir.is_dir():
+        _shutil.copytree(seed_dir, run_dir / "seed", dirs_exist_ok=True)
+
     # Seed de código do run anterior
     if existing:
         prev_run = existing[-1]

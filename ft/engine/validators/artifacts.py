@@ -461,3 +461,29 @@ def unique_screenshots(
         )
 
     return True, f"unique_screenshots: {len(images)} screenshots únicos em {screenshots_dir}"
+
+
+def guidelines_review_passed(
+    report_path: str = "docs/guidelines-review.md",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Verifica se o guidelines-review.md contém veredicto APPROVED."""
+    root = Path(project_root)
+    path = root / report_path if not Path(report_path).is_absolute() else Path(report_path)
+
+    if not path.exists():
+        return False, f"guidelines_review_passed FAIL: {report_path} não encontrado"
+
+    content = path.read_text(errors="ignore").lower()
+
+    if "approved" in content:
+        return True, "guidelines_review_passed: veredicto APPROVED"
+
+    if "iterate" in content:
+        # Extrair itens com ❌
+        lines = path.read_text(errors="ignore").splitlines()
+        fails = [l.strip() for l in lines if "❌" in l][:5]
+        detail = "; ".join(fails) if fails else "ver guidelines-review.md"
+        return False, f"guidelines_review_passed FAIL: ITERATE — {detail}"
+
+    return False, f"guidelines_review_passed FAIL: veredicto não encontrado em {report_path}"

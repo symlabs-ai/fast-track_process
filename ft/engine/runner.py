@@ -399,6 +399,7 @@ class StepRunner:
         self._max_node_retries = self._environment.get("max_node_retries", MAX_RETRIES)
         self._max_gate_retries = self._environment.get("max_gate_retries", MAX_RETRIES)
         self._max_auto_fix = self._environment.get("max_auto_fix", 2)
+        self._bypass_human_gates = False  # setado por cmd_run via --bypass-human-gates
         # Run mode: isolated → LLM trabalha em runs/<N>/, continuous → trabalha na raiz
         self._run_mode = self._environment.get("run_mode", "isolated")
         self._work_dir = self._resolve_work_dir()
@@ -903,6 +904,20 @@ class StepRunner:
                     break
                 continue
 
+            # Human gate — checkpoint humano obrigatório
+            if node.type == "human_gate":
+                self._run_human_gate(node)
+                if mode == "step":
+                    break
+                state = self.state_mgr.load()
+                if state.node_status == "awaiting_approval":
+                    self._log_activity(node_id, node.title, "human_gate", "AWAITING_HUMAN",
+                                       "aguardando aprovacao humana (ft approve)", sprint=node_sprint)
+                    break
+                self._log_activity(node_id, node.title, "human_gate", "BYPASSED",
+                                   "bypassed (--bypass-human-gates)", sprint=node_sprint)
+                continue
+
             # Gate — validacao pura, sem LLM
             if node.type == "gate":
                 self._run_gate(node)
@@ -1148,6 +1163,24 @@ class StepRunner:
         # Esgotou retries
         self.state_mgr.block(f"Validacao falhou apos {self._max_node_retries} tentativas: {validation.feedback}")
         print(ui.step_block(f"validação falhou após {self._max_node_retries} tentativas"))
+
+    def _run_human_gate(self, node: Node) -> None:
+        """Checkpoint humano obrigatório — pausa até ft approve ser chamado.
+
+        Não executa validators nem LLM. Apenas aguarda decisão humana.
+        Bypassa automaticamente se self._bypass_human_gates=True.
+        """
+        if self._bypass_human_gates:
+            print(ui.info(f"Human gate BYPASSED: {node.title}"))
+            next_id = self.graph.resolve_next(node.id)
+            self._advance_state(node.id, next_id)
+            self.state_mgr.save()
+            return
+
+        print(ui.warn(f"HUMAN GATE — requer aprovação humana: {node.title}"))
+        print(ui.dim("  → Revise os artefatos e execute: ft approve [\"mensagem\"]"))
+        print(ui.dim("  → Para rejeitar: ft reject \"motivo\""))
+        self.state_mgr.set_pending_approval(node.id)
 
     def _run_auto_fix(self, node: Node, blocked_reason: str) -> bool:
         """Tenta corrigir automaticamente um node bloqueado (modo MVP).
@@ -1656,8 +1689,11 @@ class StepRunner:
         print(f"  LLM calls: {state.metrics.get('llm_calls', 0)}")
         print(f"{'━'*50}")
 
-    def approve(self):
-        """Stakeholder aprova artefato pendente."""
+    def approve(self, message: str | None = None):
+        """Stakeholder aprova artefato pendente.
+
+        message: nota opcional registrada no log (ex: 'Revisado e aprovado por João em 2026-04-07').
+        """
         state = self.state_mgr.load()
         self._persist_llm_engine(state)
         self._sync_process_meta(state)
@@ -1669,7 +1705,12 @@ class StepRunner:
         node = self.graph.get_node(node_id)
         next_id = self.graph.resolve_next(node_id)
         self._advance_state(node_id, next_id)
-        print(f"  APROVADO: {node_id} → proximo: {next_id}")
+        log_msg = f"APROVADO: {node_id} → {next_id}"
+        if message:
+            log_msg += f" | nota: {message}"
+        print(f"  {log_msg}")
+        self._log_activity(node_id, node.title, node.type, "APPROVED",
+                           message or "aprovado pelo stakeholder", sprint=node.sprint)
 
     def reject(self, reason: str, retry: bool = True):
         """
@@ -1756,7 +1797,13 @@ class StepRunner:
         if state.blocked_reason:
             print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
         if state.pending_approval:
-            print(ui.warn(f"AGUARDANDO APROVAÇÃO: {state.pending_approval}"))
+            pending_node = self.graph.nodes.get(state.pending_approval)
+            if pending_node and pending_node.type == "human_gate":
+                print(ui.warn(f"HUMAN GATE PENDENTE: {state.pending_approval} — {pending_node.title}"))
+                print(ui.dim("  → ft approve [\"mensagem\"]   para aprovar"))
+                print(ui.dim("  → ft reject \"motivo\"         para rejeitar"))
+            else:
+                print(ui.warn(f"AGUARDANDO APROVAÇÃO: {state.pending_approval}"))
 
         if full:
             # Agrupar por sprint

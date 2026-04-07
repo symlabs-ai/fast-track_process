@@ -429,6 +429,7 @@ def cmd_init(args):
 
 def cmd_continue(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False)
 
     # Inicializar estado se nao existe
     state = runner.state_mgr.load()
@@ -446,7 +447,8 @@ def cmd_status(args):
 
 def cmd_approve(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
-    runner.approve()
+    message = getattr(args, "message", None)
+    runner.approve(message=message)
     # Continuar automaticamente apos aprovacao
     if not args.no_continue:
         runner.run(mode="step")
@@ -854,6 +856,7 @@ def cmd_run(args):
         llm_model=llm_model,
         verbose=getattr(args, "verbose", False),
     )
+    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False)
 
     # Provisionar ambiente antes do init
     if args.key:
@@ -1063,6 +1066,8 @@ def main():
     cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
     cont.add_argument("--sprint", action="store_true", help="Avancar ate fim da sprint")
     cont.add_argument("--mvp", action="store_true", help="Avancar ate MVP (modo autonomo)")
+    cont.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
+                      help="Pular human_gates automaticamente (LLM decide)")
 
     # status
     st = sub.add_parser("status", help="Estado atual")
@@ -1072,6 +1077,8 @@ def main():
     # approve
     ap = sub.add_parser("approve", help="Aprovar artefato pendente")
     add_llm_engine_flags(ap)
+    ap.add_argument("message", nargs="?", default=None,
+                    help="Nota opcional registrada no log (ex: 'Aprovado após revisão')")
     ap.add_argument("--no-continue", action="store_true", help="Nao continuar automaticamente")
 
     # reject
@@ -1116,6 +1123,8 @@ def main():
                     help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)")
     ru.add_argument("--input", metavar="FILE", dest="demand_input",
                     help="Demanda bruta do usuário (texto livre — o engine classifica produto vs processo)")
+    ru.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
+                    help="Pular human_gates automaticamente (LLM decide)")
     ru.add_argument("--force", action="store_true",
                     help="Forçar novo run mesmo se já houver um ativo")
     ru.add_argument("--template", "-t",

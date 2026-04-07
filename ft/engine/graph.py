@@ -14,7 +14,7 @@ import yaml
 @dataclass
 class Node:
     id: str
-    type: str  # discovery, document, build, test, gate, review, decision, sync, end
+    type: str  # discovery, document, build, test, gate, human_gate, review, decision, sync, end
     title: str
     executor: str = "python"
     outputs: list[str] = field(default_factory=list)

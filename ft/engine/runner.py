@@ -94,16 +94,23 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
 def _resolve_validator_root(path: str, project_root: str, work_dir: str | None) -> str:
     """Resolve o root efetivo para um validator.
 
-    Estratégia: se o arquivo existe no work_dir (que pode ser runs/<N>/
-    prefixado ao project_root), usa work_dir. Senão, project_root.
+    Em modo isolado (worktree/runs): LLM roda no work_dir e escreve lá.
+    Validators devem usar work_dir como raiz.
+    Fallback para project_root apenas se o arquivo não existir no work_dir
+    mas existir no project_root.
     """
     if not work_dir or work_dir == project_root:
         return project_root
-    # Se o arquivo existe no work_dir, usar work_dir (LLM escreveu lá)
-    if path and (Path(work_dir) / path).exists():
-        return work_dir
-    # Fallback para project_root (docs compartilhados, process/, etc.)
-    return project_root
+    # No modo isolado, work_dir é o worktree onde o LLM escreveu
+    if path:
+        work_path = Path(work_dir) / path
+        proj_path = Path(project_root) / path
+        if work_path.exists():
+            return work_dir
+        if proj_path.exists():
+            return project_root
+    # Sem path específico: preferir work_dir em modo isolado
+    return work_dir
 
 
 def run_validators(node: Node, project_root: str, state_dir: str | None = None, work_dir: str | None = None) -> ValidationResult:
@@ -165,8 +172,8 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None, 
                     passed, detail = fn(**args, project_root=_eff_root())
             # Validadores simples
             elif isinstance(args, bool) and args is True:
-                # Validators de código → work_dir; outros → project_root
-                root = (work_dir or project_root) if name in _code_validators else project_root
+                # Prefer work_dir (worktree) when available — LLM escreve lá
+                root = work_dir or project_root
                 passed, detail = fn(project_root=root)
             elif isinstance(args, (int, float)):
                 path = node.outputs[0] if node.outputs else ""

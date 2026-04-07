@@ -6,6 +6,7 @@ O LLM so constroi. Nao decide nada sobre o processo.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -202,10 +203,27 @@ REGRAS:
     elif log_path:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 
+    # Resolver ambiente para o subprocess (gateway_project se aplicável)
+    proc_env = None
+    claude_md = Path(project_root) / "CLAUDE.md"
+    if claude_md.exists():
+        content = claude_md.read_text()
+        for line in content.splitlines():
+            if line.startswith("gateway_project:"):
+                gw_project = line.split(":", 1)[1].strip()
+                base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+                # Substituir o segmento /s/<projeto> no URL se existir
+                if "/s/" in base_url:
+                    import re
+                    new_url = re.sub(r"/s/[^/]+$", f"/s/{gw_project}", base_url)
+                    proc_env = {**os.environ, "ANTHROPIC_BASE_URL": new_url}
+                break
+
     # Chamar executor em modo nao-interativo, com streaming para arquivo.
     proc = subprocess.Popen(
         cmd,
         cwd=project_root,
+        env=proc_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

@@ -178,6 +178,23 @@
 - **Status**: concluido
 - **Prioridade**: Alta
 
+### BL-19: Process Triage — Classificação da hipótese e adaptação do processo
+- **Problema**: O usuário mistura requisitos de produto e de processo na hipótese. O engine não distingue e roda o processo padrão, que pode não atender o que o usuário quer (ex: "prototipar UI antes de codar" roda num processo que vai direto pro TDD).
+- **Solução**: Node `ft.process_triage` como primeiro passo de qualquer run:
+  1. LLM lê a hipótese e classifica o que é **produto** vs **processo**
+  2. Extrai os requisitos de processo (ex: "protótipo primeiro", "sem backend", "mock data")
+  3. Compara com o processo base (YAML atual)
+  4. Se o processo não atende → **para e conversa** com o stakeholder:
+     - Mostra o que detectou
+     - Faz perguntas de esclarecimento
+     - Propõe adaptações no YAML
+     - Stakeholder aprova → LLM adapta o YAML → `ft validate` → continua
+     - Stakeholder rejeita → roda o processo padrão
+  5. Separa a parte de produto e salva como hipótese limpa em `docs/hipotese.md`
+- **Entrega**: Node novo no início do grafo + lógica de adaptação do YAML via LLM + validação automática do YAML adaptado
+- **Status**: proposto
+- **Prioridade**: Crítica
+
 ---
 
 ## Resumo
@@ -203,3 +220,4 @@
 | BL-16 | Stakeholder Review | Alta | proposto |
 | BL-17 | Análise Crítica do LLM | Alta | proposto |
 | BL-18 | Código em runs/ (modo isolated) | Alta | concluido |
+| BL-19 | Process Triage (classificar hipótese) | Crítica | proposto |

@@ -4,6 +4,13 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.9.2] - 2026-04-07
+
+- fix(engine): `_next_run_dir` copia `seed/` do project root para o run dir — LLM acha `seed/PRD.md`, `seed/process.yml`, `seed/ui_guidelines.md` sem erros de path
+- fix(process): `FT_UI_PROTOTYPE.yml` referencia `seed/ui_guidelines.md` (obrigatório) em vez de `docs/ui_guidelines.md` (que não existe no run dir)
+
+---
+
 ## [v0.9.1] - 2026-04-07
 
 - fix(engine): `_seed_from_previous` troca exclude-list por allowlist (`frontend`, `backend`, `src`, `lib`, `tests`, `docs`) — evita propagar `pyproject.toml`, `CHANGELOG.md`, `seed/`, `process/`, `node_modules/` entre ciclos

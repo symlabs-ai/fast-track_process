@@ -290,6 +290,80 @@ def _ensure_runs_gitignore(project_root: Path) -> None:
         gitignore.write_text("*\n!.gitignore\n")
 
 
+def _next_cycle_num(project_root: Path) -> int:
+    """Retorna o próximo número de ciclo baseado em runs/ existentes."""
+    runs_dir = project_root / "runs"
+    if not runs_dir.is_dir():
+        return 1
+    existing = sorted(
+        [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+        key=_cycle_num,
+    )
+    return (_cycle_num(existing[-1]) + 1) if existing else 1
+
+
+def _setup_worktree(project_root: Path, name: str) -> Path:
+    """Cria um git worktree para rodar um ciclo em isolamento total.
+
+    Cria: <project_root>/worktrees/cycle-NN-<name>
+    Branch: cycle-NN-<name>
+
+    Retorna o path do worktree criado.
+    """
+    import subprocess as _sp
+    import shutil as _shutil
+
+    git_dir = project_root / ".git"
+    if not git_dir.exists():
+        raise RuntimeError(
+            f"Projeto não é um repositório git: {project_root}\n"
+            "  Execute: git init && git add -A && git commit -m 'init'\n"
+            "  Ou use ft run sem --worktree"
+        )
+
+    # Garantir que há pelo menos um commit (worktree precisa de HEAD)
+    result = _sp.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project_root, capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Repositório sem commits — faça um commit inicial antes de usar --worktree"
+        )
+
+    next_num = _next_cycle_num(project_root)
+    branch_name = f"cycle-{next_num:02d}-{name}"
+    worktree_dir = project_root / "worktrees" / branch_name
+
+    # Adicionar worktrees/ ao .gitignore do projeto (se não estiver)
+    gitignore_path = project_root / ".gitignore"
+    if gitignore_path.exists():
+        content = gitignore_path.read_text()
+        if "worktrees/" not in content:
+            with open(gitignore_path, "a") as f:
+                f.write("\n# Git worktrees de ciclos\nworktrees/\n")
+    else:
+        gitignore_path.write_text("worktrees/\n")
+
+    # Criar worktree
+    result = _sp.run(
+        ["git", "worktree", "add", str(worktree_dir), "-b", branch_name],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git worktree add falhou:\n{result.stderr}")
+
+    # Copiar .claude/ (não está no git) para o worktree
+    claude_src = project_root / ".claude"
+    if claude_src.is_dir():
+        claude_dst = worktree_dir / ".claude"
+        if not claude_dst.exists():
+            _shutil.copytree(claude_src, claude_dst)
+
+    print(f"  Worktree: {worktree_dir.relative_to(project_root)} (branch: {branch_name})")
+    return worktree_dir
+
+
 def get_runner(process: str | None = None, llm_engine: str | None = None, verbose: bool = False) -> StepRunner:
     root = find_project_root()
     state_path = _find_latest_state(root)
@@ -695,6 +769,16 @@ def cmd_run(args):
     sys.stdout.reconfigure(line_buffering=True)
 
     project_root = Path(args.project).resolve()
+
+    # --worktree: criar worktree git e redirecionar project_root para ele
+    worktree_name = getattr(args, "worktree", None)
+    if worktree_name:
+        from ft.engine import ui as _ui
+        wt_name = worktree_name if isinstance(worktree_name, str) and worktree_name != "True" else (
+            resolve_llm_engine(args) or "run"
+        )
+        project_root = _setup_worktree(project_root, wt_name)
+
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
 
     # Verificar se já tem um run ativo
@@ -1017,6 +1101,9 @@ def main():
                     help="Forçar novo run mesmo se já houver um ativo")
     ru.add_argument("--template", "-t",
                     help="Template de processo a copiar (ex: fast-track-v2)")
+    ru.add_argument("--worktree", metavar="NAME", nargs="?", const=True,
+                    help="Rodar em git worktree isolado (cycle-NN-NAME). "
+                         "NAME opcional: default = engine LLM ou 'run'")
 
     args = parser.parse_args()
 

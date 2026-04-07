@@ -145,6 +145,32 @@
 - **Status**: concluido
 - **Prioridade**: Média
 
+### BL-16: Stakeholder Review — Validação interativa do produto
+- **Problema**: O processo termina sem apresentar o produto ao stakeholder. O usuário não sabe como testar (qual comando, qual URL, quais endpoints). Feedback do playtest não é capturado sistematicamente.
+- **Solução**: Node `ft.stakeholder_review` entre `gate.mvp` e `ft.end` que:
+  1. Detecta `interface_type` do `tech_stack.md`
+  2. Para UI: sobe o servidor e apresenta o link (ex: http://localhost:8000)
+  3. Para CLI: mostra o comando para testar
+  4. Para API: mostra os endpoints principais
+  5. Coleta feedback do stakeholder em linguagem natural
+  6. Anota o feedback como novas User Stories no PRD para o próximo ciclo
+  7. Não corrige o protótipo — o próximo ciclo resolve
+- **Entrega**: Node novo no YAML + lógica no runner para subir servidor e aguardar input
+- **Status**: proposto
+- **Prioridade**: Alta
+
+### BL-17: Análise Crítica — Sugestões do LLM ao final do ciclo
+- **Problema**: O stakeholder só vê o que ele próprio percebe. O LLM tem contexto completo do ciclo (PRD, retro, screenshots, código, logs) e pode identificar gaps, oportunidades e débitos que o stakeholder não vislumbrou.
+- **Solução**: Node `ft.critical_analysis` após stakeholder review que:
+  1. LLM analisa todos os artefatos do ciclo
+  2. Apresenta lista numerada de sugestões de melhoria (UX, produto, técnico, processo)
+  3. Stakeholder escolhe por número quais quer incluir no próximo ciclo
+  4. Escolhidas são anotadas como User Stories no PRD
+  5. Rejeitadas são descartadas sem impacto
+- **Entrega**: Node novo no YAML com prompt consultivo/estratégico
+- **Status**: proposto
+- **Prioridade**: Alta
+
 ---
 
 ## Resumo
@@ -167,3 +193,5 @@
 | BL-13 | Estrutura `process/`, `docs/`, `runs/` | Alta | concluido |
 | BL-14 | Environment Hooks | Alta | concluido |
 | BL-15 | RunMode isolated/continuous | Média | concluido |
+| BL-16 | Stakeholder Review | Alta | proposto |
+| BL-17 | Análise Crítica do LLM | Alta | proposto |

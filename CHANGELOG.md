@@ -4,6 +4,25 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.29] - 2026-04-06
+
+- feat(engine): colorized CLI output with step cards, type-colored badges, ANSI colors
+- feat(cli): `-v`/`--verbose` flag to show LLM stream output in terminal
+- feat(cli): `ft fix` command — user describes fix in natural language, LLM applies it
+- feat(cli): friendly error display instead of raw tracebacks (`FT_DEBUG=1` for full)
+- feat(engine): gate retry via LLM in mvp mode with configurable `max_gate_retries`
+- feat(engine): smarter retries with error history (LLM told not to repeat failed approaches)
+- feat(engine): autofix for missing gate outputs (infers from file_exists validator)
+- feat(engine): irreversible errors skip retry, show plain-language explanation + alternatives
+- feat(process): diagrams node now requires Mermaid format (no ASCII art)
+- feat(process): visual regression check before MVP gate (`ft.visual_check` + `gate.visual_check`)
+- feat(process): step progress shows `[X/total]` instead of raw node ID
+- fix(engine): gate.e2e.browser crash on missing outputs + defensive validator
+- fix(cli): `--from-project .` no longer crashes with SameFileError
+- fix(engine): "pulando LLM" → "pulando etapa" (user-friendly message)
+
+---
+
 ## [v0.8.28] - 2026-04-06
 
 - feat(engine): BL-14 — environment hooks system (`ft/engine/hooks.py`)

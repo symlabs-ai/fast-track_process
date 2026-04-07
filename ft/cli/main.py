@@ -866,12 +866,33 @@ def cmd_run(args):
         state_path = state_dir / "engine_state.yml"
         print(f"  RunMode: continuous")
     else:
-        # Isolated (default): cada run em runs/<N>/
-        _ensure_runs_gitignore(project_root)
-        run_dir = _next_run_dir(project_root)
+        # Isolated (default): cada run em worktree git isolado
+        # Fallback para runs/<N>/ se projeto não tiver git ou não tiver commits
+        git_ok = (project_root / ".git").exists()
+        has_commits = False
+        if git_ok:
+            import subprocess as _sp
+            has_commits = _sp.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=project_root, capture_output=True,
+            ).returncode == 0
+
+        worktree_name = getattr(args, "worktree", None)
+        if git_ok and has_commits and worktree_name is not False:
+            # Worktree: nome derivado do engine ou "run"
+            if worktree_name and isinstance(worktree_name, str) and worktree_name != "True":
+                wt_name = worktree_name
+            else:
+                wt_name = resolve_llm_engine(args) or "run"
+            run_dir = _setup_worktree(project_root, wt_name)
+        else:
+            # Fallback: diretório simples em runs/
+            _ensure_runs_gitignore(project_root)
+            run_dir = _next_run_dir(project_root)
+
         (run_dir / "state").mkdir(parents=True, exist_ok=True)
         state_path = run_dir / "state" / "engine_state.yml"
-        print(f"  RunMode: isolated → {run_dir.relative_to(project_root)}")
+        print(f"  RunMode: isolated → {run_dir}")
 
     # Resolver YAML do processo
     if args.process:

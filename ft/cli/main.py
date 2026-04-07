@@ -461,12 +461,16 @@ def cmd_run(args):
 
     # Copiar plano_de_voo do ciclo anterior se fornecido
     if args.from_project:
-        src = Path(args.from_project) / "docs" / "plano_de_voo.md"
+        src = Path(args.from_project).resolve() / "docs" / "plano_de_voo.md"
+        dst_docs = project_root / "docs"
+        dst = dst_docs / "plano_de_voo.md"
         if src.exists():
-            dst_docs = project_root / "docs"
-            dst_docs.mkdir(parents=True, exist_ok=True)
-            shutil.copy(src, dst_docs / "plano_de_voo.md")
-            print(f"  plano_de_voo.md copiado de {args.from_project}")
+            if src.resolve() == dst.resolve():
+                print(f"  plano_de_voo.md já está em docs/ (mesmo projeto)")
+            else:
+                dst_docs.mkdir(parents=True, exist_ok=True)
+                shutil.copy(src, dst)
+                print(f"  plano_de_voo.md copiado de {args.from_project}")
         else:
             print(f"  AVISO: --from-project fornecido mas plano_de_voo.md não encontrado em {src}")
 

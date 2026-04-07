@@ -85,7 +85,22 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
 }
 
 
-def run_validators(node: Node, project_root: str, state_dir: str | None = None) -> ValidationResult:
+def _resolve_validator_root(path: str, project_root: str, work_dir: str | None) -> str:
+    """Resolve o root efetivo para um validator.
+
+    Paths que começam com docs/ ou process/ → project_root (conhecimento compartilhado)
+    Paths de código (src/, tests/, frontend/, *.py) → work_dir se disponível
+    """
+    if not work_dir or work_dir == project_root:
+        return project_root
+    # Paths que vivem na raiz do projeto (compartilhados entre runs)
+    if path.startswith("docs/") or path.startswith("process/") or path == "CHANGELOG.md":
+        return project_root
+    # Paths de código → work_dir (run isolado)
+    return work_dir
+
+
+def run_validators(node: Node, project_root: str, state_dir: str | None = None, work_dir: str | None = None) -> ValidationResult:
     """Roda todos os validadores de um node. Retorna resultado agregado."""
     items = []
     extra_artifacts: dict[str, str] = {}
@@ -97,9 +112,19 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None) 
                 items.append(ValidationItem(name=name, passed=False, detail=f"Validador desconhecido: {name}"))
                 continue
 
+            # Resolver root efetivo: docs/ → project_root, código → work_dir
+            def _eff_root(path: str = "") -> str:
+                return _resolve_validator_root(path, project_root, work_dir)
+
+            # Validators booleanos de código (tests_pass, tests_exist, etc.) → work_dir
+            _code_validators = ("tests_pass", "tests_fail", "tests_exist",
+                                "coverage_min", "coverage_per_file",
+                                "lint_clean", "format_check")
+
             # read_artifact — caso especial: args como dict com path/key/pattern
             if name == "read_artifact" and isinstance(args, dict):
-                passed, detail = fn(**args, project_root=project_root)
+                root = _eff_root(args.get("path", ""))
+                passed, detail = fn(**args, project_root=root)
                 if name == "read_artifact" and passed:
                     try:
                         kv = detail.split(": ", 1)[-1]
@@ -110,13 +135,13 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None) 
                         pass
             # Gate validators compostos — recebem args como dict
             elif name.startswith("gate_") and isinstance(args, dict):
-                passed, detail = fn(**args, project_root=project_root)
+                passed, detail = fn(**args, project_root=_eff_root())
             elif name.startswith("gate_") and isinstance(args, bool) and args is True:
                 # gate_delivery: true → usa outputs do node
                 if name == "gate_delivery":
-                    passed, detail = fn(outputs=node.outputs, project_root=project_root)
+                    passed, detail = fn(outputs=node.outputs, project_root=_eff_root())
                 else:
-                    passed, detail = fn(project_root=project_root)
+                    passed, detail = fn(project_root=_eff_root())
             elif isinstance(args, dict):
                 # sections_unchanged: resolve snapshot_path relativo ao state_dir
                 if name == "sections_unchanged" and state_dir and "snapshot_path" in args:
@@ -124,31 +149,29 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None) 
                     resolved_args["snapshot_path"] = str(
                         Path(state_dir) / args["snapshot_path"]
                     )
-                    passed, detail = fn(**resolved_args, project_root=project_root)
+                    passed, detail = fn(**resolved_args, project_root=_eff_root(args.get("path", "")))
                 else:
-                    passed, detail = fn(**args, project_root=project_root)
+                    passed, detail = fn(**args, project_root=_eff_root())
             # Validadores simples
             elif isinstance(args, bool) and args is True:
-                # Ex: tests_pass: true → tests_pass(project_root)
-                passed, detail = fn(project_root=project_root)
+                # Validators de código → work_dir; outros → project_root
+                root = (work_dir or project_root) if name in _code_validators else project_root
+                passed, detail = fn(project_root=root)
             elif isinstance(args, (int, float)):
-                # Ex: min_lines: 10 → min_lines(path, 10, project_root)
-                # path vem do primeiro output do node
                 path = node.outputs[0] if node.outputs else ""
                 if not path:
                     passed, detail = False, f"{name} FAIL: node sem outputs — não é possível inferir o path do artefato"
                 else:
-                    passed, detail = fn(path, args, project_root=project_root)
+                    passed, detail = fn(path, args, project_root=_eff_root(path))
             elif isinstance(args, str):
                 # Ex: file_exists: path → file_exists(path, project_root)
-                passed, detail = fn(args, project_root=project_root)
+                passed, detail = fn(args, project_root=_eff_root(args))
             elif isinstance(args, list):
-                # Ex: has_sections: [A, B, C] → has_sections(path, [A,B,C], project_root)
                 path = node.outputs[0] if node.outputs else ""
                 if not path:
                     passed, detail = False, f"{name} FAIL: node sem outputs — não é possível inferir o path do artefato"
                 else:
-                    passed, detail = fn(path, args, project_root=project_root)
+                    passed, detail = fn(path, args, project_root=_eff_root(path))
             else:
                 passed, detail = False, f"Args nao suportados para {name}: {args}"
 
@@ -929,7 +952,7 @@ class StepRunner:
                 (Path(self.project_root) / o).exists() for o in node.outputs
             )
             if all_exist:
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
                 if validation.passed:
                     print(ui.success("Artefato já existe e é válido — pulando etapa"))
                     self._log_event(
@@ -1004,7 +1027,7 @@ class StepRunner:
 
         # Validar
         print(ui.info("Validando..."))
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
         self._print_validation(validation)
 
         if validation.passed:
@@ -1041,7 +1064,7 @@ class StepRunner:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
                 self._print_validation(validation)
 
                 if validation.passed:
@@ -1063,7 +1086,7 @@ class StepRunner:
     def _run_gate(self, node: Node):
         """Roda gate — validacao pura sem LLM. Em modo mvp, tenta corrigir via LLM."""
         print(ui.info("Rodando gate..."))
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
         self._print_validation(validation)
 
         if validation.passed:
@@ -1121,7 +1144,7 @@ class StepRunner:
                     self._clear_active_llm_log(state)
 
                 # Re-validar
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
                 self._print_validation(validation)
 
                 if validation.passed:
@@ -1172,7 +1195,7 @@ class StepRunner:
             return False
 
         # Re-validar com o fix aplicado
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
         self._print_validation(validation)
 
         if validation.passed:
@@ -1279,7 +1302,7 @@ class StepRunner:
         allowed = self._resolve_allowed_paths(node)
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
-        early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+        early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
         if early_check.passed:
             print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
             for output_path in node.outputs:
@@ -1312,7 +1335,7 @@ class StepRunner:
         if not result.success:
             # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
             # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
-            pre_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+            pre_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
             if pre_check.passed:
                 print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
@@ -1327,7 +1350,7 @@ class StepRunner:
             self.state_mgr.record_artifact(name, output_path)
 
         # Validar artefatos deterministicos
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
         self._print_validation(validation)
 
         if not validation.passed:
@@ -1348,7 +1371,7 @@ class StepRunner:
                 finally:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
                 self._print_validation(validation)
 
             if not validation.passed:
@@ -1447,7 +1470,7 @@ class StepRunner:
         # Validar e avançar todos os nodes do grupo
         for wt_result in results:
             node = self.graph.get_node(wt_result.node_id)
-            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
             self._print_validation(validation)
             if validation.passed:
                 next_id = self.graph.resolve_next(node.id)
@@ -1540,7 +1563,7 @@ class StepRunner:
             state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
             if result.success:
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent))
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
                 self._print_validation(validation)
                 if validation.passed:
                     print(ui.awaiting_approval())

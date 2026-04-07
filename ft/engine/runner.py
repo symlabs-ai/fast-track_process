@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "min_user_stories": val.min_user_stories,
     "sections_unchanged": val.sections_unchanged,
     "demand_coverage": val.demand_coverage,
+    "prd_coverage": val.prd_coverage,
     "tests_pass": val.tests_pass,
     "tests_fail": val.tests_fail,
     "coverage_min": val.coverage_min,
@@ -1006,6 +1008,10 @@ class StepRunner:
         # Determinar paths permitidos
         allowed = self._resolve_allowed_paths(node)
 
+        # env_setup: comandos determinísticos antes da delegação (não consome turns)
+        if node.env_setup:
+            self._run_env_setup(node)
+
         print(ui.info(f"Delegando ao LLM ({node.executor})..."))
         state.node_status = "delegated"
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
@@ -1266,6 +1272,31 @@ class StepRunner:
         self._advance_state(node.id, next_id, "PASS")
         self._fire_hooks("on_gate_pass")
         print(ui.gate_pass(next_id))
+
+    def _run_env_setup(self, node: Node) -> None:
+        """Executa comandos de env_setup antes da delegação ao LLM.
+
+        Comandos rodam no work_dir (run dir no modo isolated).
+        Se qualquer comando falhar, bloqueia o node.
+        """
+        print(ui.info(f"env_setup: {len(node.env_setup)} comando(s)"))
+        for cmd in node.env_setup:
+            print(f"    $ {cmd}")
+            result = subprocess.run(
+                cmd, shell=True, cwd=self._work_dir,
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                err = result.stderr.strip() or result.stdout.strip()
+                print(ui.fail(f"env_setup falhou: {cmd}"))
+                print(f"    {err[:300]}")
+                self.state_mgr.block(f"env_setup falhou: {cmd}\n{err[:500]}")
+                return
+            if result.stdout.strip():
+                # Mostrar última linha do output para feedback
+                last_line = result.stdout.strip().splitlines()[-1]
+                print(f"    → {last_line[:120]}")
+        print(ui.info("env_setup concluído"))
 
     def _maybe_auto_commit(self, node: Node):
         """Auto-commit apos PASS em nodes de build/test_green/refactor."""

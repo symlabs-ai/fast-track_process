@@ -137,11 +137,98 @@ def _find_latest_state(root: Path) -> Path:
     return root / "runs" / "01" / "state" / "engine_state.yml"
 
 
+def _api_health_check(project_root: Path) -> None:
+    """Testa conectividade com a API antes de iniciar a run.
+
+    Faz POST mínimo ao endpoint de messages. Aceita 200/429/529
+    (API funcionando). Aborta em 400/403/405 com mensagem clara.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+    from ft.engine import ui as _ui
+
+    # Resolver base_url
+    settings_file = project_root / ".claude" / "settings.local.json"
+    base_url = None
+    if settings_file.exists():
+        try:
+            data = json.loads(settings_file.read_text())
+            base_url = data.get("env", {}).get("ANTHROPIC_BASE_URL")
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    if not base_url:
+        base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    url = f"{base_url}/v1/messages"
+    payload = json.dumps({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "ping"}],
+    }).encode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+    }
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    try:
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            host = base_url.split("//")[-1].split("/")[0]
+            print(_ui.info(f"API health check: {resp.status} OK ({host})"))
+    except urllib.error.HTTPError as e:
+        code = e.code
+        if code in (429, 529):
+            # Rate limit ou overloaded = API funcionando
+            host = base_url.split("//")[-1].split("/")[0]
+            print(_ui.info(f"API health check: {code} ({host}) — API acessível"))
+        else:
+            body = e.read().decode(errors="ignore")[:200]
+            print(_ui.fail(f"API health check: {code} — {body}"))
+            if code == 403:
+                print("    → Projeto não registrado. Registre com: ft setup-env <key>")
+            elif code == 405:
+                print("    → Rota inválida. Verifique ANTHROPIC_BASE_URL.")
+            raise SystemExit(1)
+    except Exception as e:
+        from ft.engine import ui as _ui
+        print(_ui.info(f"API health check: timeout/erro ({e}) — continuando"))
+
+
+def _seed_from_previous(src: Path, dst: Path) -> int:
+    """Copia artefatos do run anterior para o novo run.
+
+    Exclui state/, .claude/, node_modules/, dist/, __pycache__/.
+    Retorna quantidade de itens copiados.
+    """
+    import shutil as _shutil
+
+    EXCLUDE = {"state", ".claude", "node_modules", "dist", "__pycache__", ".git", "CLAUDE.md"}
+    count = 0
+    for item in src.iterdir():
+        if item.name in EXCLUDE or item.name.startswith("."):
+            continue
+        target = dst / item.name
+        if item.is_dir():
+            _shutil.copytree(item, target, dirs_exist_ok=True)
+            count += 1
+        elif item.is_file():
+            _shutil.copy2(item, target)
+            count += 1
+    return count
+
+
 def _next_run_dir(project_root: Path) -> Path:
     """Calcula e cria o próximo diretório de run em runs/.
 
     Propaga CLAUDE.md e .claude/ da raiz para o run dir
     (necessário para o SymGateway identificar o projeto).
+    Copia artefatos do run anterior (seed de código).
     """
     import shutil as _shutil
 
@@ -163,6 +250,13 @@ def _next_run_dir(project_root: Path) -> Path:
         dst = run_dir / ".claude"
         if not dst.exists():
             _shutil.copytree(claude_dir, dst)
+
+    # Seed de código do run anterior
+    if existing:
+        prev_run = existing[-1]
+        count = _seed_from_previous(prev_run, run_dir)
+        if count:
+            print(f"  Seed: {count} artefatos copiados de {prev_run.name}/ → {run_dir.name}/")
 
     return run_dir
 
@@ -577,6 +671,9 @@ def _is_pid_alive(pid: int) -> bool:
 
 def cmd_run(args):
     """Bootstrap completo: cria projeto, provisiona ambiente, inicia e roda até MVP."""
+    import sys
+    sys.stdout.reconfigure(line_buffering=True)
+
     project_root = Path(args.project).resolve()
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
 
@@ -804,6 +901,9 @@ def cmd_run(args):
         shutil.copy(src, dst)
         print(f"  hipotese.md copiado de {src}")
         _normalize_hipotese(dst, project_root, llm_engine=llm_engine or "claude")
+
+    # Health check da API antes de começar
+    _api_health_check(project_root)
 
     # Init + run MVP
     if run_mode == "continuous" and state_path.exists():

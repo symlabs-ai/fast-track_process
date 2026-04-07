@@ -305,3 +305,111 @@ def demand_coverage(
         return True, f"demand_coverage: LLM indisponível, pulando ({e})"
 
     return True, "demand_coverage: verificação concluída"
+
+
+def prd_coverage(
+    prd_path: str = "docs/PRD.md",
+    output_dirs: list[str] | None = None,
+    min_ratio: float = 0.7,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Verifica se as User Stories do PRD têm evidência no código gerado.
+
+    Extrai US do PRD via regex, busca keywords nos arquivos de output_dirs.
+    PASS se >= min_ratio das US têm pelo menos 1 match.
+    """
+    import re
+
+    root = Path(project_root)
+    prd_file = root / prd_path
+    if not prd_file.exists():
+        return True, f"prd_coverage: {prd_path} não encontrado — pulando"
+
+    prd_text = prd_file.read_text(encoding="utf-8")
+
+    # Extrair User Stories: ### US-NN — Título
+    us_pattern = re.compile(r"###\s+(US-\d+)\s*[—–-]\s*(.+)")
+    stories = us_pattern.findall(prd_text)
+    if not stories:
+        return True, "prd_coverage: nenhuma US encontrada no PRD — pulando"
+
+    # Resolver dirs de output para busca
+    if not output_dirs:
+        output_dirs = ["frontend/src", "src", "backend"]
+    search_dirs = [root / d for d in output_dirs if (root / d).is_dir()]
+    if not search_dirs:
+        return False, f"prd_coverage FAIL: nenhum diretório de output encontrado ({output_dirs})"
+
+    # Coletar todo o texto dos arquivos de código
+    code_text = []
+    for d in search_dirs:
+        for f in d.rglob("*"):
+            if f.is_file() and f.suffix in (
+                ".js", ".ts", ".jsx", ".tsx", ".svelte", ".vue",
+                ".py", ".css", ".html", ".json",
+            ):
+                try:
+                    code_text.append(f.read_text(encoding="utf-8", errors="ignore"))
+                except OSError:
+                    continue
+    all_code = "\n".join(code_text).lower()
+
+    if not all_code.strip():
+        return False, "prd_coverage FAIL: nenhum código encontrado nos diretórios de output"
+
+    # Verificar cada US
+    STOP_WORDS = {
+        "como", "quero", "para", "que", "com", "sem", "por", "uma", "um",
+        "de", "do", "da", "dos", "das", "no", "na", "nos", "nas", "ao",
+        "em", "os", "as", "se", "ou", "ter", "ser", "ver", "usar",
+        "the", "a", "an", "in", "on", "of", "to", "and", "or", "is",
+        "with", "from", "for", "by", "at", "be", "have", "this", "that",
+    }
+    # Mapeamento PT→EN para keywords comuns em UI/dev
+    PT_EN = {
+        "grafo": "graph", "visualizar": "graph", "diagrama": "diagram",
+        "navegar": "navigate", "navegação": "nav", "estado": "state",
+        "progresso": "progress", "terminal": "terminal", "editor": "editor",
+        "validação": "validat", "validar": "validat", "árvore": "tree",
+        "arquivo": "file", "arquivos": "file", "processo": "process",
+        "dados": "data", "reais": "real", "acompanhar": "progress",
+        "sprint": "sprint", "sprints": "sprint", "nodes": "node",
+        "embutido": "embed", "painel": "panel", "abas": "tab",
+        "tabs": "tab", "yaml": "yaml", "linhas": "line",
+        "sidebar": "sidebar", "explorer": "explorer",
+    }
+    covered = []
+    missing = []
+
+    for us_id, us_title in stories:
+        # Extrair keywords significativas do título
+        words = re.findall(r"[a-záéíóúãõâêôçà]+", us_title.lower())
+        keywords = [w for w in words if len(w) > 3 and w not in STOP_WORDS]
+
+        # Verificar cada keyword (original ou tradução conta como hit)
+        if not keywords:
+            covered.append(us_id)
+            continue
+        hits = 0
+        for kw in keywords:
+            if kw in all_code:
+                hits += 1
+            elif kw in PT_EN and PT_EN[kw] in all_code:
+                hits += 1
+        ratio = hits / len(keywords)
+        if ratio >= 0.4:
+            covered.append(us_id)
+        else:
+            missing.append(us_id)
+
+    total = len(stories)
+    cov_ratio = len(covered) / total if total else 1.0
+
+    if cov_ratio >= min_ratio:
+        return True, f"prd_coverage: {len(covered)}/{total} US cobertas"
+
+    missing_str = ", ".join(missing[:5])
+    return False, (
+        f"prd_coverage FAIL: {len(covered)}/{total} US cobertas "
+        f"(min {min_ratio:.0%}) — faltam: {missing_str}"
+    )

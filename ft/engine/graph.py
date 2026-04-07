@@ -33,6 +33,8 @@ class Node:
     parallel_group: str | None = None
     # Override do limite de turns do LLM para nodes complexos
     max_turns: int | None = None
+    # Comandos shell executados antes da delegação ao LLM (setup determinístico)
+    env_setup: list[str] = field(default_factory=list)
 
 
 class ProcessGraph:
@@ -176,6 +178,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             prompt=node_raw.get("prompt"),
             parallel_group=node_raw.get("parallel_group"),
             max_turns=node_raw.get("max_turns"),
+            env_setup=node_raw.get("env_setup", []),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

@@ -116,10 +116,12 @@ def _read_gateway_md(ft_root: Path | None = None) -> dict[str, str]:
 def provision_environment(project_root: Path, base_url: str | None = None,
                           key: str | None = None, admin_key: str | None = None) -> None:
     """Cria CLAUDE.md e .claude/settings.local.json no project_root."""
-    if key and not base_url:
-        base_url = f"{SYMGATEWAY_BASE}/u/{key}/p/anthropic-max"
-
     project_name = project_root.name
+
+    if key and not base_url:
+        # Embutir /s/<slug> na URL para que o gateway identifique o projeto
+        # independente do CWD (necessário para modo isolated com runs/<N>/).
+        base_url = f"{SYMGATEWAY_BASE}/u/{key}/p/anthropic-max/s/{project_name}"
 
     if not admin_key:
         gw = _read_gateway_md()

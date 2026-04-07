@@ -63,6 +63,48 @@ def auto_commit(
     return False, f"auto_commit FAIL: {result.stderr.strip()[:200]}"
 
 
+def commit_knowledge(project_root: str = ".", label: str = "snapshot") -> tuple[bool, str]:
+    """Commita docs/ e process/ se houver mudanças.
+
+    Chamado nativamente pelo engine antes de iniciar um run e ao final.
+    Garante que o conhecimento do projeto tem histórico no Git.
+    """
+    cwd = project_root
+
+    # Verificar se é um repo git
+    check = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    if check.returncode != 0:
+        return True, "commit_knowledge: não é um repo git — pulando"
+
+    # Verificar mudanças em docs/ e process/
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "docs/", "process/"],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    if not status.stdout.strip():
+        return True, "commit_knowledge: docs/ e process/ sem mudanças"
+
+    # Stage e commit
+    subprocess.run(["git", "add", "docs/", "process/"], cwd=cwd, capture_output=True)
+    result = subprocess.run(
+        ["git", "commit", "-m", f"chore: {label} — docs/ e process/"],
+        cwd=cwd, capture_output=True, text=True,
+    )
+
+    if result.returncode == 0:
+        hash_result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=cwd, capture_output=True, text=True,
+        )
+        short_hash = hash_result.stdout.strip()
+        return True, f"commit_knowledge: {short_hash} — {label}"
+
+    return False, f"commit_knowledge FAIL: {result.stderr.strip()[:200]}"
+
+
 def get_changed_files(project_root: str = ".") -> list[str]:
     """Retorna lista de arquivos modificados (staged + unstaged)."""
     result = subprocess.run(

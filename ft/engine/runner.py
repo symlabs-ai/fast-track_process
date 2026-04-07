@@ -19,7 +19,7 @@ from ft.engine.validators import gates
 from ft.engine.validators import tests as test_val
 from ft.engine.validators import code as code_val
 from ft.engine.validators import review as review_val
-from ft.engine.git_ops import auto_commit
+from ft.engine.git_ops import auto_commit, commit_knowledge
 from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
 from ft.engine import ui
 from ft.engine.parallel import ParallelRunner, check_independence
@@ -837,6 +837,9 @@ class StepRunner:
                 print(ui.process_complete(
                     state.metrics['steps_completed'], state.metrics['steps_total'],
                 ))
+                # Commitar conhecimento produzido pelo ciclo
+                ok, detail = commit_knowledge(self.project_root, label="pós-run — ciclo completo")
+                print(ui.dim(detail))
                 self._fire_hooks("on_deliver")
                 self._advance_state(node_id, None)
                 break

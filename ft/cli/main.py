@@ -573,6 +573,11 @@ def cmd_run(args):
         if not getattr(args, "force", False):
             sys.exit(1)
 
+    # Commitar docs/ e process/ antes de iniciar (snapshot de conhecimento)
+    from ft.engine.git_ops import commit_knowledge
+    ok, detail = commit_knowledge(str(project_root), label="pré-run snapshot")
+    print(f"  {detail}")
+
     run_mode = _resolve_run_mode(project_root)
 
     if run_mode == "continuous":

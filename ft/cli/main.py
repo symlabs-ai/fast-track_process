@@ -17,6 +17,7 @@ def add_llm_engine_flags(parser):
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--claude", action="store_true", help="Usar Claude CLI para delegação LLM")
     group.add_argument("--codex", action="store_true", help="Usar Codex CLI para delegação LLM")
+    group.add_argument("--gemini", action="store_true", help="Usar Gemini CLI para delegação LLM")
 
 
 def resolve_llm_engine(args) -> str | None:
@@ -24,6 +25,8 @@ def resolve_llm_engine(args) -> str | None:
         return "codex"
     if getattr(args, "claude", False):
         return "claude"
+    if getattr(args, "gemini", False):
+        return "gemini"
     return None
 
 

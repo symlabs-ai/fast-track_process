@@ -51,6 +51,13 @@ def _build_executor_command(
             prompt,
         ]
 
+    if engine == "gemini":
+        return [
+            "gemini",
+            "--yolo",
+            "-p", prompt,
+        ]
+
     raise ValueError(f"Executor LLM desconhecido: {llm_engine}")
 
 

@@ -4,22 +4,21 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [v0.9.3] - 2026-04-07
+## [v0.10.0] - 2026-04-07
 
-- feat(engine): worktree git é o padrão em modo isolated — cada ciclo roda em branch própria (`worktrees/cycle-NN-<engine>`), com fallback para `runs/cycle-NN/` se projeto não tiver git
+### Novas funcionalidades
+- **guidelines_review_passed**: validator LLM que lê `docs/guidelines-review.md` e extrai veredicto APPROVED/ITERATE — substitui `gate_ui_vscode_layout` (keyword scan insuficiente) por validação semântica via LLM
+- **ui.proto.06.guidelines_review**: novo node no `FT_UI_PROTOTYPE.yml` — LLM revisa screenshots contra `seed/ui_guidelines.md` e produz relatório com veredicto
+- **E2E em 3 sub-nodes**: `ui.e2e.01.build`, `ui.e2e.02.screenshots`, `ui.e2e.03.report` — quebra o node monolítico E2E (60 turns) em etapas menores para evitar timeout em Gemini/Codex
 
----
+### Melhorias
+- **Worktree como padrão em modo isolated**: cada ciclo roda em branch git própria (`worktrees/cycle-NN-<engine>`); fallback para `runs/cycle-NN/` se repo não tiver commits
+- **seed/ no run dir**: `_next_run_dir` copia `seed/` do project root para o run dir — LLM encontra `seed/PRD.md`, `seed/ui_guidelines.md` sem erros de path
+- **VS Code Layout no ui_guidelines.md**: seção "Layout Geral — VS Code Style" adicionada com diagrama ASCII e specs de Activity Bar, Drawer, Tabs, Terminal — referência obrigatória para o LLM
 
-## [v0.9.2] - 2026-04-07
-
-- fix(engine): `_next_run_dir` copia `seed/` do project root para o run dir — LLM acha `seed/PRD.md`, `seed/process.yml`, `seed/ui_guidelines.md` sem erros de path
-- fix(process): `FT_UI_PROTOTYPE.yml` referencia `seed/ui_guidelines.md` (obrigatório) em vez de `docs/ui_guidelines.md` (que não existe no run dir)
-
----
-
-## [v0.9.1] - 2026-04-07
-
-- fix(engine): `_seed_from_previous` troca exclude-list por allowlist (`frontend`, `backend`, `src`, `lib`, `tests`, `docs`) — evita propagar `pyproject.toml`, `CHANGELOG.md`, `seed/`, `process/`, `node_modules/` entre ciclos
+### Correções
+- **_seed_from_previous usa allowlist**: em vez de exclude-list, copia apenas `frontend`, `backend`, `src`, `lib`, `tests`, `docs` — evita propagar `pyproject.toml`, `CHANGELOG.md`, `seed/`, `process/`, `node_modules/` entre ciclos
+- **FT_UI_PROTOTYPE.yml**: referencia `seed/ui_guidelines.md` corretamente (estava `docs/ui_guidelines.md`)
 
 ---
 

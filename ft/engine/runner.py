@@ -433,7 +433,7 @@ class StepRunner:
             return self.project_root
         state_dir = self.state_mgr.path.parent  # runs/<N>/state/
         run_dir = state_dir.parent              # runs/<N>/
-        if run_dir.parent.name == "runs":
+        if run_dir.parent.name in ("runs", "worktrees"):
             run_dir.mkdir(parents=True, exist_ok=True)
             return str(run_dir)
         return self.project_root
@@ -567,7 +567,7 @@ class StepRunner:
             # Resolver conditions especiais (file_exists:)
             if node.condition and node.condition.startswith("file_exists:"):
                 check_path = node.condition.split(":", 1)[1]
-                full_path = Path(self.work_dir) / check_path
+                full_path = Path(self._work_dir) / check_path
                 decision_state[node.condition] = "true" if full_path.exists() else "false"
 
             resolved_next = self.graph.resolve_next(node.id, decision_state)
@@ -1501,7 +1501,7 @@ class StepRunner:
         # Resolver conditions especiais antes de delegar ao graph
         if node.condition and node.condition.startswith("file_exists:"):
             check_path = node.condition.split(":", 1)[1]
-            full_path = Path(self.work_dir) / check_path
+            full_path = Path(self._work_dir) / check_path
             state_dict[node.condition] = "true" if full_path.exists() else "false"
 
         next_id = self.graph.resolve_next(node.id, state_dict)

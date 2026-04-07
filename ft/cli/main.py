@@ -355,7 +355,7 @@ def _next_cycle_num(project_root: Path) -> int:
 def _setup_worktree(project_root: Path, name: str) -> Path:
     """Cria um git worktree para rodar um ciclo em isolamento total.
 
-    Cria: <project_root>/worktrees/cycle-NN-<name>
+    Cria: <project_root>/runs/cycle-NN-<name>
     Branch: cycle-NN-<name>
 
     Retorna o path do worktree criado.
@@ -383,17 +383,11 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
 
     next_num = _next_cycle_num(project_root)
     branch_name = f"cycle-{next_num:02d}-{name}"
-    worktree_dir = project_root / "worktrees" / branch_name
+    worktree_dir = project_root / "runs" / branch_name
 
-    # Adicionar worktrees/ ao .gitignore do projeto (se não estiver)
-    gitignore_path = project_root / ".gitignore"
-    if gitignore_path.exists():
-        content = gitignore_path.read_text()
-        if "worktrees/" not in content:
-            with open(gitignore_path, "a") as f:
-                f.write("\n# Git worktrees de ciclos\nworktrees/\n")
-    else:
-        gitignore_path.write_text("worktrees/\n")
+    # Garantir que runs/ existe e está no .gitignore
+    (project_root / "runs").mkdir(parents=True, exist_ok=True)
+    _ensure_runs_gitignore(project_root)
 
     # Criar worktree
     result = _sp.run(
@@ -412,6 +406,9 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
 
     print(f"  Worktree: {worktree_dir.relative_to(project_root)} (branch: {branch_name})")
     return worktree_dir
+
+
+
 
 
 def get_runner(process: str | None = None, llm_engine: str | None = None, llm_model: str | None = None, verbose: bool = False, cycle: str | None = None) -> StepRunner:
@@ -1011,6 +1008,11 @@ def cmd_run(args):
     # Resolver YAML do processo
     if args.process:
         process_path = Path(args.process)
+        if not process_path.is_absolute():
+            # Relativo ao project_root (não ao CWD do shell)
+            candidate = project_root / process_path
+            if candidate.exists():
+                process_path = candidate
     else:
         process_path = find_process_yaml(project_root)
         if not process_path:

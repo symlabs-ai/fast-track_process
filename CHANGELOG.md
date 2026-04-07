@@ -4,6 +4,17 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.31] - 2026-04-07
+
+- feat(engine): Gemini CLI como terceiro engine de delegação (`--gemini [MODEL]`)
+- feat(engine): engine e modelo configuráveis por node no YAML (`llm_engine`, `llm_model`)
+- feat(engine): engine + model selecionáveis por flag CLI (`--codex gpt-5.3`, `--claude opus`)
+- feat(cli): `--worktree [NAME]` — run em git worktree isolado para paralelismo real entre ciclos
+- feat(engine): rename de runs para cycles — diretórios `runs/cycle-NN` (backward-compatible)
+- feat(engine): melhorias de retro — health check de API, seed de código do ciclo anterior, flush de output, validator `prd_coverage`
+
+---
+
 ## [v0.8.30] - 2026-04-07
 
 - feat(engine): BL-16/17 — stakeholder review + critical analysis nodes no processo

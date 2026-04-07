@@ -90,6 +90,9 @@ nodes:
       - file_exists: docs/hipotese.md
       - file_exists: docs/PRD.md
       - min_lines: 30
+      - demand_coverage:
+          prd_path: docs/PRD.md
+          demand_path: docs/demanda.md
     next: ft.plan.01.task_list
 
   # ================================================================

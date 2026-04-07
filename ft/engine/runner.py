@@ -58,6 +58,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "has_sections": val.has_sections,
     "min_user_stories": val.min_user_stories,
     "sections_unchanged": val.sections_unchanged,
+    "demand_coverage": val.demand_coverage,
     "tests_pass": val.tests_pass,
     "tests_fail": val.tests_fail,
     "coverage_min": val.coverage_min,

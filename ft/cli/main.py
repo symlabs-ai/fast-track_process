@@ -780,10 +780,14 @@ def cmd_run(args):
             else:
                 print(_ui.warn("Não foi possível adaptar o processo — usando original"))
 
-        # Gerar hipótese limpa (só produto) e salvar
-        hypothesis = generate_hypothesis(classification)
+        # Salvar demanda original para validação de cobertura (só na primeira run)
         dst_docs = project_root / "docs"
         dst_docs.mkdir(parents=True, exist_ok=True)
+        (dst_docs / "demanda.md").write_text(demand_text)
+        print(_ui.info("Demanda original salva em docs/demanda.md"))
+
+        # Gerar hipótese limpa (só produto) e salvar
+        hypothesis = generate_hypothesis(classification)
         (dst_docs / "hipotese.md").write_text(hypothesis)
         print(_ui.success("Hipótese gerada a partir da demanda"))
         _normalize_hipotese(dst_docs / "hipotese.md", project_root, llm_engine=llm_engine or "claude")

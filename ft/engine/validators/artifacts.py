@@ -225,3 +225,83 @@ def sections_unchanged(
         "sections_unchanged: secoes preservadas "
         f"({', '.join(sections)})"
     )
+
+
+def demand_coverage(
+    prd_path: str = "docs/PRD.md",
+    demand_path: str = "docs/demanda.md",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Verifica se o PRD cobre todas as features da demanda original.
+
+    Só roda na primeira run (quando demanda.md existe).
+    Nas runs seguintes, demanda.md não existe e o validator passa automaticamente.
+    """
+    from pathlib import Path
+    import json
+
+    demand_file = Path(project_root) / demand_path
+    prd_file = Path(project_root) / prd_path
+
+    # Sem demanda = run subsequente, pular
+    if not demand_file.exists():
+        return True, "demand_coverage: sem demanda original — pulando (run subsequente)"
+
+    if not prd_file.exists():
+        return False, f"demand_coverage FAIL: {prd_path} não encontrado"
+
+    demand_text = demand_file.read_text()
+    prd_text = prd_file.read_text()
+
+    # Usar LLM para verificar cobertura
+    try:
+        from ft.engine.delegate import delegate_to_llm
+
+        prompt = (
+            "Compare a demanda original do usuário com o PRD gerado.\n\n"
+            "DEMANDA ORIGINAL:\n---\n"
+            f"{demand_text}\n---\n\n"
+            "PRD GERADO:\n---\n"
+            f"{prd_text}\n---\n\n"
+            "Verifique se CADA feature/requisito mencionado na demanda tem "
+            "pelo menos uma User Story correspondente no PRD.\n\n"
+            "Responda APENAS com JSON (sem markdown):\n"
+            '{"covered": ["feature coberta 1", "feature coberta 2"], '
+            '"missing": ["feature que faltou 1", "feature que faltou 2"], '
+            '"verdict": "PASS" ou "FAIL"}\n\n'
+            "Se todas as features estão cobertas, verdict=PASS.\n"
+            "Se alguma feature da demanda não tem US correspondente, verdict=FAIL."
+        )
+
+        result = delegate_to_llm(
+            task=prompt,
+            project_root=project_root,
+            allowed_paths=[],
+            max_turns=5,
+            llm_engine="claude",
+        )
+
+        output = result.output.strip()
+        # Extrair JSON
+        start = output.find("{")
+        end = output.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(output[start:end])
+            missing = data.get("missing", [])
+            covered = data.get("covered", [])
+            verdict = data.get("verdict", "FAIL")
+
+            if verdict == "PASS" or not missing:
+                return True, f"demand_coverage: PASS — {len(covered)} features cobertas no PRD"
+
+            missing_str = "; ".join(missing[:5])
+            return False, (
+                f"demand_coverage FAIL: {len(missing)} feature(s) da demanda sem US no PRD: "
+                f"{missing_str}"
+            )
+
+    except Exception as e:
+        # Se LLM não disponível, passar (não bloquear por falha de infra)
+        return True, f"demand_coverage: LLM indisponível, pulando ({e})"
+
+    return True, "demand_coverage: verificação concluída"

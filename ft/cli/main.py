@@ -302,7 +302,14 @@ def _ensure_runs_gitignore(project_root: Path) -> None:
     runs_dir.mkdir(exist_ok=True)
     gitignore = runs_dir / ".gitignore"
     if not gitignore.exists():
-        gitignore.write_text("*\n!.gitignore\n")
+        gitignore.write_text(
+            "# Excluir artefatos pesados dos runs do git\n"
+            "*/node_modules/\n"
+            "*/dist/\n"
+            "*/state/llm_logs/\n"
+            "*/__pycache__/\n"
+            "*.lock\n"
+        )
 
 
 def _next_cycle_num(project_root: Path) -> int:
@@ -1060,8 +1067,8 @@ def main():
     add_llm_engine_flags(init)
     init.add_argument("--template", "-t", help="Template de processo a copiar (ex: fast-track-v2)")
 
-    # continue
-    cont = sub.add_parser("continue", help="Avancar no processo")
+    # resume (alias: continue para backward compat)
+    cont = sub.add_parser("resume", aliases=["continue"], help="Retomar o processo")
     add_llm_engine_flags(cont)
     cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
     cont.add_argument("--sprint", action="store_true", help="Avancar ate fim da sprint")
@@ -1138,7 +1145,7 @@ def main():
     try:
         if args.command == "init":
             cmd_init(args)
-        elif args.command == "continue":
+        elif args.command in ("resume", "continue"):
             cmd_continue(args)
         elif args.command == "status":
             cmd_status(args)

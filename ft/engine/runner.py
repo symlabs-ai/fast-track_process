@@ -122,7 +122,10 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None, 
             # Validators booleanos de código (tests_pass, tests_exist, etc.) → work_dir
             _code_validators = ("tests_pass", "tests_fail", "tests_exist",
                                 "coverage_min", "coverage_per_file",
-                                "lint_clean", "format_check")
+                                "lint_clean", "format_check",
+                                "gate_frontend", "gate_delivery", "gate_smoke",
+                                "gate_mvp", "gate_tdd_sequence", "gate_coverage_80",
+                                "gate_e2e_all_pass", "gate_server_starts")
 
             # read_artifact — caso especial: args como dict com path/key/pattern
             if name == "read_artifact" and isinstance(args, dict):
@@ -141,10 +144,12 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None, 
                 passed, detail = fn(**args, project_root=_eff_root())
             elif name.startswith("gate_") and isinstance(args, bool) and args is True:
                 # gate_delivery: true → usa outputs do node
+                # Gates verificam estrutura de código → usar work_dir quando disponível
+                gate_root = work_dir or project_root
                 if name == "gate_delivery":
-                    passed, detail = fn(outputs=node.outputs, project_root=_eff_root())
+                    passed, detail = fn(outputs=node.outputs, project_root=gate_root)
                 else:
-                    passed, detail = fn(project_root=_eff_root())
+                    passed, detail = fn(project_root=gate_root)
             elif isinstance(args, dict):
                 # sections_unchanged: resolve snapshot_path relativo ao state_dir
                 if name == "sections_unchanged" and state_dir and "snapshot_path" in args:
@@ -1421,19 +1426,33 @@ class StepRunner:
         print(ui.info(f"env_setup: {len(node.env_setup)} comando(s)"))
         for cmd in node.env_setup:
             print(f"    $ {cmd}")
-            result = subprocess.run(
-                cmd, shell=True, cwd=self._work_dir,
-                capture_output=True, text=True, timeout=300,
-            )
-            if result.returncode != 0:
-                err = result.stderr.strip() or result.stdout.strip()
+            # Usa arquivos temporários em vez de pipes para evitar hang quando o
+            # comando inicia processos em background (&) — proc.wait() retorna
+            # assim que o shell pai sai, independente dos filhos backgrounded.
+            import tempfile
+            with tempfile.TemporaryFile(mode="w+") as out_f, \
+                 tempfile.TemporaryFile(mode="w+") as err_f:
+                proc = subprocess.Popen(
+                    cmd, shell=True, cwd=self._work_dir,
+                    stdout=out_f, stderr=err_f, text=True,
+                )
+                try:
+                    rc = proc.wait(timeout=300)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    rc = proc.wait()
+                out_f.seek(0)
+                err_f.seek(0)
+                stdout = out_f.read()
+                stderr = err_f.read()
+            if rc != 0:
+                err = stderr.strip() or stdout.strip()
                 print(ui.fail(f"env_setup falhou: {cmd}"))
                 print(f"    {err[:300]}")
                 self.state_mgr.block(f"env_setup falhou: {cmd}\n{err[:500]}")
                 return
-            if result.stdout.strip():
-                # Mostrar última linha do output para feedback
-                last_line = result.stdout.strip().splitlines()[-1]
+            if stdout.strip():
+                last_line = stdout.strip().splitlines()[-1]
                 print(f"    → {last_line[:120]}")
         print(ui.info("env_setup concluído"))
 

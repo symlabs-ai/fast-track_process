@@ -408,58 +408,42 @@ class StepRunner:
         return f"{label}>"
 
     def _resolve_work_dir(self) -> str:
-        """Resolve o diretório de trabalho para delegação ao LLM.
+        """Resolve o diretório de trabalho (CWD) para delegação ao LLM.
 
-        Sempre retorna project_root como CWD (necessário para SymGateway).
-        No modo isolated, o run_dir é usado como prefixo nos allowed_paths
-        para direcionar a escrita do LLM para runs/<N>/.
+        Modo isolated: runs/<N>/ (código gerado dentro do run)
+        Modo continuous: project_root
         """
+        if self._run_mode != "isolated":
+            return self.project_root
+        state_dir = self.state_mgr.path.parent  # runs/<N>/state/
+        run_dir = state_dir.parent              # runs/<N>/
+        if run_dir.parent.name == "runs":
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return str(run_dir)
         return self.project_root
 
     @property
     def _run_dir(self) -> str | None:
         """Retorna o path absoluto do run dir ou None se continuous."""
-        if self._run_mode != "isolated":
-            return None
-        state_dir = self.state_mgr.path.parent
-        run_dir = state_dir.parent
-        if run_dir.parent.name == "runs":
-            run_dir.mkdir(parents=True, exist_ok=True)
-            return str(run_dir)
+        if self._work_dir != self.project_root:
+            return self._work_dir
         return None
-
-    @property
-    def _run_dir_prefix(self) -> str:
-        """Retorna o path relativo do run dir (ex: 'runs/03/') ou '' se continuous."""
-        if self._run_mode != "isolated":
-            return ""
-        state_dir = self.state_mgr.path.parent  # runs/<N>/state/
-        run_dir = state_dir.parent              # runs/<N>/
-        if run_dir.parent.name == "runs":
-            run_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                return str(run_dir.relative_to(Path(self.project_root))) + "/"
-            except ValueError:
-                return ""
-        return ""
 
     def _delegate_allowed_paths(self, paths: list[str]) -> list[str]:
         """Ajusta allowed_paths para o modo isolated.
 
-        No modo isolated, paths de código (src/, tests/, frontend/) são
-        prefixados com runs/<N>/ para direcionar a escrita do LLM.
-        Paths de docs/ ficam na raiz (conhecimento compartilhado).
+        No modo isolated, paths de docs/ são absolutos (vivem na raiz).
+        Paths de código ficam relativos ao CWD (run dir).
         """
-        prefix = self._run_dir_prefix
-        if not prefix:
+        if self._work_dir == self.project_root:
             return paths
         result = []
-        root_paths = ("docs/", "docs", "process/", "process", "CHANGELOG.md")
         for p in paths:
-            if p in root_paths or p.startswith("docs/") or p.startswith("process/"):
-                result.append(p)
+            if p.startswith("docs/") or p.startswith("process/") or p == "CHANGELOG.md":
+                # docs/ e process/ vivem na raiz — path absoluto
+                result.append(str(Path(self.project_root) / p))
             else:
-                result.append(prefix + p)
+                result.append(p)
         return result
 
     def _resolve_llm_engine(self, state: Any | None = None) -> str:

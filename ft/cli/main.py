@@ -112,18 +112,30 @@ def find_process_yaml(root: Path) -> Path | None:
     return None
 
 
+def _is_cycle_dir(d: Path) -> bool:
+    """Verifica se é um diretório de ciclo: 'cycle-NN' ou legado 'NN'."""
+    name = d.name
+    return name.isdigit() or (name.startswith("cycle-") and name[6:].isdigit())
+
+
+def _cycle_num(d: Path) -> int:
+    """Extrai o número do ciclo de 'cycle-NN' ou 'NN'."""
+    name = d.name
+    return int(name[6:]) if name.startswith("cycle-") else int(name)
+
+
 def _find_latest_state(root: Path) -> Path:
     """Encontra o state mais recente. Prioridade: continuous > runs/ > legacy."""
     # 1. Continuous mode: state/ na raiz do projeto
     continuous = root / "state" / "engine_state.yml"
     if continuous.exists():
         return continuous
-    # 2. Isolated mode: runs/<N>/state/
+    # 2. Isolated mode: runs/cycle-NN/ ou runs/NN/ (legado)
     runs_dir = root / "runs"
     if runs_dir.is_dir():
         run_dirs = sorted(
-            [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()],
-            reverse=True,
+            [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+            key=_cycle_num, reverse=True,
         )
         for rd in run_dirs:
             state = rd / "state" / "engine_state.yml"
@@ -133,8 +145,8 @@ def _find_latest_state(root: Path) -> Path:
     legacy = root / "project" / "state" / "engine_state.yml"
     if legacy.exists():
         return legacy
-    # Default para novo run
-    return root / "runs" / "01" / "state" / "engine_state.yml"
+    # Default para novo ciclo
+    return root / "runs" / "cycle-01" / "state" / "engine_state.yml"
 
 
 def _api_health_check(project_root: Path) -> None:
@@ -235,10 +247,18 @@ def _next_run_dir(project_root: Path) -> Path:
     runs_dir = project_root / "runs"
     runs_dir.mkdir(exist_ok=True)
     existing = sorted(
-        [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+        [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+        key=_cycle_num,
     )
-    next_num = int(existing[-1].name) + 1 if existing else 1
-    run_dir = runs_dir / f"{next_num:02d}"
+    # Próximo ciclo: baseado no maior número existente + 1
+    # Runs legados (03, 04, 05) são contados como ciclos do passado
+    # mas novos ciclos começam da sequência lógica definida pelo usuário
+    next_num = _cycle_num(existing[-1]) + 1 if existing else 1
+    run_dir = runs_dir / f"cycle-{next_num:02d}"
+    # Se já existe (colisão), incrementar
+    while run_dir.exists():
+        next_num += 1
+        run_dir = runs_dir / f"cycle-{next_num:02d}"
     run_dir.mkdir()
 
     # Propagar CLAUDE.md e .claude/ para o run dir (gateway + settings)
@@ -642,8 +662,8 @@ def _check_active_run(project_root: Path) -> str | None:
     runs_dir = project_root / "runs"
     if runs_dir.is_dir():
         for rd in sorted(
-            [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()],
-            reverse=True,
+            [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+            key=_cycle_num, reverse=True,
         ):
             state = rd / "state" / "engine_state.yml"
             if state.exists():

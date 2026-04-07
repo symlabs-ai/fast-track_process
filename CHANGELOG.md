@@ -4,6 +4,26 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.30] - 2026-04-07
+
+- feat(engine): BL-16/17 — stakeholder review + critical analysis nodes no processo
+- feat(engine): BL-18 — LLM CWD em runs/<N>/ no modo isolated (código não polui raiz)
+- feat(engine): BL-19 — Process Triage: classifica demanda bruta, separa produto/processo, adapta YAML
+- feat(engine): demand_coverage validator — PRD deve cobrir todas as features da demanda
+- feat(engine): triage propõe adaptação ao stakeholder com diff e espera aprovação
+- feat(engine): native git commit de docs/ e process/ entre runs (pré/pós)
+- feat(cli): ft cancel com relatório LLM + proteção contra run duplicado
+- feat(cli): --input aceita demanda bruta (texto livre) — triage classifica automaticamente
+- feat(cli): spinner animado para operações longas (triage, adaptação)
+- feat(cli): mensagens claras no modo MVP ("AUTO-APROVADO" vs "AGUARDANDO APROVAÇÃO")
+- feat(cli): triage coleta respostas do stakeholder quando tem perguntas
+- fix(engine): CWD do LLM na raiz → run dir (SymGateway usa /s/<slug> agora)
+- fix(engine): validators resolvem paths por existência (run dir > project root)
+- fix(engine): screenshot_review_passed com fallback de aprovação implícita
+- fix(engine): propagação de CLAUDE.md e .claude/ para run dirs
+
+---
+
 ## [v0.8.29] - 2026-04-06
 
 - feat(engine): colorized CLI output with step cards, type-colored badges, ANSI colors

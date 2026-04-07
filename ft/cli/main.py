@@ -320,6 +320,67 @@ def cmd_fix(args):
         print(_ui.fail(f"LLM não conseguiu aplicar: {result.output[:300]}"))
 
 
+def cmd_cancel(args):
+    """Cancela o run ativo com justificativa."""
+    import yaml as _yaml
+    from datetime import datetime
+    from ft.engine import ui as _ui
+
+    root = find_project_root()
+    reason = args.reason
+
+    # Encontrar o run ativo
+    state_path = _find_latest_state(root)
+    if not state_path.exists():
+        print(_ui.warn("Nenhum run ativo encontrado."))
+        return
+
+    data = _yaml.safe_load(state_path.read_text()) or {}
+    current_node = data.get("current_node")
+    completed = data.get("completed_nodes", [])
+    total = data.get("metrics", {}).get("steps_total", "?")
+
+    if current_node is None:
+        print(_ui.warn("Processo já finalizado — nada para cancelar."))
+        return
+
+    # Matar PID se ainda estiver rodando
+    lock = data.get("_lock", {})
+    pid = lock.get("pid")
+    if pid and _is_pid_alive(pid):
+        try:
+            os.kill(pid, 15)  # SIGTERM
+            print(_ui.info(f"Processo PID {pid} encerrado"))
+        except OSError:
+            pass
+
+    # Marcar state como cancelled
+    data["node_status"] = "cancelled"
+    data["blocked_reason"] = f"CANCELADO: {reason}"
+    data["_lock"] = None
+    state_path.write_text(_yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False))
+
+    # Gerar relatório de cancelamento
+    run_dir = state_path.parent.parent  # runs/<N>/state/ → runs/<N>/
+    cancel_report = run_dir / "CANCELLED.md"
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    cancel_report.write_text(
+        f"# Run Cancelado\n\n"
+        f"**Data:** {ts}\n"
+        f"**Node atual:** {current_node}\n"
+        f"**Progresso:** {len(completed)}/{total} steps\n"
+        f"**Steps concluídos:** {', '.join(completed) if completed else 'nenhum'}\n\n"
+        f"## Motivo do cancelamento\n\n"
+        f"{reason}\n"
+    )
+
+    print(_ui.header("Run cancelado"))
+    print(_ui.info(f"Node: {current_node} ({len(completed)}/{total} steps)"))
+    print(_ui.info(f"Motivo: {reason}"))
+    print(_ui.dim(f"Relatório salvo em: {cancel_report.relative_to(root)}"))
+    print(_ui.info("Para iniciar um novo run: ft run ."))
+
+
 def cmd_setup_env(args):
     """Provisiona CLAUDE.md e .claude/settings.local.json a partir de uma API key."""
     project_root = Path(args.project) if args.project else find_project_root()
@@ -399,10 +460,71 @@ def _resolve_run_mode(project_root: Path) -> str:
     return env.get("run_mode", "isolated")
 
 
+def _check_active_run(project_root: Path) -> str | None:
+    """Verifica se há um run ativo (state com lock de PID vivo). Retorna descrição ou None."""
+    import yaml as _yaml
+
+    # Checar continuous mode
+    for state_candidate in [
+        project_root / "state" / "engine_state.yml",
+    ]:
+        if state_candidate.exists():
+            try:
+                data = _yaml.safe_load(state_candidate.read_text()) or {}
+                lock = data.get("_lock")
+                current = data.get("current_node")
+                if lock and current:
+                    pid = lock.get("pid")
+                    if pid and _is_pid_alive(pid):
+                        return f"Modo continuous ativo (PID {pid}, node: {current})"
+            except Exception:
+                pass
+
+    # Checar isolated runs
+    runs_dir = project_root / "runs"
+    if runs_dir.is_dir():
+        for rd in sorted(
+            [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()],
+            reverse=True,
+        ):
+            state = rd / "state" / "engine_state.yml"
+            if state.exists():
+                try:
+                    data = _yaml.safe_load(state.read_text()) or {}
+                    lock = data.get("_lock")
+                    current = data.get("current_node")
+                    if lock and current:
+                        pid = lock.get("pid")
+                        if pid and _is_pid_alive(pid):
+                            return f"Run {rd.name} ativo (PID {pid}, node: {current})"
+                except Exception:
+                    pass
+    return None
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Verifica se um PID está rodando."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
 def cmd_run(args):
     """Bootstrap completo: cria projeto, provisiona ambiente, inicia e roda até MVP."""
     project_root = Path(args.project).resolve()
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
+
+    # Verificar se já tem um run ativo
+    active = _check_active_run(project_root)
+    if active:
+        from ft.engine import ui as _ui
+        print(_ui.fail(f"Já existe um run ativo: {active}"))
+        print(_ui.warn("Aguarde o run atual terminar, ou use: ft continue --mvp"))
+        print(_ui.dim("Para forçar novo run mesmo assim: ft run . --force"))
+        if not getattr(args, "force", False):
+            sys.exit(1)
 
     run_mode = _resolve_run_mode(project_root)
 
@@ -616,6 +738,10 @@ def main():
     add_llm_engine_flags(fx)
     fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
 
+    # cancel
+    ca = sub.add_parser("cancel", help="Cancelar o run ativo com justificativa")
+    ca.add_argument("reason", help="Motivo do cancelamento (entre aspas)")
+
     # setup-env
     se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json")
     se.add_argument("key", help="API key do SymGateway (sk-sym_...)")
@@ -635,6 +761,8 @@ def main():
                     help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)")
     ru.add_argument("--input", metavar="FILE", dest="demand_input",
                     help="Demanda bruta do usuário (texto livre — o engine classifica produto vs processo)")
+    ru.add_argument("--force", action="store_true",
+                    help="Forçar novo run mesmo se já houver um ativo")
     ru.add_argument("--template", "-t",
                     help="Template de processo a copiar (ex: fast-track-v2)")
 
@@ -657,6 +785,8 @@ def main():
             cmd_validate(args)
         elif args.command == "fix":
             cmd_fix(args)
+        elif args.command == "cancel":
+            cmd_cancel(args)
         elif args.command == "setup-env":
             cmd_setup_env(args)
         elif args.command == "run":

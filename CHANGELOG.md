@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.9.1] - 2026-04-07
+
+- fix(engine): `_seed_from_previous` troca exclude-list por allowlist (`frontend`, `backend`, `src`, `lib`, `tests`, `docs`) — evita propagar `pyproject.toml`, `CHANGELOG.md`, `seed/`, `process/`, `node_modules/` entre ciclos
+
+---
+
 ## [v0.9.0] - 2026-04-07
 
 ### Novas funcionalidades

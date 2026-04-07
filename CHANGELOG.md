@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.9.3] - 2026-04-07
+
+- feat(engine): worktree git é o padrão em modo isolated — cada ciclo roda em branch própria (`worktrees/cycle-NN-<engine>`), com fallback para `runs/cycle-NN/` se projeto não tiver git
+
+---
+
 ## [v0.9.2] - 2026-04-07
 
 - fix(engine): `_next_run_dir` copia `seed/` do project root para o run dir — LLM acha `seed/PRD.md`, `seed/process.yml`, `seed/ui_guidelines.md` sem erros de path

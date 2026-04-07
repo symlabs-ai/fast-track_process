@@ -4,6 +4,21 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.11.0] - 2026-04-07
+
+### Novas funcionalidades
+- **ft lint-process**: comando CLI que usa LLM para validar semanticamente um YAML de processo — detecta referências a projetos específicos (nomes de produto, specs de design, tech stack hardcoded) e retorna relatório com violations + verdict PASS/FAIL
+- **Process design rules**: documentação formal em `docs/ft_engine_usage.md` da regra "YAML = orquestração pura" — toda especificidade de projeto vive em `seed/` e `scripts/`; hotspots são hooks e referências a artefatos
+
+### Melhorias
+- **guidelines_review_passed**: adicionado ao `VALIDATOR_REGISTRY` — validator que lê `docs/guidelines-review.md` e extrai veredicto APPROVED/ITERATE; lista itens ❌ em caso de falha
+- **decision node com file_exists**: condição `file_exists:<path>` suportada em nodes de decisão — avalia existência do arquivo em tempo de execução e propaga para `_reconcile_state_with_graph`
+- **FT_UI_PROTOTYPE.yml v3.0.0**: processo agora é completamente genérico — decision node `ui.route` roteia para seed path (PRD existente) ou demand path (demanda bruta); `frontend/`, `Playwright`, `npm`, `1920x1080`, `localhost:4173` removidos dos prompts; env_setup usa `scripts/build.sh` e `scripts/serve.sh`
+- **scripts/serve.sh**: encontra porta livre incrementalmente a partir de 4173, escreve URL em `.serve_url` — elimina conflito de porta entre ciclos paralelos
+- **seed/tech_stack.md + ui_guidelines.md §9**: tech stack e specs de captura (viewport, ferramenta, telas obrigatórias) movidos para seed — LLM lê os arquivos em vez de ter specs hardcoded no YAML
+
+---
+
 ## [v0.10.0] - 2026-04-07
 
 ### Novas funcionalidades

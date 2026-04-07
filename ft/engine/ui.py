@@ -173,6 +173,49 @@ def validator_fail(detail: str) -> str:
     return f"    {RED}[fail]{RESET} {detail}"
 
 
+class Spinner:
+    """Spinner animado para operações longas. Usa como context manager."""
+
+    FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, message: str = "Processando"):
+        self._message = message
+        self._running = False
+        self._thread = None
+
+    def __enter__(self):
+        import threading
+        self._running = True
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1)
+        # Limpar a linha do spinner
+        sys.stdout.write(f"\r{' ' * (len(self._message) + 10)}\r")
+        sys.stdout.flush()
+
+    def _spin(self):
+        import time
+        i = 0
+        while self._running:
+            frame = self.FRAMES[i % len(self.FRAMES)]
+            if _COLOR:
+                sys.stdout.write(f"\r  {CYAN}{frame}{RESET} {DIM}{self._message}...{RESET}")
+            else:
+                sys.stdout.write(f"\r  {frame} {self._message}...")
+            sys.stdout.flush()
+            i += 1
+            time.sleep(0.1)
+
+    def update(self, message: str):
+        """Atualiza a mensagem do spinner."""
+        self._message = message
+
+
 def autofix_applied(description: str) -> str:
     return f"  {BOLD_GREEN}⚙ Autocorreção:{RESET} {description}"
 

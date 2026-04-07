@@ -663,14 +663,14 @@ def cmd_run(args):
             sys.exit(1)
 
         demand_text = src.read_text()
-        print(_ui.info("Analisando demanda..."))
 
-        classification = classify_demand(
-            demand=demand_text,
-            process_yaml_path=process_path,
-            project_root=str(project_root),
-            llm_engine=llm_engine or "claude",
-        )
+        with _ui.Spinner("Analisando demanda"):
+            classification = classify_demand(
+                demand=demand_text,
+                process_yaml_path=process_path,
+                project_root=str(project_root),
+                llm_engine=llm_engine or "claude",
+            )
 
         print(present_triage(classification))
 
@@ -690,26 +690,26 @@ def cmd_run(args):
             if answers:
                 # Re-classificar com as respostas incorporadas
                 enriched_demand = demand_text + "\n\nRespostas do stakeholder:\n" + "\n".join(answers)
-                print(_ui.info("Re-analisando com suas respostas..."))
-                classification = classify_demand(
-                    demand=enriched_demand,
-                    process_yaml_path=process_path,
-                    project_root=str(project_root),
-                    llm_engine=llm_engine or "claude",
-                )
+                with _ui.Spinner("Re-analisando com suas respostas"):
+                    classification = classify_demand(
+                        demand=enriched_demand,
+                        process_yaml_path=process_path,
+                        project_root=str(project_root),
+                        llm_engine=llm_engine or "claude",
+                    )
                 print(present_triage(classification))
 
         # Se há requisitos de processo → adaptar YAML
         process_reqs = classification.get("process", {})
         if process_reqs.get("detected") and process_reqs.get("conflicts"):
-            print(_ui.warn("Adaptando processo para atender sua demanda..."))
-            adapted = adapt_process(
-                process_yaml_path=process_path,
-                requirements=process_reqs.get("requirements", []),
-                conflicts=process_reqs.get("conflicts", []),
-                project_root=str(project_root),
-                llm_engine=llm_engine or "claude",
-            )
+            with _ui.Spinner("Adaptando processo para atender sua demanda"):
+                adapted = adapt_process(
+                    process_yaml_path=process_path,
+                    requirements=process_reqs.get("requirements", []),
+                    conflicts=process_reqs.get("conflicts", []),
+                    project_root=str(project_root),
+                    llm_engine=llm_engine or "claude",
+                )
             if adapted:
                 valid, report = validate_adapted_yaml(adapted)
                 print(report)

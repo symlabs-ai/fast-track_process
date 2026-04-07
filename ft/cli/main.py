@@ -360,16 +360,24 @@ def cmd_cancel(args):
     data["_lock"] = None
     state_path.write_text(_yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False))
 
-    # Gerar relatório de cancelamento
+    # Gerar relatório de cancelamento (determinístico)
     run_dir = state_path.parent.parent  # runs/<N>/state/ → runs/<N>/
     cancel_report = run_dir / "CANCELLED.md"
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    cancel_report.write_text(
+    gate_log = data.get("gate_log", {})
+    blocked = data.get("blocked_reason", "")
+    artifacts = data.get("artifacts", {})
+
+    # Base determinística
+    base_report = (
         f"# Run Cancelado\n\n"
         f"**Data:** {ts}\n"
         f"**Node atual:** {current_node}\n"
         f"**Progresso:** {len(completed)}/{total} steps\n"
-        f"**Steps concluídos:** {', '.join(completed) if completed else 'nenhum'}\n\n"
+        f"**Steps concluídos:** {', '.join(completed) if completed else 'nenhum'}\n"
+        f"**Gates:** {', '.join(f'{k}={v}' for k, v in gate_log.items()) if gate_log else 'nenhum'}\n"
+        f"**Artefatos:** {', '.join(artifacts.keys()) if artifacts else 'nenhum'}\n"
+        f"**Último bloqueio:** {blocked or 'nenhum'}\n\n"
         f"## Motivo do cancelamento\n\n"
         f"{reason}\n"
     )
@@ -377,7 +385,46 @@ def cmd_cancel(args):
     print(_ui.header("Run cancelado"))
     print(_ui.info(f"Node: {current_node} ({len(completed)}/{total} steps)"))
     print(_ui.info(f"Motivo: {reason}"))
-    print(_ui.dim(f"Relatório salvo em: {cancel_report.relative_to(root)}"))
+
+    # Análise LLM do cancelamento
+    print(_ui.info("Gerando análise do cancelamento..."))
+    from ft.engine.delegate import delegate_to_llm
+    llm_engine = resolve_llm_engine(args) or "claude"
+
+    analysis_prompt = (
+        f"Um run do processo Fast Track foi cancelado. Analise o contexto e produza "
+        f"um relatório de encerramento.\n\n"
+        f"DADOS DO RUN:\n{base_report}\n\n"
+        f"PRODUZA uma análise com:\n"
+        f"## Análise do cancelamento\n"
+        f"- O que foi concluído e o que ficou pendente\n"
+        f"- Se o motivo do cancelamento indica problema de produto ou de processo\n"
+        f"- Recomendação: retomar este run (ft continue) ou iniciar novo (ft run)\n\n"
+        f"## Aprendizados para o próximo ciclo\n"
+        f"- O que o ciclo parcial ensinou\n"
+        f"- O que deveria mudar no próximo run\n\n"
+        f"Escreva o relatório completo em: {cancel_report.relative_to(root)}\n"
+        f"Comece com o conteúdo base que já preparei, e adicione as seções de análise.\n"
+        f"Ao final diga DONE."
+    )
+
+    # Salvar base primeiro (fallback se LLM falhar)
+    cancel_report.write_text(base_report)
+
+    result = delegate_to_llm(
+        task=analysis_prompt,
+        project_root=str(root),
+        allowed_paths=[str(cancel_report.relative_to(root))],
+        max_turns=10,
+        llm_engine=llm_engine,
+    )
+
+    if result.success:
+        print(_ui.success("Relatório de cancelamento gerado com análise"))
+    else:
+        print(_ui.warn("LLM não disponível — relatório base salvo sem análise"))
+
+    print(_ui.dim(f"Relatório: {cancel_report.relative_to(root)}"))
     print(_ui.info("Para iniciar um novo run: ft run ."))
 
 
@@ -740,6 +787,7 @@ def main():
 
     # cancel
     ca = sub.add_parser("cancel", help="Cancelar o run ativo com justificativa")
+    add_llm_engine_flags(ca)
     ca.add_argument("reason", help="Motivo do cancelamento (entre aspas)")
 
     # setup-env

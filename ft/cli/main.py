@@ -538,6 +538,120 @@ def cmd_validate(args):
     sys.exit(0 if report.passed else 1)
 
 
+def cmd_lint_process(args):
+    """Lint semântico — usa LLM para detectar especificidades de projeto no YAML."""
+    import json as _json
+
+    root = find_project_root()
+
+    if args.process:
+        process_path = Path(args.process)
+    else:
+        process_path = find_process_yaml(root)
+        if not process_path:
+            print("ERRO: Nenhum YAML de processo encontrado em ./process/")
+            sys.exit(1)
+
+    yaml_content = process_path.read_text()
+    rel_path = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
+
+    print(f"\nLint semântico: {rel_path}\n")
+
+    prompt = (
+        "Você é um validador de processos YAML do Fast Track.\n\n"
+        "REGRA FUNDAMENTAL: O YAML de processo é pura orquestração. Ele define sequência "
+        "de passos, executor, e validators. Ele NÃO deve conter especificidades de projeto.\n\n"
+        "VIOLAÇÕES (error) — reporte se encontrar nos prompts ou títulos:\n"
+        "- Nomes de produto/projeto (ex: 'ft-studio', 'Pokemon', 'YouNews', qualquer nome próprio)\n"
+        "- Specs de design hardcoded (ex: 'Activity Bar 40px', '#0a0a1a', 'fts-*', '180x60px', cores hex)\n"
+        "- Tech stack hardcoded (ex: 'Svelte + Vite', 'React', 'js-yaml', 'Flask', nomes de frameworks/libs)\n"
+        "- Checklist de validação específica (em vez de 'leia ui_guidelines.md e valide')\n"
+        "- Estrutura de projeto específica detalhada (ex: lista de componentes, nomes de arquivos do projeto)\n\n"
+        "WARNINGS — reporte como warning:\n"
+        "- Nomes de screenshots muito específicos do projeto (ex: 'graph.png', 'drawer-open.png')\n\n"
+        "ACEITO — NÃO reporte:\n"
+        "- Caminhos genéricos de artefatos (seed/PRD.md, seed/ui_guidelines.md, docs/tech_stack.md)\n"
+        "- Validators genéricos (file_exists, has_sections, guidelines_review_passed)\n"
+        "- Estrutura de pastas genérica (frontend/src/, docs/screenshots/, frontend/dist/)\n"
+        "- IDs de nodes, títulos descritivos genéricos, nomes de sprints\n"
+        "- Comandos de build genéricos (npm run build, npm install, npx serve)\n"
+        "- Referências a ferramentas genéricas (Playwright, curl)\n"
+        "- Instruções genéricas ('Leia seed/ui_guidelines.md e siga')\n\n"
+        "YAML DO PROCESSO:\n"
+        "---\n"
+        f"{yaml_content}\n"
+        "---\n\n"
+        "Responda APENAS com JSON (sem markdown, sem ```), no formato:\n"
+        '{"violations": [\n'
+        '  {"level": "error"|"warning", "node_id": "...", "excerpt": "trecho curto", '
+        '"reason": "motivo", "suggestion": "como corrigir"}\n'
+        '], "verdict": "PASS"|"FAIL"}\n\n'
+        "Se não houver violações: {\"violations\": [], \"verdict\": \"PASS\"}\n"
+        "verdict=FAIL se houver pelo menos 1 error. Warnings sozinhos = PASS."
+    )
+
+    from ft.engine.delegate import delegate_to_llm
+
+    engine = resolve_llm_engine(args)
+    model = resolve_llm_model(args)
+    result = delegate_to_llm(
+        task=prompt,
+        project_root=str(root),
+        allowed_paths=[],
+        max_turns=5,
+        llm_engine=engine,
+        llm_model=model,
+    )
+
+    output = result.output.strip()
+    start = output.find("{")
+    end = output.rfind("}") + 1
+
+    if start < 0 or end <= start:
+        print(f"  Erro ao parsear resposta do LLM:\n{output[:500]}")
+        sys.exit(1)
+
+    try:
+        data = _json.loads(output[start:end])
+    except _json.JSONDecodeError:
+        print(f"  JSON inválido na resposta do LLM:\n{output[start:end][:500]}")
+        sys.exit(1)
+
+    violations = data.get("violations", [])
+    verdict = data.get("verdict", "FAIL")
+
+    if not violations:
+        print("  \u2705 Nenhuma especificidade de projeto detectada")
+        print(f"\n  Resultado: PASS")
+        sys.exit(0)
+
+    errors = [v for v in violations if v.get("level") == "error"]
+    warnings = [v for v in violations if v.get("level") == "warning"]
+
+    for v in violations:
+        icon = "\u274c" if v.get("level") == "error" else "\u26a0\ufe0f "
+        node = v.get("node_id", "?")
+        excerpt = v.get("excerpt", "")
+        reason = v.get("reason", "")
+        suggestion = v.get("suggestion", "")
+        print(f"  {icon} {node}: \"{excerpt}\"")
+        print(f"     \u2192 {reason}")
+        if suggestion:
+            print(f"     Sugestão: {suggestion}")
+        print()
+
+    has_errors = len(errors) > 0
+    status = "FAIL" if has_errors else "PASS"
+    parts = []
+    if errors:
+        parts.append(f"{len(errors)} erro(s)")
+    if warnings:
+        parts.append(f"{len(warnings)} warning(s)")
+    print(f"  Resultado: {status} ({', '.join(parts)})")
+
+    sys.exit(1 if has_errors else 0)
+
+
 def cmd_fix(args):
     """Delega ao LLM a correção de um problema descrito pelo usuário."""
     from ft.engine.delegate import delegate_to_llm
@@ -1159,6 +1273,10 @@ def main():
     # validate
     sub.add_parser("validate", help="Validar YAML do processo")
 
+    # lint-process
+    lp = sub.add_parser("lint-process", help="Lint semântico — detecta especificidades de projeto no YAML")
+    add_llm_engine_flags(lp)
+
     # fix
     fx = sub.add_parser("fix", help="Corrigir problema descrito em linguagem natural")
     add_llm_engine_flags(fx)
@@ -1215,6 +1333,8 @@ def main():
             cmd_graph(args)
         elif args.command == "validate":
             cmd_validate(args)
+        elif args.command == "lint-process":
+            cmd_lint_process(args)
         elif args.command == "fix":
             cmd_fix(args)
         elif args.command == "cancel":

@@ -42,7 +42,22 @@ ft-engine status --full           # Grafo completo agrupado por sprint
 ft-engine approve                 # Aprovar artefato pendente
 ft-engine reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
 ft-engine reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
+ft lint-process                   # Lint semântico — detecta especificidades de projeto no YAML
 ```
+
+### Lint de processo
+
+O `ft lint-process` usa LLM para verificar se o YAML de processo está genérico — sem
+referências a projeto específico (nomes de produto, tech stack hardcoded, specs de design).
+
+```bash
+ft lint-process                                    # YAML auto-detectado
+ft lint-process --process process/MEU_PROCESSO.yml  # YAML explícito
+ft lint-process --gemini                            # usar Gemini como engine
+```
+
+Detecta: nomes de produto, cores/dimensões hardcoded, frameworks nos prompts, checklists
+específicas. Retorna PASS (genérico) ou FAIL (com lista de violações e sugestões).
 
 ### Seleção do executor LLM
 
@@ -130,6 +145,72 @@ nodes:
     type: end
     title: "Processo concluído"
 ```
+
+---
+
+## Regras de Design de Processo
+
+O YAML de processo é **pura orquestração**. Ele define a sequência de passos, quem executa
+cada um (LLM coach, LLM coder, python), e quais validators rodam. Nada mais.
+
+### O que o YAML define
+
+- **Sequência**: quais nodes existem e em que ordem executam
+- **Executor**: quem roda cada node (llm_coach, llm_coder, python)
+- **Validators**: quais verificações determinísticas rodam após cada node
+- **Hotspots de customização**: referências a arquivos que o LLM deve ler e seguir
+
+### O que o YAML NÃO define
+
+- Design, layout, cores, dimensões, specs visuais
+- Requisitos funcionais, user stories, regras de negócio
+- Tech stack, frameworks, dependências, linguagens
+- Nomes de projeto, domínio, contexto específico
+
+### Onde vive a especificidade do projeto
+
+Toda informação específica do projeto vive nos **artefatos seed** (`seed/`):
+
+| Artefato | Conteúdo |
+|----------|----------|
+| `seed/PRD.md` | O que construir — user stories, requisitos |
+| `seed/ui_guidelines.md` | Como deve parecer — layout, cores, dimensões, animações |
+| `seed/tech_stack.md` | Com que tecnologia — framework, linguagens, dependências |
+
+### Como o YAML referencia especificidades
+
+Os prompts nos nodes referenciam artefatos por caminho, nunca duplicam conteúdo:
+
+```yaml
+# ERRADO — polui o YAML com especificidades do projeto
+prompt: |
+  Implemente o layout VS Code com Activity Bar (40px) + Drawer retrátil.
+  Use Svelte + Vite. Cores: fundo #0a0a1a, acento #f0c040.
+  Grafo SVG com nodes 180×60px e arestas bezier.
+
+# CERTO — o YAML só orquestra, a LLM lê os artefatos
+prompt: |
+  Implemente a interface completa do projeto.
+  LEIA OBRIGATORIAMENTE:
+    - docs/PRD.md              (user stories — todas são obrigatórias)
+    - docs/tech_stack.md       (stack decidido)
+    - seed/ui_guidelines.md    (especificações visuais completas)
+  Siga TODAS as especificações dos artefatos acima.
+```
+
+### Hotspots de customização
+
+O processo disponibiliza pontos de flexibilização:
+
+1. **Hooks para scripts**: `env_setup`, `on_init` — executam shell scripts do projeto
+2. **Hooks para LLM**: prompts que dizem "leia arquivo X e siga" — a LLM extrai o que precisa
+3. **Validators genéricos**: `file_exists`, `has_sections`, `guidelines_review_passed` — verificam estrutura, não conteúdo específico
+
+### Teste de genericidade
+
+Um processo YAML bem desenhado deve funcionar para **qualquer projeto do mesmo tipo**
+trocando apenas os artefatos em `seed/`. Se precisa editar o YAML para mudar de projeto,
+a especificidade vazou para o processo.
 
 ---
 

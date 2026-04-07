@@ -564,6 +564,12 @@ class StepRunner:
             if predecessors and not all(pred in completed for pred in predecessors):
                 continue
 
+            # Resolver conditions especiais (file_exists:)
+            if node.condition and node.condition.startswith("file_exists:"):
+                check_path = node.condition.split(":", 1)[1]
+                full_path = Path(self.work_dir) / check_path
+                decision_state[node.condition] = "true" if full_path.exists() else "false"
+
             resolved_next = self.graph.resolve_next(node.id, decision_state)
             if not resolved_next or resolved_next not in progress_frontier:
                 continue
@@ -1484,9 +1490,19 @@ class StepRunner:
             print(ui.dim(f"COMMIT SKIP: {detail}"))
 
     def _run_decision(self, node: Node):
-        """Roda decision node — avalia condicao e segue branch."""
+        """Roda decision node — avalia condicao e segue branch.
+
+        Suporta conditions especiais:
+          - file_exists:<path>  → resolve para "true"/"false" baseado em filesystem
+        """
         state = self.state_mgr.state
         state_dict = self._decision_state_dict(state)
+
+        # Resolver conditions especiais antes de delegar ao graph
+        if node.condition and node.condition.startswith("file_exists:"):
+            check_path = node.condition.split(":", 1)[1]
+            full_path = Path(self.work_dir) / check_path
+            state_dict[node.condition] = "true" if full_path.exists() else "false"
 
         next_id = self.graph.resolve_next(node.id, state_dict)
         if next_id:

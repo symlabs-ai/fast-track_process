@@ -1267,6 +1267,74 @@ nodes:
           - Veredicto
           - Débitos
           - Correções obrigatórias
+    next: ft.visual_check
+
+  # ── Visual Regression — compara produto final com screenshots do E2E ──
+
+  - id: ft.visual_check
+    type: build
+    title: "Verificação Visual Final — Comparar com Screenshots E2E"
+    executor: llm_coder
+    sprint: sprint-10-handoff
+    outputs:
+      - docs/visual-check-report.md
+    write_scope:
+      - docs/
+      - docs/screenshots/final/
+    prompt: |
+      O produto passou por testes E2E com screenshots no início do processo.
+      Agora, após todas as correções e refatorações, precisamos verificar se
+      o produto final ainda corresponde ao que foi validado visualmente.
+
+      PASSO 1 — Subir o servidor e tirar screenshots fresh:
+        - Inicie o servidor (python main.py ou equivalente)
+        - Use Playwright para navegar em TODAS as rotas do docs/e2e-browser-report.md
+        - Tire screenshots das mesmas telas, salve em docs/screenshots/final/
+        - Use o mesmo viewport e seed de dados do E2E original
+
+      PASSO 2 — Comparar com screenshots anteriores:
+        - Abra os screenshots de docs/screenshots/e2e/ (referência)
+        - Abra os screenshots de docs/screenshots/final/ (atual)
+        - Para cada tela, compare visualmente e reporte:
+          - Elementos que desapareceram
+          - Layout que mudou
+          - Dados que não aparecem mais
+          - Funcionalidades que pararam de funcionar
+
+      PASSO 3 — Produzir relatório em docs/visual-check-report.md:
+
+        ## Verificação Visual Final
+
+        | Tela | Screenshot E2E | Screenshot Final | Status | Diferenças |
+        |------|---------------|-----------------|--------|------------|
+        | Explore | e2e/explore.png | final/explore.png | ✅/⚠️/❌ | descrição |
+
+        ## Veredicto
+        - PASS: produto final corresponde ao validado no E2E
+        - FAIL: listar o que mudou e precisa de atenção
+
+      Se encontrar regressões visuais, corrija o código ANTES de produzir o relatório.
+      Ao final diga DONE.
+    max_turns: 80
+    validators:
+      - file_exists: docs/visual-check-report.md
+      - min_lines: 10
+      - has_sections:
+          - Verificação Visual Final
+          - Veredicto
+    next: gate.visual_check
+
+  - id: gate.visual_check
+    type: gate
+    title: "Gate Visual Check"
+    executor: python
+    sprint: sprint-10-handoff
+    outputs:
+      - docs/visual-check-report.md
+    validators:
+      - file_exists: docs/visual-check-report.md
+      - has_sections:
+          - Veredicto
     next: gate.mvp
 
   - id: gate.mvp

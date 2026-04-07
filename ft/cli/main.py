@@ -716,10 +716,16 @@ def cmd_run(args):
                     )
                 print(present_triage(classification))
 
-        # Se há requisitos de processo → adaptar YAML
+        # Se há requisitos de processo → propor adaptação ao stakeholder
         process_reqs = classification.get("process", {})
         if process_reqs.get("detected") and process_reqs.get("conflicts"):
-            with _ui.Spinner("Adaptando processo para atender sua demanda"):
+            from ft.engine.triage import (
+                diff_process, apply_renames_to_state, present_adaptation_proposal,
+            )
+
+            original_yaml = process_path.read_text()
+
+            with _ui.Spinner("Elaborando proposta de adaptação do processo"):
                 adapted = adapt_process(
                     process_yaml_path=process_path,
                     requirements=process_reqs.get("requirements", []),
@@ -727,22 +733,49 @@ def cmd_run(args):
                     project_root=str(project_root),
                     llm_engine=llm_engine or "claude",
                 )
+
             if adapted:
                 valid, report = validate_adapted_yaml(adapted)
-                print(report)
                 if valid:
-                    # Salvar YAML adaptado
-                    process_path.write_text(adapted)
-                    print(_ui.success("Processo adaptado e validado"))
-                    # Recriar runner com o novo YAML
-                    runner = StepRunner(
-                        process_path=process_path,
-                        state_path=state_path,
-                        project_root=project_root,
-                        llm_engine=llm_engine,
-                        verbose=getattr(args, "verbose", False),
-                    )
+                    # Calcular diff e mostrar proposta
+                    import yaml as _yaml
+                    orig_data = _yaml.safe_load(original_yaml)
+                    adapt_data = _yaml.safe_load(adapted)
+                    proc_diff = diff_process(original_yaml, adapted)
+
+                    print(present_adaptation_proposal(
+                        proc_diff,
+                        len(orig_data.get("nodes", [])),
+                        len(adapt_data.get("nodes", [])),
+                    ))
+
+                    # Esperar aprovação do stakeholder
+                    try:
+                        choice = input(f"  {_ui.BOLD_WHITE}>{_ui.RESET} ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        choice = "reject"
+
+                    if choice in ("approve", "ft approve", "sim", "s", "yes", "y", "1"):
+                        process_path.write_text(adapted)
+                        print(_ui.success("Processo adaptado e salvo"))
+
+                        # Aplicar renomeações ao state se existir
+                        if proc_diff["renames"] and state_path.exists():
+                            apply_renames_to_state(state_path, proc_diff["renames"])
+                            print(_ui.info(f"{len(proc_diff['renames'])} nodes renomeados no state"))
+
+                        # Recriar runner com o novo YAML
+                        runner = StepRunner(
+                            process_path=process_path,
+                            state_path=state_path,
+                            project_root=project_root,
+                            llm_engine=llm_engine,
+                            verbose=getattr(args, "verbose", False),
+                        )
+                    else:
+                        print(_ui.info("Adaptação rejeitada — usando processo padrão"))
                 else:
+                    print(report)
                     print(_ui.warn("YAML adaptado não passou na validação — usando processo original"))
             else:
                 print(_ui.warn("Não foi possível adaptar o processo — usando original"))

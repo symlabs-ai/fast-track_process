@@ -262,6 +262,158 @@ def adapt_process(
     return output if "nodes:" in output else None
 
 
+def diff_process(original_yaml: str, adapted_yaml: str) -> dict[str, Any]:
+    """Compara dois YAMLs e retorna as diferenças.
+
+    Retorna:
+      {
+        "renames": {"old_id": "new_id", ...},
+        "added": ["new_node_id", ...],
+        "removed": ["old_node_id", ...],
+        "reordered": bool,
+        "summary": ["descrição 1", "descrição 2", ...]
+      }
+    """
+    import yaml as _yaml
+
+    original = _yaml.safe_load(original_yaml)
+    adapted = _yaml.safe_load(adapted_yaml)
+
+    orig_nodes = {n["id"]: n for n in original.get("nodes", [])}
+    adapt_nodes = {n["id"]: n for n in adapted.get("nodes", [])}
+
+    orig_ids = set(orig_nodes.keys())
+    adapt_ids = set(adapt_nodes.keys())
+
+    removed = orig_ids - adapt_ids
+    added = adapt_ids - orig_ids
+    kept = orig_ids & adapt_ids
+
+    # Inferir renomeações: nodes removidos que têm título similar a nodes adicionados
+    renames: dict[str, str] = {}
+    unmatched_removed = set(removed)
+    unmatched_added = set(added)
+
+    for old_id in list(unmatched_removed):
+        old_title = orig_nodes[old_id].get("title", "").lower()
+        old_type = orig_nodes[old_id].get("type", "")
+        for new_id in list(unmatched_added):
+            new_title = adapt_nodes[new_id].get("title", "").lower()
+            new_type = adapt_nodes[new_id].get("type", "")
+            # Mesmo tipo e título similar → provável renomeação
+            if old_type == new_type and (
+                old_title == new_title
+                or old_id.split(".")[-1] == new_id.split(".")[-1]
+            ):
+                renames[old_id] = new_id
+                unmatched_removed.discard(old_id)
+                unmatched_added.discard(new_id)
+                break
+
+    # Detectar reordenação
+    orig_order = [n["id"] for n in original.get("nodes", [])]
+    adapt_order = [n["id"] for n in adapted.get("nodes", [])]
+    kept_orig_order = [n for n in orig_order if n in kept]
+    kept_adapt_order = [n for n in adapt_order if n in kept]
+    reordered = kept_orig_order != kept_adapt_order
+
+    # Gerar resumo legível
+    summary: list[str] = []
+    if renames:
+        for old, new in renames.items():
+            summary.append(f"Renomeado: {old} → {new}")
+    if unmatched_added:
+        for nid in unmatched_added:
+            title = adapt_nodes[nid].get("title", nid)
+            summary.append(f"Adicionado: {title} ({nid})")
+    if unmatched_removed:
+        for nid in unmatched_removed:
+            title = orig_nodes[nid].get("title", nid)
+            summary.append(f"Removido: {title} ({nid})")
+    if reordered:
+        summary.append("Ordem dos nodes foi alterada")
+
+    orig_sprints = set(n.get("sprint", "") for n in original.get("nodes", []) if n.get("sprint"))
+    adapt_sprints = set(n.get("sprint", "") for n in adapted.get("nodes", []) if n.get("sprint"))
+    new_sprints = adapt_sprints - orig_sprints
+    if new_sprints:
+        summary.append(f"Sprints novos: {', '.join(sorted(new_sprints))}")
+
+    return {
+        "renames": renames,
+        "added": sorted(unmatched_added),
+        "removed": sorted(unmatched_removed),
+        "reordered": reordered,
+        "summary": summary,
+    }
+
+
+def apply_renames_to_state(state_path: str | Path, renames: dict[str, str]) -> None:
+    """Aplica mapa de renomeação ao state existente."""
+    import yaml as _yaml
+
+    path = Path(state_path)
+    if not path.exists() or not renames:
+        return
+
+    data = _yaml.safe_load(path.read_text()) or {}
+
+    # Renomear current_node
+    current = data.get("current_node")
+    if current and current in renames:
+        data["current_node"] = renames[current]
+
+    # Renomear completed_nodes
+    completed = data.get("completed_nodes", [])
+    data["completed_nodes"] = [renames.get(n, n) for n in completed]
+
+    # Renomear gate_log keys
+    gate_log = data.get("gate_log", {})
+    data["gate_log"] = {renames.get(k, k): v for k, v in gate_log.items()}
+
+    # Renomear artifacts keys
+    artifacts = data.get("artifacts", {})
+    data["artifacts"] = {renames.get(k, k): v for k, v in artifacts.items()}
+
+    path.write_text(_yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False))
+
+
+def present_adaptation_proposal(
+    diff: dict[str, Any],
+    original_node_count: int,
+    adapted_node_count: int,
+) -> str:
+    """Formata a proposta de adaptação para o stakeholder aprovar."""
+    lines = [ui.header("Adaptação do Processo")]
+
+    lines.append(f"\n  {ui.BOLD_WHITE}O que vai mudar:{ui.RESET}")
+    for i, item in enumerate(diff["summary"], 1):
+        lines.append(f"    {ui.YELLOW}{i}.{ui.RESET} {item}")
+
+    if diff["renames"]:
+        lines.append(f"\n  {ui.BOLD_WHITE}Nodes renomeados:{ui.RESET}")
+        for old, new in diff["renames"].items():
+            lines.append(f"    {ui.DIM}{old}{ui.RESET} → {ui.CYAN}{new}{ui.RESET}")
+
+    if diff["added"]:
+        lines.append(f"\n  {ui.BOLD_GREEN}Nodes adicionados:{ui.RESET}")
+        for nid in diff["added"]:
+            lines.append(f"    {ui.GREEN}+{ui.RESET} {nid}")
+
+    if diff["removed"]:
+        lines.append(f"\n  {ui.BOLD_RED}Nodes removidos:{ui.RESET}")
+        for nid in diff["removed"]:
+            lines.append(f"    {ui.RED}-{ui.RESET} {nid}")
+
+    lines.append(f"\n  {ui.DIM}Processo: {original_node_count} → {adapted_node_count} nodes{ui.RESET}")
+    lines.append(f"\n  {ui.BOLD_WHITE}Aprovar adaptação?{ui.RESET}")
+    lines.append(f"    {ui.BOLD_CYAN}ft approve{ui.RESET} — aplicar adaptação e iniciar")
+    lines.append(f"    {ui.BOLD_CYAN}ft reject{ui.RESET}  — usar processo padrão sem mudanças")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def validate_adapted_yaml(yaml_content: str) -> tuple[bool, str]:
     """Valida o YAML adaptado usando o validador do engine."""
     import tempfile

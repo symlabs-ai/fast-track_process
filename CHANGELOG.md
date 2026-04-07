@@ -4,44 +4,34 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [v0.8.32] - 2026-04-07
+## [v0.9.0] - 2026-04-07
 
-- fix(engine): env_setup não trava mais quando comandos de background (`&`) mantêm pipes abertos — usa `Popen`+`proc.wait()` com arquivos temporários
-- fix(engine): gate validators booleanos (`gate_frontend`, `gate_*`) agora usam `work_dir` no modo isolated, corrigindo falso FAIL quando frontend/ está em `runs/<N>/`
-- feat(cli): `ft resume` como comando principal (alias `continue`), com `sys.stdout.reconfigure(line_buffering=True)` para flush correto em pipes
-- feat(cli): `ft resume` / `ft run` suportam `--worktree` para runs isolados em git worktrees
-- feat(engine): `human_gate` — node type para checkpoints humanos obrigatórios; `ft approve` para liberar
-- feat(engine): auto-fix automático em modo MVP quando node bloqueia (configurável via `max_auto_fix`)
-- fix(engine): `runs/.gitignore` com padrões específicos em vez de `*` — evitava que Codex/ripgrep vissem arquivos do run
+### Novas funcionalidades
+- **Ciclos paralelos**: `ft resume --cycle <cycle-NN>` permite retomar um ciclo específico sem conflitar com outros ciclos em execução simultânea
+- **FT UI Prototype**: novo processo `FT_UI_PROTOTYPE.yml` para validação visual de interfaces sem TDD ou backend — scaffold → screenshots → E2E → stakeholder
+- **gate_ui_vscode_layout**: validator que verifica se a UI implementou o layout VS Code (Activity Bar, Drawer, Tabs, Terminal) por keyword scan no `frontend/src/`
+- **unique_screenshots**: validator MD5 que detecta screenshots duplicados copiados de ciclos anteriores — exige que cada screenshot seja único
+- **Gemini CLI**: suporte ao Gemini como engine de delegação com seleção de modelo (`--gemini gemini-2.5-flash`)
+- **human_gate**: tipo de node para checkpoints humanos obrigatórios; `ft approve` para liberar
+- **Process Triage (BL-19)**: classifica demanda bruta, separa produto/processo, adapta YAML automaticamente
+- **demand_coverage validator**: PRD deve cobrir todas as features da demanda bruta
+- **engine/model por node no YAML**: `llm_engine` e `llm_model` configuráveis individualmente por node
 
-## [v0.8.31] - 2026-04-07
+### Melhorias
+- **Seed de código entre ciclos**: `_seed_from_previous` copia artefatos do ciclo anterior excluindo screenshots, node_modules, dist — LLM parte de código existente
+- **Flush de output**: `sys.stdout.reconfigure(line_buffering=True)` em `ft resume` corrige ausência de output ao redirecionar para arquivo
+- **runs/.gitignore**: padrões específicos (não `*`) — permite que Codex/ripgrep vejam arquivos do run
+- **ft resume** como comando principal (alias `continue`)
 
-- feat(engine): Gemini CLI como terceiro engine de delegação (`--gemini [MODEL]`)
-- feat(engine): engine e modelo configuráveis por node no YAML (`llm_engine`, `llm_model`)
-- feat(engine): engine + model selecionáveis por flag CLI (`--codex gpt-5.3`, `--claude opus`)
-- feat(cli): `--worktree [NAME]` — run em git worktree isolado para paralelismo real entre ciclos
-- feat(engine): rename de runs para cycles — diretórios `runs/cycle-NN` (backward-compatible)
-- feat(engine): melhorias de retro — health check de API, seed de código do ciclo anterior, flush de output, validator `prd_coverage`
+### Correções
+- **env_setup não trava**: Popen+proc.wait com arquivos temporários — pipes de background não bloqueiam mais
+- **gate_* em modo isolated**: validators booleanos usam `work_dir` corretamente quando frontend/ está em `runs/<N>/`
+- **Seed exclui screenshots**: docs/screenshots/, docs/e2e/, docs/final/ não são mais copiados entre ciclos
 
----
-
-## [v0.8.30] - 2026-04-07
-
-- feat(engine): BL-16/17 — stakeholder review + critical analysis nodes no processo
-- feat(engine): BL-18 — LLM CWD em runs/<N>/ no modo isolated (código não polui raiz)
-- feat(engine): BL-19 — Process Triage: classifica demanda bruta, separa produto/processo, adapta YAML
-- feat(engine): demand_coverage validator — PRD deve cobrir todas as features da demanda
-- feat(engine): triage propõe adaptação ao stakeholder com diff e espera aprovação
-- feat(engine): native git commit de docs/ e process/ entre runs (pré/pós)
-- feat(cli): ft cancel com relatório LLM + proteção contra run duplicado
-- feat(cli): --input aceita demanda bruta (texto livre) — triage classifica automaticamente
-- feat(cli): spinner animado para operações longas (triage, adaptação)
-- feat(cli): mensagens claras no modo MVP ("AUTO-APROVADO" vs "AGUARDANDO APROVAÇÃO")
-- feat(cli): triage coleta respostas do stakeholder quando tem perguntas
-- fix(engine): CWD do LLM na raiz → run dir (SymGateway usa /s/<slug> agora)
-- fix(engine): validators resolvem paths por existência (run dir > project root)
-- fix(engine): screenshot_review_passed com fallback de aprovação implícita
-- fix(engine): propagação de CLAUDE.md e .claude/ para run dirs
+### Outros
+- Rename de runs para cycles: diretórios `runs/cycle-NN` (backward-compatible)
+- UI guidelines para ft-studio (NODE_W, NODE_H, bezier, minimap, CSS namespace fts-*)
+- KB: pitfalls P4 (routing sem URL), P5 (prd_review REJECTED), api_contract elimina mismatch
 
 ---
 

@@ -61,6 +61,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "sections_unchanged": val.sections_unchanged,
     "demand_coverage": val.demand_coverage,
     "prd_coverage": val.prd_coverage,
+    "unique_screenshots": val.unique_screenshots,
     "tests_pass": val.tests_pass,
     "tests_fail": val.tests_fail,
     "coverage_min": val.coverage_min,
@@ -73,6 +74,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "gate_acceptance_cli": gates.gate_acceptance_cli,
     "gate_pulse_instrumented": gates.gate_pulse_instrumented,
     "screenshot_review_passed": gates.screenshot_review_passed,
+    "gate_ui_vscode_layout": gates.gate_ui_vscode_layout,
     "read_artifact": val.read_artifact,
     # Test validators (Phase 3)
     "coverage_per_file": test_val.coverage_per_file,

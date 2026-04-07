@@ -5,6 +5,7 @@ Cada funcao retorna (passed: bool, detail: str).
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import unicodedata
@@ -413,3 +414,50 @@ def prd_coverage(
         f"prd_coverage FAIL: {len(covered)}/{total} US cobertas "
         f"(min {min_ratio:.0%}) — faltam: {missing_str}"
     )
+
+
+def unique_screenshots(
+    screenshots_dir: str = "docs/screenshots",
+    min_count: int = 2,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Verifica que os screenshots em um diretório são arquivos distintos (sem cópias).
+
+    Falha se:
+    - O diretório não existe ou tem menos de min_count imagens
+    - Dois ou mais arquivos têm hash MD5 idêntico (LLM copiou em vez de capturar)
+    """
+    root = Path(project_root)
+    sdir = root / screenshots_dir
+    if not sdir.exists():
+        return False, f"unique_screenshots FAIL: diretório {screenshots_dir} não encontrado"
+
+    IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+    images = [f for f in sdir.rglob("*") if f.suffix.lower() in IMAGE_EXTS]
+
+    if len(images) < min_count:
+        return False, (
+            f"unique_screenshots FAIL: apenas {len(images)} imagem(ns) em {screenshots_dir} "
+            f"(mínimo: {min_count})"
+        )
+
+    hashes: dict[str, list[str]] = {}
+    for img in images:
+        try:
+            h = hashlib.md5(img.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        rel = str(img.relative_to(root))
+        hashes.setdefault(h, []).append(rel)
+
+    duplicates = {h: paths for h, paths in hashes.items() if len(paths) > 1}
+    if duplicates:
+        examples = []
+        for paths in list(duplicates.values())[:3]:
+            examples.append(f"{paths[0]} = {paths[1]}")
+        return False, (
+            f"unique_screenshots FAIL: {len(duplicates)} grupo(s) de screenshots idênticos "
+            f"— {'; '.join(examples)}"
+        )
+
+    return True, f"unique_screenshots: {len(images)} screenshots únicos em {screenshots_dir}"

@@ -236,14 +236,29 @@ def _seed_from_previous(src: Path, dst: Path) -> int:
     import shutil as _shutil
 
     EXCLUDE = {"state", ".claude", "node_modules", "dist", "__pycache__", ".git", "CLAUDE.md"}
+    # Sub-dirs do docs que não devem ser propagados entre ciclos
+    EXCLUDE_DOCS_SUBDIRS = {"screenshots", "e2e", "final"}
     count = 0
     for item in src.iterdir():
         if item.name in EXCLUDE or item.name.startswith("."):
             continue
         target = dst / item.name
         if item.is_dir():
-            _shutil.copytree(item, target, dirs_exist_ok=True)
-            count += 1
+            if item.name == "docs":
+                # Seed docs/ excluindo subdiretórios de screenshots/artefatos visuais
+                target.mkdir(exist_ok=True)
+                for sub in item.iterdir():
+                    if sub.name in EXCLUDE_DOCS_SUBDIRS:
+                        continue
+                    sub_target = target / sub.name
+                    if sub.is_dir():
+                        _shutil.copytree(sub, sub_target, dirs_exist_ok=True)
+                    else:
+                        _shutil.copy2(sub, sub_target)
+                count += 1
+            else:
+                _shutil.copytree(item, target, dirs_exist_ok=True)
+                count += 1
         elif item.is_file():
             _shutil.copy2(item, target)
             count += 1
@@ -386,9 +401,15 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
     return worktree_dir
 
 
-def get_runner(process: str | None = None, llm_engine: str | None = None, llm_model: str | None = None, verbose: bool = False) -> StepRunner:
+def get_runner(process: str | None = None, llm_engine: str | None = None, llm_model: str | None = None, verbose: bool = False, cycle: str | None = None) -> StepRunner:
     root = find_project_root()
-    state_path = _find_latest_state(root)
+    if cycle:
+        state_path = root / "runs" / cycle / "state" / "engine_state.yml"
+        if not state_path.exists():
+            print(f"ERRO: Ciclo '{cycle}' não encontrado em runs/{cycle}/state/engine_state.yml")
+            sys.exit(1)
+    else:
+        state_path = _find_latest_state(root)
 
     if process:
         process_path = Path(process)
@@ -437,7 +458,7 @@ def cmd_init(args):
 def cmd_continue(args):
     import sys
     sys.stdout.reconfigure(line_buffering=True)
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = getattr(args, "bypass_human_gates", False)
 
     # Inicializar estado se nao existe
@@ -1077,6 +1098,7 @@ def main():
     cont.add_argument("--mvp", action="store_true", help="Avancar ate MVP (modo autonomo)")
     cont.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
                       help="Pular human_gates automaticamente (LLM decide)")
+    cont.add_argument("--cycle", help="Ciclo específico a retomar (ex: cycle-07)")
 
     # status
     st = sub.add_parser("status", help="Estado atual")

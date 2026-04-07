@@ -576,3 +576,63 @@ def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     if failures:
         return False, f"gate_frontend FAIL: {'; '.join(failures)}"
     return True, "gate_frontend: estrutura PWA OK"
+
+
+def gate_ui_vscode_layout(project_root: str = ".") -> tuple[bool, str]:
+    """Verifica se o layout VS Code está presente no código fonte Svelte.
+
+    Procura por evidências de: Activity Bar, Drawer lateral, tabs no painel
+    central e Terminal como painel horizontal na base — os 4 pilares do layout.
+    """
+    import re
+
+    src_dir = Path(project_root) / "frontend" / "src"
+    if not src_dir.exists():
+        return False, "gate_ui_vscode_layout FAIL: frontend/src/ não encontrado"
+
+    # Coletar todo o código fonte
+    exts = {".svelte", ".js", ".ts", ".css"}
+    all_code = ""
+    for f in src_dir.rglob("*"):
+        if f.suffix in exts:
+            try:
+                all_code += f.read_text(errors="ignore").lower() + "\n"
+            except OSError:
+                pass
+
+    if not all_code.strip():
+        return False, "gate_ui_vscode_layout FAIL: nenhum arquivo fonte encontrado"
+
+    # Evidências de cada pilar (termos alternativos aceitos)
+    pillars = {
+        "Activity Bar": [
+            "activity", "activitybar", "activity-bar", "activity_bar",
+            "sidebar-icons", "icon-bar", "nav-icons",
+        ],
+        "Drawer lateral": [
+            "drawer", "sidebar", "side-panel", "sidepanel",
+            "panel-lateral", "resizable",
+        ],
+        "Tabs painel central": [
+            "tab", "tabs", "tabpanel", "tab-bar", "tabbar",
+            "active-tab", "open-tab",
+        ],
+        "Terminal horizontal": [
+            "terminal", "bottom-panel", "bottom panel", "split",
+            "panel-bottom", "panelbottom", "ctrl+`", "ctrl-backtick",
+        ],
+    }
+
+    missing = []
+    for pillar, keywords in pillars.items():
+        found = any(kw in all_code for kw in keywords)
+        if not found:
+            missing.append(pillar)
+
+    if missing:
+        return False, (
+            f"gate_ui_vscode_layout FAIL: pilares ausentes no código — "
+            f"{', '.join(missing)}"
+        )
+
+    return True, "gate_ui_vscode_layout: Activity Bar, Drawer, Tabs e Terminal presentes"

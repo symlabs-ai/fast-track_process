@@ -15,18 +15,30 @@ from ft.integrations.symgateway import provision_environment
 
 def add_llm_engine_flags(parser):
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--claude", action="store_true", help="Usar Claude CLI para delegação LLM")
-    group.add_argument("--codex", action="store_true", help="Usar Codex CLI para delegação LLM")
-    group.add_argument("--gemini", action="store_true", help="Usar Gemini CLI para delegação LLM")
+    group.add_argument("--claude", nargs="?", const=True, metavar="MODEL",
+                       help="Usar Claude CLI (opcional: modelo, ex: --claude opus)")
+    group.add_argument("--codex", nargs="?", const=True, metavar="MODEL",
+                       help="Usar Codex CLI (opcional: modelo, ex: --codex gpt-5.3)")
+    group.add_argument("--gemini", nargs="?", const=True, metavar="MODEL",
+                       help="Usar Gemini CLI (opcional: modelo, ex: --gemini gemini-2.5-pro)")
 
 
 def resolve_llm_engine(args) -> str | None:
-    if getattr(args, "codex", False):
+    if getattr(args, "codex", None) is not None:
         return "codex"
-    if getattr(args, "claude", False):
+    if getattr(args, "claude", None) is not None:
         return "claude"
-    if getattr(args, "gemini", False):
+    if getattr(args, "gemini", None) is not None:
         return "gemini"
+    return None
+
+
+def resolve_llm_model(args) -> str | None:
+    """Extrai o modelo passado junto à flag de engine (ex: --codex gpt-5.3)."""
+    for attr in ("claude", "codex", "gemini"):
+        val = getattr(args, attr, None)
+        if val is not None and val is not True:
+            return str(val)
     return None
 
 
@@ -367,7 +379,7 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
     return worktree_dir
 
 
-def get_runner(process: str | None = None, llm_engine: str | None = None, verbose: bool = False) -> StepRunner:
+def get_runner(process: str | None = None, llm_engine: str | None = None, llm_model: str | None = None, verbose: bool = False) -> StepRunner:
     root = find_project_root()
     state_path = _find_latest_state(root)
 
@@ -386,6 +398,7 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, verbos
         state_path=state_path,
         project_root=root,
         llm_engine=llm_engine,
+        llm_model=llm_model,
         verbose=verbose,
     )
 
@@ -403,7 +416,7 @@ def cmd_init(args):
     (root / "docs").mkdir(exist_ok=True)
     _ensure_runs_gitignore(root)
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     # Limpar estado anterior se existir
     if runner.state_mgr.path.exists():
         runner.state_mgr.path.unlink()
@@ -415,7 +428,7 @@ def cmd_init(args):
 
 
 def cmd_continue(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
 
     # Inicializar estado se nao existe
     state = runner.state_mgr.load()
@@ -427,12 +440,12 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     runner.status(full=args.full)
 
 
 def cmd_approve(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     runner.approve()
     # Continuar automaticamente apos aprovacao
     if not args.no_continue:
@@ -440,12 +453,12 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     runner.reject(args.reason, retry=not args.no_retry)
 
 
 def cmd_graph(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     runner.status(full=True)
 
 
@@ -831,12 +844,14 @@ def cmd_run(args):
                 sys.exit(1)
 
     llm_engine = resolve_llm_engine(args)
+    llm_model = resolve_llm_model(args)
 
     runner = StepRunner(
         process_path=process_path,
         state_path=state_path,
         project_root=project_root,
         llm_engine=llm_engine,
+        llm_model=llm_model,
         verbose=getattr(args, "verbose", False),
     )
 
@@ -974,6 +989,7 @@ def cmd_run(args):
                             state_path=state_path,
                             project_root=project_root,
                             llm_engine=llm_engine,
+                            llm_model=llm_model,
                             verbose=getattr(args, "verbose", False),
                         )
                     else:

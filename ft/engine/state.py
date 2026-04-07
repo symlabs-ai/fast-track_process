@@ -20,6 +20,7 @@ class EngineState:
     process_id: str = ""
     version: str = "0.1.0"
     llm_engine: str = "claude"
+    llm_model: str | None = None
     active_llm_log: str | None = None
     last_llm_log: str | None = None
     current_node: str | None = None
@@ -85,6 +86,7 @@ class StateManager:
                 process_id=raw.get("process_id", ""),
                 version=raw.get("version", "0.1.0"),
                 llm_engine=raw.get("llm_engine", "claude"),
+                llm_model=raw.get("llm_model"),
                 active_llm_log=raw.get("active_llm_log"),
                 last_llm_log=raw.get("last_llm_log"),
                 current_node=raw.get("current_node"),
@@ -120,6 +122,7 @@ class StateManager:
             "process_id": self._state.process_id,
             "version": self._state.version,
             "llm_engine": self._state.llm_engine,
+            "llm_model": self._state.llm_model,
             "active_llm_log": self._state.active_llm_log,
             "last_llm_log": self._state.last_llm_log,
             "current_node": self._state.current_node,

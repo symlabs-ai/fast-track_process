@@ -380,12 +380,14 @@ class StepRunner:
         state_path: str | Path,
         project_root: str | Path = ".",
         llm_engine: str | None = None,
+        llm_model: str | None = None,
         verbose: bool = False,
     ):
         self.graph = load_graph(process_path)
         self.state_mgr = StateManager(state_path)
         self.project_root = str(Path(project_root).resolve())
         self._llm_engine_override = llm_engine.lower().strip() if llm_engine else None
+        self._llm_model_override = llm_model.strip() if llm_model else None
         self._auto_approve = False
         self._verbose = verbose
         # KB path: diretório com lições de runs anteriores (opcional)
@@ -458,11 +460,26 @@ class StepRunner:
         env_engine = os.environ.get("FT_LLM_ENGINE", "").strip().lower()
         return env_engine or "claude"
 
+    def _resolve_llm_model(self, state: Any | None = None) -> str | None:
+        """Resolve o modelo LLM efetivo (None = usar default do engine)."""
+        if self._llm_model_override:
+            return self._llm_model_override
+        if state is not None and getattr(state, "llm_model", None):
+            return state.llm_model
+        return os.environ.get("FT_LLM_MODEL") or None
+
     def _persist_llm_engine(self, state: Any) -> None:
-        """Persiste override no estado para comandos subsequentes do projeto."""
-        effective = self._resolve_llm_engine(state)
-        if getattr(state, "llm_engine", None) != effective:
-            state.llm_engine = effective
+        """Persiste engine e model no estado para comandos subsequentes do projeto."""
+        effective_engine = self._resolve_llm_engine(state)
+        effective_model = self._resolve_llm_model(state)
+        changed = False
+        if getattr(state, "llm_engine", None) != effective_engine:
+            state.llm_engine = effective_engine
+            changed = True
+        if getattr(state, "llm_model", None) != effective_model:
+            state.llm_model = effective_model
+            changed = True
+        if changed:
             self.state_mgr.save()
 
     def _decision_state_dict(self, state: Any) -> dict[str, Any]:
@@ -1023,6 +1040,7 @@ class StepRunner:
             project_root=self._work_dir,
             allowed_paths=allowed,
             llm_engine=self._resolve_llm_engine(state),
+            llm_model=self._resolve_llm_model(state),
             log_path=log_path,
             stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
         )
@@ -1077,6 +1095,7 @@ class StepRunner:
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=self._resolve_llm_engine(state),
+                        llm_model=self._resolve_llm_model(state),
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                     )
@@ -1157,6 +1176,7 @@ class StepRunner:
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(["src/", "tests/", "docs/", "main.py", "app.py", "server.py", "frontend/"]),
                         llm_engine=self._resolve_llm_engine(state),
+                        llm_model=self._resolve_llm_model(state),
                         log_path=log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                     )
@@ -1366,6 +1386,7 @@ class StepRunner:
             project_root=self._work_dir,
             allowed_paths=self._delegate_allowed_paths(allowed),
             llm_engine=self._resolve_llm_engine(state),
+            llm_model=self._resolve_llm_model(state),
             log_path=review_log_path,
             stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
         )
@@ -1410,6 +1431,7 @@ class StepRunner:
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=self._resolve_llm_engine(state),
+                        llm_model=self._resolve_llm_model(state),
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                     )
@@ -1476,10 +1498,12 @@ class StepRunner:
         par = ParallelRunner(project_root=self._work_dir, max_slots=2)
         try:
             llm_engine = self._resolve_llm_engine(self.state_mgr.state)
+            llm_model = self._resolve_llm_model(self.state_mgr.state)
             results = par.run_parallel(
                 tasks,
                 lambda **kwargs: delegate_to_llm(
                     llm_engine=llm_engine,
+                    llm_model=llm_model,
                     stream_prefix=self._stream_prefix(llm_engine),
                     **kwargs,
                 ),
@@ -1600,6 +1624,7 @@ class StepRunner:
                     project_root=self._work_dir,
                     allowed_paths=self._delegate_allowed_paths(allowed),
                     llm_engine=self._resolve_llm_engine(state),
+                    llm_model=self._resolve_llm_model(state),
                     log_path=retry_log_path,
                     stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                 )

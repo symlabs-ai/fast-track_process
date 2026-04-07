@@ -27,36 +27,43 @@ def _build_executor_command(
     prompt: str,
     project_root: str,
     max_turns: int,
+    model: str | None = None,
 ) -> list[str]:
     """Monta o comando do executor não-interativo com bypass habilitado."""
     engine = llm_engine.lower().strip()
 
     if engine == "claude":
-        return [
+        cmd = [
             "claude",
             "--print",
             "--dangerously-skip-permissions",
             "--max-turns", str(max_turns),
-            "-p", prompt,
         ]
+        if model:
+            cmd += ["--model", model]
+        cmd += ["-p", prompt]
+        return cmd
 
     if engine == "codex":
-        return [
+        cmd = [
             "codex",
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
             "-C", project_root,
-            prompt,
         ]
+        if model:
+            cmd += ["-m", model]
+        cmd.append(prompt)
+        return cmd
 
     if engine == "gemini":
-        return [
-            "gemini",
-            "--yolo",
-            "-p", prompt,
-        ]
+        cmd = ["gemini", "--yolo"]
+        if model:
+            cmd += ["-m", model]
+        cmd += ["-p", prompt]
+        return cmd
 
     raise ValueError(f"Executor LLM desconhecido: {llm_engine}")
 
@@ -180,6 +187,7 @@ def delegate_to_llm(
     allowed_paths: list[str] | None = None,
     max_turns: int = 50,
     llm_engine: str = "claude",
+    llm_model: str | None = None,
     log_path: str | None = None,
     stream_prefix: str | None = None,
 ) -> DelegateResult:
@@ -203,7 +211,7 @@ REGRAS:
 - Se encontrar um problema que nao consegue resolver, diga BLOCKED e explique o motivo
 """
 
-    cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns)
+    cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns, model=llm_model)
 
     if log_path and llm_engine != "codex":
         _write_log_preamble(log_path, llm_engine, cmd, prompt)
@@ -298,6 +306,7 @@ def delegate_with_feedback(
     project_root: str = ".",
     allowed_paths: list[str] | None = None,
     llm_engine: str = "claude",
+    llm_model: str | None = None,
     max_turns: int = 50,
     log_path: str | None = None,
     stream_prefix: str | None = None,
@@ -317,6 +326,7 @@ Nao modifique o que ja esta funcionando."""
         project_root=project_root,
         allowed_paths=allowed_paths,
         llm_engine=llm_engine,
+        llm_model=llm_model,
         max_turns=max_turns,
         log_path=log_path,
         stream_prefix=stream_prefix,

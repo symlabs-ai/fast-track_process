@@ -192,7 +192,7 @@
      - Stakeholder rejeita → roda o processo padrão
   5. Separa a parte de produto e salva como hipótese limpa em `docs/hipotese.md`
 - **Entrega**: Node novo no início do grafo + lógica de adaptação do YAML via LLM + validação automática do YAML adaptado
-- **Status**: proposto
+- **Status**: concluido
 - **Prioridade**: Crítica
 
 ---
@@ -220,4 +220,4 @@
 | BL-16 | Stakeholder Review | Alta | proposto |
 | BL-17 | Análise Crítica do LLM | Alta | proposto |
 | BL-18 | Código em runs/ (modo isolated) | Alta | concluido |
-| BL-19 | Process Triage (classificar hipótese) | Crítica | proposto |
+| BL-19 | Process Triage (classificar demanda) | Crítica | concluido |

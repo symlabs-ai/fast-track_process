@@ -474,8 +474,73 @@ def cmd_run(args):
         else:
             print(f"  AVISO: --from-project fornecido mas plano_de_voo.md não encontrado em {src}")
 
+    # ── Triage: classificar demanda bruta (--input) ──
+    demand_input = getattr(args, "demand_input", None)
+    if demand_input:
+        from ft.engine.triage import (
+            classify_demand, generate_hypothesis, present_triage,
+            adapt_process, validate_adapted_yaml,
+        )
+        from ft.engine import ui as _ui
+
+        src = Path(demand_input)
+        if not src.exists():
+            print(f"ERRO: arquivo de demanda não encontrado: {src}")
+            sys.exit(1)
+
+        demand_text = src.read_text()
+        print(_ui.info("Analisando demanda..."))
+
+        classification = classify_demand(
+            demand=demand_text,
+            process_yaml_path=process_path,
+            project_root=str(project_root),
+            llm_engine=llm_engine or "claude",
+        )
+
+        print(present_triage(classification))
+
+        # Se há requisitos de processo → adaptar YAML
+        process_reqs = classification.get("process", {})
+        if process_reqs.get("detected") and process_reqs.get("conflicts"):
+            print(_ui.warn("Adaptando processo para atender sua demanda..."))
+            adapted = adapt_process(
+                process_yaml_path=process_path,
+                requirements=process_reqs.get("requirements", []),
+                conflicts=process_reqs.get("conflicts", []),
+                project_root=str(project_root),
+                llm_engine=llm_engine or "claude",
+            )
+            if adapted:
+                valid, report = validate_adapted_yaml(adapted)
+                print(report)
+                if valid:
+                    # Salvar YAML adaptado
+                    process_path.write_text(adapted)
+                    print(_ui.success("Processo adaptado e validado"))
+                    # Recriar runner com o novo YAML
+                    runner = StepRunner(
+                        process_path=process_path,
+                        state_path=state_path,
+                        project_root=project_root,
+                        llm_engine=llm_engine,
+                        verbose=getattr(args, "verbose", False),
+                    )
+                else:
+                    print(_ui.warn("YAML adaptado não passou na validação — usando processo original"))
+            else:
+                print(_ui.warn("Não foi possível adaptar o processo — usando original"))
+
+        # Gerar hipótese limpa (só produto) e salvar
+        hypothesis = generate_hypothesis(classification)
+        dst_docs = project_root / "docs"
+        dst_docs.mkdir(parents=True, exist_ok=True)
+        (dst_docs / "hipotese.md").write_text(hypothesis)
+        print(_ui.success("Hipótese gerada a partir da demanda"))
+        _normalize_hipotese(dst_docs / "hipotese.md", project_root, llm_engine=llm_engine or "claude")
+
     # Copiar e normalizar hipótese inicial se fornecida (pre-seed de ft.mdd.01.hipotese)
-    if args.hipotese:
+    elif args.hipotese:
         src = Path(args.hipotese)
         if not src.exists():
             print(f"ERRO: arquivo de hipótese não encontrado: {src}")
@@ -568,6 +633,8 @@ def main():
                     help="API key admin do SymGateway para registrar o projeto (se --key não tiver role admin)")
     ru.add_argument("--hipotese", metavar="FILE",
                     help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)")
+    ru.add_argument("--input", metavar="FILE", dest="demand_input",
+                    help="Demanda bruta do usuário (texto livre — o engine classifica produto vs processo)")
     ru.add_argument("--template", "-t",
                     help="Template de processo a copiar (ex: fast-track-v2)")
 

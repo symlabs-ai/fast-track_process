@@ -370,6 +370,9 @@ class StepRunner:
         self._environment = load_environment(self.project_root)
         self._max_node_retries = self._environment.get("max_node_retries", MAX_RETRIES)
         self._max_gate_retries = self._environment.get("max_gate_retries", MAX_RETRIES)
+        # Run mode: isolated → LLM trabalha em runs/<N>/, continuous → trabalha na raiz
+        self._run_mode = self._environment.get("run_mode", "isolated")
+        self._work_dir = self._resolve_work_dir()
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
@@ -380,6 +383,40 @@ class StepRunner:
             return None
         label = engine or self._resolve_llm_engine()
         return f"{label}>"
+
+    def _resolve_work_dir(self) -> str:
+        """Resolve o diretório de trabalho para delegação ao LLM.
+
+        Modo isolated: runs/<N>/ (derivado do state_path)
+        Modo continuous: project_root
+        """
+        if self._run_mode != "isolated":
+            return self.project_root
+        # state_path é runs/<N>/state/engine_state.yml → runs/<N>/
+        state_dir = self.state_mgr.path.parent  # runs/<N>/state/
+        run_dir = state_dir.parent              # runs/<N>/
+        # Verificar que é um run dir válido (parent é runs/)
+        if run_dir.parent.name == "runs":
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return str(run_dir)
+        return self.project_root
+
+    def _delegate_allowed_paths(self, paths: list[str]) -> list[str]:
+        """Ajusta allowed_paths para o modo isolated.
+
+        No modo isolated, paths como 'docs/' precisam apontar para a raiz
+        do projeto (onde docs/ vive), não para o run dir.
+        """
+        if self._run_mode != "isolated" or self._work_dir == self.project_root:
+            return paths
+        root_paths = ("docs/", "docs", "process/", "process")
+        result = []
+        for p in paths:
+            if p in root_paths or p.startswith("docs/"):
+                result.append(str(Path(self.project_root) / p))
+            else:
+                result.append(p)
+        return result
 
     def _resolve_llm_engine(self, state: Any | None = None) -> str:
         """Resolve o executor LLM efetivo para esta run."""
@@ -941,7 +978,7 @@ class StepRunner:
 
         delegate_kwargs: dict = dict(
             task=task_prompt,
-            project_root=self.project_root,
+            project_root=self._work_dir,
             allowed_paths=allowed,
             llm_engine=self._resolve_llm_engine(state),
             log_path=log_path,
@@ -994,8 +1031,8 @@ class StepRunner:
                     result = delegate_with_feedback(
                         original_task=task_prompt,
                         feedback=validation.feedback or "",
-                        project_root=self.project_root,
-                        allowed_paths=allowed,
+                        project_root=self._work_dir,
+                        allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=self._resolve_llm_engine(state),
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
@@ -1074,8 +1111,8 @@ class StepRunner:
                 try:
                     result = delegate_to_llm(
                         task=fix_prompt,
-                        project_root=self.project_root,
-                        allowed_paths=["src/", "tests/", "docs/", "main.py", "app.py", "server.py", "frontend/"],
+                        project_root=self._work_dir,
+                        allowed_paths=self._delegate_allowed_paths(["src/", "tests/", "docs/", "main.py", "app.py", "server.py", "frontend/"]),
                         llm_engine=self._resolve_llm_engine(state),
                         log_path=log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
@@ -1258,8 +1295,8 @@ class StepRunner:
 
         review_kwargs: dict = dict(
             task=task_prompt,
-            project_root=self.project_root,
-            allowed_paths=allowed,
+            project_root=self._work_dir,
+            allowed_paths=self._delegate_allowed_paths(allowed),
             llm_engine=self._resolve_llm_engine(state),
             log_path=review_log_path,
             stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
@@ -1302,8 +1339,8 @@ class StepRunner:
                     result2 = delegate_with_feedback(
                         original_task=task_prompt,
                         feedback=validation.feedback or "",
-                        project_root=self.project_root,
-                        allowed_paths=allowed,
+                        project_root=self._work_dir,
+                        allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=self._resolve_llm_engine(state),
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
@@ -1368,7 +1405,7 @@ class StepRunner:
                 "log_path": str(self._build_llm_log_path(n.id, "parallel")),
             })
 
-        par = ParallelRunner(project_root=self.project_root, max_slots=2)
+        par = ParallelRunner(project_root=self._work_dir, max_slots=2)
         try:
             llm_engine = self._resolve_llm_engine(self.state_mgr.state)
             results = par.run_parallel(
@@ -1492,8 +1529,8 @@ class StepRunner:
                 result = delegate_with_feedback(
                     original_task=original_prompt,
                     feedback=f"REJEITADO PELO STAKEHOLDER: {reason}",
-                    project_root=self.project_root,
-                    allowed_paths=allowed,
+                    project_root=self._work_dir,
+                    allowed_paths=self._delegate_allowed_paths(allowed),
                     llm_engine=self._resolve_llm_engine(state),
                     log_path=retry_log_path,
                     stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),

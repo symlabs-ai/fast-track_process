@@ -35,6 +35,9 @@ class Node:
     max_turns: int | None = None
     # Comandos shell executados antes da delegação ao LLM (setup determinístico)
     env_setup: list[str] = field(default_factory=list)
+    # Override de engine/modelo por node (substitui o global do run)
+    llm_engine: str | None = None
+    llm_model: str | None = None
 
 
 class ProcessGraph:
@@ -179,6 +182,8 @@ def load_graph(path: str | Path) -> ProcessGraph:
             parallel_group=node_raw.get("parallel_group"),
             max_turns=node_raw.get("max_turns"),
             env_setup=node_raw.get("env_setup", []),
+            llm_engine=node_raw.get("llm_engine"),
+            llm_model=node_raw.get("llm_model"),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

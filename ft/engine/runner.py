@@ -451,8 +451,10 @@ class StepRunner:
                 result.append(p)
         return result
 
-    def _resolve_llm_engine(self, state: Any | None = None) -> str:
-        """Resolve o executor LLM efetivo para esta run."""
+    def _resolve_llm_engine(self, state: Any | None = None, node: Any | None = None) -> str:
+        """Resolve o executor LLM efetivo. Prioridade: node > CLI override > state > env."""
+        if node is not None and getattr(node, "llm_engine", None):
+            return node.llm_engine
         if self._llm_engine_override:
             return self._llm_engine_override
         if state is not None and getattr(state, "llm_engine", None):
@@ -460,8 +462,10 @@ class StepRunner:
         env_engine = os.environ.get("FT_LLM_ENGINE", "").strip().lower()
         return env_engine or "claude"
 
-    def _resolve_llm_model(self, state: Any | None = None) -> str | None:
-        """Resolve o modelo LLM efetivo (None = usar default do engine)."""
+    def _resolve_llm_model(self, state: Any | None = None, node: Any | None = None) -> str | None:
+        """Resolve o modelo LLM efetivo. Prioridade: node > CLI override > state > env."""
+        if node is not None and getattr(node, "llm_model", None):
+            return node.llm_model
         if self._llm_model_override:
             return self._llm_model_override
         if state is not None and getattr(state, "llm_model", None):
@@ -1035,14 +1039,15 @@ class StepRunner:
         log_path = self._start_llm_log(state, node.id, "run")
         self.state_mgr.save()
 
+        effective_engine = self._resolve_llm_engine(state, node=node)
         delegate_kwargs: dict = dict(
             task=task_prompt,
             project_root=self._work_dir,
             allowed_paths=allowed,
-            llm_engine=self._resolve_llm_engine(state),
-            llm_model=self._resolve_llm_model(state),
+            llm_engine=effective_engine,
+            llm_model=self._resolve_llm_model(state, node=node),
             log_path=log_path,
-            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
+            stream_prefix=self._stream_prefix(effective_engine),
         )
         if node.max_turns is not None:
             delegate_kwargs["max_turns"] = node.max_turns
@@ -1094,10 +1099,10 @@ class StepRunner:
                         feedback=validation.feedback or "",
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(allowed),
-                        llm_engine=self._resolve_llm_engine(state),
-                        llm_model=self._resolve_llm_model(state),
+                        llm_engine=self._resolve_llm_engine(state, node=node),
+                        llm_model=self._resolve_llm_model(state, node=node),
                         log_path=retry_log_path,
-                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
+                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -1385,10 +1390,10 @@ class StepRunner:
             task=task_prompt,
             project_root=self._work_dir,
             allowed_paths=self._delegate_allowed_paths(allowed),
-            llm_engine=self._resolve_llm_engine(state),
-            llm_model=self._resolve_llm_model(state),
+            llm_engine=self._resolve_llm_engine(state, node=node),
+            llm_model=self._resolve_llm_model(state, node=node),
             log_path=review_log_path,
-            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
+            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
         )
         if node.max_turns is not None:
             review_kwargs["max_turns"] = node.max_turns
@@ -1430,10 +1435,10 @@ class StepRunner:
                         feedback=validation.feedback or "",
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(allowed),
-                        llm_engine=self._resolve_llm_engine(state),
-                        llm_model=self._resolve_llm_model(state),
+                        llm_engine=self._resolve_llm_engine(state, node=node),
+                        llm_model=self._resolve_llm_model(state, node=node),
                         log_path=retry_log_path,
-                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
+                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
                     )
                 finally:
                     self._clear_active_llm_log(state)

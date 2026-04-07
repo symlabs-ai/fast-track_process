@@ -88,9 +88,8 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
 def _resolve_validator_root(path: str, project_root: str, work_dir: str | None) -> str:
     """Resolve o root efetivo para um validator.
 
-    Estratégia: se o arquivo existe no work_dir, usa work_dir.
-    Senão, usa project_root. Isso cobre tanto docs gerados pelo LLM
-    no run (runs/<N>/docs/) quanto docs compartilhados (docs/ na raiz).
+    Estratégia: se o arquivo existe no work_dir (que pode ser runs/<N>/
+    prefixado ao project_root), usa work_dir. Senão, project_root.
     """
     if not work_dir or work_dir == project_root:
         return project_root
@@ -411,35 +410,56 @@ class StepRunner:
     def _resolve_work_dir(self) -> str:
         """Resolve o diretório de trabalho para delegação ao LLM.
 
-        Modo isolated: runs/<N>/ (derivado do state_path)
-        Modo continuous: project_root
+        Sempre retorna project_root como CWD (necessário para SymGateway).
+        No modo isolated, o run_dir é usado como prefixo nos allowed_paths
+        para direcionar a escrita do LLM para runs/<N>/.
         """
+        return self.project_root
+
+    @property
+    def _run_dir(self) -> str | None:
+        """Retorna o path absoluto do run dir ou None se continuous."""
         if self._run_mode != "isolated":
-            return self.project_root
-        # state_path é runs/<N>/state/engine_state.yml → runs/<N>/
-        state_dir = self.state_mgr.path.parent  # runs/<N>/state/
-        run_dir = state_dir.parent              # runs/<N>/
-        # Verificar que é um run dir válido (parent é runs/)
+            return None
+        state_dir = self.state_mgr.path.parent
+        run_dir = state_dir.parent
         if run_dir.parent.name == "runs":
             run_dir.mkdir(parents=True, exist_ok=True)
             return str(run_dir)
-        return self.project_root
+        return None
+
+    @property
+    def _run_dir_prefix(self) -> str:
+        """Retorna o path relativo do run dir (ex: 'runs/03/') ou '' se continuous."""
+        if self._run_mode != "isolated":
+            return ""
+        state_dir = self.state_mgr.path.parent  # runs/<N>/state/
+        run_dir = state_dir.parent              # runs/<N>/
+        if run_dir.parent.name == "runs":
+            run_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                return str(run_dir.relative_to(Path(self.project_root))) + "/"
+            except ValueError:
+                return ""
+        return ""
 
     def _delegate_allowed_paths(self, paths: list[str]) -> list[str]:
         """Ajusta allowed_paths para o modo isolated.
 
-        No modo isolated, paths como 'docs/' precisam apontar para a raiz
-        do projeto (onde docs/ vive), não para o run dir.
+        No modo isolated, paths de código (src/, tests/, frontend/) são
+        prefixados com runs/<N>/ para direcionar a escrita do LLM.
+        Paths de docs/ ficam na raiz (conhecimento compartilhado).
         """
-        if self._run_mode != "isolated" or self._work_dir == self.project_root:
+        prefix = self._run_dir_prefix
+        if not prefix:
             return paths
-        root_paths = ("docs/", "docs", "process/", "process")
         result = []
+        root_paths = ("docs/", "docs", "process/", "process", "CHANGELOG.md")
         for p in paths:
-            if p in root_paths or p.startswith("docs/"):
-                result.append(str(Path(self.project_root) / p))
-            else:
+            if p in root_paths or p.startswith("docs/") or p.startswith("process/"):
                 result.append(p)
+            else:
+                result.append(prefix + p)
         return result
 
     def _resolve_llm_engine(self, state: Any | None = None) -> str:
@@ -960,7 +980,7 @@ class StepRunner:
                 (Path(self.project_root) / o).exists() for o in node.outputs
             )
             if all_exist:
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
                 if validation.passed:
                     print(ui.success("Artefato já existe e é válido — pulando etapa"))
                     self._log_event(
@@ -1035,7 +1055,7 @@ class StepRunner:
 
         # Validar
         print(ui.info("Validando..."))
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
         self._print_validation(validation)
 
         if validation.passed:
@@ -1073,7 +1093,7 @@ class StepRunner:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
                 self._print_validation(validation)
 
                 if validation.passed:
@@ -1095,7 +1115,7 @@ class StepRunner:
     def _run_gate(self, node: Node):
         """Roda gate — validacao pura sem LLM. Em modo mvp, tenta corrigir via LLM."""
         print(ui.info("Rodando gate..."))
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
         self._print_validation(validation)
 
         if validation.passed:
@@ -1153,7 +1173,7 @@ class StepRunner:
                     self._clear_active_llm_log(state)
 
                 # Re-validar
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
                 self._print_validation(validation)
 
                 if validation.passed:
@@ -1204,7 +1224,7 @@ class StepRunner:
             return False
 
         # Re-validar com o fix aplicado
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
         self._print_validation(validation)
 
         if validation.passed:
@@ -1311,7 +1331,7 @@ class StepRunner:
         allowed = self._resolve_allowed_paths(node)
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
-        early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+        early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
         if early_check.passed:
             print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
             for output_path in node.outputs:
@@ -1344,7 +1364,7 @@ class StepRunner:
         if not result.success:
             # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
             # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
-            pre_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+            pre_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
             if pre_check.passed:
                 print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
@@ -1359,7 +1379,7 @@ class StepRunner:
             self.state_mgr.record_artifact(name, output_path)
 
         # Validar artefatos deterministicos
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
         self._print_validation(validation)
 
         if not validation.passed:
@@ -1380,7 +1400,7 @@ class StepRunner:
                 finally:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
                 self._print_validation(validation)
 
             if not validation.passed:
@@ -1479,7 +1499,7 @@ class StepRunner:
         # Validar e avançar todos os nodes do grupo
         for wt_result in results:
             node = self.graph.get_node(wt_result.node_id)
-            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
             self._print_validation(validation)
             if validation.passed:
                 next_id = self.graph.resolve_next(node.id)
@@ -1572,7 +1592,7 @@ class StepRunner:
             state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
             if result.success:
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
+                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
                 self._print_validation(validation)
                 if validation.passed:
                     print(ui.awaiting_approval(auto=self._auto_approve))

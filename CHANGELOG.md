@@ -4,6 +4,16 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.8.32] - 2026-04-07
+
+- fix(engine): env_setup não trava mais quando comandos de background (`&`) mantêm pipes abertos — usa `Popen`+`proc.wait()` com arquivos temporários
+- fix(engine): gate validators booleanos (`gate_frontend`, `gate_*`) agora usam `work_dir` no modo isolated, corrigindo falso FAIL quando frontend/ está em `runs/<N>/`
+- feat(cli): `ft resume` como comando principal (alias `continue`), com `sys.stdout.reconfigure(line_buffering=True)` para flush correto em pipes
+- feat(cli): `ft resume` / `ft run` suportam `--worktree` para runs isolados em git worktrees
+- feat(engine): `human_gate` — node type para checkpoints humanos obrigatórios; `ft approve` para liberar
+- feat(engine): auto-fix automático em modo MVP quando node bloqueia (configurável via `max_auto_fix`)
+- fix(engine): `runs/.gitignore` com padrões específicos em vez de `*` — evitava que Codex/ripgrep vissem arquivos do run
+
 ## [v0.8.31] - 2026-04-07
 
 - feat(engine): Gemini CLI como terceiro engine de delegação (`--gemini [MODEL]`)

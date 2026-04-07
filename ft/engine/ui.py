@@ -129,7 +129,9 @@ def step_block(reason: str) -> str:
     return f"  {BOLD_RED}BLOCK{RESET}: {RED}{reason}{RESET}"
 
 
-def awaiting_approval() -> str:
+def awaiting_approval(auto: bool = False) -> str:
+    if auto:
+        return f"  {BOLD_GREEN}AUTO-APROVADO{RESET} {DIM}(modo MVP){RESET}"
     return f"  {BOLD_YELLOW}AGUARDANDO APROVAÇÃO{RESET} — rode: {BOLD}ft approve{RESET}"
 
 

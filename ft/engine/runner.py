@@ -925,13 +925,17 @@ class StepRunner:
                                    state.blocked_reason or "bloqueado", sprint=node_sprint)
                 break
             if state.node_status == "awaiting_approval":
-                self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL",
-                                   "aguardando aprovacao humana", sprint=node_sprint)
                 if self._auto_approve:
+                    print(ui.awaiting_approval(auto=True))
+                    self._log_activity(node_id, node.title, node.type, "AUTO_APPROVED",
+                                       "auto-aprovado (modo MVP)", sprint=node_sprint)
                     next_id = self.graph.resolve_next(state.current_node)
                     self._advance_state(state.current_node, next_id)
                     state = self.state_mgr.load()
                 else:
+                    print(ui.awaiting_approval(auto=False))
+                    self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL",
+                                       "aguardando aprovacao humana", sprint=node_sprint)
                     break
             else:
                 self._fire_hooks("on_node_end")
@@ -967,7 +971,7 @@ class StepRunner:
                     for output_path in node.outputs:
                         self.state_mgr.record_artifact(Path(output_path).stem, output_path)
                     if node.requires_approval and not self._auto_approve:
-                        print(ui.awaiting_approval())
+                        print(ui.awaiting_approval(auto=self._auto_approve))
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
@@ -1038,7 +1042,7 @@ class StepRunner:
             self._maybe_auto_commit(node)
 
             if node.requires_approval and not self._auto_approve:
-                print(ui.awaiting_approval())
+                print(ui.awaiting_approval(auto=self._auto_approve))
                 self.state_mgr.set_pending_approval(node.id)
                 return
 
@@ -1051,6 +1055,7 @@ class StepRunner:
         if validation.retryable:
             for retry in range(1, self._max_node_retries + 1):
                 print(ui.retry(retry, self._max_node_retries))
+                print(ui.info(f"Corrigindo automaticamente: {validation.feedback or 'validação falhou'}"))
                 retry_log_path = self._start_llm_log(state, node.id, f"retry-{retry}")
                 self.state_mgr.save()
                 try:
@@ -1074,7 +1079,7 @@ class StepRunner:
                     self._maybe_auto_commit(node)
 
                     if node.requires_approval:
-                        print(ui.awaiting_approval())
+                        print(ui.awaiting_approval(auto=self._auto_approve))
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
@@ -1569,7 +1574,7 @@ class StepRunner:
                 validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._work_dir)
                 self._print_validation(validation)
                 if validation.passed:
-                    print(ui.awaiting_approval())
+                    print(ui.awaiting_approval(auto=self._auto_approve))
                     self.state_mgr.set_pending_approval(node.id)
                     return
             # Se retry falhou, bloquear

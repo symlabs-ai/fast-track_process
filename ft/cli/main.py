@@ -674,6 +674,31 @@ def cmd_run(args):
 
         print(present_triage(classification))
 
+        # Se há perguntas → coletar respostas do stakeholder e re-classificar
+        questions = classification.get("questions", [])
+        if questions:
+            print(f"\n  {_ui.BOLD_WHITE}Responda as perguntas (uma por linha, Enter vazio para pular):{_ui.RESET}")
+            answers = []
+            for i, q in enumerate(questions, 1):
+                try:
+                    answer = input(f"    {_ui.CYAN}{i}.{_ui.RESET} ")
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if answer.strip():
+                    answers.append(f"Pergunta: {q}\nResposta: {answer.strip()}")
+
+            if answers:
+                # Re-classificar com as respostas incorporadas
+                enriched_demand = demand_text + "\n\nRespostas do stakeholder:\n" + "\n".join(answers)
+                print(_ui.info("Re-analisando com suas respostas..."))
+                classification = classify_demand(
+                    demand=enriched_demand,
+                    process_yaml_path=process_path,
+                    project_root=str(project_root),
+                    llm_engine=llm_engine or "claude",
+                )
+                print(present_triage(classification))
+
         # Se há requisitos de processo → adaptar YAML
         process_reqs = classification.get("process", {})
         if process_reqs.get("detected") and process_reqs.get("conflicts"):

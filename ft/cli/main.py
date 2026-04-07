@@ -138,7 +138,13 @@ def _find_latest_state(root: Path) -> Path:
 
 
 def _next_run_dir(project_root: Path) -> Path:
-    """Calcula e cria o próximo diretório de run em runs/."""
+    """Calcula e cria o próximo diretório de run em runs/.
+
+    Propaga CLAUDE.md e .claude/ da raiz para o run dir
+    (necessário para o SymGateway identificar o projeto).
+    """
+    import shutil as _shutil
+
     runs_dir = project_root / "runs"
     runs_dir.mkdir(exist_ok=True)
     existing = sorted(
@@ -147,6 +153,17 @@ def _next_run_dir(project_root: Path) -> Path:
     next_num = int(existing[-1].name) + 1 if existing else 1
     run_dir = runs_dir / f"{next_num:02d}"
     run_dir.mkdir()
+
+    # Propagar CLAUDE.md e .claude/ para o run dir (gateway + settings)
+    claude_md = project_root / "CLAUDE.md"
+    if claude_md.exists():
+        _shutil.copy(claude_md, run_dir / "CLAUDE.md")
+    claude_dir = project_root / ".claude"
+    if claude_dir.is_dir():
+        dst = run_dir / ".claude"
+        if not dst.exists():
+            _shutil.copytree(claude_dir, dst)
+
     return run_dir
 
 

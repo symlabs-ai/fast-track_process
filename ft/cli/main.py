@@ -230,22 +230,27 @@ def _api_health_check(project_root: Path) -> None:
 def _seed_from_previous(src: Path, dst: Path) -> int:
     """Copia artefatos do run anterior para o novo run.
 
-    Exclui state/, .claude/, node_modules/, dist/, __pycache__/.
+    Usa allowlist — só copia outputs conhecidos de projeto.
+    Nunca copia: state/, seed/, process/, node_modules/, dist/,
+    arquivos de configuração do engine (pyproject.toml, CHANGELOG.md, etc).
     Retorna quantidade de itens copiados.
     """
     import shutil as _shutil
 
-    EXCLUDE = {"state", ".claude", "node_modules", "dist", "__pycache__", ".git", "CLAUDE.md"}
-    # Sub-dirs do docs que não devem ser propagados entre ciclos
+    # Allowlist de diretórios de output que fazem sentido propagar
+    SEED_DIRS = {"frontend", "backend", "src", "lib", "tests", "docs"}
+    # Sub-dirs do docs/ que NÃO devem ser propagados (artefatos visuais de ciclo)
     EXCLUDE_DOCS_SUBDIRS = {"screenshots", "e2e", "final"}
+
     count = 0
     for item in src.iterdir():
-        if item.name in EXCLUDE or item.name.startswith("."):
+        if item.name.startswith("."):
             continue
         target = dst / item.name
-        if item.is_dir():
+
+        if item.is_dir() and item.name in SEED_DIRS:
             if item.name == "docs":
-                # Seed docs/ excluindo subdiretórios de screenshots/artefatos visuais
+                # Seed docs/ excluindo screenshots e artefatos visuais
                 target.mkdir(exist_ok=True)
                 for sub in item.iterdir():
                     if sub.name in EXCLUDE_DOCS_SUBDIRS:
@@ -257,11 +262,14 @@ def _seed_from_previous(src: Path, dst: Path) -> int:
                         _shutil.copy2(sub, sub_target)
                 count += 1
             else:
-                _shutil.copytree(item, target, dirs_exist_ok=True)
+                _shutil.copytree(item, target, dirs_exist_ok=True,
+                                 ignore=_shutil.ignore_patterns(
+                                     "node_modules", "dist", "__pycache__", ".git", "*.pyc"
+                                 ))
                 count += 1
-        elif item.is_file():
-            _shutil.copy2(item, target)
-            count += 1
+        # Arquivos raiz: não copiar nada (pyproject.toml, CHANGELOG.md, etc
+        # são artefatos do engine ou do ciclo anterior, não outputs do projeto)
+
     return count
 
 

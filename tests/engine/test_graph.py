@@ -174,7 +174,7 @@ class TestLoadGraph:
     def test_load_fast_track_v2(self):
         g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
         assert len(g.nodes) >= 42  # May grow as process evolves
-        assert len(g.get_sprints()) == 10
+        assert len(g.get_sprints()) == 11
 
     def test_load_fast_track_v2_routes_ui_around_acceptance_cli(self):
         g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")

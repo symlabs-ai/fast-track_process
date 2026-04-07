@@ -171,6 +171,13 @@
 - **Status**: proposto
 - **Prioridade**: Alta
 
+### BL-18: Código gerado dentro de runs/ no modo isolated
+- **Problema**: No modo isolated, o LLM delega com `cwd=project_root` e escreve `src/`, `frontend/`, `tests/`, `main.py`, `pyproject.toml` na raiz do projeto. Isso polui o diretório com artefatos de um run específico, causando ambiguidade entre o que é do processo (docs, process) e o que é do run.
+- **Solução**: No modo isolated, o `delegate_to_llm` deve usar `cwd=runs/<N>/` em vez de `project_root`. O LLM gera código dentro do run dir. Apenas `docs/` e `process/` ficam na raiz (são compartilhados entre ciclos).
+- **Entrega**: Alterar `_run_llm_step` no runner para usar o run dir como CWD quando `run_mode=isolated`. Adaptar paths de `allowed_paths` para serem relativos ao run dir.
+- **Status**: proposto
+- **Prioridade**: Alta
+
 ---
 
 ## Resumo
@@ -195,3 +202,4 @@
 | BL-15 | RunMode isolated/continuous | Média | concluido |
 | BL-16 | Stakeholder Review | Alta | proposto |
 | BL-17 | Análise Crítica do LLM | Alta | proposto |
+| BL-18 | Código em runs/ (modo isolated) | Alta | proposto |

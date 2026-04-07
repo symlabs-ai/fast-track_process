@@ -1366,10 +1366,10 @@ nodes:
     sprint: sprint-10-handoff
     condition: interface_type
     branches:
-      cli_only: ft.end
-      api: ft.end
+      cli_only: ft.stakeholder_review
+      api: ft.stakeholder_review
       _default: gate.mvp.frontend
-    next: ft.end
+    next: ft.stakeholder_review
 
   - id: gate.mvp.frontend
     type: gate
@@ -1378,6 +1378,146 @@ nodes:
     sprint: sprint-10-handoff
     validators:
       - gate_frontend: true
+    next: ft.stakeholder_review
+
+  # ================================================================
+  # Fase 11: Validação do Stakeholder + Análise Crítica
+  # ================================================================
+
+  - id: ft.stakeholder_review
+    type: build
+    title: "Validação do Stakeholder — Playtest do Produto"
+    executor: llm_coder
+    sprint: sprint-11-stakeholder
+    outputs:
+      - docs/stakeholder-feedback.md
+    write_scope:
+      - docs/
+    prompt: |
+      O MVP foi entregue e validado por todos os gates. Agora o stakeholder
+      precisa testar o produto pessoalmente.
+
+      PASSO 1 — Detectar tipo de interface:
+        Leia docs/tech_stack.md e identifique o interface_type (ui, api, cli, mixed).
+
+      PASSO 2 — Apresentar o produto para teste:
+
+        Se interface_type for "ui" ou "mixed":
+          - Inicie o servidor (python main.py ou equivalente)
+          - Aguarde o servidor estar pronto (curl http://localhost:PORT/health)
+          - Apresente ao stakeholder:
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            Produto pronto para teste!
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            Acesse: http://localhost:PORT
+
+            Teste as funcionalidades e reporte o que encontrar.
+            Quando terminar, diga DONE seguido do seu feedback.
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+        Se interface_type for "cli":
+          - Mostre o comando para testar (ex: python main.py --help)
+
+        Se interface_type for "api":
+          - Mostre os endpoints principais de docs/api_contract.md
+
+      PASSO 3 — NÃO execute este passo automaticamente.
+        Este node requer aprovação do stakeholder (requires_approval: true).
+        O stakeholder vai testar, reportar feedback, e aprovar ou rejeitar.
+
+        Crie docs/stakeholder-feedback.md com:
+
+        ## Stakeholder Feedback — Ciclo N
+
+        **Data:** YYYY-MM-DD
+        **Tipo de teste:** UI / CLI / API
+        **Acesso:** http://localhost:PORT (ou comando)
+
+        ### Como testar
+        (instruções claras para o stakeholder)
+
+        ### Feedback recebido
+        (será preenchido após o playtest)
+
+        ### User Stories geradas
+        (será preenchido após o playtest)
+
+        Ao final diga DONE.
+    requires_approval: true
+    max_turns: 10
+    validators:
+      - file_exists: docs/stakeholder-feedback.md
+      - min_lines: 5
+    next: ft.critical_analysis
+
+  - id: ft.critical_analysis
+    type: document
+    title: "Análise Crítica — Sugestões do LLM para Evolução"
+    executor: llm_coach
+    sprint: sprint-11-stakeholder
+    outputs:
+      - docs/critical-analysis.md
+    prompt: |
+      Você é um consultor de produto experiente. Analise TODO o contexto do ciclo
+      que acabou de ser executado e produza uma análise crítica com sugestões de
+      melhoria que o stakeholder pode não ter percebido.
+
+      LEIA obrigatoriamente:
+        - docs/PRD.md (o que foi planejado)
+        - docs/retro.md (problemas encontrados)
+        - docs/TASK_LIST.md (o que foi implementado)
+        - docs/tech_stack.md (decisões técnicas)
+        - docs/stakeholder-feedback.md (feedback do playtest)
+        - docs/forgebase-audit.md (auditoria técnica, se existir)
+        - docs/e2e-browser-report.md (screenshots, se existir)
+        - docs/visual-check-report.md (regressões visuais, se existir)
+
+      PRODUZA docs/critical-analysis.md no formato:
+
+      ## Análise Crítica — Ciclo N
+
+      ### Resumo da Execução
+      (breve: o que foi entregue, o que não foi, quanto tempo levou)
+
+      ### Sugestões de Melhoria
+
+      Analise e sugira melhorias numeradas. Para cada uma, explique:
+      - O que fazer
+      - Por que o stakeholder deveria considerar
+      - Impacto estimado (alto/médio/baixo)
+
+      Categorias a considerar:
+      1. **Gaps de UX** — problemas de usabilidade que os testes não pegaram
+      2. **Oportunidades de produto** — features que fariam sentido dado o contexto
+      3. **Débitos técnicos** — problemas que vão doer no futuro se não tratados
+      4. **Melhorias de processo** — o que o Fast Track poderia ter feito melhor
+
+      Exemplo de formato:
+
+      | # | Sugestão | Categoria | Impacto | Descrição |
+      |---|----------|-----------|---------|-----------|
+      | 1 | Adicionar tutorial interativo | UX | Alto | Jogadores não entendem as mecânicas sem ler Instructions |
+      | 2 | Cachear sprites em Web Worker | Técnico | Médio | Sprites são regenerados a cada frame, causa lag em mobile |
+      | 3 | ... | ... | ... | ... |
+
+      ### Como aplicar
+
+      Para incluir sugestões no próximo ciclo, o stakeholder deve rodar:
+        ft fix "incluir sugestões 1, 3 e 5 no PRD"
+
+      Ou rejeitar todas e seguir com o PRD como está.
+
+      Ao final diga DONE.
+    requires_approval: true
+    max_turns: 30
+    validators:
+      - file_exists: docs/critical-analysis.md
+      - min_lines: 20
+      - has_sections:
+          - Análise Crítica
+          - Sugestões de Melhoria
     next: ft.end
 
   - id: ft.end

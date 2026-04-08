@@ -614,6 +614,16 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, llm_mo
 
 
 def cmd_init(args):
+    import os
+
+    # Se nome fornecido, criar/entrar na pasta antes de qualquer coisa
+    name = getattr(args, "name", None)
+    if name:
+        target = Path.cwd() / name
+        target.mkdir(parents=True, exist_ok=True)
+        os.chdir(target)
+        print(f"  → Projeto: {target}")
+
     # Copiar template se fornecido e processo não existe
     template = getattr(args, "template", None)
     root = find_project_root()
@@ -1551,6 +1561,7 @@ def main():
     # init
     init = sub.add_parser("init", help="Inicializar/resetar estado do processo")
     add_llm_engine_flags(init)
+    init.add_argument("name", nargs="?", help="Nome do projeto a criar (opcional — default: diretório atual)")
     init.add_argument("--template", "-t", help="Template de processo a copiar (ex: fast-track-v2)")
 
     # resume (alias: continue para backward compat)

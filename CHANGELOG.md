@@ -4,36 +4,20 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [v0.12.5] - 2026-04-08
+## [v0.13.0] - 2026-04-08
 
-- feat(init): `ft init` também provisiona SymGateway quando `SYM_GATEWAY_PROJECT_KEY` está definida
+### Novas funcionalidades
+- **SymGateway via env vars**: credenciais migradas para `SYM_GATEWAY_PROJECT_KEY` e `SYM_GATEWAY_ADMIN_KEY` — `--key`/`--admin-key` removidos do `ft run` e `ft setup-env`; provisionamento falha com erro claro e instruções se a env var não estiver definida
+- **`ft init <nome>`**: aceita nome do projeto como argumento posicional — cria a pasta, inicializa dentro dela e provisiona SymGateway automaticamente se `SYM_GATEWAY_PROJECT_KEY` estiver definida
+- **`ft validate` com verificação estrutural**: valida presença de `docs/`, `process/` e `src/` além do schema do YAML de processo — exit code 1 se qualquer verificação falhar
+- **Template `docs/code_reference/`**: novo subdiretório no template base para código de referência (ex: `graph_routing.js`)
 
----
-
-## [v0.12.4] - 2026-04-08
-
-- feat(symgateway): credenciais migradas para env vars `SYM_GATEWAY_PROJECT_KEY` e `SYM_GATEWAY_ADMIN_KEY`; `--key`/`--admin-key` removidos do `ft run` e `ft setup-env`
-- fix(register_gateway.sh): falha com erro claro e instruções se `SYM_GATEWAY_PROJECT_KEY` não estiver definida
-
----
-
-## [v0.12.3] - 2026-04-08
-
-- feat(init): `ft init <nome>` cria a pasta do projeto e inicializa dentro dela
-
----
-
-## [v0.12.2] - 2026-04-08
-
-- chore: remove process files órfãos (test_process*.yml, FAST_TRACK_PROCESS.yml V1) e atualiza testes para BL-20/BL-21
-- fix(runner): `status()` agora sincroniza versão do processo a partir do grafo
-- fix(validate): busca YAML em `process/` recursivamente (compat com `fast_track/`)
-
----
-
-## [v0.12.1] - 2026-04-08
-
-- feat(validate): `ft validate` agora valida estrutura base do projeto (docs/, process/, src/) além do YAML
+### Melhorias
+- **`ft init` + SymGateway unificado**: provisiona CLAUDE.md e `.claude/settings.local.json` automaticamente — elimina etapa manual `ft setup-env`
+- **`register_gateway.sh` atualizado**: template symgateway usa novas env vars; falha explicitamente se `SYM_GATEWAY_PROJECT_KEY` ausente
+- **Limpeza de processo**: arquivos de processo órfãos removidos (`test_process*.yml`, `FAST_TRACK_PROCESS.yml` V1); testes migrados para YAML inline (BL-20/BL-21)
+- **`status()` sincroniza versão**: `status()` agora chama `_sync_process_meta()` — corrige bug onde versão do YAML não era atualizada no state
+- **`find_process_yaml` recursivo**: scan de `process/` agora usa `rglob` — encontra YAMLs em subdiretórios como `process/fast_track/`
 
 ---
 

@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.12.3] - 2026-04-08
+
+- feat(init): `ft init <nome>` cria a pasta do projeto e inicializa dentro dela
+
+---
+
 ## [v0.12.2] - 2026-04-08
 
 - chore: remove process files órfãos (test_process*.yml, FAST_TRACK_PROCESS.yml V1) e atualiza testes para BL-20/BL-21

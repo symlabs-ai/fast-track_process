@@ -38,6 +38,8 @@ class Node:
     # Override de engine/modelo por node (substitui o global do run)
     llm_engine: str | None = None
     llm_model: str | None = None
+    # Desabilita o pre-seed check — node sempre roda mesmo se outputs já existem
+    no_pre_seed: bool = False
 
 
 class ProcessGraph:
@@ -184,6 +186,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             env_setup=node_raw.get("env_setup", []),
             llm_engine=node_raw.get("llm_engine"),
             llm_model=node_raw.get("llm_model"),
+            no_pre_seed=node_raw.get("no_pre_seed", False),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

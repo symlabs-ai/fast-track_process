@@ -1041,7 +1041,8 @@ class StepRunner:
         # Pre-seed check: se todos os outputs já existem e os validators passam,
         # pula delegação ao LLM — o artefato foi fornecido externamente (ex: --hipotese).
         # NÃO aplica a build nodes: um scaffold de passo anterior não conta como implementação.
-        if node.outputs and node.type not in ("build",) and not self._validator_snapshot_specs(node):
+        # NÃO aplica se node tiver no_pre_seed: true — node deve sempre rodar (ex: plano de voo).
+        if node.outputs and node.type not in ("build",) and not self._validator_snapshot_specs(node) and not getattr(node, "no_pre_seed", False):
             all_exist = all(
                 (Path(self.project_root) / o).exists() for o in node.outputs
             )

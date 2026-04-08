@@ -7,11 +7,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+# Padrões que indicam rate limit / quota esgotada no output do LLM
+_RATE_LIMIT_PATTERNS = re.compile(
+    r"rate.limit|429|quota.exceeded|resource.?exhausted|"
+    r"too.many.requests|overloaded|try.again.in|"
+    r"RESOURCE_EXHAUSTED|rateLimitExceeded",
+    re.IGNORECASE,
+)
+_RATE_LIMIT_WAIT = [60, 120, 240]  # segundos de backoff (3 tentativas)
 
 
 @dataclass
@@ -263,6 +273,49 @@ REGRAS:
 
     raw_output = output_holder["output"]
     output = _extract_codex_output(raw_output) if llm_engine == "codex" else raw_output
+
+    # Detectar rate limit e fazer retry com backoff exponencial
+    if _RATE_LIMIT_PATTERNS.search(output):
+        for attempt, wait in enumerate(_RATE_LIMIT_WAIT, start=1):
+            print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
+                  f"Aguardando {wait}s antes da tentativa {attempt}/{len(_RATE_LIMIT_WAIT)}…")
+            time.sleep(wait)
+            proc2 = subprocess.Popen(
+                cmd,
+                cwd=project_root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            holder2: dict[str, str] = {"output": ""}
+            t2 = threading.Thread(
+                target=lambda: holder2.__setitem__(
+                    "output",
+                    _stream_process_output(
+                        proc2,
+                        llm_engine=llm_engine,
+                        log_path=log_path,
+                        stream_prefix=stream_prefix,
+                    ),
+                ),
+                daemon=True,
+            )
+            t2.start()
+            try:
+                rc2 = proc2.wait(timeout=1800)
+            except subprocess.TimeoutExpired:
+                proc2.kill()
+                t2.join(timeout=5)
+                break
+            t2.join(timeout=5)
+            raw2 = holder2["output"]
+            out2 = _extract_codex_output(raw2) if llm_engine == "codex" else raw2
+            if not _RATE_LIMIT_PATTERNS.search(out2):
+                output = out2
+                returncode = rc2
+                break
+            output = out2  # última tentativa falhou também
 
     # Detectar erro 403 de gateway (integração opcional)
     try:

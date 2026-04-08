@@ -90,29 +90,56 @@ def find_process_yaml(root: Path) -> Path | None:
     """Encontra o YAML do processo no diretório do projeto.
 
     Prioridade (projeto-primeiro):
-      1. {root}/process/FAST_TRACK_PROCESS.yml (padrão V3)
-      2. {root}/process/*.yml (qualquer YAML solto em process/)
-      3. {root}/process/fast_track/FAST_TRACK_PROCESS_V2.yml (legacy)
+      1. {root}/process/FAST_TRACK_PROCESS.yml (padrão V3) — só se bater com process_id do state
+      2. {root}/process/*.yml casando com process_id do engine_state (auto-detect)
+      3. {root}/process/FAST_TRACK_PROCESS.yml sem verificação
+      4. {root}/process/*.yml (qualquer, preferindo "FAST_TRACK" no nome)
+      5. {root}/process/fast_track/FAST_TRACK_PROCESS_V2.yml (legacy)
     """
-    # 1. Nome canônico em process/
+    import yaml as _yaml
+
+    # Tenta ler o process_id do engine_state ativo para casar com o YAML correto
+    active_process_id: str | None = None
+    for state_path in (root / "runs").glob("*/state/engine_state.yml") if (root / "runs").is_dir() else []:
+        try:
+            with open(state_path) as _f:
+                _st = _yaml.safe_load(_f)
+            if _st and _st.get("process_id"):
+                active_process_id = _st["process_id"]
+                break
+        except Exception:
+            pass
+
+    process_dir = root / "process"
+    yamls = sorted(process_dir.glob("*.yml")) if process_dir.is_dir() else []
+
+    # Se temos process_id do state, tentar casar
+    if active_process_id and yamls:
+        for y in yamls:
+            try:
+                with open(y) as _f:
+                    _meta = _yaml.safe_load(_f)
+                if _meta and _meta.get("id") == active_process_id:
+                    return y
+            except Exception:
+                pass
+
+    # Fallback: nome canônico
     canonical = root / "process" / "FAST_TRACK_PROCESS.yml"
     if canonical.exists():
         return canonical
 
-    # 2. Qualquer YAML em process/ (scan)
-    process_dir = root / "process"
-    if process_dir.is_dir():
-        yamls = sorted(process_dir.glob("*.yml"))
+    # Qualquer YAML em process/ (scan)
+    if yamls:
         if len(yamls) == 1:
             return yamls[0]
-        if len(yamls) > 1:
-            # Preferir o que tem "FAST_TRACK" no nome
-            for y in yamls:
-                if "FAST_TRACK" in y.name.upper():
-                    return y
-            return yamls[0]
+        # Preferir o que tem "FAST_TRACK" no nome
+        for y in yamls:
+            if "FAST_TRACK" in y.name.upper():
+                return y
+        return yamls[0]
 
-    # 3. Legacy: process/fast_track/ subdir
+    # Legacy: process/fast_track/ subdir
     for name in ("FAST_TRACK_PROCESS_V2.yml", "FAST_TRACK_PROCESS.yml"):
         p = root / "process" / "fast_track" / name
         if p.exists():
@@ -534,24 +561,10 @@ def cmd_runs(args):
         print(_ui.warn("Nenhum ciclo encontrado em runs/"))
         return
 
+    import yaml as _yaml
+
     rows = []
     for cycle in cycles:
-        log = next(cycle.glob("*_log.md"), None)
-        if not log:
-            rows.append((cycle.name, "—", "—", "—", "—"))
-            continue
-
-        lines = [l for l in log.read_text().splitlines() if l.startswith("| 2")]
-        if not lines:
-            rows.append((cycle.name, "—", "—", "—", "—"))
-            continue
-
-        last = lines[-1].split("|")
-        node = last[2].strip().strip("`") if len(last) > 2 else "—"
-        result = last[7].strip() if len(last) > 7 else "—"
-        ts = last[1].strip()[11:16] if len(last) > 1 else "—"  # HH:MM
-        total = len(lines)
-
         # Serve URL — busca apenas dentro de runs/ (ignora .serve_url na raiz = resíduo git)
         serve_url = "—"
         runs_subdir = cycle / "runs"
@@ -560,29 +573,51 @@ def cmd_runs(args):
                 serve_url = f.read_text().strip()
                 break
 
-        # Total de nodes do processo
-        import yaml as _yaml
-        total_nodes = "?"
-        for proc_candidate in [cycle / "process" / "FT_UI_PROTOTYPE.yml", cycle / "process" / "FAST_TRACK_PROCESS_V2.yml"]:
-            if proc_candidate.exists():
-                try:
-                    proc = _yaml.safe_load(proc_candidate.read_text())
-                    total_nodes = str(len(proc.get("nodes", [])))
-                except Exception:
-                    pass
-                break
+        # Fonte de verdade: engine_state.yml do ciclo mais recente
+        state_files = sorted((cycle / "runs").glob("*/state/engine_state.yml")) if (cycle / "runs").is_dir() else []
+        state_data = {}
+        if state_files:
+            try:
+                state_data = _yaml.safe_load(state_files[-1].read_text()) or {}
+            except Exception:
+                pass
+
+        if not state_data:
+            continue  # ciclo vazio/fantasma — sem estado
+
+        steps_done = state_data.get("metrics", {}).get("steps_completed", len(state_data.get("completed_nodes", [])))
+        steps_total = state_data.get("metrics", {}).get("steps_total", "?")
+        current_node = state_data.get("current_node") or ""
+        node_status = state_data.get("node_status", "")
+
+        # Timestamp da última entrada no log de atividade
+        ts = "—"
+        log = next(cycle.glob("*_log.md"), None)
+        if log:
+            lines = [l for l in log.read_text().splitlines() if l.startswith("| 2")]
+            if lines:
+                last = lines[-1].split("|")
+                ts = last[1].strip()[11:16] if len(last) > 1 else "—"
+
+        # Node a exibir
+        if not current_node:
+            node = "DONE" if node_status == "done" else "—"
+        else:
+            node = current_node
 
         # Status colorido
-        if result in ("AWAITING_HUMAN",):
-            status_str = _ui.warn(f"⏸  {node}")
-        elif result in ("PASS", "ROUTED", "AUTO_FIXED", "APPROVED"):
-            status_str = _ui.success(f"✓  {node}")
-        elif "FAIL" in result:
-            status_str = _ui.fail(f"✗  {node}")
+        if node_status == "done":
+            status_str = _ui.success(node)
+        elif node_status == "blocked":
+            status_str = _ui.fail(node)
+        elif node_status == "awaiting_approval":
+            status_str = _ui.warn(f"⏸ {node}")
+        elif node_status == "delegated":
+            status_str = f"   ⟳ {node}"
         else:
             status_str = f"   {node}"
 
-        rows.append((cycle.name, f"{total}/{total_nodes}", ts, status_str, serve_url))
+        rows.append((cycle.name, f"{steps_done}/{steps_total}", ts, status_str, serve_url))
 
     # Header
     print()

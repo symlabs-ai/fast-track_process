@@ -4,6 +4,16 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.11.2] - 2026-04-08
+
+- **rate limit retry**: `delegate_to_llm` detecta rate limit no output (429, RESOURCE_EXHAUSTED, overloaded, etc.) e reexecuta com backoff exponencial 60 → 120 → 240s — evita ciclos bloqueados por quota temporária
+- **ft status sem efeitos colaterais**: removida chamada a `_sync_process_meta()` do método `status()` — eliminava corrupção silenciosa do `engine_state.yml` com metadados do YAML errado
+- **ft runs lê engine_state**: `cmd_runs` reescrito para ler `engine_state.yml` diretamente em vez de `*_log.md` — `ft runs` e `ft status` agora têm a mesma fonte de verdade
+- **find_process_yaml auto-detecta**: lê `process_id` do `engine_state.yml` ativo e busca o YAML correspondente pelo campo `id:` — resolve ambiguidade quando há múltiplos YAMLs em `process/`
+- **--process removido de ft status/continue**: argumento era redundante pois o processo já é auto-detectado pelo engine_state
+
+---
+
 ## [v0.11.1] - 2026-04-07
 
 ### Correções

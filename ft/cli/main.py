@@ -513,6 +513,73 @@ def cmd_status(args):
     runner.status(full=args.full)
 
 
+def cmd_runs(args):
+    """Mostra tabela comparativa de todos os ciclos em runs/."""
+    from ft.engine import ui as _ui
+    import re as _re
+
+    project_root = Path(args.project).resolve()
+    runs_dir = project_root / "runs"
+
+    if not runs_dir.exists():
+        print(_ui.warn("Nenhum ciclo encontrado em runs/"))
+        return
+
+    cycles = sorted(
+        [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+        key=_cycle_num,
+    )
+
+    if not cycles:
+        print(_ui.warn("Nenhum ciclo encontrado em runs/"))
+        return
+
+    rows = []
+    for cycle in cycles:
+        log = next(cycle.glob("*_log.md"), None)
+        if not log:
+            rows.append((cycle.name, "—", "—", "—", "—"))
+            continue
+
+        lines = [l for l in log.read_text().splitlines() if l.startswith("| 2")]
+        if not lines:
+            rows.append((cycle.name, "—", "—", "—", "—"))
+            continue
+
+        last = lines[-1].split("|")
+        node = last[2].strip().strip("`") if len(last) > 2 else "—"
+        result = last[7].strip() if len(last) > 7 else "—"
+        ts = last[1].strip()[11:16] if len(last) > 1 else "—"  # HH:MM
+        total = len(lines)
+
+        # Serve URL
+        serve_url = "—"
+        for candidate in [cycle / ".serve_url", cycle / "runs" / "cycle-01" / ".serve_url"]:
+            if candidate.exists():
+                serve_url = candidate.read_text().strip()
+                break
+
+        # Status colorido
+        if result in ("AWAITING_HUMAN",):
+            status_str = _ui.warn(f"⏸  {node}")
+        elif result in ("PASS", "ROUTED", "AUTO_FIXED", "APPROVED"):
+            status_str = _ui.success(f"✓  {node}")
+        elif "FAIL" in result:
+            status_str = _ui.fail(f"✗  {node}")
+        else:
+            status_str = f"   {node}"
+
+        rows.append((cycle.name, str(total), ts, status_str, serve_url))
+
+    # Header
+    print()
+    print(f"  {'CICLO':<22} {'STEPS':>5}  {'ÚLT.':>5}  {'NODE ATUAL':<40}  URL")
+    print(f"  {'─'*22}  {'─'*5}  {'─'*5}  {'─'*40}  {'─'*25}")
+    for name, steps, ts, node_str, url in rows:
+        print(f"  {name:<22}  {steps:>5}  {ts:>5}  {node_str:<40}  {url}")
+    print()
+
+
 def cmd_approve(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     message = getattr(args, "message", None)
@@ -1288,6 +1355,10 @@ def main():
     add_llm_engine_flags(st)
     st.add_argument("--full", "-f", action="store_true", help="Mostrar grafo e artefatos")
 
+    # runs — tabela comparativa de todos os ciclos
+    ru2 = sub.add_parser("runs", help="Tabela comparativa de todos os ciclos em runs/")
+    ru2.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
+
     # approve
     ap = sub.add_parser("approve", help="Aprovar artefato pendente")
     add_llm_engine_flags(ap)
@@ -1378,6 +1449,8 @@ def main():
             cmd_setup_env(args)
         elif args.command == "run":
             cmd_run(args)
+        elif args.command == "runs":
+            cmd_runs(args)
         else:
             parser.print_help()
     except KeyboardInterrupt:

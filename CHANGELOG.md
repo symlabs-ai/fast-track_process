@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.12.1] - 2026-04-08
+
+- feat(validate): `ft validate` agora valida estrutura base do projeto (docs/, process/, src/) além do YAML
+
+---
+
 ## [v0.12.0] - 2026-04-08
 
 ### Novas funcionalidades

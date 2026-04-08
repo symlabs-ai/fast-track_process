@@ -79,16 +79,25 @@ def copy_template(template_name: str, project_root: Path) -> Path:
     shutil.copy(yamls[0], dest)
     print(f"  Template '{template_name}' copiado para process/{dest.name}")
 
-    # Copiar docs/ e src/ do template se existirem
-    for subdir in ("docs", "src"):
+    # Copiar subdirs do template (docs/, src/, scripts/)
+    for subdir in ("docs", "src", "scripts"):
         template_sub = src_dir / subdir
         if template_sub.is_dir():
-            dest_sub = project_root / subdir
+            # scripts/ vai para process/scripts/
+            dest_sub = (project_root / "process" / "scripts") if subdir == "scripts" else (project_root / subdir)
             dest_sub.mkdir(parents=True, exist_ok=True)
             for f in template_sub.iterdir():
-                dest_f = dest_sub / f.name
-                if not dest_f.exists():  # não sobrescrever existentes
-                    shutil.copy(f, dest_f)
+                if f.is_file():
+                    dest_f = dest_sub / f.name
+                    if not dest_f.exists():
+                        shutil.copy2(f, dest_f)  # copy2 preserva permissões (executable)
+
+    # Copiar environment.yml para process/
+    env_yml = src_dir / "environment.yml"
+    if env_yml.exists():
+        dest_env = project_root / "process" / "environment.yml"
+        if not dest_env.exists():
+            shutil.copy(env_yml, dest_env)
 
     return dest
 

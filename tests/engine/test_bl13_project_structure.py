@@ -104,16 +104,20 @@ class TestFindLatestState:
         legacy.write_text("legacy")
         assert _find_latest_state(tmp_path) == legacy
 
-    def test_defaults_to_run_01(self, tmp_path):
+    def test_defaults_to_external_worktree(self, tmp_path):
         from ft.cli.main import _find_latest_state
         result = _find_latest_state(tmp_path)
-        assert result == tmp_path / "runs" / "01" / "state" / "engine_state.yml"
+        # BL-20: default is external worktree, not runs/
+        expected = Path.home() / ".ft" / "worktrees" / tmp_path.name / "cycle-01" / "state" / "engine_state.yml"
+        assert result == expected
 
-    def test_ignores_non_numeric_dirs(self, tmp_path):
+    def test_ignores_non_numeric_dirs_in_runs(self, tmp_path):
         from ft.cli.main import _find_latest_state
         (tmp_path / "runs" / "archive").mkdir(parents=True)
         result = _find_latest_state(tmp_path)
-        assert result == tmp_path / "runs" / "01" / "state" / "engine_state.yml"
+        # BL-20: still defaults to external worktree when no real state found
+        expected = Path.home() / ".ft" / "worktrees" / tmp_path.name / "cycle-01" / "state" / "engine_state.yml"
+        assert result == expected
 
 
 # ---------------------------------------------------------------------------
@@ -124,21 +128,21 @@ class TestNextRunDir:
     def test_creates_first_run(self, tmp_path):
         from ft.cli.main import _next_run_dir
         run_dir = _next_run_dir(tmp_path)
-        assert run_dir == tmp_path / "runs" / "01"
+        assert run_dir == tmp_path / "runs" / "cycle-01"
         assert run_dir.is_dir()
 
     def test_increments_from_existing(self, tmp_path):
         from ft.cli.main import _next_run_dir
-        (tmp_path / "runs" / "01").mkdir(parents=True)
-        (tmp_path / "runs" / "02").mkdir()
+        (tmp_path / "runs" / "cycle-01").mkdir(parents=True)
+        (tmp_path / "runs" / "cycle-02").mkdir()
         run_dir = _next_run_dir(tmp_path)
-        assert run_dir == tmp_path / "runs" / "03"
+        assert run_dir == tmp_path / "runs" / "cycle-03"
         assert run_dir.is_dir()
 
     def test_pads_with_zero(self, tmp_path):
         from ft.cli.main import _next_run_dir
         run_dir = _next_run_dir(tmp_path)
-        assert run_dir.name == "01"
+        assert run_dir.name == "cycle-01"
 
 
 # ---------------------------------------------------------------------------
@@ -146,20 +150,20 @@ class TestNextRunDir:
 # ---------------------------------------------------------------------------
 
 class TestEnsureRunsGitignore:
-    def test_creates_gitignore(self, tmp_path):
+    def test_adds_runs_to_root_gitignore(self, tmp_path):
+        """_ensure_runs_gitignore adds runs/ to .gitignore in project root."""
         from ft.cli.main import _ensure_runs_gitignore
         _ensure_runs_gitignore(tmp_path)
-        gitignore = tmp_path / "runs" / ".gitignore"
+        gitignore = tmp_path / ".gitignore"
         assert gitignore.exists()
-        content = gitignore.read_text()
-        assert "*" in content
-        assert "!.gitignore" in content
+        assert "runs/" in gitignore.read_text()
 
     def test_idempotent(self, tmp_path):
         from ft.cli.main import _ensure_runs_gitignore
         _ensure_runs_gitignore(tmp_path)
         _ensure_runs_gitignore(tmp_path)
-        assert (tmp_path / "runs" / ".gitignore").exists()
+        content = (tmp_path / ".gitignore").read_text()
+        assert content.count("runs/") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -177,20 +181,18 @@ class TestInitCreatesStructure:
         run_ft(["init"], cwd=tmp_path)
         assert (tmp_path / "docs").is_dir()
 
-    def test_creates_runs_dir(self, tmp_path):
+    def test_does_not_create_runs_dir(self, tmp_path):
+        """BL-20: ft init no longer creates runs/ inside the repo."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["init"], cwd=tmp_path)
-        assert (tmp_path / "runs").is_dir()
+        assert not (tmp_path / "runs").is_dir()
 
-    def test_creates_runs_gitignore(self, tmp_path):
+    def test_state_in_external_worktree(self, tmp_path):
+        """BL-20: state lives in ~/.ft/worktrees/<project>/cycle-01/."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["init"], cwd=tmp_path)
-        assert (tmp_path / "runs" / ".gitignore").exists()
-
-    def test_state_in_runs_01(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        run_ft(["init"], cwd=tmp_path)
-        assert (tmp_path / "runs" / "01" / "state" / "engine_state.yml").exists()
+        state = Path.home() / ".ft" / "worktrees" / tmp_path.name / "cycle-01" / "state" / "engine_state.yml"
+        assert state.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -198,23 +200,19 @@ class TestInitCreatesStructure:
 # ---------------------------------------------------------------------------
 
 class TestRunCreatesRunSubdir:
-    def test_run_creates_run_01(self, tmp_path):
+    def test_run_creates_external_worktree(self, tmp_path):
+        """BL-20: ft run creates cycle in ~/.ft/worktrees/, not runs/."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        # ft run needs a project path argument
-        result = run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        # Run may fail on LLM delegation, but the structure should be created
-        assert (tmp_path / "runs" / "01").is_dir()
-        assert (tmp_path / "runs" / "01" / "state").is_dir()
+        run_ft(["run", str(tmp_path)], cwd=tmp_path)
+        wt_home = Path.home() / ".ft" / "worktrees" / tmp_path.name
+        assert wt_home.is_dir()
+        cycles = list(wt_home.iterdir())
+        assert len(cycles) >= 1
 
     def test_run_creates_docs(self, tmp_path):
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         assert (tmp_path / "docs").is_dir()
-
-    def test_run_creates_gitignore(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        assert (tmp_path / "runs" / ".gitignore").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -222,21 +220,22 @@ class TestRunCreatesRunSubdir:
 # ---------------------------------------------------------------------------
 
 class TestRunIncrementsRunNumber:
-    def test_second_run_creates_run_02(self, tmp_path):
+    def test_second_run_creates_cycle_02(self, tmp_path):
         from ft.cli.main import _next_run_dir
         r1 = _next_run_dir(tmp_path)
-        assert r1.name == "01"
+        assert r1.name == "cycle-01"
         r2 = _next_run_dir(tmp_path)
-        assert r2.name == "02"
+        assert r2.name == "cycle-02"
         assert r2.is_dir()
 
-    def test_second_ft_run_creates_run_02_e2e(self, tmp_path):
-        """Two ft run calls should create runs/01/ and runs/02/."""
+    def test_second_ft_run_creates_second_cycle_e2e(self, tmp_path):
+        """Two ft run calls should create cycle-01 and cycle-02 in worktrees."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        assert (tmp_path / "runs" / "01").is_dir()
-        assert (tmp_path / "runs" / "02").is_dir()
+        wt_home = Path.home() / ".ft" / "worktrees" / tmp_path.name
+        cycles = [d.name for d in wt_home.iterdir() if d.is_dir()]
+        assert len(cycles) >= 2
 
 
 # ---------------------------------------------------------------------------

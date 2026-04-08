@@ -32,7 +32,7 @@ class TestBuildExecutorCommand:
 
     def test_invalid_engine_raises(self):
         with pytest.raises(ValueError, match="Executor LLM desconhecido"):
-            _build_executor_command("gemini", "x", "/tmp/proj", 3)
+            _build_executor_command("unknown_engine_xyz", "x", "/tmp/proj", 3)
 
     def test_extracts_final_codex_message_from_json_stream(self):
         raw = "\n".join([

@@ -27,6 +27,11 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
+def _state_file(project_dir: Path) -> Path:
+    """Retorna o caminho do engine_state.yml para um projeto (BL-20: worktree externo)."""
+    return Path.home() / ".ft" / "worktrees" / project_dir.name / "cycle-01" / "state" / "engine_state.yml"
+
+
 def run_ft(args: list[str], cwd: Path, timeout: int = 30) -> subprocess.CompletedProcess:
     """Invoke the ft engine CLI via python -m ft.cli.main."""
     import os
@@ -195,8 +200,10 @@ class TestInit:
 
     def test_creates_state_file(self, ft_project):
         run_ft(["init"], cwd=ft_project)
-        state_file = ft_project / "runs" / "01" / "state" / "engine_state.yml"
-        assert state_file.exists(), "engine_state.yml should be created by ft init"
+        # State lives in external worktree (BL-20)
+        wt_home = Path.home() / ".ft" / "worktrees" / ft_project.name
+        state_file = wt_home / "cycle-01" / "state" / "engine_state.yml"
+        assert state_file.exists(), f"engine_state.yml should be created by ft init (checked {state_file})"
 
     def test_output_mentions_process_title(self, ft_project):
         result = run_ft(["init"], cwd=ft_project)
@@ -224,7 +231,7 @@ class TestInit:
         process_file.write_text(GATE_ONLY_PROCESS)
         result = run_ft(["--process", str(process_file), "init"], cwd=tmp_path)
         assert result.returncode == 0
-        assert (tmp_path / "runs" / "01" / "state" / "engine_state.yml").exists()
+        assert _state_file(tmp_path).exists()
 
     def test_no_local_yaml_gives_clear_error(self, tmp_path):
         """Without a local process YAML, ft init gives a clear error with guidance."""
@@ -236,7 +243,7 @@ class TestInit:
     def test_codex_flag_persists_engine_choice(self, ft_project):
         result = run_ft(["init", "--codex"], cwd=ft_project)
         assert result.returncode == 0
-        state_file = ft_project / "runs" / "01" / "state" / "engine_state.yml"
+        state_file = _state_file(ft_project)
         assert "llm_engine: codex" in state_file.read_text()
 
     def test_missing_process_file_exits_nonzero(self, tmp_path):
@@ -377,7 +384,7 @@ class TestApprove:
         """Set up pending approval by writing state, then approve."""
         import yaml
 
-        state_file = ft_project_approval / "runs" / "01" / "state" / "engine_state.yml"
+        state_file = _state_file(ft_project_approval)
         with open(state_file) as f:
             state = yaml.safe_load(f) or {}
 
@@ -425,7 +432,7 @@ class TestReject:
         """reject with --no-retry should block the pending node."""
         import yaml
 
-        state_file = ft_project_approval / "runs" / "01" / "state" / "engine_state.yml"
+        state_file = _state_file(ft_project_approval)
         with open(state_file) as f:
             state = yaml.safe_load(f) or {}
 

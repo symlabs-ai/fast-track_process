@@ -99,10 +99,12 @@ class TestFindLatestStateContinuous:
 # ---------------------------------------------------------------------------
 
 class TestRunIsolated:
-    def test_creates_runs_dir(self, tmp_path):
+    def test_creates_external_worktree(self, tmp_path):
+        """BL-20: isolated mode creates cycle in ~/.ft/worktrees/, not runs/."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        assert (tmp_path / "runs" / "01").is_dir()
+        wt_home = Path.home() / ".ft" / "worktrees" / tmp_path.name
+        assert wt_home.is_dir() and any(wt_home.iterdir())
 
     def test_output_shows_isolated(self, tmp_path):
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")

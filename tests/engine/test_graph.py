@@ -161,13 +161,30 @@ class TestGraphValidation:
 # ---------------------------------------------------------------------------
 
 class TestLoadGraph:
-    def test_load_test_process(self):
-        g = load_graph("process/test_process.yml")
+    def test_load_inline_process(self, tmp_path):
+        p = tmp_path / "process.yml"
+        p.write_text(
+            "id: test_process\nversion: '0.1.0'\ntitle: Test\nnodes:\n"
+            "  - {id: a, type: discovery, title: A, next: b}\n"
+            "  - {id: b, type: document, title: B, next: c}\n"
+            "  - {id: c, type: build, title: C, next: d}\n"
+            "  - {id: d, type: gate, title: D, next: e}\n"
+            "  - {id: e, type: end, title: Done}\n"
+        )
+        g = load_graph(str(p))
         assert g.meta["id"] == "test_process"
         assert len(g.nodes) == 5
 
-    def test_load_v2_process(self):
-        g = load_graph("process/test_process_v2.yml")
+    def test_load_process_with_sprints(self, tmp_path):
+        p = tmp_path / "process.yml"
+        p.write_text(
+            "id: test_v2\nversion: '0.2.0'\ntitle: Test v2\nnodes:\n"
+            "  - {id: a, type: discovery, title: A, sprint: sprint-01-discovery, next: b}\n"
+            "  - {id: b, type: document, title: B, sprint: sprint-01-discovery, next: c}\n"
+            "  - {id: c, type: build, title: C, sprint: sprint-02-build, next: d}\n"
+            "  - {id: d, type: end, title: Done}\n"
+        )
+        g = load_graph(str(p))
         assert len(g.get_sprints()) == 2
         assert "sprint-01-discovery" in g.get_sprints()
 

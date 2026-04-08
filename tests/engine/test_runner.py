@@ -9,21 +9,81 @@ from ft.engine.runner import StepRunner, run_validators, ValidationResult, build
 from ft.engine.delegate import DelegateResult
 
 
+_TEST_PROCESS_V2_YAML = """\
+id: test_process_v2
+version: "0.2.0"
+title: "Processo de Teste v2 (Sprints)"
+nodes:
+  - id: step.01.hipotese
+    type: discovery
+    title: "Hipotese do produto"
+    executor: llm_coach
+    sprint: sprint-01-discovery
+    outputs:
+      - project/docs/hipotese.md
+    requires_approval: true
+    validators:
+      - file_exists: project/docs/hipotese.md
+      - min_lines: 5
+    next: step.02.prd
+  - id: step.02.prd
+    type: document
+    title: "PRD simplificado"
+    executor: llm_coach
+    sprint: sprint-01-discovery
+    outputs:
+      - project/docs/PRD.md
+    validators:
+      - file_exists: project/docs/PRD.md
+      - has_sections:
+          - Hipotese
+          - Visao
+          - User Stories
+      - min_lines: 20
+    next: gate.01.discovery
+  - id: gate.01.discovery
+    type: gate
+    title: "Gate de discovery"
+    executor: python
+    sprint: sprint-01-discovery
+    validators:
+      - file_exists: project/docs/hipotese.md
+      - file_exists: project/docs/PRD.md
+    next: step.03.implementacao
+  - id: step.03.implementacao
+    type: build
+    title: "Implementar funcionalidade basica"
+    executor: llm_coder
+    sprint: sprint-02-build
+    outputs:
+      - src/main.py
+    validators:
+      - file_exists: src/main.py
+      - tests_pass: true
+    next: gate.02.delivery
+  - id: gate.02.delivery
+    type: gate
+    title: "Gate de delivery"
+    executor: python
+    sprint: sprint-02-build
+    validators:
+      - gate_delivery: true
+    outputs:
+      - src/main.py
+    next: step.05.done
+  - id: step.05.done
+    type: end
+    title: "Processo completo"
+"""
+
+
 @pytest.fixture
 def runner_v2(tmp_path):
-    """Runner using test_process_v2.yml with a temp state."""
+    """Runner with inline v2-style process (sprints + gates)."""
+    process_path = tmp_path / "process.yml"
+    process_path.write_text(_TEST_PROCESS_V2_YAML)
     return StepRunner(
-        process_path="process/test_process_v2.yml",
-        state_path=tmp_path / "state.yml",
-        project_root=".",
-    )
-
-
-@pytest.fixture
-def runner_tdd(tmp_path):
-    """Runner using test_process_v3_tdd.yml."""
-    return StepRunner(
-        process_path="process/test_process_v3_tdd.yml",
+        process_path=process_path,
         state_path=tmp_path / "state.yml",
         project_root=".",
     )
@@ -46,8 +106,10 @@ class TestInitState:
         assert state.metrics["steps_total"] == 5
 
     def test_init_persists_selected_llm_engine(self, tmp_path):
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(_TEST_PROCESS_V2_YAML)
         runner = StepRunner(
-            process_path="process/test_process_v2.yml",
+            process_path=process_path,
             state_path=tmp_path / "state.yml",
             project_root=".",
             llm_engine="codex",
@@ -343,8 +405,10 @@ class TestRunGate:
         (Path(".") / "project/docs/hipotese.md").write_text("x" * 100)
         (Path(".") / "project/docs/PRD.md").write_text("x" * 100)
 
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(_TEST_PROCESS_V2_YAML)
         runner = StepRunner(
-            process_path="process/test_process_v2.yml",
+            process_path=process_path,
             state_path=tmp_path / "state.yml",
             project_root=".",
         )
@@ -364,8 +428,10 @@ class TestRunGate:
         (Path(".") / "project/docs/hipotese.md").write_text("x" * 100)
         (Path(".") / "project/docs/PRD.md").write_text("x" * 100)
 
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(_TEST_PROCESS_V2_YAML)
         runner = StepRunner(
-            process_path="process/test_process_v2.yml",
+            process_path=process_path,
             state_path=tmp_path / "state.yml",
             project_root=".",
         )

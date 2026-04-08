@@ -105,8 +105,8 @@ class TestCopyTemplate:
         from ft.cli.main import copy_template
         result = copy_template("fast-track-v2", tmp_path)
         assert result.exists()
-        assert result.name == "FAST_TRACK_PROCESS.yml"
-        assert (tmp_path / "process" / "FAST_TRACK_PROCESS.yml").exists()
+        assert result.name == "process.yml"
+        assert (tmp_path / "process" / "process.yml").exists()
 
     def test_template_is_valid_yaml(self, tmp_path):
         from ft.cli.main import copy_template
@@ -143,16 +143,23 @@ class TestInitTemplate:
 # ---------------------------------------------------------------------------
 
 class TestValidateCLI:
-    def test_validate_valid_process(self, tmp_path):
+    def _base_project(self, tmp_path):
+        """Create base project structure (docs/, process/, src/)."""
         (tmp_path / "project" / "state").mkdir(parents=True)
+        (tmp_path / "docs").mkdir(exist_ok=True)
+        (tmp_path / "src").mkdir(exist_ok=True)
+        (tmp_path / "process").mkdir(exist_ok=True)
+
+    def test_validate_valid_process(self, tmp_path):
+        self._base_project(tmp_path)
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         result = run_ft(["validate"], cwd=tmp_path)
         assert result.returncode == 0
         assert "PASS" in result.stdout
 
     def test_validate_with_explicit_process(self, tmp_path):
-        (tmp_path / "project" / "state").mkdir(parents=True)
-        yaml_path = _create_process_yaml(tmp_path / "my_process.yml")
+        self._base_project(tmp_path)
+        yaml_path = _create_process_yaml(tmp_path / "process" / "my_process.yml")
         result = run_ft(["-p", str(yaml_path), "validate"], cwd=tmp_path)
         assert result.returncode == 0
 

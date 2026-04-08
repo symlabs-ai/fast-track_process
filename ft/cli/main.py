@@ -777,9 +777,9 @@ def _validate_project_structure(root: Path) -> tuple[list[str], list[str]]:
         if not (root / d).is_dir():
             errors.append(f"diretório '{d}/' ausente")
 
-    # Pelo menos um YAML em process/
+    # Pelo menos um YAML em process/ (direto ou em subdiretórios)
     if (root / "process").is_dir():
-        yamls = list((root / "process").glob("*.yml")) + list((root / "process").glob("*.yaml"))
+        yamls = list((root / "process").rglob("*.yml")) + list((root / "process").rglob("*.yaml"))
         if not yamls:
             errors.append("nenhum YAML encontrado em process/")
 

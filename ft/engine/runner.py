@@ -1820,6 +1820,7 @@ class StepRunner:
     def status(self, full: bool = False):
         """Mostra estado atual."""
         state = self.state_mgr.load()
+        self._sync_process_meta(state)
         completed = set(state.completed_nodes)
         node_status = self.graph.get_status(completed)
 

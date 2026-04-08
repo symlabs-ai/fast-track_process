@@ -552,11 +552,24 @@ def cmd_runs(args):
         ts = last[1].strip()[11:16] if len(last) > 1 else "—"  # HH:MM
         total = len(lines)
 
-        # Serve URL
+        # Serve URL — busca apenas dentro de runs/ (ignora .serve_url na raiz = resíduo git)
         serve_url = "—"
-        for candidate in [cycle / ".serve_url", cycle / "runs" / "cycle-01" / ".serve_url"]:
-            if candidate.exists():
-                serve_url = candidate.read_text().strip()
+        runs_subdir = cycle / "runs"
+        if runs_subdir.exists():
+            for f in sorted(runs_subdir.rglob(".serve_url")):
+                serve_url = f.read_text().strip()
+                break
+
+        # Total de nodes do processo
+        import yaml as _yaml
+        total_nodes = "?"
+        for proc_candidate in [cycle / "process" / "FT_UI_PROTOTYPE.yml", cycle / "process" / "FAST_TRACK_PROCESS_V2.yml"]:
+            if proc_candidate.exists():
+                try:
+                    proc = _yaml.safe_load(proc_candidate.read_text())
+                    total_nodes = str(len(proc.get("nodes", [])))
+                except Exception:
+                    pass
                 break
 
         # Status colorido
@@ -569,14 +582,14 @@ def cmd_runs(args):
         else:
             status_str = f"   {node}"
 
-        rows.append((cycle.name, str(total), ts, status_str, serve_url))
+        rows.append((cycle.name, f"{total}/{total_nodes}", ts, status_str, serve_url))
 
     # Header
     print()
-    print(f"  {'CICLO':<22} {'STEPS':>5}  {'ÚLT.':>5}  {'NODE ATUAL':<40}  URL")
-    print(f"  {'─'*22}  {'─'*5}  {'─'*5}  {'─'*40}  {'─'*25}")
+    print(f"  {'CICLO':<22} {'STEPS':>8}  {'ÚLT.':>5}  {'NODE ATUAL':<40}  URL")
+    print(f"  {'─'*22}  {'─'*8}  {'─'*5}  {'─'*40}  {'─'*25}")
     for name, steps, ts, node_str, url in rows:
-        print(f"  {name:<22}  {steps:>5}  {ts:>5}  {node_str:<40}  {url}")
+        print(f"  {name:<22}  {steps:>8}  {ts:>5}  {node_str:<40}  {url}")
     print()
 
 

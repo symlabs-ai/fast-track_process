@@ -4,6 +4,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.12.2] - 2026-04-08
+
+- chore: remove process files órfãos (test_process*.yml, FAST_TRACK_PROCESS.yml V1) e atualiza testes para BL-20/BL-21
+- fix(runner): `status()` agora sincroniza versão do processo a partir do grafo
+- fix(validate): busca YAML em `process/` recursivamente (compat com `fast_track/`)
+
+---
+
 ## [v0.12.1] - 2026-04-08
 
 - feat(validate): `ft validate` agora valida estrutura base do projeto (docs/, process/, src/) além do YAML

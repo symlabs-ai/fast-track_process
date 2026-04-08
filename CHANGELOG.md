@@ -4,6 +4,16 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.11.1] - 2026-04-07
+
+### Correções
+- **_is_cycle_dir**: aceita formato `cycle-NN-engine` (ex: `cycle-01-claude`) — antes `name[6:].isdigit()` falhava para nomes compostos
+- **runs/ no .gitignore da raiz**: `_ensure_runs_gitignore` agora adiciona `runs/` ao `.gitignore` do projeto em vez de criar `runs/.gitignore` interno — ciclos são efêmeros e nunca versionados
+- **Validator root em modo worktree**: `_resolve_validator_root` prefere `work_dir` (worktree) em vez de `project_root` — corrige falso FAIL em `screenshot_review_passed` quando LLM escreve artefatos no worktree
+- **Worktree em `runs/`**: `_setup_worktree` cria worktrees em `runs/cycle-NN-<engine>/` unificando os conceitos de run dir e worktree
+
+---
+
 ## [v0.11.0] - 2026-04-07
 
 ### Novas funcionalidades

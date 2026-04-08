@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.12.5] - 2026-04-08
+
+- feat(init): `ft init` também provisiona SymGateway quando `SYM_GATEWAY_PROJECT_KEY` está definida
+
+---
+
 ## [v0.12.4] - 2026-04-08
 
 - feat(symgateway): credenciais migradas para env vars `SYM_GATEWAY_PROJECT_KEY` e `SYM_GATEWAY_ADMIN_KEY`; `--key`/`--admin-key` removidos do `ft run` e `ft setup-env`

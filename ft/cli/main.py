@@ -766,6 +766,31 @@ def cmd_graph(args):
     runner.status(full=True)
 
 
+def _validate_project_structure(root: Path) -> tuple[list[str], list[str]]:
+    """Valida estrutura base do projeto (docs/, process/, src/).
+    Retorna (errors, warnings)."""
+    errors = []
+    warnings = []
+
+    required_dirs = ["docs", "process", "src"]
+    for d in required_dirs:
+        if not (root / d).is_dir():
+            errors.append(f"diretório '{d}/' ausente")
+
+    # Pelo menos um YAML em process/
+    if (root / "process").is_dir():
+        yamls = list((root / "process").glob("*.yml")) + list((root / "process").glob("*.yaml"))
+        if not yamls:
+            errors.append("nenhum YAML encontrado em process/")
+
+    # Warnings para docs opcionais mas esperados
+    for doc in ["docs/PRD.md", "docs/TECH_STACK.md"]:
+        if not (root / doc).exists():
+            warnings.append(f"'{doc}' não encontrado")
+
+    return errors, warnings
+
+
 def cmd_validate(args):
     """Valida o YAML do processo."""
     from ft.engine.graph import load_graph
@@ -774,6 +799,23 @@ def cmd_validate(args):
 
     root = find_project_root()
 
+    # --- Validação de estrutura do projeto ---
+    print("\nValidando estrutura do projeto...\n")
+    struct_errors, struct_warnings = _validate_project_structure(root)
+    structure_passed = len(struct_errors) == 0
+    if structure_passed:
+        print("  \u2705 Estrutura: docs/, process/, src/ presentes")
+    else:
+        for e in struct_errors:
+            print(f"  \u274c {e}")
+    for w in struct_warnings:
+        print(f"  \u26a0\ufe0f  {w}")
+    warn_note = f" ({len(struct_warnings)} warnings)" if struct_warnings else ""
+    err_note = f" ({len(struct_errors)} erros)" if struct_errors else ""
+    print(f"\n  Estrutura: {'PASS' if structure_passed else 'FAIL'}{err_note}{warn_note}")
+
+    # --- Validação do YAML ---
+    print()
     if args.process:
         process_path = Path(args.process)
     else:
@@ -782,7 +824,8 @@ def cmd_validate(args):
             print("ERRO: Nenhum YAML de processo encontrado em ./process/")
             sys.exit(1)
 
-    print(f"\nValidando {process_path.relative_to(root) if process_path.is_relative_to(root) else process_path}...\n")
+    rel = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
+    print(f"Validando {rel}...\n")
 
     try:
         graph = load_graph(process_path)
@@ -794,7 +837,8 @@ def cmd_validate(args):
     total = len(graph.nodes)
     print(format_report(report, total))
 
-    sys.exit(0 if report.passed else 1)
+    overall_pass = structure_passed and report.passed
+    sys.exit(0 if overall_pass else 1)
 
 
 def cmd_lint_process(args):

@@ -195,6 +195,56 @@
 - **Status**: concluido
 - **Prioridade**: Crítica
 
+### BL-20: Worktrees fora do repositório — eliminar `runs/`
+- **Problema**: `runs/` dentro do repo polui o git status, permite que LLMs editem ciclos vizinhos e cria acoplamento artificial entre o código do processo e os artefatos gerados. Múltiplos ciclos paralelos são frágeis quando todos vivem no mesmo diretório.
+- **Solução**: `ft run` usa `git worktree add <path-externo> -b cycle-NN-<engine>` em vez de criar pasta em `runs/`. Os worktrees vivem fora do repo (ex: `~/.ft/worktrees/<projeto>/cycle-NN/`). O repo base fica limpo. Cada ciclo tem isolamento real. `ft runs` lista worktrees ativos via `git worktree list`. `ft status` localiza o worktree pelo branch name.
+- **Entrega**: Alterar `ft run` para usar `git worktree add` externo. Remover criação de `runs/`. Adaptar `ft status`, `ft runs`, `ft continue` para operar por path do worktree. Atualizar `engine_state.yml` com path absoluto do worktree.
+- **Status**: proposto
+- **Prioridade**: Alta
+
+### BL-21: Nova estrutura base do projeto
+- **Problema**: `seed/` é jargão interno do processo — não intuitivo para quem abre o repo. Múltiplos YAMLs em `process/` causam ambiguidade. `runs/` polui o repo (ver BL-20). Não há separação clara entre documentação do produto e arquivos de referência de código.
+- **Solução**: Estrutura base padronizada, agnóstica de processo:
+  ```
+  ├── docs/
+  │   ├── PRD.md
+  │   ├── TECH_STACK.md
+  │   ├── UI_GUIDELINES.md    (placeholder — opcional por processo)
+  │   └── code_snippets/      (referências de código para o LLM, ex: graph_routing.js)
+  ├── process/
+  │   ├── environment.yml
+  │   ├── process.yml         (único YAML — sem ambiguidade)
+  │   ├── structure.yml       (contrato da estrutura — ver BL-22)
+  │   └── scripts/
+  │       └── setup_env.sh
+  └── src/
+  ```
+  `ft init` cria essa estrutura. Template agnóstico — não presume UI, backend ou qualquer domínio.
+- **Entrega**: Novo template base. `ft init` atualizado. Migração do ft-studio como projeto piloto.
+- **Status**: proposto
+- **Prioridade**: Alta
+
+### BL-22: `process/structure.yml` — contrato da estrutura materializado pelo ambiente
+- **Problema**: A estrutura de diretórios e os arquivos obrigatórios estão espalhados entre `tech_stack.md`, `agent_rules.md` e a cabeça do LLM. O LLM cria o scaffold do zero a cada ciclo com variações não intencionais. Arquivos de referência (como `graph_routing.js`) precisam ser copiados manualmente ou via instrução no prompt.
+- **Solução**: `process/structure.yml` declara: diretórios a criar, arquivos obrigatórios (validados ao final) e arquivos a copiar de `docs/code_snippets/` para o worktree antes do LLM começar. O `setup_env.sh` lê esse YAML e materializa tudo deterministicamente no `on_init`. O LLM recebe a estrutura pronta e só precisa preencher os arquivos.
+  ```yaml
+  directories: [src/components, src/utils, ...]
+  required_files: [src/App.svelte, package.json, ...]
+  copy_from_docs:
+    - from: code_snippets/graph_routing.js
+      to: src/utils/layout.js
+  ```
+- **Entrega**: Schema de `structure.yml`. Script `create_structure.sh` que lê e materializa. Hook no `environment.yml`. Validator que confere `required_files` ao final do ciclo.
+- **Status**: proposto
+- **Prioridade**: Média
+
+### BL-23: Handoff genérico entre ciclos — substituir `plano_de_voo.md`
+- **Problema**: `plano_de_voo.md` é um artefato específico do processo FT_UI_PROTOTYPE — não é conceito base do framework. O mecanismo de passar contexto entre ciclos está acoplado ao processo, não ao engine. O formato (markdown narrativo) não é estruturado o suficiente para o engine consumir programaticamente.
+- **Solução**: O engine gera automaticamente um `handoff.yml` estruturado ao final de cada ciclo (no worktree), contendo: US implementadas, US pendentes, itens críticos validados, porta do servidor, paths relevantes, notas do LLM. O próximo ciclo lê esse `handoff.yml` via `--from-cycle` flag. O `plano_de_voo.md` narrativo vira responsabilidade do processo específico (opcional), não do framework base.
+- **Entrega**: Geração automática de `handoff.yml` no `on_cycle_end`. Flag `--from-cycle <path>` no `ft run`. Remoção do `plano_de_voo.md` do template base.
+- **Status**: proposto
+- **Prioridade**: Média
+
 ---
 
 ## Resumo
@@ -221,3 +271,7 @@
 | BL-17 | Análise Crítica do LLM | Alta | proposto |
 | BL-18 | Código em runs/ (modo isolated) | Alta | concluido |
 | BL-19 | Process Triage (classificar demanda) | Crítica | concluido |
+| BL-20 | Worktrees fora do repositório | Alta | proposto |
+| BL-21 | Nova estrutura base do projeto | Alta | proposto |
+| BL-22 | process/structure.yml — contrato da estrutura | Média | proposto |
+| BL-23 | Handoff genérico entre ciclos | Média | proposto |

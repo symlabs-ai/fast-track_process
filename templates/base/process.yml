@@ -1,0 +1,66 @@
+# Processo Base — Fast Track
+# Template mínimo. Customize conforme o domínio do projeto.
+# Docs: docs/PRD.md, docs/TECH_STACK.md
+
+id: base_process
+version: 1.0.0
+
+sprints:
+  - id: sprint-01-discovery
+    title: "Discovery"
+  - id: sprint-02-build
+    title: "Build"
+  - id: sprint-03-validate
+    title: "Validação"
+
+nodes:
+  - id: start
+    type: discovery
+    title: "Ler e Validar PRD"
+    executor: llm_coach
+    sprint: sprint-01-discovery
+    max_turns: 10
+    outputs:
+      - docs/hipotese.md
+    prompt: |
+      Leia docs/PRD.md e docs/TECH_STACK.md.
+      Resuma a hipótese do projeto em docs/hipotese.md.
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/hipotese.md
+    next: build
+
+  - id: build
+    type: build
+    title: "Implementar MVP"
+    executor: llm_coder
+    sprint: sprint-02-build
+    max_turns: 60
+    outputs:
+      - .build_ok
+    prompt: |
+      Implemente o MVP conforme docs/PRD.md e docs/TECH_STACK.md.
+      Ao final diga DONE.
+    validators:
+      - file_exists: .build_ok
+    next: validate
+
+  - id: validate
+    type: review
+    title: "Validação Final"
+    executor: llm_coder
+    sprint: sprint-03-validate
+    max_turns: 30
+    outputs:
+      - docs/validation-report.md
+    prompt: |
+      Verifique que o MVP atende os critérios do PRD.
+      Gere docs/validation-report.md com resultado.
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/validation-report.md
+    next: end
+
+  - id: end
+    type: end
+    title: "Concluído"

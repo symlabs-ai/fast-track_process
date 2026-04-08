@@ -71,9 +71,25 @@ def copy_template(template_name: str, project_root: Path) -> Path:
     dest_dir = project_root / "process"
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    dest = dest_dir / "FAST_TRACK_PROCESS.yml"
+    dest = dest_dir / "process.yml"
+    # Compat: se já existe FAST_TRACK_PROCESS.yml, não sobrescrever
+    legacy_dest = dest_dir / "FAST_TRACK_PROCESS.yml"
+    if legacy_dest.exists():
+        dest = legacy_dest
     shutil.copy(yamls[0], dest)
-    print(f"  Template '{template_name}' copiado para process/FAST_TRACK_PROCESS.yml")
+    print(f"  Template '{template_name}' copiado para process/{dest.name}")
+
+    # Copiar docs/ e src/ do template se existirem
+    for subdir in ("docs", "src"):
+        template_sub = src_dir / subdir
+        if template_sub.is_dir():
+            dest_sub = project_root / subdir
+            dest_sub.mkdir(parents=True, exist_ok=True)
+            for f in template_sub.iterdir():
+                dest_f = dest_sub / f.name
+                if not dest_f.exists():  # não sobrescrever existentes
+                    shutil.copy(f, dest_f)
+
     return dest
 
 
@@ -100,7 +116,17 @@ def find_process_yaml(root: Path) -> Path | None:
 
     # Tenta ler o process_id do engine_state ativo para casar com o YAML correto
     active_process_id: str | None = None
-    for state_path in (root / "runs").glob("*/state/engine_state.yml") if (root / "runs").is_dir() else []:
+    # Buscar em worktrees externos e runs/ legado
+    state_globs = []
+    wt_home = Path.home() / ".ft" / "worktrees" / root.name
+    if wt_home.is_dir():
+        state_globs.extend(wt_home.glob("*/runs/*/state/engine_state.yml"))
+        state_globs.extend(wt_home.glob("*/state/engine_state.yml"))
+    if (root / "runs").is_dir():
+        state_globs.extend((root / "runs").glob("*/state/engine_state.yml"))
+        state_globs.extend((root / "runs").glob("*/runs/*/state/engine_state.yml"))
+
+    for state_path in state_globs:
         try:
             with open(state_path) as _f:
                 _st = _yaml.safe_load(_f)
@@ -124,7 +150,12 @@ def find_process_yaml(root: Path) -> Path | None:
             except Exception:
                 pass
 
-    # Fallback: nome canônico
+    # Novo padrão: process/process.yml
+    new_canonical = root / "process" / "process.yml"
+    if new_canonical.exists():
+        return new_canonical
+
+    # Fallback: nome canônico legado
     canonical = root / "process" / "FAST_TRACK_PROCESS.yml"
     if canonical.exists():
         return canonical
@@ -176,12 +207,40 @@ def _cycle_num(d: Path) -> int:
 
 
 def _find_latest_state(root: Path) -> Path:
-    """Encontra o state mais recente. Prioridade: continuous > runs/ > legacy."""
+    """Encontra o state mais recente.
+
+    Prioridade: continuous > worktrees externos > runs/ legado > legacy.
+    """
     # 1. Continuous mode: state/ na raiz do projeto
     continuous = root / "state" / "engine_state.yml"
     if continuous.exists():
         return continuous
-    # 2. Isolated mode: runs/cycle-NN/ ou runs/NN/ (legado)
+
+    # 2. Worktrees externos (~/.ft/worktrees/<project>/)
+    wt_home = Path.home() / ".ft" / "worktrees" / root.name
+    if wt_home.is_dir():
+        wt_dirs = sorted(
+            [d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+            key=_cycle_num, reverse=True,
+        )
+        for wd in wt_dirs:
+            # Worktree com runs internas (modo isolated dentro do worktree)
+            runs_sub = wd / "runs"
+            if runs_sub.is_dir():
+                sub_dirs = sorted(
+                    [d for d in runs_sub.iterdir() if d.is_dir()],
+                    key=lambda x: x.name, reverse=True,
+                )
+                for sd in sub_dirs:
+                    state = sd / "state" / "engine_state.yml"
+                    if state.exists():
+                        return state
+            # Worktree com state direto
+            state = wd / "state" / "engine_state.yml"
+            if state.exists():
+                return state
+
+    # 3. Fallback legado: runs/ dentro do projeto
     runs_dir = root / "runs"
     if runs_dir.is_dir():
         run_dirs = sorted(
@@ -189,15 +248,28 @@ def _find_latest_state(root: Path) -> Path:
             key=_cycle_num, reverse=True,
         )
         for rd in run_dirs:
+            # Worktrees legados com runs internas
+            runs_sub = rd / "runs"
+            if runs_sub.is_dir():
+                sub_dirs = sorted(
+                    [d for d in runs_sub.iterdir() if d.is_dir()],
+                    key=lambda x: x.name, reverse=True,
+                )
+                for sd in sub_dirs:
+                    state = sd / "state" / "engine_state.yml"
+                    if state.exists():
+                        return state
             state = rd / "state" / "engine_state.yml"
             if state.exists():
                 return state
-    # 3. Fallback legado
+
+    # 4. Fallback legado antigo
     legacy = root / "project" / "state" / "engine_state.yml"
     if legacy.exists():
         return legacy
-    # Default para novo ciclo
-    return root / "runs" / "cycle-01" / "state" / "engine_state.yml"
+
+    # Default para novo ciclo em worktree externo
+    return _worktrees_home(root) / "cycle-01" / "state" / "engine_state.yml"
 
 
 def _api_health_check(project_root: Path) -> None:
@@ -345,10 +417,15 @@ def _next_run_dir(project_root: Path) -> Path:
         if not dst.exists():
             _shutil.copytree(claude_dir, dst)
 
-    # Copiar seed/ do projeto para o run dir (LLM roda com CWD=run dir)
+    # Copiar seed/ ou docs/ do projeto para o run dir (LLM roda com CWD=run dir)
     seed_dir = project_root / "seed"
     if seed_dir.is_dir():
         _shutil.copytree(seed_dir, run_dir / "seed", dirs_exist_ok=True)
+    else:
+        # Nova estrutura: propagar docs/ para o run dir
+        docs_dir = project_root / "docs"
+        if docs_dir.is_dir():
+            _shutil.copytree(docs_dir, run_dir / "docs", dirs_exist_ok=True)
 
     # Seed de código do run anterior
     if existing:
@@ -380,21 +457,37 @@ def _ensure_runs_gitignore(project_root: Path) -> None:
 
 
 def _next_cycle_num(project_root: Path) -> int:
-    """Retorna o próximo número de ciclo baseado em runs/ existentes."""
+    """Retorna o próximo número de ciclo baseado em worktrees externos e runs/ legado."""
+    max_num = 0
+
+    # Worktrees externos (~/.ft/worktrees/<project>/)
+    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    if wt_home.is_dir():
+        for d in wt_home.iterdir():
+            if d.is_dir() and _is_cycle_dir(d):
+                max_num = max(max_num, _cycle_num(d))
+
+    # Fallback legado: runs/ dentro do projeto
     runs_dir = project_root / "runs"
-    if not runs_dir.is_dir():
-        return 1
-    existing = sorted(
-        [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
-        key=_cycle_num,
-    )
-    return (_cycle_num(existing[-1]) + 1) if existing else 1
+    if runs_dir.is_dir():
+        for d in runs_dir.iterdir():
+            if d.is_dir() and _is_cycle_dir(d):
+                max_num = max(max_num, _cycle_num(d))
+
+    return max_num + 1
+
+
+def _worktrees_home(project_root: Path) -> Path:
+    """Retorna ~/.ft/worktrees/<project_name>/. Cria se não existir."""
+    home = Path.home() / ".ft" / "worktrees" / project_root.name
+    home.mkdir(parents=True, exist_ok=True)
+    return home
 
 
 def _setup_worktree(project_root: Path, name: str) -> Path:
     """Cria um git worktree para rodar um ciclo em isolamento total.
 
-    Cria: <project_root>/runs/cycle-NN-<name>
+    Cria: ~/.ft/worktrees/<project>/cycle-NN-<name>
     Branch: cycle-NN-<name>
 
     Retorna o path do worktree criado.
@@ -420,7 +513,7 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
             "Repositório sem commits — faça um commit inicial antes de usar --worktree"
         )
 
-    # Número do ciclo: o maior entre runs/ locais e branches git existentes
+    # Número do ciclo: o maior entre worktrees externos, runs/ locais e branches git
     next_num = _next_cycle_num(project_root)
 
     # Verificar branches git existentes para evitar conflito
@@ -438,11 +531,7 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
                     next_num = existing_num + 1
 
     branch_name = f"cycle-{next_num:02d}-{name}"
-    worktree_dir = project_root / "runs" / branch_name
-
-    # Garantir que runs/ existe e está no .gitignore
-    (project_root / "runs").mkdir(parents=True, exist_ok=True)
-    _ensure_runs_gitignore(project_root)
+    worktree_dir = _worktrees_home(project_root) / branch_name
 
     # Criar worktree
     result = _sp.run(
@@ -459,7 +548,7 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
         if not claude_dst.exists():
             _shutil.copytree(claude_src, claude_dst)
 
-    print(f"  Worktree: {worktree_dir.relative_to(project_root)} (branch: {branch_name})")
+    print(f"  Worktree: {worktree_dir} (branch: {branch_name})")
     return worktree_dir
 
 
@@ -469,10 +558,29 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
 def get_runner(process: str | None = None, llm_engine: str | None = None, llm_model: str | None = None, verbose: bool = False, cycle: str | None = None) -> StepRunner:
     root = find_project_root()
     if cycle:
-        state_path = root / "runs" / cycle / "state" / "engine_state.yml"
-        if not state_path.exists():
-            print(f"ERRO: Ciclo '{cycle}' não encontrado em runs/{cycle}/state/engine_state.yml")
-            sys.exit(1)
+        # Buscar em worktrees externos primeiro, depois runs/ legado
+        wt_home = Path.home() / ".ft" / "worktrees" / root.name
+        wt_path = wt_home / cycle / "state" / "engine_state.yml"
+        legacy_path = root / "runs" / cycle / "state" / "engine_state.yml"
+
+        if wt_path.exists():
+            state_path = wt_path
+        elif legacy_path.exists():
+            state_path = legacy_path
+        else:
+            # Tentar state dentro de runs/ do worktree (modo isolated aninhado)
+            wt_runs = sorted((wt_home / cycle / "runs").glob("*/state/engine_state.yml")) if (wt_home / cycle / "runs").is_dir() else []
+            legacy_runs = sorted((root / "runs" / cycle / "runs").glob("*/state/engine_state.yml")) if (root / "runs" / cycle / "runs").is_dir() else []
+
+            if wt_runs:
+                state_path = wt_runs[-1]
+            elif legacy_runs:
+                state_path = legacy_runs[-1]
+            else:
+                print(f"ERRO: Ciclo '{cycle}' não encontrado")
+                print(f"  Worktrees: {wt_home}")
+                print(f"  Legado:    {root / 'runs'}")
+                sys.exit(1)
     else:
         state_path = _find_latest_state(root)
 
@@ -504,10 +612,10 @@ def cmd_init(args):
         if not find_process_yaml(root):
             copy_template(template, root)
 
-    # Criar estrutura V3: process/, docs/, runs/
+    # Criar estrutura base: process/, docs/, src/
     (root / "process").mkdir(exist_ok=True)
     (root / "docs").mkdir(exist_ok=True)
-    _ensure_runs_gitignore(root)
+    (root / "src").mkdir(exist_ok=True)
 
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     # Limpar estado anterior se existir
@@ -541,24 +649,26 @@ def cmd_status(args):
 
 
 def cmd_runs(args):
-    """Mostra tabela comparativa de todos os ciclos em runs/."""
+    """Mostra tabela comparativa de todos os ciclos (worktrees externos + runs/ legado)."""
     from ft.engine import ui as _ui
     import re as _re
 
     project_root = Path(args.project).resolve()
+
+    # Coletar ciclos de worktrees externos + runs/ legado
+    cycles = []
+    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    if wt_home.is_dir():
+        cycles.extend(d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d))
+
     runs_dir = project_root / "runs"
+    if runs_dir.is_dir():
+        cycles.extend(d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d))
 
-    if not runs_dir.exists():
-        print(_ui.warn("Nenhum ciclo encontrado em runs/"))
-        return
-
-    cycles = sorted(
-        [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
-        key=_cycle_num,
-    )
+    cycles = sorted(cycles, key=_cycle_num)
 
     if not cycles:
-        print(_ui.warn("Nenhum ciclo encontrado em runs/"))
+        print(_ui.warn("Nenhum ciclo encontrado"))
         return
 
     import yaml as _yaml
@@ -1138,16 +1248,18 @@ def cmd_run(args):
         if _outer_worktree_used:
             # --worktree já criou o ambiente isolado: project_root é o worktree.
             # Usar project_root diretamente como run_dir — sem aninhamento.
-            _ensure_runs_gitignore(project_root)
             run_dir = _next_run_dir(project_root)
         elif git_ok and has_commits:
-            # Modo isolado padrão: criar worktree interno nomeado pelo engine
+            # Modo isolado padrão: worktree externo em ~/.ft/worktrees/
             wt_name = resolve_llm_engine(args) or "run"
             run_dir = _setup_worktree(project_root, wt_name)
         else:
-            # Fallback: diretório simples em runs/
-            _ensure_runs_gitignore(project_root)
-            run_dir = _next_run_dir(project_root)
+            # Fallback sem git: diretório simples em ~/.ft/worktrees/
+            wt_home = _worktrees_home(project_root)
+            next_num = _next_cycle_num(project_root)
+            engine_name = resolve_llm_engine(args) or "run"
+            run_dir = wt_home / f"cycle-{next_num:02d}-{engine_name}"
+            run_dir.mkdir(parents=True, exist_ok=True)
 
         (run_dir / "state").mkdir(parents=True, exist_ok=True)
         state_path = run_dir / "state" / "engine_state.yml"

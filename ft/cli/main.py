@@ -636,6 +636,12 @@ def cmd_init(args):
     (root / "docs").mkdir(exist_ok=True)
     (root / "src").mkdir(exist_ok=True)
 
+    # Provisionar ambiente SymGateway (se SYM_GATEWAY_PROJECT_KEY estiver definida)
+    import os as _os
+    if _os.environ.get("SYM_GATEWAY_PROJECT_KEY"):
+        provision_environment(project_root=root)
+        print(f"  Ambiente SymGateway provisionado")
+
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     # Limpar estado anterior se existir
     if runner.state_mgr.path.exists():

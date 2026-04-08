@@ -393,7 +393,23 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
             "Repositório sem commits — faça um commit inicial antes de usar --worktree"
         )
 
+    # Número do ciclo: o maior entre runs/ locais e branches git existentes
     next_num = _next_cycle_num(project_root)
+
+    # Verificar branches git existentes para evitar conflito
+    branches_result = _sp.run(
+        ["git", "branch", "--list", "cycle-*"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    for line in branches_result.stdout.splitlines():
+        branch = line.strip().lstrip("*+ ")
+        if branch.startswith("cycle-"):
+            parts = branch.split("-")
+            if len(parts) >= 2 and parts[1].isdigit():
+                existing_num = int(parts[1])
+                if existing_num >= next_num:
+                    next_num = existing_num + 1
+
     branch_name = f"cycle-{next_num:02d}-{name}"
     worktree_dir = project_root / "runs" / branch_name
 
@@ -955,13 +971,17 @@ def cmd_run(args):
     project_root = Path(args.project).resolve()
 
     # --worktree: criar worktree git e redirecionar project_root para ele
+    # Quando --worktree é usado, o worktree externo já É o ambiente isolado —
+    # o engine não deve criar outro worktree interno (flag para suprimir).
     worktree_name = getattr(args, "worktree", None)
+    _outer_worktree_used = False
     if worktree_name:
         from ft.engine import ui as _ui
         wt_name = worktree_name if isinstance(worktree_name, str) and worktree_name != "True" else (
             resolve_llm_engine(args) or "run"
         )
         project_root = _setup_worktree(project_root, wt_name)
+        _outer_worktree_used = True
 
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
 
@@ -1000,13 +1020,14 @@ def cmd_run(args):
                 cwd=project_root, capture_output=True,
             ).returncode == 0
 
-        worktree_name = getattr(args, "worktree", None)
-        if git_ok and has_commits and worktree_name is not False:
-            # Worktree: nome derivado do engine ou "run"
-            if worktree_name and isinstance(worktree_name, str) and worktree_name != "True":
-                wt_name = worktree_name
-            else:
-                wt_name = resolve_llm_engine(args) or "run"
+        if _outer_worktree_used:
+            # --worktree já criou o ambiente isolado: project_root é o worktree.
+            # Usar project_root diretamente como run_dir — sem aninhamento.
+            _ensure_runs_gitignore(project_root)
+            run_dir = _next_run_dir(project_root)
+        elif git_ok and has_commits:
+            # Modo isolado padrão: criar worktree interno nomeado pelo engine
+            wt_name = resolve_llm_engine(args) or "run"
             run_dir = _setup_worktree(project_root, wt_name)
         else:
             # Fallback: diretório simples em runs/

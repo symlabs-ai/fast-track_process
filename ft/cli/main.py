@@ -128,15 +128,24 @@ def find_process_yaml(root: Path) -> Path | None:
 
 
 def _is_cycle_dir(d: Path) -> bool:
-    """Verifica se é um diretório de ciclo: 'cycle-NN' ou legado 'NN'."""
+    """Verifica se é um diretório de ciclo: 'cycle-NN', 'cycle-NN-engine' ou legado 'NN'."""
     name = d.name
-    return name.isdigit() or (name.startswith("cycle-") and name[6:].isdigit())
+    if name.isdigit():
+        return True
+    if name.startswith("cycle-"):
+        # Aceita cycle-NN e cycle-NN-engine
+        rest = name[6:]  # "01" ou "01-claude"
+        num_part = rest.split("-")[0]
+        return num_part.isdigit()
+    return False
 
 
 def _cycle_num(d: Path) -> int:
-    """Extrai o número do ciclo de 'cycle-NN' ou 'NN'."""
+    """Extrai o número do ciclo de 'cycle-NN', 'cycle-NN-engine' ou 'NN'."""
     name = d.name
-    return int(name[6:]) if name.startswith("cycle-") else int(name)
+    if name.startswith("cycle-"):
+        return int(name[6:].split("-")[0])
+    return int(name)
 
 
 def _find_latest_state(root: Path) -> Path:
@@ -325,19 +334,22 @@ def _next_run_dir(project_root: Path) -> Path:
 
 
 def _ensure_runs_gitignore(project_root: Path) -> None:
-    """Cria runs/.gitignore se não existir."""
+    """Garante que runs/ está no .gitignore da raiz do projeto.
+
+    Ciclos são artefatos efêmeros — nunca versionados.
+    """
     runs_dir = project_root / "runs"
     runs_dir.mkdir(exist_ok=True)
-    gitignore = runs_dir / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text(
-            "# Excluir artefatos pesados dos runs do git\n"
-            "*/node_modules/\n"
-            "*/dist/\n"
-            "*/state/llm_logs/\n"
-            "*/__pycache__/\n"
-            "*.lock\n"
-        )
+
+    # Adicionar runs/ ao .gitignore da raiz (se não estiver)
+    gitignore_path = project_root / ".gitignore"
+    if gitignore_path.exists():
+        content = gitignore_path.read_text()
+        if "runs/" not in content:
+            with open(gitignore_path, "a") as f:
+                f.write("\n# Ciclos Fast Track — artefatos efêmeros, nunca versionados\nruns/\n")
+    else:
+        gitignore_path.write_text("# Ciclos Fast Track — artefatos efêmeros, nunca versionados\nruns/\n")
 
 
 def _next_cycle_num(project_root: Path) -> int:

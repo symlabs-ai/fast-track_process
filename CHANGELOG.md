@@ -4,6 +4,33 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.12.0] - 2026-04-08
+
+### Novas funcionalidades
+- **Worktrees externos (BL-20)**: ciclos agora vivem em `~/.ft/worktrees/<projeto>/` em vez de `runs/` dentro do repositório — repo fica limpo, ciclos paralelos isolados de verdade via `git worktree` nativo
+- **Nova estrutura base (BL-21)**: `ft init --template base` cria `docs/`, `process/`, `src/` — sem `runs/`, sem `seed/`. Template com `process/process.yml`, `docs/PRD.md` e `docs/TECH_STACK.md`
+- **`process/process.yml`**: novo nome canônico do YAML de processo — `find_process_yaml()` prioriza `process.yml` sobre `FAST_TRACK_PROCESS.yml`
+
+### Melhorias
+- **`_worktrees_home()`**: nova função utilitária que retorna `~/.ft/worktrees/<project_name>/`
+- **`_next_cycle_num()`**: scan de worktrees externos + `runs/` legado + branches git para evitar conflitos de numeração
+- **`_find_latest_state()`**: busca state em worktrees externos primeiro, depois `runs/` legado
+- **`cmd_runs()`**: lista ciclos de worktrees externos e `runs/` legado simultaneamente
+- **`get_runner()`**: `--cycle` flag busca em worktrees externos antes de `runs/`
+- **`copy_template()`**: copia `docs/` e `src/` do template além do YAML; destino padrão `process/process.yml`
+- **`_next_run_dir()`**: propaga `docs/` para o run dir quando `seed/` não existe (nova estrutura)
+- **`cmd_init()`**: cria `src/` em vez de `runs/`; não chama `_ensure_runs_gitignore()`
+
+### Compatibilidade
+- Projetos com `runs/` existente continuam funcionando (fallback em todos os comandos)
+- Projetos com `seed/` continuam copiando para run dir
+- YAMLs com nome `FAST_TRACK_PROCESS.yml` continuam sendo encontrados
+- **rate limit retry**: backoff exponencial 60→120→240s em `delegate_to_llm`
+- **ft status/runs**: fonte de verdade unificada via `engine_state.yml`
+- **find_process_yaml**: auto-detect por `process_id` do state ativo
+
+---
+
 ## [v0.11.2] - 2026-04-08
 
 - **rate limit retry**: `delegate_to_llm` detecta rate limit no output (429, RESOURCE_EXHAUSTED, overloaded, etc.) e reexecuta com backoff exponencial 60 → 120 → 240s — evita ciclos bloqueados por quota temporária

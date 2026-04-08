@@ -115,8 +115,17 @@ def _read_gateway_md(ft_root: Path | None = None) -> dict[str, str]:
 
 def provision_environment(project_root: Path, base_url: str | None = None,
                           key: str | None = None, admin_key: str | None = None) -> None:
-    """Cria CLAUDE.md e .claude/settings.local.json no project_root."""
+    """Cria CLAUDE.md e .claude/settings.local.json no project_root.
+
+    Lê credenciais de env vars (SYM_GATEWAY_PROJECT_KEY, SYM_GATEWAY_ADMIN_KEY)
+    se não fornecidas como argumento.
+    """
+    import os
     project_name = project_root.name
+
+    # Env vars têm prioridade sobre argumentos legados
+    key = key or os.environ.get("SYM_GATEWAY_PROJECT_KEY")
+    admin_key = admin_key or os.environ.get("SYM_GATEWAY_ADMIN_KEY")
 
     if key and not base_url:
         # Embutir /s/<slug> na URL para que o gateway identifique o projeto

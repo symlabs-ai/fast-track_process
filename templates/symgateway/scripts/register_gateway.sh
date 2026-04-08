@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Registra o projeto no SymGateway e configura CLAUDE.md + settings.
-# Requer: SYMGATEWAY_KEY (ou --key no ft run)
+# Requer: SYM_GATEWAY_PROJECT_KEY (e opcionalmente SYM_GATEWAY_ADMIN_KEY)
 set -e
 
 PROJECT_NAME=$(basename "$(pwd)")
@@ -12,27 +12,33 @@ if [ -f CLAUDE.md ] && grep -q "gateway_project" CLAUDE.md; then
     exit 0
 fi
 
-# Verificar key
-KEY="${SYMGATEWAY_KEY:-}"
-if [ -z "$KEY" ]; then
-    echo "  ⚠ SymGateway: SYMGATEWAY_KEY não definida — pulando registro"
-    echo "    Use: ft run . --key <sk-sym_...> ou exporte SYMGATEWAY_KEY"
-    exit 0
+# Verificar chave do projeto (obrigatória)
+if [ -z "${SYM_GATEWAY_PROJECT_KEY:-}" ]; then
+    echo ""
+    echo "  ✗ SYM_GATEWAY_PROJECT_KEY não definida"
+    echo ""
+    echo "    Exporte antes de rodar:"
+    echo "      export SYM_GATEWAY_PROJECT_KEY=sk-sym_..."
+    echo "      export SYM_GATEWAY_ADMIN_KEY=sk-sym_...  # opcional — usa PROJECT_KEY se ausente"
+    echo ""
+    exit 1
 fi
+
+PROJECT_KEY="$SYM_GATEWAY_PROJECT_KEY"
+ADMIN_KEY="${SYM_GATEWAY_ADMIN_KEY:-$PROJECT_KEY}"
 
 # Criar CLAUDE.md com gateway_project
 if [ ! -f CLAUDE.md ]; then
     echo "gateway_project: ${PROJECT_NAME}" > CLAUDE.md
     echo "  → CLAUDE.md criado (gateway_project: ${PROJECT_NAME})"
 else
-    # Adicionar gateway_project no topo se ausente
     echo -e "gateway_project: ${PROJECT_NAME}\n$(cat CLAUDE.md)" > CLAUDE.md
     echo "  → CLAUDE.md atualizado (gateway_project: ${PROJECT_NAME})"
 fi
 
 # Criar .claude/settings.local.json com ANTHROPIC_BASE_URL
 mkdir -p .claude
-BASE_URL="${GATEWAY_URL}/u/${KEY}/p/anthropic-max/s/${PROJECT_NAME}"
+BASE_URL="${GATEWAY_URL}/u/${PROJECT_KEY}/p/anthropic-max/s/${PROJECT_NAME}"
 cat > .claude/settings.local.json <<EOF
 {
   "env": {
@@ -42,8 +48,7 @@ cat > .claude/settings.local.json <<EOF
 EOF
 echo "  → .claude/settings.local.json criado (ANTHROPIC_BASE_URL configurado)"
 
-# Tentar registrar o projeto via API (best-effort)
-ADMIN_KEY="${SYMGATEWAY_ADMIN_KEY:-$KEY}"
+# Registrar projeto via API (best-effort)
 RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
     -X POST "${GATEWAY_URL}/projects" \
     -H "Authorization: Bearer ${ADMIN_KEY}" \
@@ -54,6 +59,6 @@ RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
 case "$RESPONSE" in
     200|201) echo "  → SymGateway: projeto '${PROJECT_NAME}' registrado" ;;
     409)     echo "  → SymGateway: projeto '${PROJECT_NAME}' já existe — ok" ;;
-    403)     echo "  ⚠ SymGateway: key sem permissão admin — projeto pode não estar registrado" ;;
+    403)     echo "  ⚠ SymGateway: SYM_GATEWAY_ADMIN_KEY sem permissão — projeto pode não estar registrado" ;;
     *)       echo "  ⚠ SymGateway: registro retornou HTTP ${RESPONSE} — continuando" ;;
 esac

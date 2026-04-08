@@ -335,7 +335,7 @@ def _api_health_check(project_root: Path) -> None:
             body = e.read().decode(errors="ignore")[:200]
             print(_ui.fail(f"API health check: {code} — {body}"))
             if code == 403:
-                print("    → Projeto não registrado. Registre com: ft setup-env <key>")
+                print("    → Projeto não registrado. Registre com: ft setup-env")
             elif code == 405:
                 print("    → Rota inválida. Verifique ANTHROPIC_BASE_URL.")
             raise SystemExit(1)
@@ -1122,9 +1122,17 @@ def cmd_cancel(args):
 
 
 def cmd_setup_env(args):
-    """Provisiona CLAUDE.md e .claude/settings.local.json a partir de uma API key."""
+    """Provisiona CLAUDE.md e .claude/settings.local.json via SYM_GATEWAY_PROJECT_KEY."""
+    import os
+    key = os.environ.get("SYM_GATEWAY_PROJECT_KEY")
+    if not key:
+        print("  ✗ SYM_GATEWAY_PROJECT_KEY não definida\n")
+        print("    Exporte antes de rodar:")
+        print("      export SYM_GATEWAY_PROJECT_KEY=sk-sym_...")
+        print("      export SYM_GATEWAY_ADMIN_KEY=sk-sym_...  # opcional")
+        sys.exit(1)
     project_root = Path(args.project) if args.project else find_project_root()
-    provision_environment(project_root=project_root, key=args.key)
+    provision_environment(project_root=project_root)
     print(f"  Projeto: {project_root}")
     print(f"  gateway_project: {project_root.name}")
 
@@ -1361,13 +1369,11 @@ def cmd_run(args):
     )
     runner._bypass_human_gates = getattr(args, "bypass_human_gates", False)
 
-    # Provisionar ambiente antes do init
-    if args.key:
-        admin_key = getattr(args, "admin_key", None)
-        provision_environment(project_root=project_root, key=args.key, admin_key=admin_key)
-        print(f"  Ambiente provisionado com key fornecida")
-    else:
-        print(f"  Sem --key: usando ANTHROPIC_API_KEY do ambiente")
+    # Provisionar ambiente SymGateway (se SYM_GATEWAY_PROJECT_KEY estiver definida)
+    import os as _os
+    if _os.environ.get("SYM_GATEWAY_PROJECT_KEY"):
+        provision_environment(project_root=project_root)
+        print(f"  Ambiente SymGateway provisionado")
 
     # Disparar hooks on_env_setup se definidos no environment.yml
     from ft.engine.hooks import run_hooks
@@ -1618,20 +1624,16 @@ def main():
     ca.add_argument("reason", help="Motivo do cancelamento (entre aspas)")
 
     # setup-env
-    se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json")
-    se.add_argument("key", help="API key do SymGateway (sk-sym_...)")
+    se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json (lê SYM_GATEWAY_PROJECT_KEY e SYM_GATEWAY_ADMIN_KEY do ambiente)")
     se.add_argument("--project", help="Diretório do projeto (default: CWD ou raiz detectada)")
 
     # run — bootstrap completo: cria projeto, provisiona, init, continue --mvp
     ru = sub.add_parser("run", help="Bootstrap completo de um novo projeto até MVP")
     add_llm_engine_flags(ru)
     ru.add_argument("project", help="Caminho do diretório do projeto (criado se não existir)")
-    ru.add_argument("--key", help="API key do SymGateway (sk-sym_...)")
     ru.add_argument("--process", help="YAML do processo (default: FAST_TRACK_PROCESS_V2.yml)")
     ru.add_argument("--from-project", metavar="PATH",
                     help="Copiar plano_de_voo.md do ciclo anterior (para retomada de ciclo)")
-    ru.add_argument("--admin-key", metavar="KEY",
-                    help="API key admin do SymGateway para registrar o projeto (se --key não tiver role admin)")
     ru.add_argument("--hipotese", metavar="FILE",
                     help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)")
     ru.add_argument("--input", metavar="FILE", dest="demand_input",

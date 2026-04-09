@@ -16,6 +16,7 @@ from ft.engine.graph import ProcessGraph, Node
 VALID_NODE_TYPES = frozenset({
     "discovery", "document", "build", "test_red", "test_green",
     "refactor", "review", "retro", "gate", "decision", "sync", "end",
+    "human_gate",
 })
 
 VALID_EXECUTORS = frozenset({

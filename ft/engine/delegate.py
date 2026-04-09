@@ -45,7 +45,8 @@ def _build_executor_command(
     if engine == "claude":
         cmd = [
             "claude",
-            "--print",
+            "--output-format", "stream-json",
+            "--verbose",
             "--dangerously-skip-permissions",
             "--max-turns", str(max_turns),
         ]
@@ -98,6 +99,27 @@ def _write_log_preamble(log_path: str, llm_engine: str, cmd: list[str], prompt: 
 def _format_stream_line(llm_engine: str, line: str) -> str:
     """Formata linhas do stream para observação humana no terminal."""
     text = line.rstrip()
+    if llm_engine == "claude":
+        if not text.startswith("{"):
+            return text
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        etype = event.get("type", "")
+        if etype == "assistant":
+            msg = event.get("message", {})
+            for block in msg.get("content", []):
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "tool_use":
+                    return _describe_tool_call(block.get("name", ""), block.get("input", {}))
+                if btype == "text":
+                    return f"→ {block.get('text', '').strip()[:120]}"
+        if etype == "result":
+            return f"result: {event.get('result', '')[:80]}"
+        return f"event {etype}"
     if llm_engine != "codex":
         return text
 
@@ -161,6 +183,69 @@ def _extract_codex_output(raw_output: str) -> str:
     return raw_output
 
 
+def _extract_claude_json_output(raw_output: str) -> str:
+    """Extrai texto final do stream-json do Claude CLI (uma linha JSON por evento)."""
+    # Primeiro tenta pegar o campo result do evento final
+    for line in reversed(raw_output.splitlines()):
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "result":
+            result = event.get("result", "")
+            if result:
+                return result
+
+    # Fallback: concatenar textos de mensagens assistant
+    parts: list[str] = []
+    for line in raw_output.splitlines():
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "assistant":
+            msg = event.get("message", {})
+            for block in msg.get("content", []):
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block["text"])
+    if parts:
+        return "\n\n".join(parts)
+    return raw_output
+
+
+def _describe_tool_call(name: str, input_data: dict) -> str:
+    """Formata uma tool call do Claude em texto curto para display."""
+    name_lower = name.lower()
+    if name_lower in ("read", "readfile"):
+        path = input_data.get("file_path") or input_data.get("path", "")
+        return f"Read {path}"
+    if name_lower in ("write", "writefile"):
+        path = input_data.get("file_path") or input_data.get("path", "")
+        return f"Write {path}"
+    if name_lower == "edit":
+        path = input_data.get("file_path") or input_data.get("path", "")
+        return f"Edit {path}"
+    if name_lower == "bash":
+        cmd = (input_data.get("command") or "")[:60].replace("\n", " ")
+        return f"$ {cmd}"
+    if name_lower == "glob":
+        pat = input_data.get("pattern", "")
+        return f"Glob {pat}"
+    if name_lower == "grep":
+        pat = input_data.get("pattern", "")
+        return f"Grep {pat}"
+    if name_lower == "notebookedit":
+        return "NotebookEdit"
+    # Generic
+    return f"[{name}]"
+
+
 def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
     """Extrai texto curto para a linha de status ao vivo. Retorna None para linhas sem interesse."""
     text = line.rstrip()
@@ -193,8 +278,36 @@ def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
             ctx["tokens"] = ctx.get("tokens", 0) + tok
             return f"turn {ctx.get('turn', '?')} done · {ctx['tokens']:,} out tok"
         return None
+    elif llm_engine == "claude":
+        if not text.startswith("{"):
+            return text[:80] if text else None
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            return text[:80] if text else None
+        etype = event.get("type", "")
+        if etype == "assistant":
+            msg = event.get("message", {})
+            for block in msg.get("content", []):
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "tool_use":
+                    desc = _describe_tool_call(block.get("name", ""), block.get("input", {}))
+                    ctx["last_tool"] = desc
+                    return desc
+                if btype == "text":
+                    snippet = block.get("text", "").strip().replace("\n", " ")[:80]
+                    if snippet:
+                        return f"→ {snippet}"
+        if etype == "result":
+            tok = event.get("usage", {}).get("output_tokens", 0) or 0
+            ctx["tokens"] = ctx.get("tokens", 0) + tok
+            if tok:
+                return f"done · {ctx['tokens']:,} out tok"
+        return None
     else:
-        # Claude / outros: plain text — mostrar linha se não for vazia
+        # Outros engines: plain text
         if text and not text.startswith("["):
             return text[:80]
         return None
@@ -217,14 +330,21 @@ def _stream_process_output(
     ctx: dict = {}
     term_width = _shutil.get_terminal_size((80, 20)).columns - 4
     last_status: list[str] = ["aguardando LLM..."]
+    printed_status: list[str] = [""]  # último status que gerou uma nova linha
     start_time = time.time()
 
+    def _print_inline(status: str, elapsed: int) -> None:
+        """Evento ao vivo: imprime linha permanente no scrollback."""
+        ts = time.strftime("%H:%M:%S")
+        msg = f"  ⟳ [{ts}] {status} ({elapsed}s)"
+        # Limpa a linha do heartbeat (que estava em \r), imprime e avança
+        print(f"\r{msg:<{term_width}}", flush=True)
+        printed_status[0] = status
+
     def _print_heartbeat():
-        """Imprime heartbeat a cada 10s lendo a última linha do log."""
+        """Heartbeat a cada 10s: atualiza timer in-place na linha atual."""
         while proc.poll() is None:
             elapsed = int(time.time() - start_time)
-            ts = time.strftime("%H:%M:%S")
-            # Lê última linha não-vazia do log em tempo real
             status = last_status[0]
             if log_path:
                 try:
@@ -245,14 +365,18 @@ def _stream_process_output(
                             return False
                         if s.startswith("```") or s in ("DONE", "BLOCKED"):
                             return False
+                        if s.startswith("{"):  # raw JSON line — skip
+                            return False
                         return True
                     lines = [l.strip() for l in output_section.splitlines() if _useful(l)]
                     if lines:
                         status = lines[-1][:120]
                 except Exception:
                     pass
+            ts = time.strftime("%H:%M:%S")
             msg = f"  ⟳ [{ts}] {status} ({elapsed}s)"
-            print(f"\r{msg:<{term_width + 16}}", end="", flush=True)
+            # Atualiza in-place: só sobrescreve a linha corrente sem avançar
+            print(f"\r{msg:<{term_width}}", end="", flush=True)
             time.sleep(10)
 
     log_file = None
@@ -269,27 +393,80 @@ def _stream_process_output(
             chunks.append(line)
             if log_file:
                 log_file.write(line)
+                # Para engines JSON (claude stream-json, codex --json),
+                # também escreve linha legível logo após o JSON bruto
+                if llm_engine in ("claude", "codex"):
+                    stripped = line.strip()
+                    if stripped.startswith("{"):
+                        try:
+                            event = json.loads(stripped)
+                            etype = event.get("type", "")
+                            decoded: str | None = None
+                            if llm_engine == "claude":
+                                if etype == "assistant":
+                                    msg = event.get("message", {})
+                                    for block in msg.get("content", []):
+                                        if not isinstance(block, dict):
+                                            continue
+                                        btype = block.get("type")
+                                        if btype == "tool_use":
+                                            decoded = _describe_tool_call(
+                                                block.get("name", ""), block.get("input", {})
+                                            )
+                                            break
+                                        if btype == "text":
+                                            t = block.get("text", "").strip().replace("\n", " ")
+                                            if t:
+                                                decoded = f"→ {t[:120]}"
+                                            break
+                                elif etype == "result":
+                                    tok = event.get("usage", {}).get("output_tokens", 0) or 0
+                                    if tok:
+                                        decoded = f"done · {tok:,} output tokens"
+                            else:  # codex
+                                if etype == "item.completed":
+                                    item = event.get("item", {})
+                                    itype = item.get("type", "")
+                                    if itype == "command_execution":
+                                        cmd_text = (item.get("command") or "")[:80].replace("\n", " ")
+                                        decoded = f"$ {cmd_text}"
+                                    elif itype == "agent_message":
+                                        msg_text = (item.get("text") or "").strip().replace("\n", " ")[:120]
+                                        if msg_text:
+                                            decoded = f"→ {msg_text}"
+                                    elif itype == "tool_call":
+                                        decoded = f"tool {item.get('name') or item.get('tool', '')}"
+                                elif etype == "turn.completed":
+                                    usage = event.get("usage", {})
+                                    tok = usage.get("output_tokens", 0)
+                                    if tok:
+                                        decoded = f"done · {tok:,} output tokens"
+                            if decoded:
+                                log_file.write(f"{decoded}\n")
+                        except (json.JSONDecodeError, Exception):
+                            pass
                 log_file.flush()
             if stream_prefix:
                 print(f"  {stream_prefix} {_format_stream_line(llm_engine, line)}")
             else:
                 # Atualiza last_status com qualquer linha não-vazia do LLM
                 stripped = line.strip()
-                if stripped:
+                if stripped and not stripped.startswith("{"):
                     last_status[0] = stripped[:120]
                 status = _live_status(llm_engine, line, ctx)
                 if status:
-                    ts = time.strftime("%H:%M:%S")
-                    prefix = f"  ⟳ [{ts}] "
-                    max_status = term_width - len(prefix) + 4  # +4 accounts for \r indent
-                    truncated = status[:max(max_status, 20)]
-                    print(f"\r{prefix}{truncated:<{max(max_status, 20)}}", end="", flush=True)
+                    status = status[:120]
+                    last_status[0] = status
+                    elapsed = int(time.time() - start_time)
+                    # Inline: sempre nova linha — cada ação fica visível no scrollback
+                    if status != printed_status[0]:
+                        _print_inline(status, elapsed)
     finally:
         if log_file:
             log_file.close()
         if not stream_prefix:
             # Limpa a linha de status ao terminar
-            print(f"\r{' ' * (term_width + 16)}\r", end="", flush=True)
+            print(f"\r{' ' * (term_width)}\r", end="", flush=True)
 
     return "".join(chunks)
 
@@ -374,8 +551,15 @@ REGRAS:
 
     reader.join(timeout=5)
 
+    def _extract_output(raw: str, engine: str) -> str:
+        if engine == "codex":
+            return _extract_codex_output(raw)
+        if engine == "claude":
+            return _extract_claude_json_output(raw)
+        return raw
+
     raw_output = output_holder["output"]
-    output = _extract_codex_output(raw_output) if llm_engine == "codex" else raw_output
+    output = _extract_output(raw_output, llm_engine)
 
     # Detectar rate limit e fazer retry com backoff exponencial
     if _RATE_LIMIT_PATTERNS.search(output):
@@ -413,7 +597,7 @@ REGRAS:
                 break
             t2.join(timeout=5)
             raw2 = holder2["output"]
-            out2 = _extract_codex_output(raw2) if llm_engine == "codex" else raw2
+            out2 = _extract_output(raw2, llm_engine)
             if not _RATE_LIMIT_PATTERNS.search(out2):
                 output = out2
                 returncode = rc2

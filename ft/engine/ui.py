@@ -139,6 +139,88 @@ def awaiting_approval(auto: bool = False) -> str:
     return f"  {BOLD_YELLOW}AGUARDANDO APROVAÇÃO{RESET} — rode: {BOLD}ft approve{RESET}"
 
 
+def human_gate_card(title: str, description: str | None = None,
+                    url: str | None = None, reject_hint: str | None = None,
+                    work_dir: str | None = None,
+                    files: list[str] | None = None) -> str:
+    """Card de checkpoint humano — foco em O QUE FAZER, não em artefatos internos."""
+    w = 54
+    sep = f"  {DIM}{'─' * (w - 2)}{RESET}"
+    lines = [
+        f"\n{BOLD_YELLOW}  ● {title}{RESET}",
+        sep,
+    ]
+    if description:
+        # Quebra em linhas de ~48 chars para caber no card
+        words = description.split()
+        current_line = ""
+        for word in words:
+            if len(current_line) + len(word) + 1 > 48:
+                lines.append(f"  {current_line}")
+                current_line = word
+            else:
+                current_line = (current_line + " " + word).strip()
+        if current_line:
+            lines.append(f"  {current_line}")
+        lines.append(sep)
+    if files:
+        for f in files:
+            lines.append(f"  {DIM}📄 {f}{RESET}")
+        lines.append(sep)
+    if url:
+        lines.append(f"  {BOLD_WHITE}URL:{RESET} {BOLD_CYAN}{url}{RESET}")
+        lines.append(sep)
+    lines.append(f"  Aprovar:   {BOLD}ft approve{RESET}")
+    if reject_hint:
+        lines.append(f"  Rejeitar:  {BOLD}ft reject \"{RESET}{reject_hint}{BOLD}\"{RESET}")
+    else:
+        lines.append(f"  Rejeitar:  {BOLD}ft reject \"motivo\"{RESET}")
+    return "\n".join(lines)
+
+
+def exploration_start(title: str, count: int = 0) -> str:
+    """Card exibido quando o processo entra em modo exploração."""
+    w = 54
+    sep = f"  {DIM}{'─' * (w - 2)}{RESET}"
+    counter = f" ({count} exploração(ões) registrada(s))" if count else ""
+    lines = [
+        f"\n{BOLD_YELLOW}  ◈ {title}{RESET}{DIM}{counter}{RESET}",
+        sep,
+        f"  {DIM}Faça pedidos livres ao LLM. Tudo fica no worktree (descartável).{RESET}",
+        sep,
+        f"  Explorar:  {BOLD}ft explore \"seu pedido\"{RESET}",
+        f"  Pular:     {BOLD}ft explore --skip{RESET}",
+        f"  Encerrar:  {BOLD}ft explore --finish{RESET}",
+    ]
+    return "\n".join(lines)
+
+
+def exploration_item(index: int, request: str) -> str:
+    return f"  {BOLD_YELLOW}◈ [{index}]{RESET} {request}"
+
+
+def fix_gate(message: str, feedback: str, goto: str) -> str:
+    """Card exibido quando on_fail.human_gate pausa o ciclo aguardando ft fix."""
+    w = 54
+    sep = f"  {DIM}{'─' * (w - 2)}{RESET}"
+    lines = [
+        f"\n{BOLD_RED}  ✗ {message}{RESET}",
+        sep,
+    ]
+    # Feedback do validator — primeiras 3 linhas não-vazias
+    fb_lines = [l.strip() for l in feedback.splitlines() if l.strip()][:3]
+    for l in fb_lines:
+        lines.append(f"  {RED}{l}{RESET}")
+    lines += [
+        sep,
+        f"  {DIM}Destino após correção: {goto}{RESET}",
+        sep,
+        f"  Para corrigir:  {BOLD}ft fix \"sua instrução\"{RESET}",
+        f"  Para cancelar:  {BOLD}ft reject{RESET}",
+    ]
+    return "\n".join(lines)
+
+
 def process_complete(steps_done: int | str, steps_total: int | str) -> str:
     w = 54
     line = "━" * w
@@ -154,13 +236,15 @@ def sprint_complete(sprint_name: str) -> str:
     return f"\n  {BOLD_YELLOW}Sprint {sprint_name} completa{RESET}"
 
 
-def init_banner(title: str, first_node: str, first_title: str, total: int) -> str:
+def init_banner(title: str, first_node: str, first_title: str, total: int, process_file: str = "") -> str:
     w = 54
     line = "━" * w
+    file_line = f"  {DIM}Processo: {process_file}{RESET}\n" if process_file else ""
     return (
         f"\n{BOLD_CYAN}{line}{RESET}\n"
         f"  {BOLD_WHITE}Processo inicializado{RESET}\n"
-        f"  {title}\n"
+        f"{file_line}"
+        f"  {BOLD_YELLOW}{title}{RESET}\n"
         f"  {DIM}Primeiro: {first_node} ({first_title}){RESET}\n"
         f"  {DIM}Total: {total} steps{RESET}\n"
         f"{BOLD_CYAN}{line}{RESET}"

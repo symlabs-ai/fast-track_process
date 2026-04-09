@@ -836,6 +836,33 @@ def cmd_reject(args):
     runner.reject(args.reason, retry=not args.no_retry)
 
 
+def cmd_explore(args):
+    """Modo de exploração livre — acumula pedidos e gera relatório ao finalizar."""
+    from ft.engine import ui as _ui
+
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
+                        llm_model=resolve_llm_model(args),
+                        verbose=getattr(args, "verbose", False))
+
+    if getattr(args, "finish", False):
+        runner.explore_finish()
+    elif getattr(args, "skip", False):
+        runner.explore_skip()
+    else:
+        request = getattr(args, "request", None)
+        if not request:
+            # Sem argumento: mostrar estado atual de exploração
+            state = runner.state_mgr.load()
+            if state.node_status != "exploring":
+                print(_ui.warn("Ciclo não está em modo exploração."))
+                print(_ui.info("Aguarde o processo chegar num node type: exploration"))
+            else:
+                log = state.exploration_log or []
+                print(_ui.exploration_start("Exploração Livre", len(log)))
+            return
+        runner.explore_request(request)
+
+
 def cmd_close(args):
     """Encerra o ciclo ativo: merge_on_end + remove worktree + limpa branch."""
     import subprocess as _sp
@@ -1093,26 +1120,31 @@ def cmd_lint_process(args):
 
 
 def cmd_fix(args):
-    """Delega ao LLM a correção de um problema descrito pelo usuário."""
-    from ft.engine.delegate import delegate_to_llm
+    """Injeta instrução de correção e retoma o ciclo (on_fail) ou delega ao LLM (blocked)."""
     from ft.engine import ui as _ui
 
-    root = find_project_root()
     instruction = args.instruction
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
+                        llm_model=resolve_llm_model(args),
+                        verbose=getattr(args, "verbose", False))
 
-    # Carregar estado para saber onde o processo parou
-    state_path = _find_latest_state(root)
+    # Modo 1: pending_fix (on_fail event) — injeta instrução e volta ao goto
+    if runner.apply_fix(instruction):
+        mode = "mvp" if getattr(args, "mvp", False) else "step"
+        runner.run(mode=mode)
+        return
+
+    # Modo 2: blocked genérico — delega ao LLM para corrigir arquivos
+    from ft.engine.delegate import delegate_to_llm
+    root = runner.project_root
+    state_path = runner.state_mgr.path
     blocked_context = ""
     if state_path.exists():
-        import yaml
-        with open(state_path) as f:
-            state_data = yaml.safe_load(f) or {}
-        blocked = state_data.get("blocked_reason", "")
-        current = state_data.get("current_node", "")
-        if blocked:
+        state = runner.state_mgr.load()
+        if state.blocked_reason:
             blocked_context = (
-                f"\n\nCONTEXTO: O processo parou no node '{current}' com o erro:\n"
-                f"{blocked}\n"
+                f"\n\nCONTEXTO: O processo parou no node '{state.current_node}' com o erro:\n"
+                f"{state.blocked_reason}\n"
             )
 
     prompt = (
@@ -1124,18 +1156,27 @@ def cmd_fix(args):
     )
 
     print(_ui.info(f"Aplicando correção: {instruction}"))
-    llm_engine = resolve_llm_engine(args)
     result = delegate_to_llm(
         task=prompt,
         project_root=str(root),
         allowed_paths=["src/", "tests/", "docs/", "main.py", "app.py", "server.py",
                         "frontend/", "process/"],
-        llm_engine=llm_engine or "claude",
+        llm_engine=resolve_llm_engine(args) or "claude",
     )
 
     if result.success:
         print(_ui.success("Correção aplicada"))
-        print(_ui.info("Para continuar o processo: ft continue --mvp"))
+        state = runner.state_mgr.load()
+        if state.node_status == "blocked":
+            state.node_status = "running"
+            state.blocked_reason = None
+            state.last_approval_message = instruction
+            runner.state_mgr.save()
+            print(_ui.info("Estado desbloqueado — continuando..."))
+            mode = "mvp" if getattr(args, "mvp", False) else "step"
+            runner.run(mode=mode)
+        else:
+            print(_ui.info("Para continuar o processo: ft continue --mvp"))
     else:
         print(_ui.fail(f"LLM não conseguiu aplicar: {result.output[:300]}"))
 
@@ -1768,10 +1809,18 @@ def main():
     lp = sub.add_parser("lint-process", help="Lint semântico — detecta especificidades de projeto no YAML")
     add_llm_engine_flags(lp)
 
+    # explore
+    ex = sub.add_parser("explore", help="Modo exploração livre — pedidos ao LLM sem avançar o processo")
+    add_llm_engine_flags(ex)
+    ex.add_argument("request", nargs="?", help="Pedido ao LLM (entre aspas). Omitir para ver status.")
+    ex.add_argument("--finish", action="store_true", help="Encerrar exploração e gerar relatório")
+    ex.add_argument("--skip", action="store_true", help="Pular o node de exploração sem gerar relatório")
+
     # fix
-    fx = sub.add_parser("fix", help="Corrigir problema descrito em linguagem natural")
+    fx = sub.add_parser("fix", help="Corrigir problema e desbloquear o ciclo")
     add_llm_engine_flags(fx)
     fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
+    fx.add_argument("--mvp", action="store_true", help="Continuar em modo MVP após correção")
 
     # close
     cl = sub.add_parser("close", help="Encerrar ciclo: merge artefatos, remover worktree")
@@ -1830,6 +1879,8 @@ def main():
             cmd_validate(args)
         elif args.command == "lint-process":
             cmd_lint_process(args)
+        elif args.command == "explore":
+            cmd_explore(args)
         elif args.command == "fix":
             cmd_fix(args)
         elif args.command == "close":

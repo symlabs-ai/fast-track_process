@@ -44,6 +44,11 @@ class Node:
     reject_next: str | None = None
     # Descrição amigável exibida ao usuário quando o step inicia
     description: str | None = None
+    # Evento disparado quando o node falha (review ITERATE/REJECTED ou validators)
+    # Estrutura: {human_gate: "mensagem", goto: "node_id"}
+    on_fail: dict | None = None
+    # Nó opcional — pode ser pulado com ft explore --skip
+    optional: bool = False
 
 
 class ProcessGraph:
@@ -191,6 +196,10 @@ def load_graph(path: str | Path) -> ProcessGraph:
             llm_engine=node_raw.get("llm_engine"),
             llm_model=node_raw.get("llm_model"),
             no_pre_seed=node_raw.get("no_pre_seed", False),
+            description=node_raw.get("description"),
+            reject_next=node_raw.get("reject_next"),
+            on_fail=node_raw.get("on_fail"),
+            optional=node_raw.get("optional", False),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

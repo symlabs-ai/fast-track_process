@@ -34,6 +34,8 @@ class EngineState:
     blocked_reason: str | None = None
     pending_approval: str | None = None  # node_id aguardando approve/reject
     last_approval_message: str | None = None  # mensagem do ultimo ft approve (consumida pelo proximo LLM)
+    pending_fix: dict | None = None  # {goto: node_id, feedback: str} quando on_fail aguarda ft fix
+    exploration_log: list[str] = field(default_factory=list)  # requests feitos em modo exploração
     metrics: dict[str, Any] = field(default_factory=lambda: {
         "steps_completed": 0,
         "steps_total": 0,
@@ -101,6 +103,8 @@ class StateManager:
                 blocked_reason=raw.get("blocked_reason"),
                 pending_approval=raw.get("pending_approval"),
                 last_approval_message=raw.get("last_approval_message"),
+                pending_fix=raw.get("pending_fix"),
+                exploration_log=raw.get("exploration_log", []),
                 metrics=raw.get("metrics", EngineState().metrics),
                 _lock=raw.get("_lock"),
             )
@@ -138,6 +142,8 @@ class StateManager:
             "blocked_reason": self._state.blocked_reason,
             "pending_approval": self._state.pending_approval,
             "last_approval_message": self._state.last_approval_message,
+            "pending_fix": self._state.pending_fix,
+            "exploration_log": self._state.exploration_log,
             "metrics": self._state.metrics,
             "_lock": self._state._lock,
         }

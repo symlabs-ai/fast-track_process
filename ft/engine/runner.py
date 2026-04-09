@@ -463,6 +463,7 @@ class StepRunner:
         verbose: bool = False,
     ):
         self.graph = load_graph(process_path)
+        self.process_path = str(process_path)
         self.state_mgr = StateManager(state_path)
         self.project_root = str(Path(project_root).resolve())
         self._llm_engine_override = llm_engine.lower().strip() if llm_engine else None
@@ -874,6 +875,29 @@ class StepRunner:
         if count:
             print(ui.success(f"merge_on_end: {count} item(ns) copiado(s) para {original_root.name}/"))
 
+    def _handle_on_fail(self, node: "Node", feedback: str) -> None:
+        """Processa o evento on_fail de um node. Pausa para ft fix ou bloqueia."""
+        on_fail = node.on_fail or {}
+        goto = on_fail.get("goto")
+        gate_msg = on_fail.get("human_gate", "Falha no node — corrija e tente novamente.")
+
+        if not goto:
+            self.state_mgr.block(f"on_fail sem goto definido: {feedback}")
+            return
+
+        # Validar que o goto existe no grafo
+        if goto not in self.graph.nodes:
+            self.state_mgr.block(f"on_fail.goto '{goto}' não encontrado no grafo")
+            return
+
+        state = self.state_mgr.state
+        state.pending_fix = {"goto": goto, "feedback": feedback}
+        state.node_status = "pending_fix"
+        state.blocked_reason = None
+        self.state_mgr.save()
+
+        print(ui.fix_gate(gate_msg, feedback, goto))
+
     def _advance_state(self, completed_node: str, next_node: str | None, gate_result: str = "PASS") -> None:
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
         if self.state_mgr.state.node_status == "blocked":
@@ -990,6 +1014,7 @@ class StepRunner:
         )
         print(ui.init_banner(
             self.graph.meta.get("title", "?"), first.id, first.title, total,
+            process_file=self.process_path,
         ))
         self._init_log()
         self._log_event(
@@ -1076,7 +1101,15 @@ class StepRunner:
                 if mode == "step":
                     break
                 state = self.state_mgr.load()
-                if state.node_status in ("blocked", "awaiting_approval"):
+                if state.node_status in ("blocked", "awaiting_approval", "pending_fix"):
+                    break
+                continue
+
+            # Exploration — sandbox livre do stakeholder
+            if node.type == "exploration":
+                self._run_exploration(node)
+                state = self.state_mgr.load()
+                if state.node_status == "exploring":
                     break
                 continue
 
@@ -1187,6 +1220,11 @@ class StepRunner:
 
             if mode == "step":
                 break
+
+        if mode == "step":
+            state = self.state_mgr.load()
+            if state.node_status not in ("blocked", "awaiting_approval", "done", "completed"):
+                print(ui.dim("  → ft continue   para continuar o próximo step"))
 
     def _run_llm_step(self, node: Node):
         """Delega ao LLM, valida resultado, avanca ou retenta."""
@@ -1371,32 +1409,21 @@ class StepRunner:
         if node.env_setup:
             self._run_env_setup(node)
 
-        print(ui.warn(f"HUMAN GATE — requer aprovação humana: {node.title}"))
-
-        # Mostrar outputs do nó predecessor para o usuário saber o que revisar
-        predecessor_ids = self._predecessor_ids(node.id)
-        artifacts: list[str] = []
-        for pred_id in predecessor_ids:
-            pred_node = self.graph.nodes.get(pred_id)
-            if pred_node and pred_node.outputs:
-                artifacts.extend(pred_node.outputs)
-        if artifacts:
-            print(ui.dim("  Artefatos para revisar:"))
-            for a in artifacts:
-                abs_path = Path(self.project_root) / a
-                print(ui.dim(f"    - {a}"))
-                if abs_path.exists():
-                    print(ui.dim(f"      {abs_path}"))
-
         # Mostrar URL se disponível
         serve_url_path = Path(self.project_root) / ".serve_url"
+        url: str | None = None
         if serve_url_path.exists():
-            url = serve_url_path.read_text().strip()
-            if url:
-                print(ui.info(f"  URL: {url}"))
+            url = serve_url_path.read_text().strip() or None
 
-        print(ui.dim("  → ft approve        para aprovar"))
-        print(ui.dim("  → ft reject \"motivo\" para rejeitar"))
+        gate_work_dir = str(self.state_mgr.path.parent.parent)
+        is_worktree = ".ft/worktrees" in gate_work_dir
+        abs_files = [str(Path(gate_work_dir) / o) for o in (node.outputs or [])] if is_worktree else None
+        print(ui.human_gate_card(
+            title=node.title,
+            description=node.description,
+            url=url,
+            files=abs_files or None,
+        ))
         self.state_mgr.set_pending_approval(node.id)
 
     def _run_auto_fix(self, node: Node, blocked_reason: str) -> bool:
@@ -1802,7 +1829,11 @@ class StepRunner:
                 self._print_validation(validation)
 
             if not validation.passed:
-                self.state_mgr.block(f"Review: validadores falharam: {validation.feedback}")
+                feedback = validation.feedback or "validadores falharam"
+                if node.on_fail:
+                    self._handle_on_fail(node, feedback)
+                else:
+                    self.state_mgr.block(f"Review: validadores falharam: {feedback}")
                 return
 
         # Ler relatorio e verificar veredicto
@@ -1837,6 +1868,120 @@ class StepRunner:
         next_id = self.graph.resolve_next(node.id)
         self._advance_state(node.id, next_id, verdict)
         print(f"  REVIEW {verdict} → proximo: {next_id}")
+
+    def _run_exploration(self, node: "Node") -> None:
+        """Pausa o ciclo em modo exploração — aguarda ft explore ou ft explore --finish/--skip."""
+        state = self.state_mgr.state
+        count = len(state.exploration_log)
+        print(ui.exploration_start(node.title, count))
+        state.node_status = "exploring"
+        state.current_node = node.id
+        self.state_mgr.save()
+
+    def explore_request(self, request: str) -> None:
+        """Executa um pedido livre do stakeholder no worktree atual."""
+        state = self.state_mgr.load()
+        if state.node_status != "exploring":
+            print(ui.warn("Não há sessão de exploração ativa."))
+            return
+
+        import time as _time
+        ts = _time.strftime("%H:%M")
+        print(ui.exploration_item(len(state.exploration_log) + 1, request))
+
+        allowed = self._resolve_allowed_paths(self.graph.nodes.get(state.current_node))
+        log_path = str(self._log_dir / f"exploration_{len(state.exploration_log) + 1:02d}.log")
+
+        from ft.engine.delegate import delegate_to_llm
+        result = delegate_to_llm(
+            task=(
+                f"MODO EXPLORAÇÃO — pedido do stakeholder:\n\n{request}\n\n"
+                f"Implemente a mudança pedida. Diga DONE e liste arquivos alterados. "
+                f"Diga BLOCKED se não conseguir."
+            ),
+            project_root=self._work_dir,
+            allowed_paths=self._delegate_allowed_paths(allowed),
+            llm_engine=self._resolve_llm_engine(state),
+            llm_model=self._resolve_llm_model(state),
+            log_path=log_path,
+        )
+
+        summary = "DONE" if result.success else f"BLOCKED: {result.output[:120]}"
+        state.exploration_log.append(f"[{ts}] {request} → {summary}")
+        self.state_mgr.save()
+
+        if result.success:
+            print(ui.success(f"Exploração aplicada"))
+        else:
+            print(ui.fail(f"LLM não conseguiu: {result.output[:200]}"))
+
+        # Mostrar menu novamente
+        count = len(state.exploration_log)
+        print(ui.exploration_start(self.graph.nodes[state.current_node].title, count))
+
+    def explore_finish(self) -> None:
+        """Gera relatório de descobertas e avança o nó de exploração."""
+        state = self.state_mgr.load()
+        if state.node_status != "exploring":
+            print(ui.warn("Não há sessão de exploração ativa."))
+            return
+
+        node = self.graph.nodes.get(state.current_node)
+        if not node:
+            return
+
+        log = state.exploration_log
+        if not log:
+            print(ui.info("Nenhum pedido registrado — encerrando exploração sem relatório."))
+        else:
+            # Gera exploration-report.md via LLM
+            log_text = "\n".join(f"{i+1}. {entry}" for i, entry in enumerate(log))
+            allowed = self._resolve_allowed_paths(node)
+            from ft.engine.delegate import delegate_to_llm
+            report_result = delegate_to_llm(
+                task=(
+                    f"Gere docs/exploration-report.md com o relatório da sessão de exploração.\n\n"
+                    f"Pedidos realizados:\n{log_text}\n\n"
+                    f"O relatório deve ter:\n"
+                    f"## Sessão de Exploração\n"
+                    f"Data, total de pedidos.\n\n"
+                    f"## Pedidos Realizados\n"
+                    f"Lista numerada com cada pedido e resultado.\n\n"
+                    f"## Descobertas\n"
+                    f"O que funcionou bem, o que foi descartado, observações.\n\n"
+                    f"## Sugestões para o Próximo Ciclo\n"
+                    f"Itens que o stakeholder pode querer levar adiante (em aberto — stakeholder decide).\n\n"
+                    f"Diga DONE ao terminar."
+                ),
+                project_root=self._work_dir,
+                allowed_paths=self._delegate_allowed_paths(allowed),
+                llm_engine=self._resolve_llm_engine(state),
+                llm_model=self._resolve_llm_model(state),
+                log_path=str(self._log_dir / "exploration_report.log"),
+            )
+            if report_result.success:
+                report_path = Path(self._work_dir) / "docs" / "exploration-report.md"
+                print(ui.success(f"Relatório de exploração gerado: {report_path}"))
+            else:
+                print(ui.warn("Não foi possível gerar o relatório — avançando sem ele."))
+
+        state.exploration_log = []
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id, "EXPLORED")
+
+    def explore_skip(self) -> None:
+        """Pula o nó de exploração (opcional)."""
+        state = self.state_mgr.load()
+        if state.node_status != "exploring":
+            print(ui.warn("Não há sessão de exploração ativa."))
+            return
+        node = self.graph.nodes.get(state.current_node)
+        if not node or not node.optional:
+            print(ui.warn("Este nó não é opcional."))
+            return
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id, "SKIPPED")
+        print(ui.info(f"Exploração pulada → {next_id}"))
 
     def _run_parallel_group(self, nodes: list[Node]):
         """Fan-out: delega nodes independentes em paralelo via worktrees."""
@@ -1956,6 +2101,48 @@ class StepRunner:
         if message:
             state.last_approval_message = message
             self.state_mgr.save()
+        print(ui.dim("  → ft continue   para prosseguir"))
+
+    def apply_fix(self, instruction: str) -> bool:
+        """
+        Executa o on_fail.goto: volta ao node alvo, injeta instrução, limpa pending_fix.
+        Retorna True se havia pending_fix, False se não.
+        """
+        state = self.state_mgr.load()
+        pending = state.pending_fix
+        if not pending:
+            return False
+
+        goto = pending.get("goto")
+        if not goto or goto not in self.graph.nodes:
+            print(f"  Erro: on_fail.goto '{goto}' inválido.")
+            return False
+
+        # Ordem canônica para saber quais nodes descartar
+        ordered = [n.id for n in self.graph.nodes.values()]
+        try:
+            target_idx = ordered.index(goto)
+        except ValueError:
+            print(f"  Erro: node '{goto}' não encontrado na ordem do grafo.")
+            return False
+
+        # Volta: remove goto e tudo posterior de completed_nodes
+        state.completed_nodes = [
+            n for n in state.completed_nodes
+            if n in ordered and ordered.index(n) < target_idx
+        ]
+        state.current_node = goto
+        state.node_status = "running"
+        state.blocked_reason = None
+        state.pending_fix = None
+        state.last_approval_message = (
+            f"CORREÇÃO SOLICITADA — retornando de on_fail:\n{instruction}\n\n"
+            f"Feedback original:\n{pending.get('feedback', '')}"
+        )
+        state.metrics["steps_completed"] = len(state.completed_nodes)
+        self.state_mgr.save()
+        print(ui.info(f"↩ Voltando para {goto} com instrução injetada"))
+        return True
 
     def reject(self, reason: str, retry: bool = True):
         """
@@ -2087,31 +2274,29 @@ class StepRunner:
             print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:
             print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
+        if state.pending_fix:
+            pf = state.pending_fix
+            goto = pf.get("goto", "?")
+            feedback = pf.get("feedback", "")
+            node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
+            gate_msg = (node_obj.on_fail or {}).get("human_gate", "Falha — correção necessária.") if node_obj else "Falha — correção necessária."
+            print(ui.fix_gate(gate_msg, feedback, goto))
         if state.pending_approval:
             pending_node = self.graph.nodes.get(state.pending_approval)
             if pending_node and pending_node.type == "human_gate":
-                print(ui.warn(f"HUMAN GATE PENDENTE: {state.pending_approval} — {pending_node.title}"))
-                if pending_node.description:
-                    print(ui.dim(f"  {pending_node.description}"))
-                # Artefatos do predecessor para revisar
-                pred_ids = self._predecessor_ids(pending_node.id)
-                artifacts_to_review: list[str] = []
-                for pred_id in pred_ids:
-                    pred = self.graph.nodes.get(pred_id)
-                    if pred and pred.outputs:
-                        artifacts_to_review.extend(pred.outputs)
-                if artifacts_to_review:
-                    print(ui.dim("  Revise antes de aprovar:"))
-                    for a in artifacts_to_review:
-                        abs_path = Path(self._work_dir) / a
-                        print(ui.dim(f"    - {a}"))
-                        if abs_path.exists():
-                            print(ui.dim(f"      {abs_path}"))
                 serve_url_file = Path(self._work_dir) / ".serve_url"
+                url: str | None = None
                 if serve_url_file.exists():
-                    print(ui.info(f"URL: {serve_url_file.read_text().strip()}"))
-                print(ui.dim("  → ft approve [\"mensagem\"]   para aprovar"))
-                print(ui.dim("  → ft reject \"motivo\"         para rejeitar"))
+                    url = serve_url_file.read_text().strip() or None
+                _gate_wt = str(self.state_mgr.path.parent.parent)
+                _is_wt = ".ft/worktrees" in str(self.state_mgr.path)
+                _abs_files = [str(Path(_gate_wt) / o) for o in (pending_node.outputs or [])] if _is_wt else None
+                print(ui.human_gate_card(
+                    title=pending_node.title,
+                    description=pending_node.description,
+                    url=url,
+                    files=_abs_files or None,
+                ))
             else:
                 print(ui.warn(f"AGUARDANDO APROVAÇÃO: {state.pending_approval}"))
 

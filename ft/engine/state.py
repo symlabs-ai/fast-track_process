@@ -33,6 +33,7 @@ class EngineState:
     artifacts: dict[str, str | None] = field(default_factory=dict)
     blocked_reason: str | None = None
     pending_approval: str | None = None  # node_id aguardando approve/reject
+    last_approval_message: str | None = None  # mensagem do ultimo ft approve (consumida pelo proximo LLM)
     metrics: dict[str, Any] = field(default_factory=lambda: {
         "steps_completed": 0,
         "steps_total": 0,
@@ -99,6 +100,7 @@ class StateManager:
                 artifacts=raw.get("artifacts", {}),
                 blocked_reason=raw.get("blocked_reason"),
                 pending_approval=raw.get("pending_approval"),
+                last_approval_message=raw.get("last_approval_message"),
                 metrics=raw.get("metrics", EngineState().metrics),
                 _lock=raw.get("_lock"),
             )
@@ -135,6 +137,7 @@ class StateManager:
             "artifacts": self._state.artifacts,
             "blocked_reason": self._state.blocked_reason,
             "pending_approval": self._state.pending_approval,
+            "last_approval_message": self._state.last_approval_message,
             "metrics": self._state.metrics,
             "_lock": self._state._lock,
         }

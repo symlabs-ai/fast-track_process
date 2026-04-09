@@ -1225,6 +1225,19 @@ class StepRunner:
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
 
+        # Injetar mensagem do último ft approve como contexto para o LLM
+        approval_msg = self.state_mgr.state.last_approval_message
+        if approval_msg:
+            task_prompt = (
+                f"MENSAGEM DO STAKEHOLDER (aprovação do gate anterior):\n{approval_msg}\n\n"
+                f"Leve esta mensagem em conta ao executar sua tarefa.\n\n"
+                f"{task_prompt}"
+            )
+            # Consumir — não passa para o próximo nó
+            self.state_mgr.state.last_approval_message = None
+            self.state_mgr.save()
+            print(ui.info("Contexto: mensagem do stakeholder injetada no prompt"))
+
         # Hyper-mode: enriquecer prompt com docs existentes
         if node.type in ("discovery", "document", "retro"):
             existing = scan_existing_docs(self.project_root)
@@ -1939,6 +1952,10 @@ class StepRunner:
         print(f"  {log_msg}")
         self._log_activity(node_id, node.title, node.type, "APPROVED",
                            message or "aprovado pelo stakeholder", sprint=node.sprint)
+        # Guardar mensagem para o próximo nó LLM injetar como contexto
+        if message:
+            state.last_approval_message = message
+            self.state_mgr.save()
 
     def reject(self, reason: str, retry: bool = True):
         """

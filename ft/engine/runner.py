@@ -1199,6 +1199,10 @@ class StepRunner:
             self.state_mgr.save()
             return
 
+        # env_setup no human_gate: sobe servidor etc. antes de pausar para o stakeholder
+        if node.env_setup:
+            self._run_env_setup(node)
+
         print(ui.warn(f"HUMAN GATE — requer aprovação humana: {node.title}"))
         print(ui.dim("  → Revise os artefatos e execute: ft approve [\"mensagem\"]"))
         print(ui.dim("  → Para rejeitar: ft reject \"motivo\""))
@@ -1836,6 +1840,14 @@ class StepRunner:
         if current_sprint:
             print(ui.info(f"Sprint: {current_sprint}"))
         print(ui.info(f"Progresso: {state.metrics['steps_completed']}/{state.metrics['steps_total']}"))
+        # Mostrar URL se node atual é human_gate
+        current_node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
+        if current_node_obj and current_node_obj.type == "human_gate":
+            serve_url_file = Path(self._work_dir) / ".serve_url"
+            if serve_url_file.exists():
+                print(ui.info(f"URL: {serve_url_file.read_text().strip()}"))
+            print(ui.warn(f"HUMAN GATE: {current_node_obj.title}"))
+            print(ui.dim("  → ft continue   para entrar no gate"))
         if state.active_llm_log:
             print(ui.dim(f"LLM log ativo: {state.active_llm_log}"))
         elif state.last_llm_log:
@@ -1846,6 +1858,9 @@ class StepRunner:
             pending_node = self.graph.nodes.get(state.pending_approval)
             if pending_node and pending_node.type == "human_gate":
                 print(ui.warn(f"HUMAN GATE PENDENTE: {state.pending_approval} — {pending_node.title}"))
+                serve_url_file = Path(self._work_dir) / ".serve_url"
+                if serve_url_file.exists():
+                    print(ui.info(f"URL: {serve_url_file.read_text().strip()}"))
                 print(ui.dim("  → ft approve [\"mensagem\"]   para aprovar"))
                 print(ui.dim("  → ft reject \"motivo\"         para rejeitar"))
             else:

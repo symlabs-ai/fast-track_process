@@ -125,15 +125,17 @@ def find_process_yaml(root: Path) -> Path | None:
 
     # Tenta ler o process_id do engine_state ativo para casar com o YAML correto
     active_process_id: str | None = None
+    state_globs: list[Path] = []
+    # State local (worktree ou continuous)
+    local_state = root / "state" / "engine_state.yml"
+    if local_state.exists():
+        state_globs.append(local_state)
     # Buscar em worktrees externos e runs/ legado
-    state_globs = []
     wt_home = Path.home() / ".ft" / "worktrees" / root.name
     if wt_home.is_dir():
-        state_globs.extend(wt_home.glob("*/runs/*/state/engine_state.yml"))
         state_globs.extend(wt_home.glob("*/state/engine_state.yml"))
     if (root / "runs").is_dir():
         state_globs.extend((root / "runs").glob("*/state/engine_state.yml"))
-        state_globs.extend((root / "runs").glob("*/runs/*/state/engine_state.yml"))
 
     for state_path in sorted(state_globs, key=lambda p: p.stat().st_mtime, reverse=True):
         try:
@@ -233,17 +235,6 @@ def _find_latest_state(root: Path) -> Path:
             key=_cycle_num, reverse=True,
         )
         for wd in wt_dirs:
-            # Worktree com runs internas (modo isolated dentro do worktree)
-            runs_sub = wd / "runs"
-            if runs_sub.is_dir():
-                sub_dirs = sorted(
-                    [d for d in runs_sub.iterdir() if d.is_dir()],
-                    key=lambda x: x.name, reverse=True,
-                )
-                for sd in sub_dirs:
-                    state = sd / "state" / "engine_state.yml"
-                    if state.exists():
-                        return state
             # Worktree com state direto
             state = wd / "state" / "engine_state.yml"
             if state.exists():
@@ -391,7 +382,7 @@ def _seed_from_previous(src: Path, dst: Path) -> int:
 
 
 def _next_run_dir(project_root: Path) -> Path:
-    """Calcula e cria o próximo diretório de run em runs/.
+    """Calcula e cria o próximo diretório de run em ~/.ft/worktrees/<project>/.
 
     Propaga CLAUDE.md e .claude/ da raiz para o run dir
     (necessário para o SymGateway identificar o projeto).
@@ -399,22 +390,14 @@ def _next_run_dir(project_root: Path) -> Path:
     """
     import shutil as _shutil
 
-    runs_dir = project_root / "runs"
-    runs_dir.mkdir(exist_ok=True)
-    existing = sorted(
-        [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
-        key=_cycle_num,
-    )
-    # Próximo ciclo: baseado no maior número existente + 1
-    # Runs legados (03, 04, 05) são contados como ciclos do passado
-    # mas novos ciclos começam da sequência lógica definida pelo usuário
-    next_num = _cycle_num(existing[-1]) + 1 if existing else 1
-    run_dir = runs_dir / f"cycle-{next_num:02d}"
+    wt_home = _worktrees_home(project_root)
+    next_num = _next_cycle_num(project_root)
+    run_dir = wt_home / f"cycle-{next_num:02d}"
     # Se já existe (colisão), incrementar
     while run_dir.exists():
         next_num += 1
-        run_dir = runs_dir / f"cycle-{next_num:02d}"
-    run_dir.mkdir()
+        run_dir = wt_home / f"cycle-{next_num:02d}"
+    run_dir.mkdir(parents=True)
 
     # Propagar CLAUDE.md e .claude/ para o run dir (gateway + settings)
     claude_md = project_root / "CLAUDE.md"
@@ -426,19 +409,33 @@ def _next_run_dir(project_root: Path) -> Path:
         if not dst.exists():
             _shutil.copytree(claude_dir, dst)
 
-    # Copiar seed/ ou docs/ do projeto para o run dir (LLM roda com CWD=run dir)
+    # Propagar docs/ do projeto para o run dir (LLM roda com CWD=run dir)
+    # Nova estrutura: docs/ é o padrão; seed/ é fallback legado
+    docs_dir = project_root / "docs"
     seed_dir = project_root / "seed"
-    if seed_dir.is_dir():
-        _shutil.copytree(seed_dir, run_dir / "seed", dirs_exist_ok=True)
-    else:
-        # Nova estrutura: propagar docs/ para o run dir
-        docs_dir = project_root / "docs"
-        if docs_dir.is_dir():
-            _shutil.copytree(docs_dir, run_dir / "docs", dirs_exist_ok=True)
+    if docs_dir.is_dir():
+        _shutil.copytree(docs_dir, run_dir / "docs", dirs_exist_ok=True)
+    elif seed_dir.is_dir():
+        # Legado: copiar seed/ como docs/ no run dir
+        _shutil.copytree(seed_dir, run_dir / "docs", dirs_exist_ok=True)
 
-    # Seed de código do run anterior
-    if existing:
-        prev_run = existing[-1]
+    # Propagar process/ para o run dir
+    process_dir = project_root / "process"
+    if process_dir.is_dir():
+        _shutil.copytree(process_dir, run_dir / "process", dirs_exist_ok=True)
+
+    # Seed de código do run anterior — buscar em worktrees e runs/ legado
+    existing_wt = sorted(
+        [d for d in wt_home.iterdir() if d.is_dir() and d != run_dir and _is_cycle_dir(d)],
+        key=_cycle_num,
+    )
+    runs_dir = project_root / "runs"
+    existing_legacy = sorted(
+        [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+        key=_cycle_num,
+    ) if runs_dir.is_dir() else []
+    prev_run = (existing_wt or existing_legacy or [None])[-1]
+    if prev_run:
         count = _seed_from_previous(prev_run, run_dir)
         if count:
             print(f"  Seed: {count} artefatos copiados de {prev_run.name}/ → {run_dir.name}/")
@@ -491,6 +488,42 @@ def _worktrees_home(project_root: Path) -> Path:
     home = Path.home() / ".ft" / "worktrees" / project_root.name
     home.mkdir(parents=True, exist_ok=True)
     return home
+
+
+def _engine_from_last_cycle(project_root: Path) -> str | None:
+    """Lê o llm_engine do ciclo mais recente (worktree externo ou runs/ legado)."""
+    import yaml as _yaml
+
+    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    candidates: list[Path] = []
+
+    if wt_home.is_dir():
+        candidates += sorted(
+            [d / "state" / "engine_state.yml" for d in wt_home.iterdir()
+             if d.is_dir() and _is_cycle_dir(d)],
+            key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            reverse=True,
+        )
+
+    runs_dir = project_root / "runs"
+    if runs_dir.is_dir():
+        candidates += sorted(
+            [d / "state" / "engine_state.yml" for d in runs_dir.iterdir()
+             if d.is_dir() and _is_cycle_dir(d)],
+            key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            reverse=True,
+        )
+
+    for state_file in candidates:
+        if state_file.exists():
+            try:
+                data = _yaml.safe_load(state_file.read_text()) or {}
+                engine = data.get("llm_engine")
+                if engine:
+                    return engine
+            except Exception:
+                pass
+    return None
 
 
 def _setup_worktree(project_root: Path, name: str) -> Path:
@@ -564,6 +597,21 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
 
 
 
+def _worktree_root_from_state(state_path: Path) -> Path | None:
+    """Se o state mora dentro de um worktree, retorna o root desse worktree."""
+    # state_path é algo como ~/.ft/worktrees/<proj>/cycle-NN/state/engine_state.yml
+    # O root do worktree é o parent de state/ → cycle-NN/
+    candidate = state_path.parent.parent
+    git_file = candidate / ".git"
+    if git_file.exists() and git_file.is_file():
+        # É um worktree (arquivo .git aponta para o repo original)
+        return candidate
+    # Pode ser diretório simples (sem git) em ~/.ft/worktrees/
+    if ".ft" in str(candidate) and "worktrees" in str(candidate) and (candidate / "state").is_dir():
+        return candidate
+    return None
+
+
 def get_runner(process: str | None = None, llm_engine: str | None = None, llm_model: str | None = None, verbose: bool = False, cycle: str | None = None) -> StepRunner:
     root = find_project_root()
     if cycle:
@@ -577,26 +625,27 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, llm_mo
         elif legacy_path.exists():
             state_path = legacy_path
         else:
-            # Tentar state dentro de runs/ do worktree (modo isolated aninhado)
-            wt_runs = sorted((wt_home / cycle / "runs").glob("*/state/engine_state.yml")) if (wt_home / cycle / "runs").is_dir() else []
-            legacy_runs = sorted((root / "runs" / cycle / "runs").glob("*/state/engine_state.yml")) if (root / "runs" / cycle / "runs").is_dir() else []
-
-            if wt_runs:
-                state_path = wt_runs[-1]
-            elif legacy_runs:
-                state_path = legacy_runs[-1]
-            else:
-                print(f"ERRO: Ciclo '{cycle}' não encontrado")
-                print(f"  Worktrees: {wt_home}")
-                print(f"  Legado:    {root / 'runs'}")
-                sys.exit(1)
+            print(f"ERRO: Ciclo '{cycle}' não encontrado")
+            print(f"  Worktrees: {wt_home}")
+            print(f"  Legado:    {root / 'runs'}")
+            sys.exit(1)
     else:
         state_path = _find_latest_state(root)
 
+    # Resolver effective_root: se o state mora num worktree, operar lá — não na main
+    effective_root = root
+    if state_path:
+        wt_root = _worktree_root_from_state(state_path)
+        if wt_root:
+            effective_root = wt_root
+
+    # Buscar processo no effective_root primeiro, fallback para root do projeto
     if process:
         process_path = Path(process)
     else:
-        process_path = find_process_yaml(root)
+        process_path = find_process_yaml(effective_root)
+        if not process_path:
+            process_path = find_process_yaml(root)
         if not process_path:
             print("ERRO: Nenhum YAML de processo encontrado em ./process/")
             print("  Use: ft init --template fast-track-v2")
@@ -606,7 +655,7 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, llm_mo
     return StepRunner(
         process_path=process_path,
         state_path=state_path,
-        project_root=root,
+        project_root=effective_root,
         llm_engine=llm_engine,
         llm_model=llm_model,
         verbose=verbose,
@@ -703,22 +752,29 @@ def cmd_runs(args):
 
     rows = []
     for cycle in cycles:
-        # Serve URL — busca apenas dentro de runs/ (ignora .serve_url na raiz = resíduo git)
+        # Serve URL — buscar .serve_url na raiz do ciclo
         serve_url = "—"
-        runs_subdir = cycle / "runs"
-        if runs_subdir.exists():
-            for f in sorted(runs_subdir.rglob(".serve_url")):
-                serve_url = f.read_text().strip()
-                break
+        serve_file = cycle / ".serve_url"
+        if serve_file.exists():
+            serve_url = serve_file.read_text().strip()
 
-        # Fonte de verdade: engine_state.yml do ciclo mais recente
-        state_files = sorted((cycle / "runs").glob("*/state/engine_state.yml")) if (cycle / "runs").is_dir() else []
+        # Fonte de verdade: engine_state.yml
+        # Novo padrão: state/ diretamente no ciclo
+        # Fallback legado: runs/*/state/ dentro do ciclo
         state_data = {}
-        if state_files:
+        state_path = cycle / "state" / "engine_state.yml"
+        if state_path.exists():
             try:
-                state_data = _yaml.safe_load(state_files[-1].read_text()) or {}
+                state_data = _yaml.safe_load(state_path.read_text()) or {}
             except Exception:
                 pass
+        if not state_data:
+            state_files = sorted((cycle / "runs").glob("*/state/engine_state.yml")) if (cycle / "runs").is_dir() else []
+            if state_files:
+                try:
+                    state_data = _yaml.safe_load(state_files[-1].read_text()) or {}
+                except Exception:
+                    pass
 
         if not state_data:
             continue  # ciclo vazio/fantasma — sem estado
@@ -778,6 +834,68 @@ def cmd_approve(args):
 def cmd_reject(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     runner.reject(args.reason, retry=not args.no_retry)
+
+
+def cmd_close(args):
+    """Encerra o ciclo ativo: merge_on_end + remove worktree + limpa branch."""
+    import subprocess as _sp
+    from ft.engine import ui as _ui
+
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    state = runner.state_mgr.load()
+
+    # Verificar se o ciclo terminou
+    terminal = {"done", "completed"}
+    if state.node_status not in terminal and not getattr(args, "force", False):
+        print(_ui.fail(f"Ciclo ainda ativo: {state.current_node} ({state.node_status})"))
+        print(_ui.warn("Use --force para encerrar mesmo assim, ou ft approve/continue para finalizar"))
+        return
+
+    # 1. Executar merge_on_end
+    runner._merge_on_end()
+
+    # 2. Descobrir se estamos num worktree
+    work = Path(runner.project_root)
+    git_file = work / ".git"
+    is_worktree = git_file.exists() and git_file.is_file()
+
+    if is_worktree and not getattr(args, "keep_worktree", False):
+        # Ler repo original
+        gitdir_line = git_file.read_text().strip()
+        if gitdir_line.startswith("gitdir:"):
+            gitdir = Path(gitdir_line.split(":", 1)[1].strip())
+            original_root = gitdir.parent.parent.parent
+
+            # Branch do worktree
+            branch = _sp.run(
+                ["git", "branch", "--show-current"],
+                cwd=work, capture_output=True, text=True,
+            ).stdout.strip()
+
+            # 3. Remover worktree
+            result = _sp.run(
+                ["git", "worktree", "remove", str(work), "--force"],
+                cwd=original_root, capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                print(_ui.success(f"Worktree removido: {work.name}"))
+            else:
+                print(_ui.warn(f"Worktree não removido: {result.stderr.strip()[:200]}"))
+
+            # 4. Remover branch
+            if branch:
+                result = _sp.run(
+                    ["git", "branch", "-D", branch],
+                    cwd=original_root, capture_output=True, text=True,
+                )
+                if result.returncode == 0:
+                    print(_ui.success(f"Branch removida: {branch}"))
+                else:
+                    print(_ui.dim(f"Branch {branch} não removida: {result.stderr.strip()[:100]}"))
+    elif is_worktree:
+        print(_ui.dim("Worktree preservado (--keep-worktree)"))
+
+    print(_ui.success("Ciclo encerrado."))
 
 
 def cmd_graph(args):
@@ -892,13 +1010,13 @@ def cmd_lint_process(args):
         "WARNINGS — reporte como warning:\n"
         "- Nomes de screenshots muito específicos do projeto (ex: 'graph.png', 'drawer-open.png')\n\n"
         "ACEITO — NÃO reporte:\n"
-        "- Caminhos genéricos de artefatos (seed/PRD.md, seed/ui_guidelines.md, docs/tech_stack.md)\n"
+        "- Caminhos genéricos de artefatos (docs/PRD.md, docs/ui_guidelines.md, docs/tech_stack.md)\n"
         "- Validators genéricos (file_exists, has_sections, guidelines_review_passed)\n"
         "- Estrutura de pastas genérica (frontend/src/, docs/screenshots/, frontend/dist/)\n"
         "- IDs de nodes, títulos descritivos genéricos, nomes de sprints\n"
         "- Comandos de build genéricos (npm run build, npm install, npx serve)\n"
         "- Referências a ferramentas genéricas (Playwright, curl)\n"
-        "- Instruções genéricas ('Leia seed/ui_guidelines.md e siga')\n\n"
+        "- Instruções genéricas ('Leia docs/ui_guidelines.md e siga')\n\n"
         "YAML DO PROCESSO:\n"
         "---\n"
         f"{yaml_content}\n"
@@ -1218,26 +1336,53 @@ def _resolve_run_mode(project_root: Path) -> str:
 
 
 def _check_active_run(project_root: Path) -> str | None:
-    """Verifica se há um run ativo (state com lock de PID vivo). Retorna descrição ou None."""
+    """Verifica se há um ciclo ativo (em andamento, pausado ou bloqueado). Retorna descrição ou None."""
     import yaml as _yaml
 
-    # Checar continuous mode
-    for state_candidate in [
-        project_root / "state" / "engine_state.yml",
-    ]:
-        if state_candidate.exists():
-            try:
-                data = _yaml.safe_load(state_candidate.read_text()) or {}
-                lock = data.get("_lock")
-                current = data.get("current_node")
-                if lock and current:
-                    pid = lock.get("pid")
-                    if pid and _is_pid_alive(pid):
-                        return f"Modo continuous ativo (PID {pid}, node: {current})"
-            except Exception:
-                pass
+    _TERMINAL_STATUSES = {"done", "completed", "failed", "aborted"}
 
-    # Checar isolated runs
+    def _is_active_state(data: dict) -> bool:
+        """Retorna True se o state indica ciclo em andamento (não finalizado)."""
+        node_status = data.get("node_status", "")
+        current_node = data.get("current_node", "")
+        # Se o node_status é terminal ou não há node atual, não é ativo
+        if node_status in _TERMINAL_STATUSES or not current_node:
+            return False
+        return True
+
+    def _describe_state(data: dict, cycle_name: str) -> str:
+        node = data.get("current_node", "?")
+        status = data.get("node_status", "?")
+        return f"{cycle_name} ({node} — {status})"
+
+    # 1. Continuous mode
+    state_candidate = project_root / "state" / "engine_state.yml"
+    if state_candidate.exists():
+        try:
+            data = _yaml.safe_load(state_candidate.read_text()) or {}
+            if _is_active_state(data):
+                return _describe_state(data, "modo continuous")
+        except Exception:
+            pass
+
+    # 2. Worktrees externos (~/.ft/worktrees/<project>/)
+    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    if wt_home.is_dir():
+        candidates = sorted(
+            [d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d)],
+            key=_cycle_num, reverse=True,
+        )
+        for wt in candidates:
+            state = wt / "state" / "engine_state.yml"
+            if state.exists():
+                try:
+                    data = _yaml.safe_load(state.read_text()) or {}
+                    if _is_active_state(data):
+                        return _describe_state(data, wt.name)
+                except Exception:
+                    pass
+
+    # 3. Isolated runs legado (runs/)
     runs_dir = project_root / "runs"
     if runs_dir.is_dir():
         for rd in sorted(
@@ -1248,14 +1393,11 @@ def _check_active_run(project_root: Path) -> str | None:
             if state.exists():
                 try:
                     data = _yaml.safe_load(state.read_text()) or {}
-                    lock = data.get("_lock")
-                    current = data.get("current_node")
-                    if lock and current:
-                        pid = lock.get("pid")
-                        if pid and _is_pid_alive(pid):
-                            return f"Run {rd.name} ativo (PID {pid}, node: {current})"
+                    if _is_active_state(data):
+                        return _describe_state(data, rd.name)
                 except Exception:
                     pass
+
     return None
 
 
@@ -1275,30 +1417,34 @@ def cmd_run(args):
 
     project_root = Path(args.project).resolve()
 
+    # Verificar se já tem um ciclo ativo (em andamento, pausado ou bloqueado)
+    # Deve rodar ANTES de criar worktree para não poluir em caso de erro.
+    if not getattr(args, "force", False):
+        active = _check_active_run(project_root)
+        if active:
+            from ft.engine import ui as _ui
+            print(_ui.fail(f"Já existe um ciclo ativo: {active}"))
+            print(_ui.warn("Use: ft continue"))
+            print(_ui.dim("Para forçar novo ciclo mesmo assim: ft run . --force"))
+            sys.exit(1)
+
     # --worktree: criar worktree git e redirecionar project_root para ele
     # Quando --worktree é usado, o worktree externo já É o ambiente isolado —
     # o engine não deve criar outro worktree interno (flag para suprimir).
+    # Engine efetivo: CLI flag > último ciclo > "claude"
+    _effective_engine = resolve_llm_engine(args) or _engine_from_last_cycle(project_root)
+
     worktree_name = getattr(args, "worktree", None)
     _outer_worktree_used = False
     if worktree_name:
         from ft.engine import ui as _ui
         wt_name = worktree_name if isinstance(worktree_name, str) and worktree_name != "True" else (
-            resolve_llm_engine(args) or "run"
+            _effective_engine or "run"
         )
         project_root = _setup_worktree(project_root, wt_name)
         _outer_worktree_used = True
 
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
-
-    # Verificar se já tem um run ativo
-    active = _check_active_run(project_root)
-    if active:
-        from ft.engine import ui as _ui
-        print(_ui.fail(f"Já existe um run ativo: {active}"))
-        print(_ui.warn("Aguarde o run atual terminar, ou use: ft continue --mvp"))
-        print(_ui.dim("Para forçar novo run mesmo assim: ft run . --force"))
-        if not getattr(args, "force", False):
-            sys.exit(1)
 
     # Commitar docs/ e process/ antes de iniciar (snapshot de conhecimento)
     from ft.engine.git_ops import commit_knowledge
@@ -1328,16 +1474,16 @@ def cmd_run(args):
         if _outer_worktree_used:
             # --worktree já criou o ambiente isolado: project_root é o worktree.
             # Usar project_root diretamente como run_dir — sem aninhamento.
-            run_dir = _next_run_dir(project_root)
+            run_dir = project_root
         elif git_ok and has_commits:
             # Modo isolado padrão: worktree externo em ~/.ft/worktrees/
-            wt_name = resolve_llm_engine(args) or "run"
+            wt_name = _effective_engine or "run"
             run_dir = _setup_worktree(project_root, wt_name)
         else:
             # Fallback sem git: diretório simples em ~/.ft/worktrees/
             wt_home = _worktrees_home(project_root)
             next_num = _next_cycle_num(project_root)
-            engine_name = resolve_llm_engine(args) or "run"
+            engine_name = _effective_engine or "run"
             run_dir = wt_home / f"cycle-{next_num:02d}-{engine_name}"
             run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1365,14 +1511,13 @@ def cmd_run(args):
                 print("  Use: ft run . --template fast-track-v2")
                 sys.exit(1)
 
-    llm_engine = resolve_llm_engine(args)
     llm_model = resolve_llm_model(args)
 
     runner = StepRunner(
         process_path=process_path,
         state_path=state_path,
         project_root=project_root,
-        llm_engine=llm_engine,
+        llm_engine=_effective_engine,
         llm_model=llm_model,
         verbose=getattr(args, "verbose", False),
     )
@@ -1628,6 +1773,14 @@ def main():
     add_llm_engine_flags(fx)
     fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
 
+    # close
+    cl = sub.add_parser("close", help="Encerrar ciclo: merge artefatos, remover worktree")
+    add_llm_engine_flags(cl)
+    cl.add_argument("--keep-worktree", action="store_true", dest="keep_worktree",
+                     help="Preservar o worktree no disco (não remover)")
+    cl.add_argument("--force", action="store_true",
+                     help="Encerrar mesmo se o ciclo não terminou")
+
     # cancel
     ca = sub.add_parser("cancel", help="Cancelar o run ativo com justificativa")
     add_llm_engine_flags(ca)
@@ -1679,6 +1832,8 @@ def main():
             cmd_lint_process(args)
         elif args.command == "fix":
             cmd_fix(args)
+        elif args.command == "close":
+            cmd_close(args)
         elif args.command == "cancel":
             cmd_cancel(args)
         elif args.command == "setup-env":

@@ -24,16 +24,16 @@ def auto_commit(
         for p in paths:
             subprocess.run(["git", "add", p], cwd=cwd, capture_output=True)
     else:
-        # Stage tudo exceto engine_state e runs/
+        # Stage tudo exceto state/ e runs/ (legado)
         subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
-        # Unstage runs/ (state e artefatos descartáveis)
+        # Unstage state/ (engine state não é versionado)
         subprocess.run(
-            ["git", "reset", "HEAD", "runs/"],
+            ["git", "reset", "HEAD", "state/"],
             cwd=cwd, capture_output=True, text=True,
         )
-        # Fallback legado: unstage project/state/ se existir
+        # Unstage runs/ (legado — artefatos descartáveis)
         subprocess.run(
-            ["git", "reset", "HEAD", "project/state/"],
+            ["git", "reset", "HEAD", "runs/"],
             cwd=cwd, capture_output=True, text=True,
         )
 

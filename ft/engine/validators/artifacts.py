@@ -487,3 +487,34 @@ def guidelines_review_passed(
         return False, f"guidelines_review_passed FAIL: ITERATE — {detail}"
 
     return False, f"guidelines_review_passed FAIL: veredicto não encontrado em {report_path}"
+
+
+def bash_passes(script: str, project_root: str = ".") -> tuple[bool, str]:
+    """Roda um script bash e verifica se sai com código 0.
+
+    O script é resolvido relativo ao project_root.
+    stdout/stderr são capturados; em caso de falha, as últimas linhas são exibidas.
+    """
+    script_path = Path(project_root) / script
+    if not script_path.exists():
+        return False, f"bash_passes FAIL: script não encontrado: {script}"
+    try:
+        result = subprocess.run(
+            ["bash", str(script_path)],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"bash_passes FAIL: script excedeu 60s: {script}"
+    except Exception as e:
+        return False, f"bash_passes FAIL: erro ao executar {script}: {e}"
+
+    if result.returncode == 0:
+        last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
+        return True, f"bash_passes: {script} → {last_line}"
+
+    output = (result.stdout + result.stderr).strip()
+    preview = "\n".join(output.splitlines()[-5:]) if output else "(sem saída)"
+    return False, f"bash_passes FAIL: {script} saiu com código {result.returncode}\n{preview}"

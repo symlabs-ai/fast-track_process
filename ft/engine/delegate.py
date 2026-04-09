@@ -230,14 +230,17 @@ def _stream_process_output(
             else:
                 status = _live_status(llm_engine, line, ctx)
                 if status:
-                    truncated = status[:term_width]
-                    print(f"\r  ⟳ {truncated:<{term_width}}", end="", flush=True)
+                    ts = time.strftime("%H:%M:%S")
+                    prefix = f"  ⟳ [{ts}] "
+                    max_status = term_width - len(prefix) + 4  # +4 accounts for \r indent
+                    truncated = status[:max(max_status, 20)]
+                    print(f"\r{prefix}{truncated:<{max(max_status, 20)}}", end="", flush=True)
     finally:
         if log_file:
             log_file.close()
         if not stream_prefix:
             # Limpa a linha de status ao terminar
-            print(f"\r{' ' * (term_width + 4)}\r", end="", flush=True)
+            print(f"\r{' ' * (term_width + 16)}\r", end="", flush=True)
 
     return "".join(chunks)
 

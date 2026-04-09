@@ -20,6 +20,7 @@ from ft.engine.validators import gates
 from ft.engine.validators import tests as test_val
 from ft.engine.validators import code as code_val
 from ft.engine.validators import review as review_val
+from ft.engine.validators import check_paths as cp_val
 from ft.engine.git_ops import auto_commit, commit_knowledge
 from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
 from ft.engine import ui
@@ -30,6 +31,67 @@ from ft.engine.stakeholder import (
     format_pending_summary,
     scan_kb_lessons, kb_lessons_prompt,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _last_log_activity(log_path: str) -> str | None:
+    """Retorna a última linha de atividade significativa do log JSONL, com timestamp do arquivo."""
+    import json as _json
+    import os as _os
+
+    p = Path(log_path)
+    if not p.exists():
+        return None
+
+    mtime = p.stat().st_mtime
+    ts = datetime.fromtimestamp(mtime).strftime("%H:%M:%S")
+
+    # Ler as últimas linhas do arquivo (eficiente para arquivos grandes)
+    try:
+        with p.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            read_size = min(size, 8192)
+            f.seek(-read_size, 2)
+            tail = f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    activity: str | None = None
+    for line in reversed(tail.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("{"):
+            try:
+                event = _json.loads(line)
+                etype = event.get("type", "")
+                if etype == "item.completed":
+                    item = event.get("item", {})
+                    itype = item.get("type", "")
+                    if itype == "command_execution":
+                        cmd = (item.get("command") or "").strip().replace("\n", " ")[:80]
+                        activity = f"$ {cmd}"
+                        break
+                    if itype == "agent_message":
+                        msg = (item.get("text") or "").strip().replace("\n", " ")[:80]
+                        if msg:
+                            activity = f"→ {msg}"
+                            break
+            except Exception:
+                continue
+        else:
+            # Plain text (claude / outros engines)
+            if not line.startswith("[") and len(line) > 5:
+                activity = line[:80]
+                break
+
+    if activity:
+        return f"[{ts}] {activity}"
+    return f"[{ts}] (sem atividade recente legível)"
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +139,8 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "screenshot_review_passed": gates.screenshot_review_passed,
     "gate_ui_vscode_layout": gates.gate_ui_vscode_layout,
     "read_artifact": val.read_artifact,
+    "bash_passes": val.bash_passes,
+    "paths_clean": cp_val.paths_clean,
     # Test validators (Phase 3)
     "coverage_per_file": test_val.coverage_per_file,
     "tests_exist": test_val.tests_exist,
@@ -729,6 +793,87 @@ class StepRunner:
                 if snapshot.exists():
                     snapshot.unlink()
 
+    def _merge_on_end(self) -> None:
+        """Merge artefatos do worktree de volta para o repo original conforme merge_on_end.
+
+        Valores aceitos no YAML do processo:
+          merge_on_end: none       → nada (default)
+          merge_on_end: full       → git merge da branch
+          merge_on_end: docs       → copia docs/ inteiro
+          merge_on_end:            → lista de paths (arquivos ou diretórios)
+            - docs/PRD.md
+            - docs/plano_de_voo.md
+            - kb/
+        """
+        import shutil as _shutil
+        import subprocess as _sp
+
+        spec = self.graph.meta.get("merge_on_end", "none")
+        if spec == "none" or not spec:
+            return
+
+        # Descobrir repo original a partir do worktree
+        work = Path(self.project_root)
+        git_file = work / ".git"
+        if not git_file.exists() or git_file.is_dir():
+            # Não é worktree (é o repo principal ou não-git) — nada a fazer
+            return
+
+        # .git é um arquivo em worktrees: "gitdir: /path/to/.git/worktrees/<name>"
+        gitdir_line = git_file.read_text().strip()
+        if not gitdir_line.startswith("gitdir:"):
+            return
+        # Navegar: .git/worktrees/<name> → .git → repo root
+        gitdir = Path(gitdir_line.split(":", 1)[1].strip())
+        original_root = gitdir.parent.parent.parent  # .git/worktrees/<name> → .git → repo
+        if not (original_root / ".git").is_dir():
+            print(ui.warn(f"merge_on_end: não encontrou repo original em {original_root}"))
+            return
+
+        if spec == "full":
+            # Git merge da branch no repo original
+            branch = _sp.run(
+                ["git", "branch", "--show-current"],
+                cwd=work, capture_output=True, text=True,
+            ).stdout.strip()
+            if branch:
+                result = _sp.run(
+                    ["git", "merge", branch, "--no-edit"],
+                    cwd=original_root, capture_output=True, text=True,
+                )
+                if result.returncode == 0:
+                    print(ui.success(f"merge_on_end: branch {branch} mergida em {original_root.name}"))
+                else:
+                    print(ui.fail(f"merge_on_end: falha no merge — {result.stderr.strip()[:200]}"))
+            return
+
+        # Resolver lista de paths a copiar
+        if isinstance(spec, str):
+            # Preset: "docs" → ["docs/"]
+            paths = [f"{spec}/"]
+        elif isinstance(spec, list):
+            paths = spec
+        else:
+            return
+
+        count = 0
+        for p in paths:
+            src = work / p
+            dst = original_root / p
+            if not src.exists():
+                continue
+            if src.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+                _shutil.copytree(src, dst, dirs_exist_ok=True)
+                count += 1
+            elif src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _shutil.copy2(src, dst)
+                count += 1
+
+        if count:
+            print(ui.success(f"merge_on_end: {count} item(ns) copiado(s) para {original_root.name}/"))
+
     def _advance_state(self, completed_node: str, next_node: str | None, gate_result: str = "PASS") -> None:
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
         if self.state_mgr.state.node_status == "blocked":
@@ -900,6 +1045,8 @@ class StepRunner:
                 # Commitar conhecimento produzido pelo ciclo
                 ok, detail = commit_knowledge(self.project_root, label="pós-run — ciclo completo")
                 print(ui.dim(detail))
+                # Merge artefatos de volta para o repo original
+                self._merge_on_end()
                 self._fire_hooks("on_deliver")
                 self._advance_state(node_id, None)
                 break
@@ -1785,20 +1932,46 @@ class StepRunner:
         node = self.graph.get_node(node_id)
         print(f"  REJEITADO: {node_id} — {reason}")
 
-        if retry and node.executor.startswith("llm"):
+        # Encontrar o node LLM que deve receber o feedback:
+        # - Se o node rejeitado é LLM, usa ele mesmo
+        # - Se tem reject_next, vai direto para aquele node
+        # - Se é human_gate, encontra o predecessor LLM
+        retry_node = node
+        if node.reject_next:
+            retry_node = self.graph.get_node(node.reject_next)
+        elif not node.executor.startswith("llm"):
+            # Buscar predecessor: o node cujo .next == node_id
+            for other_id, other_node in self.graph.nodes.items():
+                if other_node.next == node_id:
+                    retry_node = other_node
+                    break
+                if other_node.branches:
+                    for target in other_node.branches.values():
+                        if target == node_id:
+                            retry_node = other_node
+                            break
+
+        if retry and retry_node.executor.startswith("llm"):
             # Reenviar ao LLM com feedback da rejeicao
             from ft.engine.delegate import delegate_with_feedback
-            original_prompt = build_task_prompt(node, {})
+            original_prompt = build_task_prompt(retry_node, {})
             retry_prompt = build_rejection_prompt(original_prompt, reason)
 
-            allowed = self._resolve_allowed_paths(node)
-            print(f"  Reenviando ao LLM com feedback da rejeicao...")
+            allowed = self._resolve_allowed_paths(retry_node)
+            print(f"  Reenviando ao LLM ({retry_node.id}) com feedback da rejeicao...")
 
-            # Desbloquear estado para retry
+            # Rollback: remover retry_node e gate da lista de completados
+            for nid in (retry_node.id, node_id):
+                if nid in state.completed_nodes:
+                    state.completed_nodes.remove(nid)
+                    state.metrics["steps_completed"] = max(0, state.metrics.get("steps_completed", 1) - 1)
+
+            # Desbloquear estado para retry — posicionar no node LLM
+            state.current_node = retry_node.id
             state.node_status = "ready"
             state.pending_approval = None
             state.blocked_reason = None
-            retry_log_path = self._start_llm_log(state, node.id, "stakeholder-retry")
+            retry_log_path = self._start_llm_log(state, retry_node.id, "stakeholder-retry")
             self.state_mgr.save()
 
             try:
@@ -1817,11 +1990,17 @@ class StepRunner:
             state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
             if result.success:
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+                validation = run_validators(retry_node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
                 self._print_validation(validation)
                 if validation.passed:
+                    # Marcar retry_node como concluído e avançar ao gate
+                    state.completed_nodes.append(retry_node.id)
+                    state.metrics["steps_completed"] = state.metrics.get("steps_completed", 0) + 1
+                    state.current_node = node_id
+                    state.node_status = "awaiting_approval"
+                    state.pending_approval = node_id
+                    self.state_mgr.save()
                     print(ui.awaiting_approval(auto=self._auto_approve))
-                    self.state_mgr.set_pending_approval(node.id)
                     return
             # Se retry falhou, bloquear
             self.state_mgr.block(f"Retry apos rejeicao falhou: {reason}")
@@ -1846,7 +2025,10 @@ class StepRunner:
         print(ui.info(f"Status: {state.node_status}"))
         if current_sprint:
             print(ui.info(f"Sprint: {current_sprint}"))
-        print(ui.info(f"Progresso: {state.metrics['steps_completed']}/{state.metrics['steps_total']}"))
+        steps_done = state.metrics.get("steps_completed", 0)
+        steps_total = state.metrics.get("steps_total", 0)
+        current_step = steps_done + 1 if state.node_status not in ("done", "completed") else steps_done
+        print(ui.info(f"Progresso: {current_step}/{steps_total} (passo atual)"))
         # Mostrar URL se node atual é human_gate
         current_node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
         if current_node_obj and current_node_obj.type == "human_gate":
@@ -1857,6 +2039,9 @@ class StepRunner:
             print(ui.dim("  → ft continue   para entrar no gate"))
         if state.active_llm_log:
             print(ui.dim(f"LLM log ativo: {state.active_llm_log}"))
+            last_activity = _last_log_activity(state.active_llm_log)
+            if last_activity:
+                print(ui.dim(f"  Última atividade: {last_activity}"))
         elif state.last_llm_log:
             print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:

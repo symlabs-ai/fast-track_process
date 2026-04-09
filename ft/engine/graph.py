@@ -176,11 +176,17 @@ def load_graph(path: str | Path) -> ProcessGraph:
             elif isinstance(v, str):
                 validators.append({v: True})
 
+        # Normalizar executor: V3 usa nomes curtos (claude/codex/gemini),
+        # runner usa o prefixo "llm" para detectar delegação ao LLM.
+        _EXECUTOR_ALIASES = {"claude": "llm_claude", "codex": "llm_codex", "gemini": "llm_gemini"}
+        raw_executor = node_raw.get("executor", "python")
+        executor = _EXECUTOR_ALIASES.get(raw_executor, raw_executor)
+
         nodes.append(Node(
             id=node_raw["id"],
             type=node_raw.get("type", "build"),
             title=node_raw.get("title", node_raw["id"]),
-            executor=node_raw.get("executor", "python"),
+            executor=executor,
             outputs=node_raw.get("outputs", []),
             write_scope=node_raw.get("write_scope", []),
             requires_approval=node_raw.get("requires_approval", False),

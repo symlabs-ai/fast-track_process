@@ -161,6 +161,45 @@ def _extract_codex_output(raw_output: str) -> str:
     return raw_output
 
 
+def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
+    """Extrai texto curto para a linha de status ao vivo. Retorna None para linhas sem interesse."""
+    text = line.rstrip()
+    if llm_engine == "codex":
+        if not text.startswith("{"):
+            return None
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        etype = event.get("type", "")
+        if etype == "turn.started":
+            ctx["turn"] = ctx.get("turn", 0) + 1
+            return f"turn {ctx['turn']}"
+        if etype == "item.completed":
+            item = event.get("item", {})
+            itype = item.get("type", "")
+            if itype == "command_execution":
+                cmd = (item.get("command") or "")[:60].replace("\n", " ")
+                return f"$ {cmd}"
+            if itype == "agent_message":
+                msg = (item.get("text") or "").strip().replace("\n", " ")[:60]
+                return f"→ {msg}" if msg else None
+            if itype == "tool_call":
+                name = item.get("name") or item.get("tool", "")
+                return f"tool {name}"
+        if etype == "turn.completed":
+            usage = event.get("usage", {})
+            tok = usage.get("output_tokens", 0)
+            ctx["tokens"] = ctx.get("tokens", 0) + tok
+            return f"turn {ctx.get('turn', '?')} done · {ctx['tokens']:,} out tok"
+        return None
+    else:
+        # Claude / outros: plain text — mostrar linha se não for vazia
+        if text and not text.startswith("["):
+            return text[:80]
+        return None
+
+
 def _stream_process_output(
     proc: subprocess.Popen,
     llm_engine: str,
@@ -168,9 +207,13 @@ def _stream_process_output(
     stream_prefix: str | None = None,
 ) -> str:
     """Consome stdout/stderr combinado do subprocesso, gravando em arquivo e espelhando no terminal."""
+    import shutil as _shutil
     chunks: list[str] = []
     stream = proc.stdout
     assert stream is not None
+
+    ctx: dict = {}
+    term_width = _shutil.get_terminal_size((80, 20)).columns - 4
 
     log_file = None
     try:
@@ -184,9 +227,17 @@ def _stream_process_output(
                 log_file.flush()
             if stream_prefix:
                 print(f"  {stream_prefix} {_format_stream_line(llm_engine, line)}")
+            else:
+                status = _live_status(llm_engine, line, ctx)
+                if status:
+                    truncated = status[:term_width]
+                    print(f"\r  ⟳ {truncated:<{term_width}}", end="", flush=True)
     finally:
         if log_file:
             log_file.close()
+        if not stream_prefix:
+            # Limpa a linha de status ao terminar
+            print(f"\r{' ' * (term_width + 4)}\r", end="", flush=True)
 
     return "".join(chunks)
 

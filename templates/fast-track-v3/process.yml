@@ -1,0 +1,614 @@
+# Fast Track V3 — Processo Completo de MVP
+# Incorpora aprendizados dos ciclos SM1-SM13 e ft-studio ciclos 1-5.
+# Uso: ft run . --template fast-track-v3 [--claude|--codex|--gemini]
+
+id: fast_track_v3
+version: "1.0.0"
+title: "Fast Track V3 — MVP Completo"
+
+merge_on_end:
+  - docs/PRD.md
+  - docs/handoff.md
+  - docs/critical-analysis.md
+  - docs/tech_stack.md
+  - docs/api_contract.md
+  - docs/test_data.md
+  - docs/plano_de_voo.md
+
+nodes:
+
+  # ================================================================
+  # HyperMode — rota para pular MDD quando PRD já existe
+  # ================================================================
+
+  - id: ft.start.route
+    type: decision
+    title: "HyperMode — PRD existente?"
+    description: "Detecta se já existe docs/PRD.md no projeto. Se sim, pula todo o MDD e vai direto ao planejamento."
+    sprint: sprint-01-mdd
+    executor: python
+    condition: "file_exists:docs/PRD.md"
+    branches:
+      "true": ft.plan.01.task_list
+      "false": ft.mdd.01.hipotese
+
+  # ================================================================
+  # Sprint 01 — MDD (Método de Desenvolvimento Dirigido)
+  # ================================================================
+
+  - id: ft.mdd.01.hipotese
+    type: discovery
+    title: "Capturar Hipótese"
+    description: "Entrevistar o stakeholder para capturar a hipótese central do produto: problema, público-alvo, solução proposta e sinal de validação."
+    sprint: sprint-01-mdd
+    executor: claude
+    outputs:
+      - docs/hipotese.md
+    validators:
+      - has_file: docs/hipotese.md
+      - has_sections:
+          - Hipótese Central
+          - Problema Observado
+          - Público-Alvo
+          - Sinal de Validação
+    next: ft.mdd.01b.hipotese_gate
+
+  - id: ft.mdd.01b.hipotese_gate
+    type: human_gate
+    title: "Revisão da Hipótese"
+    description: "Leia docs/hipotese.md e confirme se a hipótese capturada reflete corretamente o problema e o público-alvo. Rejeite com sugestões de ajuste se necessário."
+    sprint: sprint-01-mdd
+    executor: python
+    outputs:
+      - docs/hipotese.md
+    reject_next: ft.mdd.01.hipotese
+    next: ft.mdd.02.prd
+
+  - id: ft.mdd.02.prd
+    type: document
+    title: "Redigir PRD"
+    description: "Elaborar o PRD completo com hipótese, visão, user stories priorizadas (P0/P1), stack técnico, contratos de navegação e critérios de saída do ciclo."
+    sprint: sprint-01-mdd
+    executor: claude
+    outputs:
+      - docs/PRD.md
+    validators:
+      - has_file: docs/PRD.md
+      - has_sections:
+          - Hipótese
+          - Visão
+          - User Stories
+          - Stack Técnico
+          - Critérios de Saída
+    next: ft.mdd.02b.prd_gate
+
+  - id: ft.mdd.02b.prd_gate
+    type: human_gate
+    title: "Revisão do PRD"
+    description: "Leia docs/PRD.md. Verifique se as user stories P0 cobrem o fluxo core e se os critérios de saída são verificáveis. Rejeite com feedback específico se faltar algo."
+    sprint: sprint-01-mdd
+    executor: python
+    outputs:
+      - docs/PRD.md
+    reject_next: ft.mdd.02.prd
+    next: ft.mdd.03.prd_gate
+
+  - id: ft.mdd.03.prd_gate
+    type: gate
+    title: "Gate MDD"
+    description: "Verificação determinística: PRD existe, tem as seções obrigatórias e hipótese aprovada."
+    sprint: sprint-01-mdd
+    executor: python
+    validators:
+      - has_file: docs/PRD.md
+      - has_file: docs/hipotese.md
+      - has_sections:
+          - Hipótese
+          - User Stories
+          - Stack Técnico
+    next: ft.plan.01.task_list
+
+  # ================================================================
+  # Sprint 02 — Planning
+  # ================================================================
+
+  - id: ft.plan.01.task_list
+    type: document
+    title: "Criar Task List"
+    description: "Decompor as user stories P0 do PRD em tasks técnicas ordenadas. Cada task deve ser verificável e ter escopo claro de implementação."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/task_list.md
+    validators:
+      - has_file: docs/task_list.md
+    next: ft.plan.02.tech_stack
+
+  - id: ft.plan.02.tech_stack
+    type: document
+    title: "Definir Tech Stack"
+    description: "Documentar a stack técnica completa: framework, banco de dados, bibliotecas, scripts de inicialização e estrutura de diretórios. Incluir decisões de arquitetura com justificativa."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/tech_stack.md
+    validators:
+      - has_file: docs/tech_stack.md
+      - has_sections:
+          - Framework
+          - Banco de Dados
+          - Estrutura de Diretórios
+    next: ft.plan.02b.tech_gate
+
+  - id: ft.plan.02b.tech_gate
+    type: human_gate
+    title: "Revisão do Tech Stack"
+    description: "Leia docs/tech_stack.md e confirme se as escolhas técnicas estão alinhadas com os requisitos do PRD. Rejeite com justificativa se alguma escolha for inadequada."
+    sprint: sprint-02-planning
+    executor: python
+    outputs:
+      - docs/tech_stack.md
+    reject_next: ft.plan.02.tech_stack
+    next: ft.plan.03.api_contract
+
+  - id: ft.plan.03.api_contract
+    type: document
+    title: "Definir Contrato de API"
+    description: "Documentar todos os endpoints da API: método, path, request/response schema, códigos de erro. Incluir /health sem prefixo /api. Servir como contrato entre frontend e backend — evita mismatch de rotas."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/api_contract.md
+    validators:
+      - has_file: docs/api_contract.md
+      - has_sections:
+          - Base URL
+          - Endpoints
+    next: ft.plan.04.ui_criteria
+
+  - id: ft.plan.04.ui_criteria
+    type: document
+    title: "Gerar Critérios Visuais de UI"
+    description: "Definir critérios objetivos de aceitação visual para cada tela do produto: componentes obrigatórios, estados (vazio, carregado, erro), navegação e ícones. Estes critérios guiam o screenshot_review."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/ui_criteria.md
+    validators:
+      - has_file: docs/ui_criteria.md
+    next: ft.plan.05.test_data
+
+  - id: ft.plan.05.test_data
+    type: document
+    title: "Gerar Massa de Dados para Aceitação"
+    description: "Criar massa de dados realista para os testes de aceitação. OBRIGATÓRIO: todas as datas devem ser relativas à execução (hoje+N, hoje-N) — nunca datas absolutas hardcodadas. Ao menos um registro com data de hoje para validar agendamentos/eventos do dia."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/test_data.md
+    validators:
+      - has_file: docs/test_data.md
+    next: ft.plan.gate
+
+  - id: ft.plan.gate
+    type: gate
+    title: "Gate Planning"
+    description: "Verificação determinística: todos os documentos de planejamento existem antes de iniciar implementação."
+    sprint: sprint-02-planning
+    executor: python
+    validators:
+      - has_file: docs/task_list.md
+      - has_file: docs/tech_stack.md
+      - has_file: docs/api_contract.md
+      - has_file: docs/ui_criteria.md
+      - has_file: docs/test_data.md
+    next: ft.frontend.01.scaffold
+
+  # ================================================================
+  # Sprint 03 — Frontend
+  # ================================================================
+
+  - id: ft.frontend.01.scaffold
+    type: build
+    title: "Scaffold Frontend"
+    description: "Criar a estrutura base do frontend: framework, roteamento, componentes de layout, navegação principal e configuração de PWA com manifest mínimo (name, icons, display: standalone)."
+    sprint: sprint-03-frontend
+    executor: claude
+    outputs:
+      - frontend/
+      - .build_ok
+    validators:
+      - has_file: frontend/package.json
+      - command_succeeds: "cd frontend && npm install --silent && npm run build --silent"
+    next: ft.frontend.02.implement
+
+  - id: ft.frontend.02.implement
+    type: build
+    title: "Implementar Frontend"
+    description: "Implementar todas as telas e funcionalidades P0 do PRD seguindo os critérios visuais de docs/ui_criteria.md e o contrato de API de docs/api_contract.md. Proxy Vite configurado para /api → backend."
+    sprint: sprint-03-frontend
+    executor: claude
+    outputs:
+      - frontend/src/
+    validators:
+      - command_succeeds: "cd frontend && npm run build --silent"
+    next: ft.frontend.03.prd_review
+
+  - id: ft.frontend.03.prd_review
+    type: review
+    title: "Revisão PRD — Conformidade de Arquitetura"
+    description: "Auditar o frontend implementado contra o PRD: todas as rotas P0 existem, navegação correta, componentes obrigatórios presentes, sem rotas de login/registro se não especificado."
+    sprint: sprint-03-frontend
+    executor: claude
+    max_turns: 40
+    validators:
+      - command_succeeds: "cd frontend && npm run build --silent"
+    on_fail:
+      human_gate: "Revisão PRD encontrou não-conformidades no frontend. Corrija antes de continuar."
+      goto: ft.frontend.02.implement
+    next: ft.frontend.04.screenshot_review
+
+  - id: ft.frontend.04.screenshot_review
+    type: review
+    title: "Screenshot Review — Validação Visual"
+    description: "Tirar screenshots de todas as telas principais e comparar com os critérios de docs/ui_criteria.md. Verificar estados vazios, responsividade mobile e ícones SVG (não emoji)."
+    sprint: sprint-03-frontend
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/screenshots/
+      - docs/screenshot-review.md
+    validators:
+      - has_file: docs/screenshot-review.md
+    on_fail:
+      human_gate: "Screenshots não evidenciam conformidade com os critérios visuais. Corrija a UI e refaça."
+      goto: ft.frontend.02.implement
+    next: gate.frontend
+
+  - id: gate.frontend
+    type: gate
+    title: "Gate Frontend"
+    description: "Verificação determinística: build do frontend passa e screenshot review existe."
+    sprint: sprint-03-frontend
+    executor: python
+    validators:
+      - has_file: docs/screenshot-review.md
+      - command_succeeds: "cd frontend && npm run build --silent"
+    next: ft.tdd.01.red
+
+  # ================================================================
+  # Sprint 04 — TDD (Backend)
+  # ================================================================
+
+  - id: ft.tdd.01.red
+    type: test_red
+    title: "Red — Escrever Testes"
+    description: "Escrever testes de unidade e integração para todas as US P0. Os testes devem falhar agora (red). Cobrir: criação, leitura, edição, exclusão e validações de cada entidade. Usar datas relativas nos fixtures."
+    sprint: sprint-04-tdd
+    executor: claude
+    outputs:
+      - tests/
+    validators:
+      - has_file: tests/
+    next: ft.tdd.02.green
+
+  - id: ft.tdd.02.green
+    type: test_green
+    title: "Green — Implementar Backend"
+    description: "Implementar o backend (API + banco) para fazer os testes passarem. Seguir estritamente o contrato de docs/api_contract.md. Entry point em backend/app/main.py. /health sem prefixo /api."
+    sprint: sprint-04-tdd
+    executor: claude
+    max_turns: 80
+    outputs:
+      - backend/
+    validators:
+      - command_succeeds: "cd backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
+    next: ft.tdd.03.refactor
+
+  - id: ft.tdd.03.refactor
+    type: refactor
+    title: "Refactor"
+    description: "Refatorar o código para clareza, remover duplicações e garantir que os testes continuam passando. Não adicionar funcionalidades — apenas melhorar qualidade do código existente."
+    sprint: sprint-04-tdd
+    executor: claude
+    validators:
+      - command_succeeds: "cd backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
+    next: gate.tdd
+
+  - id: gate.tdd
+    type: gate
+    title: "Gate TDD"
+    description: "Verificação determinística: todos os testes passam."
+    sprint: sprint-04-tdd
+    executor: python
+    validators:
+      - command_succeeds: "cd backend && python -m pytest tests/ -q 2>&1 | tail -5"
+    next: ft.delivery.01.entrypoint
+
+  # ================================================================
+  # Sprint 05 — Delivery
+  # ================================================================
+
+  - id: ft.delivery.01.entrypoint
+    type: build
+    title: "Criar Entry Point HTTP"
+    description: "Garantir que o servidor HTTP sobe corretamente: uvicorn na porta 8000, middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
+    sprint: sprint-05-delivery
+    executor: claude
+    validators:
+      - has_file: backend/app/main.py
+    next: ft.delivery.02.self_review
+
+  - id: ft.delivery.02.self_review
+    type: refactor
+    title: "Self-Review"
+    description: "Revisar o código entregue como um tech lead faria: segurança (sem SQL injection, sem credenciais hardcodadas), performance (sem N+1 queries), código morto removido, imports organizados."
+    sprint: sprint-05-delivery
+    executor: claude
+    next: ft.delivery.03.makefile
+
+  - id: ft.delivery.03.makefile
+    type: build
+    title: "Criar Makefile"
+    description: "Criar Makefile com targets obrigatórios: make dev (sobe backend + frontend simultaneamente), make test (roda pytest), make build (build do frontend). Sem dependências externas além do que já está instalado."
+    sprint: sprint-05-delivery
+    executor: claude
+    outputs:
+      - Makefile
+    validators:
+      - has_file: Makefile
+      - command_succeeds: "make --dry-run dev 2>&1 | head -3"
+    next: gate.delivery
+
+  - id: gate.delivery
+    type: gate
+    title: "Gate Delivery"
+    description: "Verificação determinística: Makefile existe e targets funcionam, entry point existe, testes passam."
+    sprint: sprint-05-delivery
+    executor: python
+    validators:
+      - has_file: Makefile
+      - has_file: backend/app/main.py
+      - command_succeeds: "cd backend && python -m pytest tests/ -q 2>&1 | tail -5"
+    next: ft.smoke.01.run
+
+  # ================================================================
+  # Sprint 06 — Smoke
+  # ================================================================
+
+  - id: ft.smoke.01.run
+    type: build
+    title: "Smoke Test"
+    description: "Subir o servidor e verificar que GET /health retorna {status: ok, db: ok}. Este teste valida que o servidor sobe, o banco conecta e a rota de saúde responde corretamente."
+    sprint: sprint-06-smoke
+    executor: claude
+    env_setup:
+      - cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+      - sleep 3
+    outputs:
+      - docs/smoke-report.md
+    validators:
+      - command_succeeds: "curl -sf http://localhost:8000/health | python -c \"import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)\""
+      - has_file: docs/smoke-report.md
+    next: gate.smoke
+
+  - id: gate.smoke
+    type: gate
+    title: "Gate Smoke"
+    description: "Verificação determinística: smoke report existe e /health respondeu."
+    sprint: sprint-06-smoke
+    executor: python
+    validators:
+      - has_file: docs/smoke-report.md
+    next: ft.acceptance.01.cli
+
+  # ================================================================
+  # Sprint 07 — Acceptance
+  # ================================================================
+
+  - id: ft.acceptance.01.cli
+    type: build
+    title: "Acceptance Test CLI"
+    description: "Executar a massa de dados de docs/test_data.md contra a API via curl/httpx. Verificar cada endpoint P0: criar, listar, editar, excluir. Verificar que agendamentos_hoje >= 1 se houver registros do dia. Gerar relatório com PASS/FAIL por cenário."
+    sprint: sprint-07-acceptance
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/acceptance-report.md
+    validators:
+      - has_file: docs/acceptance-report.md
+      - command_succeeds: "grep -c 'FAIL' docs/acceptance-report.md | python -c \"import sys; sys.exit(0 if int(sys.stdin.read().strip()) == 0 else 1)\""
+    next: gate.acceptance
+
+  - id: gate.acceptance
+    type: gate
+    title: "Gate Acceptance"
+    description: "Verificação determinística: relatório de aceitação existe e não há FAILs."
+    sprint: sprint-07-acceptance
+    executor: python
+    validators:
+      - has_file: docs/acceptance-report.md
+    next: ft.e2e.01.browser
+
+  # ================================================================
+  # Sprint 08 — E2E
+  # ================================================================
+
+  - id: ft.e2e.01.browser
+    type: build
+    title: "E2E Browser — Configurar"
+    description: "Configurar Playwright e escrever testes E2E para os fluxos principais P0: criar registro, listar, editar e excluir em cada módulo. Testes rodam contra o servidor local."
+    sprint: sprint-08-e2e
+    executor: claude
+    env_setup:
+      - npx playwright install chromium --with-deps 2>/dev/null || true
+    outputs:
+      - tests/e2e/
+    validators:
+      - has_file: tests/e2e/
+    next: ft.e2e.02.screenshots
+
+  - id: ft.e2e.02.screenshots
+    type: build
+    title: "E2E Screenshots — Executar e Documentar"
+    description: "Rodar os testes E2E e capturar screenshots de cada fluxo. Gerar relatório com resultado por teste (PASS/FAIL) e paths dos screenshots."
+    sprint: sprint-08-e2e
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/screenshots/e2e/
+      - docs/e2e-report.md
+    validators:
+      - has_file: docs/e2e-report.md
+    next: gate.e2e
+
+  - id: gate.e2e
+    type: gate
+    title: "Gate E2E"
+    description: "Verificação determinística: relatório E2E existe e screenshots foram gerados."
+    sprint: sprint-08-e2e
+    executor: python
+    validators:
+      - has_file: docs/e2e-report.md
+      - has_file: docs/screenshots/e2e/
+    next: ft.final.01.visual_check
+
+  # ================================================================
+  # Sprint 09 — Final
+  # ================================================================
+
+  - id: ft.final.01.visual_check
+    type: build
+    title: "Verificação Visual Final"
+    description: "Comparar screenshots E2E com os critérios de docs/ui_criteria.md. Verificar que todas as telas P0 estão presentes, estados vazios funcionam, ícones são SVG, navegação está correta. Gerar relatório com PASS/FAIL por critério."
+    sprint: sprint-09-final
+    executor: claude
+    max_turns: 40
+    outputs:
+      - docs/visual-check-report.md
+    validators:
+      - has_file: docs/visual-check-report.md
+    next: gate.visual_check
+
+  - id: gate.visual_check
+    type: gate
+    title: "Gate Visual Check"
+    description: "Verificação determinística: relatório de visual check existe."
+    sprint: sprint-09-final
+    executor: python
+    validators:
+      - has_file: docs/visual-check-report.md
+    next: ft.final.02.stakeholder
+
+  - id: ft.final.02.stakeholder
+    type: human_gate
+    title: "Validação do Stakeholder"
+    description: "Abra a URL no browser, navegue por todas as telas e verifique se o produto está funcionando conforme o PRD. Teste o fluxo completo: criar, listar, editar e excluir em cada módulo. Se encontrar bugs ou desvios, rejeite descrevendo o problema."
+    sprint: sprint-09-final
+    executor: python
+    env_setup:
+      - bash process/scripts/serve.sh
+    outputs:
+      - docs/stakeholder-feedback.md
+    reject_next: ft.final.03.stakeholder_fix
+    next: ft.handoff.01.retro
+
+  - id: ft.final.03.stakeholder_fix
+    type: build
+    title: "Correção Stakeholder"
+    description: "Aplicar as correções solicitadas pelo stakeholder na validação. Focar nos problemas reportados sem expandir escopo."
+    sprint: sprint-09-final
+    executor: claude
+    max_turns: 60
+    next: ft.final.02.stakeholder
+
+  # ================================================================
+  # Sprint 10 — Handoff
+  # ================================================================
+
+  - id: ft.handoff.01.retro
+    type: retro
+    title: "Retro do Ciclo"
+    description: "Registrar os aprendizados do ciclo: o que funcionou, o que travou, quantas intervenções manuais foram necessárias e por quê. Este registro alimenta o processo do próximo ciclo."
+    sprint: sprint-10-handoff
+    executor: claude
+    outputs:
+      - docs/retro.md
+    validators:
+      - has_file: docs/retro.md
+    next: ft.handoff.02.prd_rewrite
+
+  - id: ft.handoff.02.prd_rewrite
+    type: document
+    title: "Reescrever PRD — Incorporar Aprendizados"
+    description: "Atualizar o PRD com os aprendizados do ciclo: dívidas técnicas identificadas, decisões tomadas (decision log), US entregues vs pendentes e ajustes na hipótese. Este PRD vira o seed do próximo ciclo."
+    sprint: sprint-10-handoff
+    executor: claude
+    outputs:
+      - docs/PRD.md
+    validators:
+      - has_file: docs/PRD.md
+    next: ft.handoff.03.critical_analysis
+
+  - id: ft.handoff.03.critical_analysis
+    type: document
+    title: "Análise Crítica — Sugestões do LLM"
+    description: "O LLM produz uma análise crítica honesta do produto entregue: o que está bom, o que está frágil, oportunidades de melhoria que o stakeholder pode não ter visto. Numeradas e priorizadas."
+    sprint: sprint-10-handoff
+    executor: claude
+    outputs:
+      - docs/critical-analysis.md
+    validators:
+      - has_file: docs/critical-analysis.md
+    next: ft.handoff.04.plano_voo
+
+  - id: ft.handoff.04.plano_voo
+    type: document
+    title: "Gerar Plano de Voo — Próximo Ciclo"
+    description: "Documentar o contexto para o próximo ciclo: estado atual do produto, US pendentes, dívidas técnicas P1/P2, sugestões da análise crítica escolhidas pelo stakeholder e qualquer contexto técnico necessário."
+    sprint: sprint-10-handoff
+    executor: claude
+    outputs:
+      - docs/plano_de_voo.md
+      - docs/handoff.md
+    validators:
+      - has_file: docs/plano_de_voo.md
+      - has_file: docs/handoff.md
+      - has_sections:
+          - O que foi entregue
+          - O que ficou pendente
+          - Dívidas Técnicas
+          - Próximo Ciclo
+    next: ft.handoff.gate
+
+  - id: ft.handoff.gate
+    type: human_gate
+    title: "Revisão do Handoff"
+    description: "Leia docs/handoff.md e docs/plano_de_voo.md. Confirme se o contexto para o próximo ciclo está completo e correto. Rejeite com ajustes se algo estiver faltando."
+    sprint: sprint-10-handoff
+    executor: python
+    outputs:
+      - docs/handoff.md
+      - docs/plano_de_voo.md
+    reject_next: ft.handoff.04.plano_voo
+    next: ft.explore
+
+  # ================================================================
+  # Exploração Livre (opcional)
+  # ================================================================
+
+  - id: ft.explore
+    type: exploration
+    title: "Exploração Livre"
+    description: "Espaço para pedidos livres ao LLM: experimentos, análises extras, ajustes pontuais ou qualquer coisa que não cabia no fluxo principal. Tudo fica registrado. Node opcional — use ft explore --skip para pular."
+    optional: true
+    next: ft.end
+
+  # ================================================================
+  # Fim
+  # ================================================================
+
+  - id: ft.end
+    type: end
+    title: "MVP Entregue"
+    description: "Ciclo concluído. Use ft close para fazer merge dos docs e encerrar o worktree."

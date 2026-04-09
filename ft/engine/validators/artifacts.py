@@ -90,17 +90,22 @@ def min_lines(path: str, n: int, project_root: str = ".") -> tuple[bool, str]:
     return False, f"min_lines FAIL: {path} tem {lines} linhas (min {n})"
 
 
-def has_sections(path: str, sections: list[str], project_root: str = ".") -> tuple[bool, str]:
-    """Verifica se arquivo contem as secoes esperadas."""
-    full = Path(project_root) / path
+def has_sections(path: str = "", sections: list[str] = None, project_root: str = ".", file: str = "") -> tuple[bool, str]:
+    """Verifica se arquivo contem as secoes esperadas.
+    Aceita 'path' ou 'file' como nome do argumento (aliases).
+    """
+    if sections is None:
+        sections = []
+    effective_path = file or path
+    full = Path(project_root) / effective_path
     if not full.exists():
-        return False, f"has_sections FAIL: {path} nao existe"
+        return False, f"has_sections FAIL: {effective_path} nao existe"
     content = full.read_text()
     norm_content = _normalize(content)
     missing = [s for s in sections if _normalize(s) not in norm_content]
     if not missing:
-        return True, f"has_sections: {path} tem todas as {len(sections)} secoes"
-    return False, f"has_sections FAIL: {path} faltam secoes: {missing}"
+        return True, f"has_sections: {effective_path} tem todas as {len(sections)} secoes"
+    return False, f"has_sections FAIL: {effective_path} faltam secoes: {missing}"
 
 
 def min_user_stories(path: str, n: int, project_root: str = ".") -> tuple[bool, str]:

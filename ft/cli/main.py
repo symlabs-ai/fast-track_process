@@ -670,7 +670,10 @@ def cmd_continue(args):
 
 def cmd_status(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
-    runner.status(full=args.full)
+    if getattr(args, "report", False):
+        runner.status_report()
+    else:
+        runner.status(full=args.full)
 
 
 def cmd_runs(args):
@@ -1590,6 +1593,7 @@ def main():
     st = sub.add_parser("status", help="Estado atual")
     add_llm_engine_flags(st)
     st.add_argument("--full", "-f", action="store_true", help="Mostrar grafo e artefatos")
+    st.add_argument("--report", "-r", action="store_true", help="Relatório de tempo e tokens por node")
 
     # runs — tabela comparativa de todos os ciclos
     ru2 = sub.add_parser("runs", help="Tabela comparativa de todos os ciclos em runs/")

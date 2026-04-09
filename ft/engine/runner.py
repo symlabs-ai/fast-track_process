@@ -1889,6 +1889,84 @@ class StepRunner:
                     exists = "✓" if path and Path(self.project_root, path).exists() else "✗"
                     print(f"    {exists} {name}: {path}")
 
+    def status_report(self):
+        """Relatório de tempo e tokens por node do ciclo atual."""
+        import json as _json
+        from datetime import datetime as _dt
+
+        logs_dir = self._llm_log_dir()
+        if not logs_dir.is_dir():
+            print(ui.warn("Nenhum log LLM encontrado para o ciclo atual"))
+            return
+
+        files = sorted(logs_dir.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
+        if not files:
+            print(ui.warn("Nenhum log LLM encontrado"))
+            return
+
+        rows = []
+        for f in files:
+            parts = f.stem.split("__")
+            if len(parts) < 3:
+                continue
+            ts_str, node_id, kind = parts[0], parts[1], parts[2]
+            try:
+                start = _dt.strptime(ts_str, "%Y%m%d-%H%M%S")
+            except ValueError:
+                continue
+            end = _dt.fromtimestamp(f.stat().st_mtime)
+            dur = max(0, int((end - start).total_seconds()))
+
+            input_tok = output_tok = turns = 0
+            for line in f.read_text().splitlines():
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    d = _json.loads(line)
+                except Exception:
+                    continue
+                turns += 1
+                usage = d.get("usage") or {}
+                if isinstance(usage, dict):
+                    input_tok += usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
+                    output_tok += usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+
+            rows.append((node_id, kind, dur, turns, input_tok, output_tok))
+
+        if not rows:
+            print(ui.warn("Logs vazios"))
+            return
+
+        state = self.state_mgr.load()
+        print(ui.header(f"Relatório — {state.process_id} / {state.llm_engine}"))
+        print()
+
+        col = 44
+        print(f"  {'Node':<{col}} {'Tempo':>7}  {'Turns':>5}  {'In tok':>9}  {'Out tok':>8}")
+        print(f"  {'-'*col} {'-'*7}  {'-'*5}  {'-'*9}  {'-'*8}")
+
+        total_dur = total_in = total_out = total_turns = 0
+        for node_id, kind, dur, turns, in_tok, out_tok in rows:
+            m, s = dur // 60, dur % 60
+            tag = f" [{kind}]" if kind != "run" else ""
+            label = f"{node_id}{tag}"
+            print(f"  {label:<{col}} {m:>3}m{s:02d}s  {turns:>5}  {in_tok:>9,}  {out_tok:>8,}")
+            total_dur += dur
+            total_in += in_tok
+            total_out += out_tok
+            total_turns += turns
+
+        print(f"  {'-'*col} {'-'*7}  {'-'*5}  {'-'*9}  {'-'*8}")
+        td_m, td_s = total_dur // 60, total_dur % 60
+        print(f"  {'TOTAL':<{col}} {td_m:>3}m{td_s:02d}s  {total_turns:>5}  {total_in:>9,}  {total_out:>8,}")
+        print()
+        steps_done = state.metrics.get("steps_completed", 0)
+        steps_total = state.metrics.get("steps_total", 0)
+        print(f"  Progresso : {steps_done}/{steps_total} nodes")
+        print(f"  Tempo wall: {td_m}m{td_s:02d}s  ({total_dur/3600:.1f}h)")
+        print(f"  Tokens    : {total_in:,} in  /  {total_out:,} out  /  {total_in+total_out:,} total")
+
     @staticmethod
     def _print_validation(v: ValidationResult):
         for item in v.items:

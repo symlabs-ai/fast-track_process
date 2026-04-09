@@ -33,12 +33,18 @@ def paths_clean(allowed: list[str], project_root: str = ".") -> tuple[bool, str]
         text=True,
     )
 
+    # Padrões gerados pelo engine — sempre excluídos da checagem
+    ENGINE_PATTERNS = ("_log.md",)
+
     modified = set(result.stdout.strip().splitlines())
     untracked = set(result_untracked.stdout.strip().splitlines())
     all_changed = modified | untracked
 
+    # Remover arquivos gerados pelo engine
+    all_changed = {f for f in all_changed if not any(f.endswith(p) for p in ENGINE_PATTERNS)}
+
     if not all_changed:
-        return True, "paths_clean: nenhuma modificação detectada"
+        return True, "paths_clean: nenhuma modificação detectada (ou apenas arquivos de engine)"
 
     violations = [
         f for f in sorted(all_changed)

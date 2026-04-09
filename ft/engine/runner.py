@@ -1841,7 +1841,7 @@ class StepRunner:
         review_output = ""
         for output_path in node.outputs:
             full = Path(self.project_root) / output_path
-            if full.exists():
+            if full.exists() and full.is_file():
                 review_output = full.read_text()
                 break
 

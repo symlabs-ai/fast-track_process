@@ -601,9 +601,16 @@ class StepRunner:
         return changed
 
     def _sync_process_meta(self, state: Any) -> None:
-        """Mantém process_id/version do estado alinhados ao grafo canônico carregado."""
+        """Mantém process_id/version do estado alinhados ao grafo canônico carregado.
+
+        Não sincroniza se o current_node do state não existe no grafo — indica YAML errado.
+        """
         expected_id = self.graph.meta.get("id", state.process_id)
         expected_version = self.graph.meta.get("version", state.version)
+        # Sanity check: se o state tem um node atual que não existe no grafo, o YAML
+        # carregado é o errado — não sobrescrever process_id
+        if state.current_node and state.current_node not in self.graph.nodes:
+            return
         if state.process_id != expected_id or state.version != expected_version:
             state.process_id = expected_id
             state.version = expected_version

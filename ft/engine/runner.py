@@ -1370,7 +1370,10 @@ class StepRunner:
         if artifacts:
             print(ui.dim("  Artefatos para revisar:"))
             for a in artifacts:
+                abs_path = Path(self.project_root) / a
                 print(ui.dim(f"    - {a}"))
+                if abs_path.exists():
+                    print(ui.dim(f"      {abs_path}"))
 
         # Mostrar URL se disponível
         serve_url_path = Path(self.project_root) / ".serve_url"
@@ -2071,6 +2074,22 @@ class StepRunner:
             pending_node = self.graph.nodes.get(state.pending_approval)
             if pending_node and pending_node.type == "human_gate":
                 print(ui.warn(f"HUMAN GATE PENDENTE: {state.pending_approval} — {pending_node.title}"))
+                if pending_node.description:
+                    print(ui.dim(f"  {pending_node.description}"))
+                # Artefatos do predecessor para revisar
+                pred_ids = self._predecessor_ids(pending_node.id)
+                artifacts_to_review: list[str] = []
+                for pred_id in pred_ids:
+                    pred = self.graph.nodes.get(pred_id)
+                    if pred and pred.outputs:
+                        artifacts_to_review.extend(pred.outputs)
+                if artifacts_to_review:
+                    print(ui.dim("  Revise antes de aprovar:"))
+                    for a in artifacts_to_review:
+                        abs_path = Path(self._work_dir) / a
+                        print(ui.dim(f"    - {a}"))
+                        if abs_path.exists():
+                            print(ui.dim(f"      {abs_path}"))
                 serve_url_file = Path(self._work_dir) / ".serve_url"
                 if serve_url_file.exists():
                     print(ui.info(f"URL: {serve_url_file.read_text().strip()}"))

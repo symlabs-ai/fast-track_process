@@ -228,24 +228,27 @@ def _stream_process_output(
             status = last_status[0]
             if log_path:
                 try:
-                    with open(log_path, "rb") as f:
-                        f.seek(0, 2)
-                        size = f.tell()
-                        f.seek(max(0, size - 1024))
-                        tail = f.read().decode("utf-8", errors="replace")
-                        # Filtrar linhas de cabeçalho, separadores e muito curtas
-                        def _useful(l: str) -> bool:
-                            s = l.strip()
-                            if not s or len(s) < 5:
-                                return False
-                            if s.startswith("#") or s.startswith("---") or s.startswith("==="):
-                                return False
-                            if s.startswith("```") or s == "DONE" or s.startswith("> "):
-                                return False
-                            return True
-                        lines = [l.strip() for l in tail.splitlines() if _useful(l)]
-                        if lines:
-                            status = lines[-1][:120]
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    # Ler apenas o que vem após "## Output" — ignora o prompt
+                    output_marker = "## Output"
+                    idx = content.rfind(output_marker)
+                    if idx != -1:
+                        output_section = content[idx + len(output_marker):]
+                    else:
+                        output_section = content[-1024:]
+                    def _useful(l: str) -> bool:
+                        s = l.strip()
+                        if not s or len(s) < 8:
+                            return False
+                        if s.startswith("#") or s.startswith("---") or s.startswith("==="):
+                            return False
+                        if s.startswith("```") or s in ("DONE", "BLOCKED"):
+                            return False
+                        return True
+                    lines = [l.strip() for l in output_section.splitlines() if _useful(l)]
+                    if lines:
+                        status = lines[-1][:120]
                 except Exception:
                     pass
             msg = f"  ⟳ [{ts}] {status} ({elapsed}s)"

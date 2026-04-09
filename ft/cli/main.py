@@ -1118,6 +1118,32 @@ def cmd_lint_process(args):
     sys.exit(1 if has_errors else 0)
 
 
+def cmd_retry(args):
+    """Reseta o estado blocked do node atual e retenta sem aplicar correção."""
+    from ft.engine import ui as _ui
+
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
+                        llm_model=resolve_llm_model(args),
+                        verbose=getattr(args, "verbose", False))
+
+    state = runner.state_mgr.load()
+    if state.node_status != "blocked":
+        print(_ui.warn(f"Node atual não está bloqueado (status: {state.node_status})"))
+        return
+
+    node_id = state.current_node
+    print(_ui.info(f"Retentando node: {node_id}"))
+
+    # Limpar estado bloqueado e reset do contador de auto-fix
+    state.node_status = "ready"
+    state.blocked_reason = None
+    runner.state_mgr.save()
+    runner._auto_fix_counts.pop(node_id, None)
+
+    mode = "mvp" if getattr(args, "mvp", False) else "step"
+    runner.run(mode=mode)
+
+
 def cmd_fix(args):
     """Injeta instrução de correção e retoma o ciclo (on_fail) ou delega ao LLM (blocked)."""
     from ft.engine import ui as _ui
@@ -1815,6 +1841,11 @@ def main():
     ex.add_argument("--finish", action="store_true", help="Encerrar exploração e gerar relatório")
     ex.add_argument("--skip", action="store_true", help="Pular o node de exploração sem gerar relatório")
 
+    # retry
+    rt = sub.add_parser("retry", help="Retenta o node atual bloqueado sem aplicar correção")
+    add_llm_engine_flags(rt)
+    rt.add_argument("--mvp", action="store_true", help="Continuar em modo MVP após retry")
+
     # fix
     fx = sub.add_parser("fix", help="Corrigir problema e desbloquear o ciclo")
     add_llm_engine_flags(fx)
@@ -1880,6 +1911,8 @@ def main():
             cmd_lint_process(args)
         elif args.command == "explore":
             cmd_explore(args)
+        elif args.command == "retry":
+            cmd_retry(args)
         elif args.command == "fix":
             cmd_fix(args)
         elif args.command == "close":

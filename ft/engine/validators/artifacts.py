@@ -527,3 +527,32 @@ def bash_passes(script: str, project_root: str = ".") -> tuple[bool, str]:
     output = (result.stdout + result.stderr).strip()
     preview = "\n".join(output.splitlines()[-5:]) if output else "(sem saída)"
     return False, f"bash_passes FAIL: {script} saiu com código {result.returncode}\n{preview}"
+
+
+def command_succeeds(command: str, project_root: str = ".") -> tuple[bool, str]:
+    """Executa um comando shell e verifica se sai com código 0.
+
+    Diferente de bash_passes, recebe um comando direto (string) em vez de um
+    path para script. O comando é executado com shell=True no project_root.
+    """
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"command_succeeds FAIL: comando excedeu 120s: {command[:60]}"
+    except Exception as e:
+        return False, f"command_succeeds FAIL: erro ao executar: {e}"
+
+    if result.returncode == 0:
+        last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
+        return True, f"command_succeeds: {command[:60]} → {last_line}"
+
+    output = (result.stdout + result.stderr).strip()
+    preview = "\n".join(output.splitlines()[-5:]) if output else "(sem saída)"
+    return False, f"command_succeeds FAIL: saiu com código {result.returncode}\n{preview}"

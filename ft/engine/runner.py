@@ -140,6 +140,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "gate_ui_vscode_layout": gates.gate_ui_vscode_layout,
     "read_artifact": val.read_artifact,
     "bash_passes": val.bash_passes,
+    "command_succeeds": val.command_succeeds,
     "paths_clean": cp_val.paths_clean,
     # Test validators (Phase 3)
     "coverage_per_file": test_val.coverage_per_file,

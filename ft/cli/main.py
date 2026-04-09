@@ -197,15 +197,19 @@ def find_process_yaml(root: Path) -> Path | None:
 
 
 def _is_cycle_dir(d: Path) -> bool:
-    """Verifica se é um diretório de ciclo: 'cycle-NN', 'cycle-NN-engine' ou legado 'NN'."""
+    """Verifica se é um diretório de ciclo válido.
+
+    Aceita qualquer diretório dentro de ~/.ft/worktrees/<project>/
+    que contenha um state/ ou que siga o padrão legado 'NN' / 'cycle-NN[-...]'.
+    """
     name = d.name
     if name.isdigit():
         return True
     if name.startswith("cycle-"):
-        # Aceita cycle-NN e cycle-NN-engine
-        rest = name[6:]  # "01" ou "01-claude"
-        num_part = rest.split("-")[0]
-        return num_part.isdigit()
+        return True
+    # Nomes livres (ex: cycle-03-claude, my-feature) — aceitar se tiver state/
+    if (d / "state" / "engine_state.yml").exists():
+        return True
     return False
 
 
@@ -529,8 +533,10 @@ def _engine_from_last_cycle(project_root: Path) -> str | None:
 def _setup_worktree(project_root: Path, name: str) -> Path:
     """Cria um git worktree para rodar um ciclo em isolamento total.
 
-    Cria: ~/.ft/worktrees/<project>/cycle-NN-<name>
-    Branch: cycle-NN-<name>
+    Cria: ~/.ft/worktrees/<project>/<name>
+    Branch: <name>
+
+    O nome é usado exatamente como passado — sem prefixo automático.
 
     Retorna o path do worktree criado.
     """
@@ -555,25 +561,18 @@ def _setup_worktree(project_root: Path, name: str) -> Path:
             "Repositório sem commits — faça um commit inicial antes de usar --worktree"
         )
 
-    # Número do ciclo: o maior entre worktrees externos, runs/ locais e branches git
-    next_num = _next_cycle_num(project_root)
+    branch_name = name
+    worktree_dir = _worktrees_home(project_root) / branch_name
 
-    # Verificar branches git existentes para evitar conflito
+    # Verificar conflito de branch/diretório
+    if worktree_dir.exists():
+        raise RuntimeError(f"Worktree já existe: {worktree_dir}\nEscolha outro nome ou remova o existente.")
     branches_result = _sp.run(
-        ["git", "branch", "--list", "cycle-*"],
+        ["git", "branch", "--list", branch_name],
         cwd=project_root, capture_output=True, text=True,
     )
-    for line in branches_result.stdout.splitlines():
-        branch = line.strip().lstrip("*+ ")
-        if branch.startswith("cycle-"):
-            parts = branch.split("-")
-            if len(parts) >= 2 and parts[1].isdigit():
-                existing_num = int(parts[1])
-                if existing_num >= next_num:
-                    next_num = existing_num + 1
-
-    branch_name = f"cycle-{next_num:02d}-{name}"
-    worktree_dir = _worktrees_home(project_root) / branch_name
+    if branches_result.stdout.strip():
+        raise RuntimeError(f"Branch '{branch_name}' já existe. Escolha outro nome ou delete a branch.")
 
     # Criar worktree
     result = _sp.run(

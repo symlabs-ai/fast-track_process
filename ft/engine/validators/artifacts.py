@@ -480,8 +480,12 @@ def guidelines_review_passed(
         return True, "guidelines_review_passed: veredicto APPROVED"
 
     if "iterate" in content:
-        # Extrair itens com ❌
         lines = path.read_text(errors="ignore").splitlines()
+        # Priorizar linha MOTIVO: se existir
+        motivo_lines = [l.split("MOTIVO:", 1)[1].strip() for l in lines if l.strip().upper().startswith("MOTIVO:")]
+        if motivo_lines:
+            return False, f"guidelines_review_passed FAIL: ITERATE — {motivo_lines[0]}"
+        # Fallback: itens com ❌
         fails = [l.strip() for l in lines if "❌" in l][:5]
         detail = "; ".join(fails) if fails else "ver guidelines-review.md"
         return False, f"guidelines_review_passed FAIL: ITERATE — {detail}"

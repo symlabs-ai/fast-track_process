@@ -1765,7 +1765,7 @@ class StepRunner:
 
         if not validation.passed:
             if validation.retryable:
-                print(f"  REVIEW: validadores falharam, retentando...")
+                print(f"  REVIEW: validadores falharam — {validation.feedback or 'sem detalhes'} — retentando...")
                 retry_log_path = self._start_llm_log(state, node.id, "review-retry")
                 self.state_mgr.save()
                 try:

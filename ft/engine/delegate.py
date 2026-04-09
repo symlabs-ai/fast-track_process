@@ -208,17 +208,49 @@ def _stream_process_output(
 ) -> str:
     """Consome stdout/stderr combinado do subprocesso, gravando em arquivo e espelhando no terminal."""
     import shutil as _shutil
+    import threading
+    import select
     chunks: list[str] = []
     stream = proc.stdout
     assert stream is not None
 
     ctx: dict = {}
     term_width = _shutil.get_terminal_size((80, 20)).columns - 4
+    last_status: list[str] = ["aguardando LLM..."]
+    start_time = time.time()
+
+    def _print_heartbeat():
+        """Imprime heartbeat a cada 10s lendo a última linha do log."""
+        while proc.poll() is None:
+            elapsed = int(time.time() - start_time)
+            ts = time.strftime("%H:%M:%S")
+            # Lê última linha não-vazia do log em tempo real
+            status = last_status[0]
+            if log_path:
+                try:
+                    with open(log_path, "rb") as f:
+                        f.seek(0, 2)
+                        size = f.tell()
+                        f.seek(max(0, size - 512))
+                        tail = f.read().decode("utf-8", errors="replace")
+                        lines = [l.strip() for l in tail.splitlines() if l.strip()]
+                        if lines:
+                            status = lines[-1][:100]
+                except Exception:
+                    pass
+            msg = f"  ⟳ [{ts}] {status} ({elapsed}s)"
+            print(f"\r{msg:<{term_width + 16}}", end="", flush=True)
+            time.sleep(10)
 
     log_file = None
+    heartbeat = None
     try:
         if log_path:
             log_file = Path(log_path).open("a", encoding="utf-8")
+
+        if not stream_prefix:
+            heartbeat = threading.Thread(target=_print_heartbeat, daemon=True)
+            heartbeat.start()
 
         for line in iter(stream.readline, ""):
             chunks.append(line)
@@ -228,6 +260,10 @@ def _stream_process_output(
             if stream_prefix:
                 print(f"  {stream_prefix} {_format_stream_line(llm_engine, line)}")
             else:
+                # Atualiza last_status com qualquer linha não-vazia do LLM
+                stripped = line.strip()
+                if stripped:
+                    last_status[0] = stripped[:120]
                 status = _live_status(llm_engine, line, ctx)
                 if status:
                     ts = time.strftime("%H:%M:%S")

@@ -1063,6 +1063,7 @@ class StepRunner:
             print(ui.step_card(
                 step_num, step_total, node.title,
                 node_id, node.type, node.executor, node.sprint,
+                description=node.description,
             ))
 
             self._mark_node_start(node_id)
@@ -1358,8 +1359,28 @@ class StepRunner:
             self._run_env_setup(node)
 
         print(ui.warn(f"HUMAN GATE — requer aprovação humana: {node.title}"))
-        print(ui.dim("  → Revise os artefatos e execute: ft approve [\"mensagem\"]"))
-        print(ui.dim("  → Para rejeitar: ft reject \"motivo\""))
+
+        # Mostrar outputs do nó predecessor para o usuário saber o que revisar
+        predecessor_ids = self._predecessor_ids(node.id)
+        artifacts: list[str] = []
+        for pred_id in predecessor_ids:
+            pred_node = self.graph.nodes.get(pred_id)
+            if pred_node and pred_node.outputs:
+                artifacts.extend(pred_node.outputs)
+        if artifacts:
+            print(ui.dim("  Artefatos para revisar:"))
+            for a in artifacts:
+                print(ui.dim(f"    - {a}"))
+
+        # Mostrar URL se disponível
+        serve_url_path = Path(self.project_root) / ".serve_url"
+        if serve_url_path.exists():
+            url = serve_url_path.read_text().strip()
+            if url:
+                print(ui.info(f"  URL: {url}"))
+
+        print(ui.dim("  → ft approve        para aprovar"))
+        print(ui.dim("  → ft reject \"motivo\" para rejeitar"))
         self.state_mgr.set_pending_approval(node.id)
 
     def _run_auto_fix(self, node: Node, blocked_reason: str) -> bool:

@@ -42,6 +42,8 @@ class Node:
     no_pre_seed: bool = False
     # Nó de destino quando human_gate é rejeitado (override do predecessor padrão)
     reject_next: str | None = None
+    # Descrição amigável exibida ao usuário quando o step inicia
+    description: str | None = None
 
 
 class ProcessGraph:

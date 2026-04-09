@@ -61,7 +61,8 @@ def header(text: str) -> str:
 
 def step_card(step_num: int | str, step_total: int | str, title: str,
               node_id: str, node_type: str, executor: str,
-              sprint: str | None = None) -> str:
+              sprint: str | None = None,
+              description: str | None = None) -> str:
     """Card visual para cada step."""
     w = 54
     top = f"{'┌' + '─' * (w - 2) + '┐'}"
@@ -83,9 +84,12 @@ def step_card(step_num: int | str, step_total: int | str, title: str,
         "refactor": BLUE,
     }.get(node_type, WHITE)
 
+    desc_line = f"  {DIM}{description}{RESET}\n" if description else ""
+
     return (
         f"\n{DIM}{top}{RESET}\n"
         f"  {BOLD_WHITE}{progress}{RESET} {BOLD}{title}{RESET}\n"
+        f"{desc_line}"
         f"  {type_color}{node_type}{RESET} | {DIM}{executor}{RESET} | {DIM}{node_id}{sprint_str}{RESET}\n"
         f"{DIM}{bot}{RESET}"
     )

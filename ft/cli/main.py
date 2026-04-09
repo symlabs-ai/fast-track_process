@@ -135,7 +135,7 @@ def find_process_yaml(root: Path) -> Path | None:
         state_globs.extend((root / "runs").glob("*/state/engine_state.yml"))
         state_globs.extend((root / "runs").glob("*/runs/*/state/engine_state.yml"))
 
-    for state_path in state_globs:
+    for state_path in sorted(state_globs, key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             with open(state_path) as _f:
                 _st = _yaml.safe_load(_f)

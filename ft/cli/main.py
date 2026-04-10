@@ -1267,6 +1267,89 @@ def cmd_fix(args):
         print(_ui.fail(f"LLM não conseguiu aplicar: {result.output[:300]}"))
 
 
+def cmd_abort(args):
+    """Aborta o ciclo: descarta worktree e branch sem merge nenhum."""
+    import subprocess as _sp
+    from ft.engine import ui as _ui
+
+    root = find_project_root()
+    work = Path(root)
+    git_file = work / ".git"
+
+    # Verificar se estamos num worktree
+    if not git_file.exists() or git_file.is_dir():
+        print(_ui.fail("Não está numa worktree — nada para abortar."))
+        print(_ui.dim("Use ft cancel para cancelar um run no repo principal."))
+        return
+
+    gitdir_line = git_file.read_text().strip()
+    if not gitdir_line.startswith("gitdir:"):
+        print(_ui.fail("Formato .git inválido — não é worktree."))
+        return
+
+    gitdir = Path(gitdir_line.split(":", 1)[1].strip())
+    original_root = gitdir.parent.parent.parent
+
+    branch = _sp.run(
+        ["git", "branch", "--show-current"],
+        cwd=work, capture_output=True, text=True,
+    ).stdout.strip()
+
+    # Confirmação
+    print()
+    print(_ui.warn(f"ABORT: vai descartar TUDO do ciclo em {work.name}"))
+    print(_ui.dim(f"  Worktree: {work}"))
+    print(_ui.dim(f"  Branch:   {branch}"))
+    print(_ui.dim(f"  Nenhum merge será feito — todo código será perdido."))
+    print()
+    confirm = input("Confirma? [s/N]: ").strip().lower()
+    if confirm not in ("s", "sim", "y", "yes"):
+        print(_ui.dim("Abortado pelo usuário."))
+        return
+
+    # Matar servidores que possam estar rodando
+    for pid_file in (".serve_backend.pid", ".serve_frontend.pid", ".serve.pid"):
+        pf = work / pid_file
+        if pf.exists():
+            try:
+                pid = int(pf.read_text().strip())
+                os.kill(pid, 15)
+            except (ValueError, ProcessLookupError, OSError):
+                pass
+
+    # Remover worktree
+    result = _sp.run(
+        ["git", "worktree", "remove", str(work), "--force"],
+        cwd=original_root, capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(_ui.success(f"Worktree removido: {work.name}"))
+    else:
+        print(_ui.fail(f"Erro ao remover worktree: {result.stderr.strip()[:200]}"))
+        return
+
+    # Remover branch
+    if branch:
+        result = _sp.run(
+            ["git", "branch", "-D", branch],
+            cwd=original_root, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print(_ui.success(f"Branch removida: {branch}"))
+
+    # Limpar diretório em ~/.ft/worktrees se existir
+    ft_worktrees = Path.home() / ".ft" / "worktrees"
+    if ft_worktrees.exists():
+        for project_dir in ft_worktrees.iterdir():
+            wt_dir = project_dir / work.name
+            if wt_dir.exists():
+                import shutil
+                shutil.rmtree(wt_dir, ignore_errors=True)
+                print(_ui.dim(f"  Limpou {wt_dir}"))
+
+    print(_ui.success("Ciclo abortado. Nenhum merge realizado."))
+
+
 def cmd_cancel(args):
     """Cancela o run ativo com justificativa."""
     import yaml as _yaml
@@ -1925,6 +2008,10 @@ def main():
     cl.add_argument("--merge-paths", dest="merge_paths",
                      help="Paths para merge selective (separados por espaço, entre aspas)")
 
+    # abort
+    ab = sub.add_parser("abort", help="Abortar ciclo: descarta worktree e branch sem merge")
+    add_llm_engine_flags(ab)
+
     # cancel
     ca = sub.add_parser("cancel", help="Cancelar o run ativo com justificativa")
     add_llm_engine_flags(ca)
@@ -1982,6 +2069,8 @@ def main():
             cmd_fix(args)
         elif args.command == "close":
             cmd_close(args)
+        elif args.command == "abort":
+            cmd_abort(args)
         elif args.command == "cancel":
             cmd_cancel(args)
         elif args.command == "setup-env":

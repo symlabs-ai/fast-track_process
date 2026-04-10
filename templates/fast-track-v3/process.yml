@@ -288,7 +288,7 @@ nodes:
     outputs:
       - project/tests/
     validators:
-      - has_file: tests/
+      - has_file: project/tests/
     next: ft.tdd.02.green
 
   - id: ft.tdd.02.green
@@ -301,7 +301,7 @@ nodes:
     outputs:
       - project/backend/
     validators:
-      - command_succeeds: "cd project/backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -x -q 2>&1 | tail -5"
     next: ft.tdd.03.refactor
 
   - id: ft.tdd.03.refactor
@@ -311,7 +311,7 @@ nodes:
     sprint: sprint-04-tdd
     executor: claude
     validators:
-      - command_succeeds: "cd project/backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -x -q 2>&1 | tail -5"
     next: gate.tdd
 
   - id: gate.tdd
@@ -321,7 +321,7 @@ nodes:
     sprint: sprint-04-tdd
     executor: python
     validators:
-      - command_succeeds: "cd project/backend && python -m pytest tests/ -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -q 2>&1 | tail -5"
     next: ft.delivery.01.entrypoint
 
   # ================================================================
@@ -368,7 +368,7 @@ nodes:
     validators:
       - has_file: project/Makefile
       - has_file: project/backend/main.py
-      - command_succeeds: "cd project/backend && python -m pytest tests/ -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -q 2>&1 | tail -5"
     next: ft.smoke.01.run
 
   # ================================================================
@@ -382,7 +382,7 @@ nodes:
     sprint: sprint-06-smoke
     executor: claude
     env_setup:
-      - cd project/backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+      - cd project && python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 &
       - sleep 3
     outputs:
       - docs/smoke-report.md

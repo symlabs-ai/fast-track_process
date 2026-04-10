@@ -1313,7 +1313,9 @@ class StepRunner:
 
         # env_setup: comandos determinísticos antes da delegação (não consome turns)
         if node.env_setup:
-            self._run_env_setup(node)
+            if not self._run_env_setup(node):
+                self.state_mgr.block(f"env_setup falhou no node {node.id}")
+                return
 
         print(ui.info(f"Delegando ao LLM ({node.executor})..."))
         state.node_status = "delegated"
@@ -1432,14 +1434,17 @@ class StepRunner:
             return
 
         # env_setup no human_gate: sobe servidor etc. antes de pausar para o stakeholder
+        env_ok = True
         if node.env_setup:
-            self._run_env_setup(node)
+            env_ok = self._run_env_setup(node)
 
-        # Mostrar URL se disponível
-        serve_url_path = Path(self.project_root) / ".serve_url"
+        # Mostrar URL se disponível (ler mesmo se env_setup falhou — pode ter sido escrito antes)
+        serve_url_path = Path(self._work_dir) / ".serve_url"
         url: str | None = None
         if serve_url_path.exists():
             url = serve_url_path.read_text().strip() or None
+        if not url and not env_ok:
+            print(ui.warn("env_setup falhou e .serve_url não encontrado — servidor pode não estar rodando"))
 
         gate_work_dir = str(self.state_mgr.path.parent.parent)
         is_worktree = ".ft/worktrees" in gate_work_dir
@@ -1702,11 +1707,11 @@ class StepRunner:
         self._fire_hooks("on_gate_pass")
         print(ui.gate_pass(next_id))
 
-    def _run_env_setup(self, node: Node) -> None:
+    def _run_env_setup(self, node: Node) -> bool:
         """Executa comandos de env_setup antes da delegação ao LLM.
 
         Comandos rodam no work_dir (run dir no modo isolated).
-        Se qualquer comando falhar, bloqueia o node.
+        Se qualquer comando falhar, loga o erro e retorna False.
         """
         print(ui.info(f"env_setup: {len(node.env_setup)} comando(s)"))
         for cmd in node.env_setup:
@@ -1734,12 +1739,12 @@ class StepRunner:
                 err = stderr.strip() or stdout.strip()
                 print(ui.fail(f"env_setup falhou: {cmd}"))
                 print(f"    {err[:300]}")
-                self.state_mgr.block(f"env_setup falhou: {cmd}\n{err[:500]}")
-                return
+                return False
             if stdout.strip():
                 last_line = stdout.strip().splitlines()[-1]
                 print(f"    → {last_line[:120]}")
         print(ui.info("env_setup concluído"))
+        return True
 
     def _maybe_auto_commit(self, node: Node):
         """Auto-commit apos PASS em nodes de build/test_green/refactor."""

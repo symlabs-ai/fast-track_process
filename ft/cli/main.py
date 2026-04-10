@@ -712,7 +712,7 @@ def cmd_continue(args):
     if state.current_node is None:
         runner.init_state()
 
-    mode = "mvp" if args.mvp else ("sprint" if args.sprint else "step")
+    mode = "mvp" if args.auto else ("sprint" if args.sprint else "step")
     runner.run(mode=mode)
 
 
@@ -1201,7 +1201,7 @@ def cmd_retry(args):
     runner.state_mgr.save()
     runner._auto_fix_counts.pop(node_id, None)
 
-    mode = "mvp" if getattr(args, "mvp", False) else "step"
+    mode = "mvp" if getattr(args, "auto", False) else "step"
     runner.run(mode=mode)
 
 
@@ -1216,7 +1216,7 @@ def cmd_fix(args):
 
     # Modo 1: pending_fix (on_fail event) — injeta instrução e volta ao goto
     if runner.apply_fix(instruction):
-        mode = "mvp" if getattr(args, "mvp", False) else "step"
+        mode = "mvp" if getattr(args, "auto", False) else "step"
         runner.run(mode=mode)
         return
 
@@ -1259,7 +1259,7 @@ def cmd_fix(args):
             state.last_approval_message = instruction
             runner.state_mgr.save()
             print(_ui.info("Estado desbloqueado — continuando..."))
-            mode = "mvp" if getattr(args, "mvp", False) else "step"
+            mode = "mvp" if getattr(args, "auto", False) else "step"
             runner.run(mode=mode)
         else:
             print(_ui.info("Para continuar o processo: ft continue --mvp"))
@@ -1939,7 +1939,7 @@ def main():
     add_llm_engine_flags(cont)
     cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
     cont.add_argument("--sprint", action="store_true", help="Avancar ate fim da sprint")
-    cont.add_argument("--mvp", action="store_true", help="Avancar ate MVP (modo autonomo)")
+    cont.add_argument("--auto", action="store_true", help="Avancar ate MVP (modo autonomo)")
     cont.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
                       help="Pular human_gates automaticamente (LLM decide)")
     cont.add_argument("--cycle", help="Ciclo específico a retomar (ex: cycle-07)")
@@ -1988,13 +1988,13 @@ def main():
     # retry
     rt = sub.add_parser("retry", help="Retenta o node atual bloqueado sem aplicar correção")
     add_llm_engine_flags(rt)
-    rt.add_argument("--mvp", action="store_true", help="Continuar em modo MVP após retry")
+    rt.add_argument("--auto", action="store_true", help="Continuar em modo MVP após retry")
 
     # fix
     fx = sub.add_parser("fix", help="Corrigir problema e desbloquear o ciclo")
     add_llm_engine_flags(fx)
     fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
-    fx.add_argument("--mvp", action="store_true", help="Continuar em modo MVP após correção")
+    fx.add_argument("--auto", action="store_true", help="Continuar em modo MVP após correção")
 
     # close
     cl = sub.add_parser("close", help="Encerrar ciclo: merge artefatos, remover worktree")

@@ -1898,7 +1898,7 @@ class StepRunner:
         # Veredicto deterministico via parse do relatorio
         output_upper = review_output.upper()
         if "REJECTED" in output_upper:
-            # Extrair motivos
+            # Extrair motivos da rejeição para contexto
             lines = [l.strip() for l in review_output.splitlines() if l.strip()]
             reason_lines = []
             capture = False
@@ -1907,11 +1907,69 @@ class StepRunner:
                     capture = True
                 if capture:
                     reason_lines.append(line)
-                    if len(reason_lines) >= 5:
+                    if len(reason_lines) >= 10:
                         break
-            reason = " | ".join(reason_lines[:3])
-            self.state_mgr.block(f"Expert Review REJECTED: {reason[:300]}")
-            print(f"  REVIEW REJECTED — verificar: {node.outputs[0] if node.outputs else ''}")
+            reason = "\n".join(reason_lines)
+            print(ui.fail(f"REVIEW REJECTED"))
+            print(ui.dim(f"  Motivo: {reason[:300]}"))
+
+            # Se tem on_fail com goto, delegar correção ao LLM com contexto completo
+            if node.on_fail and node.on_fail.get("goto"):
+                goto_id = node.on_fail["goto"]
+                goto_node = self.graph.get_node(goto_id)
+                if goto_node and goto_node.executor.startswith("llm"):
+                    print(ui.info(f"Delegando correção ao LLM ({goto_id}) com contexto da rejeição..."))
+
+                    original_prompt = build_task_prompt(goto_node, {})
+                    fix_prompt = (
+                        f"{original_prompt}\n\n"
+                        f"─── CONTEXTO: REVIEW REJEITOU O RESULTADO ANTERIOR ───\n"
+                        f"O expert review encontrou os seguintes problemas:\n\n"
+                        f"{reason}\n\n"
+                        f"Relatório completo em: {node.outputs[0] if node.outputs else 'N/A'}\n\n"
+                        f"Corrija TODOS os problemas listados acima. "
+                        f"Quando terminar, diga DONE."
+                    )
+
+                    allowed = self._resolve_allowed_paths(goto_node)
+                    fix_log = self._start_llm_log(state, goto_id, "review-fix")
+                    self.state_mgr.save()
+
+                    try:
+                        fix_result = delegate_to_llm(
+                            task=fix_prompt,
+                            project_root=self._work_dir,
+                            allowed_paths=self._delegate_allowed_paths(allowed),
+                            llm_engine=self._resolve_llm_engine(state, node=goto_node),
+                            llm_model=self._resolve_llm_model(state, node=goto_node),
+                            log_path=fix_log,
+                            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=goto_node)),
+                        )
+                    finally:
+                        self._clear_active_llm_log(state)
+                    state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
+
+                    if fix_result.success:
+                        # Validar o goto_node
+                        fix_validation = run_validators(goto_node, self.project_root,
+                                                        state_dir=str(self.state_mgr.path.parent),
+                                                        work_dir=self._run_dir)
+                        self._print_validation(fix_validation)
+                        if fix_validation.passed:
+                            print(ui.success("Correção aplicada — re-executando review"))
+                            # Re-rodar o review (recursão controlada — 1 nível)
+                            self._run_review(node)
+                            return
+
+                    # Fix falhou — bloqueia com contexto
+                    self.state_mgr.block(
+                        f"Review REJECTED e auto-fix falhou.\n"
+                        f"Motivo da rejeição:\n{reason[:500]}"
+                    )
+                    return
+
+            # Sem on_fail — bloqueia com o motivo
+            self.state_mgr.block(f"Expert Review REJECTED:\n{reason[:500]}")
             return
 
         # APPROVED ou APPROVED WITH NOTES

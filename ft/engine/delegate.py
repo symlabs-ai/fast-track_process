@@ -509,6 +509,15 @@ REGRAS:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Chamar executor em modo nao-interativo, com streaming para arquivo.
+    # Remover Node/npm/npx do PATH para forçar stack Python puro.
+    import os as _os
+    _env = dict(_os.environ)
+    _clean_paths = [
+        p for p in _env.get("PATH", "").split(":")
+        if not any(seg in p for seg in ("nvm", "node_modules/.bin", "/npm", "nodejs"))
+    ]
+    _env["PATH"] = ":".join(_clean_paths)
+
     proc = subprocess.Popen(
         cmd,
         cwd=project_root,
@@ -516,6 +525,7 @@ REGRAS:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=_env,
     )
     output_holder: dict[str, str] = {"output": ""}
     reader = threading.Thread(

@@ -1731,7 +1731,7 @@ def cmd_run(args):
         llm_model=llm_model,
         verbose=getattr(args, "verbose", False),
     )
-    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False)
+    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False) or getattr(args, "auto", False)
 
     # Provisionar ambiente SymGateway (se SYM_GATEWAY_PROJECT_KEY estiver definida)
     import os as _os
@@ -2041,6 +2041,8 @@ def main():
     ru.add_argument("--worktree", metavar="NAME", nargs="?", const=True,
                     help="Rodar em git worktree isolado (cycle-NN-NAME). "
                          "NAME opcional: default = engine LLM ou 'run'")
+    ru.add_argument("--auto", action="store_true",
+                    help="Avançar em modo autônomo até MVP (pula human_gates)")
 
     args = parser.parse_args()
 

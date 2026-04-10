@@ -2279,6 +2279,32 @@ class StepRunner:
                     state.node_status = "awaiting_approval"
                     state.pending_approval = node_id
                     self.state_mgr.save()
+
+                    # Resumo pós-fix: o que o LLM fez
+                    print()
+                    print(ui.header("Correção aplicada"))
+                    # Extrair últimas linhas significativas do output
+                    summary_lines = [
+                        l.strip() for l in (result.output or "").splitlines()
+                        if l.strip() and not l.strip().startswith(("[", "⟳", "#"))
+                    ][-5:]
+                    if summary_lines:
+                        for sl in summary_lines:
+                            print(f"  {sl[:120]}")
+
+                    # Mostrar URL se disponível
+                    serve_url_path = Path(self._work_dir) / ".serve_url"
+                    if serve_url_path.exists():
+                        fix_url = serve_url_path.read_text().strip()
+                        if fix_url:
+                            print(f"\n  {ui.BOLD_CYAN}URL: {fix_url}{ui.RESET}")
+
+                    # Arquivos modificados pelo LLM
+                    changed = result.files_modified or []
+                    if changed:
+                        print(f"\n  Arquivos modificados: {', '.join(changed[:5])}")
+
+                    print()
                     print(ui.awaiting_approval(auto=self._auto_approve))
                     return
             # Se retry falhou, bloquear

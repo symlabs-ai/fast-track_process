@@ -2276,14 +2276,11 @@ class StepRunner:
                     state.completed_nodes.append(retry_node.id)
                     state.metrics["steps_completed"] = state.metrics.get("steps_completed", 0) + 1
                     state.current_node = node_id
-                    state.node_status = "awaiting_approval"
-                    state.pending_approval = node_id
                     self.state_mgr.save()
 
                     # Resumo pós-fix: o que o LLM fez
                     print()
                     print(ui.header("Correção aplicada"))
-                    # Extrair últimas linhas significativas do output
                     summary_lines = [
                         l.strip() for l in (result.output or "").splitlines()
                         if l.strip() and not l.strip().startswith(("[", "⟳", "#"))
@@ -2291,21 +2288,13 @@ class StepRunner:
                     if summary_lines:
                         for sl in summary_lines:
                             print(f"  {sl[:120]}")
-
-                    # Mostrar URL se disponível
-                    serve_url_path = Path(self._work_dir) / ".serve_url"
-                    if serve_url_path.exists():
-                        fix_url = serve_url_path.read_text().strip()
-                        if fix_url:
-                            print(f"\n  {ui.BOLD_CYAN}URL: {fix_url}{ui.RESET}")
-
-                    # Arquivos modificados pelo LLM
                     changed = result.files_modified or []
                     if changed:
-                        print(f"\n  Arquivos modificados: {', '.join(changed[:5])}")
-
+                        print(f"  Arquivos modificados: {', '.join(changed[:5])}")
                     print()
-                    print(ui.awaiting_approval(auto=self._auto_approve))
+
+                    # Rodar env_setup do human_gate (sobe servidor) e mostrar card com URL
+                    self._run_human_gate(node)
                     return
             # Se retry falhou, bloquear
             self.state_mgr.block(f"Retry apos rejeicao falhou: {reason}")

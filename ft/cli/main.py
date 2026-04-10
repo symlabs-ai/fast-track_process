@@ -705,7 +705,7 @@ def cmd_continue(args):
     import sys
     sys.stdout.reconfigure(line_buffering=True)
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
-    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False)
+    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False) or getattr(args, "auto", False)
 
     # Inicializar estado se nao existe
     state = runner.state_mgr.load()

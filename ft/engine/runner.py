@@ -1125,6 +1125,11 @@ class StepRunner:
             # Exploration — sandbox livre do stakeholder
             if node.type == "exploration":
                 self._run_exploration(node)
+                if mode == "mvp":
+                    self.explore_skip()
+                    self._log_activity(node_id, node.title, "exploration", "BYPASSED",
+                                       "exploração pulada (modo mvp/auto)", sprint=node_sprint)
+                    continue
                 state = self.state_mgr.load()
                 if state.node_status == "exploring":
                     break

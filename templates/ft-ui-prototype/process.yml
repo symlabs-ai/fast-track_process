@@ -8,13 +8,7 @@ id: ft_ui_prototype
 version: "3.0.0"
 title: "FT UI Prototype — Validação Visual"
 
-# Protótipo: código é descartável, só docs sobrevivem ao ciclo
-merge_on_end:
-  - docs/PRD.md
-  - docs/handoff.md
-  - docs/critical-analysis.md
-  - docs/tech_stack.md
-  - docs/ui_guidelines.md
+# Protótipo: código é descartável, ft close pergunta estratégia de merge
 
 nodes:
   # ================================================================
@@ -383,7 +377,7 @@ nodes:
     validators:
       - file_exists: .build_ok
       - paths_clean:
-          allowed: [docs/, frontend/, state/, .build_ok, .serve_url, .serve.pid]
+          allowed: [docs/, project/, state/, .build_ok, .serve_url, .serve.pid]
     next: ui.proto.04.screenshots
 
   # ================================================================
@@ -518,7 +512,7 @@ nodes:
       - file_exists: .build_ok
       - guidelines_review_passed: true
       - paths_clean:
-          allowed: [docs/, frontend/, state/, .build_ok, .serve_url, .serve.pid]
+          allowed: [docs/, project/, state/, .build_ok, .serve_url, .serve.pid]
     next: ui.smoke.01.run
 
   # ================================================================
@@ -557,7 +551,7 @@ nodes:
     validators:
       - file_exists: docs/smoke-report.md
       - paths_clean:
-          allowed: [docs/, frontend/, state/, .build_ok, .serve_url, .serve.pid]
+          allowed: [docs/, project/, state/, .build_ok, .serve_url, .serve.pid]
     next: ui.e2e.01.build
 
   - id: ui.e2e.01.build
@@ -659,7 +653,7 @@ nodes:
           sections:
             - Veredicto
       - paths_clean:
-          allowed: [docs/, frontend/, tests/, state/, .build_ok, .serve_url, .serve.pid]
+          allowed: [docs/, project/, state/, .build_ok, .serve_url, .serve.pid]
     next: ui.final.01.visual_check
 
   # ================================================================
@@ -714,7 +708,7 @@ nodes:
           sections:
             - Veredicto
       - paths_clean:
-          allowed: [docs/, frontend/, tests/, state/, .build_ok, .serve_url, .serve.pid]
+          allowed: [docs/, project/, state/, .build_ok, .serve_url, .serve.pid]
     next: ui.final.00.plano_check
 
   - id: ui.final.00.plano_check

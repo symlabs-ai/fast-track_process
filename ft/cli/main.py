@@ -862,8 +862,51 @@ def cmd_explore(args):
         runner.explore_request(request)
 
 
+def _prompt_merge_strategy(work: Path) -> tuple[str, list[str] | None]:
+    """Prompt interativo para escolher estratégia de merge no ft close."""
+    from ft.engine import ui as _ui
+
+    # Listar pastas disponíveis no worktree
+    available = sorted(
+        p.name + ("/" if p.is_dir() else "")
+        for p in work.iterdir()
+        if not p.name.startswith(".") and p.name != "state"
+    )
+
+    print()
+    print(_ui.header("Como deseja fazer o merge?"))
+    print()
+    print("  [1] Full      — merge completo (código + docs + processo)")
+    print("  [2] Docs only — apenas docs/ e process/")
+    print("  [3] Selective — escolher pastas específicas")
+    print("  [4] None      — não mergear nada (descartar tudo)")
+    print()
+
+    choice = input("Escolha [1/2/3/4] (default: 1): ").strip() or "1"
+
+    if choice == "1":
+        return "full", None
+    elif choice == "2":
+        return "docs", None
+    elif choice == "3":
+        print()
+        print(f"  Pastas disponíveis: {' '.join(available)}")
+        print()
+        raw = input("Quais paths mergear? (separados por espaço): ").strip()
+        if not raw:
+            print(_ui.warn("Nenhum path informado — cancelando merge"))
+            return "none", None
+        paths = raw.split()
+        return "selective", paths
+    elif choice == "4":
+        return "none", None
+    else:
+        print(_ui.warn(f"Opção inválida: {choice} — usando full"))
+        return "full", None
+
+
 def cmd_close(args):
-    """Encerra o ciclo ativo: merge_on_end + remove worktree + limpa branch."""
+    """Encerra o ciclo ativo: merge interativo + remove worktree + limpa branch."""
     import subprocess as _sp
     from ft.engine import ui as _ui
 
@@ -877,28 +920,46 @@ def cmd_close(args):
         print(_ui.warn("Use --force para encerrar mesmo assim, ou ft approve/continue para finalizar"))
         return
 
-    # 1. Executar merge_on_end
-    runner._merge_on_end()
+    # 1. Determinar estratégia de merge
+    merge_strategy = getattr(args, "merge", None)
+    merge_paths = None
+
+    if merge_strategy == "selective":
+        raw_paths = getattr(args, "merge_paths", None)
+        if raw_paths:
+            merge_paths = raw_paths.split()
+        else:
+            merge_strategy = None  # Forçar prompt
+
+    work = Path(runner.project_root)
+
+    if merge_strategy:
+        # Via CLI flags (não-interativo)
+        runner.merge_on_close(merge_strategy, merge_paths)
+    else:
+        # Prompt interativo
+        wt = runner._detect_worktree()
+        if wt:
+            strategy, paths = _prompt_merge_strategy(work)
+            runner.merge_on_close(strategy, paths)
+        # Se não é worktree, nada a mergear
 
     # 2. Descobrir se estamos num worktree
-    work = Path(runner.project_root)
     git_file = work / ".git"
     is_worktree = git_file.exists() and git_file.is_file()
 
     if is_worktree and not getattr(args, "keep_worktree", False):
-        # Ler repo original
         gitdir_line = git_file.read_text().strip()
         if gitdir_line.startswith("gitdir:"):
             gitdir = Path(gitdir_line.split(":", 1)[1].strip())
             original_root = gitdir.parent.parent.parent
 
-            # Branch do worktree
             branch = _sp.run(
                 ["git", "branch", "--show-current"],
                 cwd=work, capture_output=True, text=True,
             ).stdout.strip()
 
-            # 3. Remover worktree
+            # Remover worktree
             result = _sp.run(
                 ["git", "worktree", "remove", str(work), "--force"],
                 cwd=original_root, capture_output=True, text=True,
@@ -908,7 +969,7 @@ def cmd_close(args):
             else:
                 print(_ui.warn(f"Worktree não removido: {result.stderr.strip()[:200]}"))
 
-            # 4. Remover branch
+            # Remover branch
             if branch:
                 result = _sp.run(
                     ["git", "branch", "-D", branch],
@@ -1859,6 +1920,10 @@ def main():
                      help="Preservar o worktree no disco (não remover)")
     cl.add_argument("--force", action="store_true",
                      help="Encerrar mesmo se o ciclo não terminou")
+    cl.add_argument("--merge", choices=["full", "docs", "selective", "none"],
+                     help="Estratégia de merge (sem prompt interativo)")
+    cl.add_argument("--merge-paths", dest="merge_paths",
+                     help="Paths para merge selective (separados por espaço, entre aspas)")
 
     # cancel
     ca = sub.add_parser("cancel", help="Cancelar o run ativo com justificativa")

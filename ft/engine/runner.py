@@ -723,7 +723,7 @@ class StepRunner:
         if allowed:
             return allowed
 
-        return ["src/", "tests/", "docs/"]
+        return ["project/", "docs/"]
 
     def _start_llm_log(self, state: Any, node_id: str, phase: str) -> str:
         """Registra no estado o log ativo para a delegação corrente."""
@@ -796,74 +796,78 @@ class StepRunner:
                 if snapshot.exists():
                     snapshot.unlink()
 
-    def _merge_on_end(self) -> None:
-        """Merge artefatos do worktree de volta para o repo original conforme merge_on_end.
+    def _detect_worktree(self) -> tuple[Path, Path, str] | None:
+        """Detecta se estamos num worktree e retorna (work, original_root, branch) ou None."""
+        import subprocess as _sp
 
-        Valores aceitos no YAML do processo:
-          merge_on_end: none       → nada (default)
-          merge_on_end: full       → git merge da branch
-          merge_on_end: docs       → copia docs/ inteiro
-          merge_on_end:            → lista de paths (arquivos ou diretórios)
-            - docs/PRD.md
-            - docs/plano_de_voo.md
-            - kb/
+        work = Path(self.project_root)
+        git_file = work / ".git"
+        if not git_file.exists() or git_file.is_dir():
+            return None
+
+        gitdir_line = git_file.read_text().strip()
+        if not gitdir_line.startswith("gitdir:"):
+            return None
+
+        gitdir = Path(gitdir_line.split(":", 1)[1].strip())
+        original_root = gitdir.parent.parent.parent
+        if not (original_root / ".git").is_dir():
+            return None
+
+        branch = _sp.run(
+            ["git", "branch", "--show-current"],
+            cwd=work, capture_output=True, text=True,
+        ).stdout.strip()
+
+        return work, original_root, branch
+
+    def merge_on_close(self, strategy: str, paths: list[str] | None = None) -> None:
+        """Merge artefatos do worktree de volta para o repo original.
+
+        strategy:
+          "full"      → git merge da branch inteira
+          "docs"      → copia apenas docs/ e process/
+          "selective"  → copia apenas os paths informados
+          "none"      → nada
+        paths: lista de paths para modo selective (ex: ["docs/", "project/backend/"])
         """
         import shutil as _shutil
         import subprocess as _sp
 
-        spec = self.graph.meta.get("merge_on_end", "none")
-        if spec == "none" or not spec:
+        if strategy == "none":
             return
 
-        # Descobrir repo original a partir do worktree
-        work = Path(self.project_root)
-        git_file = work / ".git"
-        if not git_file.exists() or git_file.is_dir():
-            # Não é worktree (é o repo principal ou não-git) — nada a fazer
+        wt = self._detect_worktree()
+        if not wt:
             return
+        work, original_root, branch = wt
 
-        # .git é um arquivo em worktrees: "gitdir: /path/to/.git/worktrees/<name>"
-        gitdir_line = git_file.read_text().strip()
-        if not gitdir_line.startswith("gitdir:"):
-            return
-        # Navegar: .git/worktrees/<name> → .git → repo root
-        gitdir = Path(gitdir_line.split(":", 1)[1].strip())
-        original_root = gitdir.parent.parent.parent  # .git/worktrees/<name> → .git → repo
-        if not (original_root / ".git").is_dir():
-            print(ui.warn(f"merge_on_end: não encontrou repo original em {original_root}"))
-            return
-
-        if spec == "full":
-            # Git merge da branch no repo original
-            branch = _sp.run(
-                ["git", "branch", "--show-current"],
-                cwd=work, capture_output=True, text=True,
-            ).stdout.strip()
+        if strategy == "full":
             if branch:
                 result = _sp.run(
                     ["git", "merge", branch, "--no-edit"],
                     cwd=original_root, capture_output=True, text=True,
                 )
                 if result.returncode == 0:
-                    print(ui.success(f"merge_on_end: branch {branch} mergida em {original_root.name}"))
+                    print(ui.success(f"Merge: branch {branch} mergida em {original_root.name}"))
                 else:
-                    print(ui.fail(f"merge_on_end: falha no merge — {result.stderr.strip()[:200]}"))
+                    print(ui.fail(f"Merge: falha — {result.stderr.strip()[:200]}"))
             return
 
         # Resolver lista de paths a copiar
-        if isinstance(spec, str):
-            # Preset: "docs" → ["docs/"]
-            paths = [f"{spec}/"]
-        elif isinstance(spec, list):
-            paths = spec
+        if strategy == "docs":
+            copy_paths = ["docs/", "process/"]
+        elif strategy == "selective" and paths:
+            copy_paths = paths
         else:
             return
 
         count = 0
-        for p in paths:
+        for p in copy_paths:
             src = work / p
             dst = original_root / p
             if not src.exists():
+                print(ui.dim(f"  Skip: {p} (não existe)"))
                 continue
             if src.is_dir():
                 dst.mkdir(parents=True, exist_ok=True)
@@ -875,7 +879,18 @@ class StepRunner:
                 count += 1
 
         if count:
-            print(ui.success(f"merge_on_end: {count} item(ns) copiado(s) para {original_root.name}/"))
+            print(ui.success(f"Merge: {count} item(ns) copiado(s) para {original_root.name}/"))
+
+    # Compatibilidade: alias para código legado que ainda chama _merge_on_end
+    def _merge_on_end(self) -> None:
+        spec = self.graph.meta.get("merge_on_end", "none")
+        if spec == "full":
+            self.merge_on_close("full")
+        elif isinstance(spec, list):
+            self.merge_on_close("selective", spec)
+        elif isinstance(spec, str) and spec not in ("none", ""):
+            self.merge_on_close("selective", [f"{spec}/"])
+        # Se não tem merge_on_end, nada a fazer (ft close vai perguntar)
 
     def _handle_on_fail(self, node: "Node", feedback: str) -> None:
         """Processa o evento on_fail de um node. Pausa para ft fix ou bloqueia."""

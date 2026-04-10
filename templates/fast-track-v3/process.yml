@@ -1,13 +1,18 @@
 # Fast Track V3 — Processo Completo de MVP
 # Incorpora aprendizados dos ciclos SM1-SM13 e ft-studio ciclos 1-5.
 # Uso: ft run . --template fast-track-v3 [--claude|--codex|--gemini]
+#
+# Estrutura de diretórios:
+#   docs/     — documentação (PRD, handoff, tech_stack, etc.)
+#   process/  — orquestração (process.yml, scripts/, environment.yml)
+#   project/  — todo código-fonte (frontend/, backend/, tests/, Makefile, etc.)
+#
+# REGRA: todo código vai dentro de project/. Nunca criar frontend/, backend/
+#        ou tests/ na raiz. A raiz é reservada para docs/ e process/.
 
 id: fast_track_v3
 version: "1.0.0"
 title: "Fast Track V3 — MVP Completo"
-
-# MVP completo: código + docs sobrevivem ao ciclo
-merge_on_end: full
 
 nodes:
 
@@ -205,15 +210,15 @@ nodes:
   - id: ft.frontend.01.scaffold
     type: build
     title: "Scaffold Frontend"
-    description: "Criar a estrutura base do frontend: framework, roteamento, componentes de layout, navegação principal e configuração de PWA com manifest mínimo (name, icons, display: standalone)."
+    description: "Criar a estrutura base do frontend dentro de project/frontend/: framework, roteamento, componentes de layout, navegação principal. Todo código vai em project/ — nunca na raiz."
     sprint: sprint-03-frontend
     executor: claude
     outputs:
-      - frontend/
+      - project/frontend/
       - .build_ok
     validators:
-      - has_file: frontend/package.json
-      - command_succeeds: "cd frontend && npm install --silent && npm run build --silent"
+      - has_file: project/frontend/package.json
+      - command_succeeds: "cd project/frontend && npm install --silent && npm run build --silent"
     next: ft.frontend.02.implement
 
   - id: ft.frontend.02.implement
@@ -223,9 +228,9 @@ nodes:
     sprint: sprint-03-frontend
     executor: claude
     outputs:
-      - frontend/src/
+      - project/frontend/src/
     validators:
-      - command_succeeds: "cd frontend && npm run build --silent"
+      - command_succeeds: "cd project/frontend && npm run build --silent"
     next: ft.frontend.03.prd_review
 
   - id: ft.frontend.03.prd_review
@@ -236,7 +241,7 @@ nodes:
     executor: claude
     max_turns: 40
     validators:
-      - command_succeeds: "cd frontend && npm run build --silent"
+      - command_succeeds: "cd project/frontend && npm run build --silent"
     on_fail:
       human_gate: "Revisão PRD encontrou não-conformidades no frontend. Corrija antes de continuar."
       goto: ft.frontend.02.implement
@@ -267,7 +272,7 @@ nodes:
     executor: python
     validators:
       - has_file: docs/screenshot-review.md
-      - command_succeeds: "cd frontend && npm run build --silent"
+      - command_succeeds: "cd project/frontend && npm run build --silent"
     next: ft.tdd.01.red
 
   # ================================================================
@@ -281,7 +286,7 @@ nodes:
     sprint: sprint-04-tdd
     executor: claude
     outputs:
-      - tests/
+      - project/tests/
     validators:
       - has_file: tests/
     next: ft.tdd.02.green
@@ -289,14 +294,14 @@ nodes:
   - id: ft.tdd.02.green
     type: test_green
     title: "Green — Implementar Backend"
-    description: "Implementar o backend (API + banco) para fazer os testes passarem. Seguir estritamente o contrato de docs/api_contract.md. Entry point em backend/app/main.py. /health sem prefixo /api."
+    description: "Implementar o backend (API + banco) para fazer os testes passarem. Seguir estritamente o contrato de docs/api_contract.md. Entry point em project/backend/main.py. /health sem prefixo /api. Todo código vai em project/ — nunca na raiz."
     sprint: sprint-04-tdd
     executor: claude
     max_turns: 80
     outputs:
-      - backend/
+      - project/backend/
     validators:
-      - command_succeeds: "cd backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
+      - command_succeeds: "cd project/backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
     next: ft.tdd.03.refactor
 
   - id: ft.tdd.03.refactor
@@ -306,7 +311,7 @@ nodes:
     sprint: sprint-04-tdd
     executor: claude
     validators:
-      - command_succeeds: "cd backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
+      - command_succeeds: "cd project/backend && python -m pytest tests/ -x -q 2>&1 | tail -5"
     next: gate.tdd
 
   - id: gate.tdd
@@ -316,7 +321,7 @@ nodes:
     sprint: sprint-04-tdd
     executor: python
     validators:
-      - command_succeeds: "cd backend && python -m pytest tests/ -q 2>&1 | tail -5"
+      - command_succeeds: "cd project/backend && python -m pytest tests/ -q 2>&1 | tail -5"
     next: ft.delivery.01.entrypoint
 
   # ================================================================
@@ -330,7 +335,7 @@ nodes:
     sprint: sprint-05-delivery
     executor: claude
     validators:
-      - has_file: backend/app/main.py
+      - has_file: project/backend/main.py
     next: ft.delivery.02.self_review
 
   - id: ft.delivery.02.self_review
@@ -348,9 +353,9 @@ nodes:
     sprint: sprint-05-delivery
     executor: claude
     outputs:
-      - Makefile
+      - project/Makefile
     validators:
-      - has_file: Makefile
+      - has_file: project/Makefile
       - command_succeeds: "make --dry-run dev 2>&1 | head -3"
     next: gate.delivery
 
@@ -361,9 +366,9 @@ nodes:
     sprint: sprint-05-delivery
     executor: python
     validators:
-      - has_file: Makefile
-      - has_file: backend/app/main.py
-      - command_succeeds: "cd backend && python -m pytest tests/ -q 2>&1 | tail -5"
+      - has_file: project/Makefile
+      - has_file: project/backend/main.py
+      - command_succeeds: "cd project/backend && python -m pytest tests/ -q 2>&1 | tail -5"
     next: ft.smoke.01.run
 
   # ================================================================
@@ -377,7 +382,7 @@ nodes:
     sprint: sprint-06-smoke
     executor: claude
     env_setup:
-      - cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+      - cd project/backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 &
       - sleep 3
     outputs:
       - docs/smoke-report.md
@@ -435,11 +440,11 @@ nodes:
     sprint: sprint-08-e2e
     executor: claude
     env_setup:
-      - npx playwright install chromium --with-deps 2>/dev/null || true
+      - pip install -q pytest-playwright && playwright install chromium --with-deps 2>/dev/null || true
     outputs:
-      - tests/e2e/
+      - project/tests/e2e/
     validators:
-      - has_file: tests/e2e/
+      - has_file: project/tests/e2e/
     next: ft.e2e.02.screenshots
 
   - id: ft.e2e.02.screenshots
@@ -605,4 +610,4 @@ nodes:
   - id: ft.end
     type: end
     title: "MVP Entregue"
-    description: "Ciclo concluído. Use ft close para fazer merge dos docs e encerrar o worktree."
+    description: "Ciclo concluído. Use ft close para escolher o tipo de merge (full, docs only, selective) e encerrar o worktree."

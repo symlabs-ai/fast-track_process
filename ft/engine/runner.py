@@ -422,6 +422,7 @@ class StepRunner:
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
         self._auto_fix_counts: dict[str, int] = {}          # node_id → auto-fix attempts
+        self._auto_fix_prev_error: dict[str, str] = {}     # node_id → último erro (detecção de loop)
 
     def _stream_prefix(self, engine: str | None = None) -> str | None:
         """Retorna stream_prefix se verbose, None caso contrário."""
@@ -1145,17 +1146,26 @@ class StepRunner:
             print(ui.step_pass(next_id))
             return
 
-        # Retry
+        # Retry — com detecção de erro idêntico para early-BLOCKED
         if validation.retryable:
+            previous_feedback = validation.feedback or ""
             for retry in range(1, self._max_node_retries + 1):
+                current_feedback = validation.feedback or "validação falhou"
                 print(ui.retry(retry, self._max_node_retries))
-                print(ui.info(f"Corrigindo automaticamente: {validation.feedback or 'validação falhou'}"))
+                print(ui.info(f"Corrigindo automaticamente: {current_feedback}"))
+
+                # Se o erro é idêntico ao da tentativa anterior, parar cedo
+                if retry > 1 and current_feedback == previous_feedback:
+                    print(ui.fail("Erro idêntico ao da tentativa anterior — bloqueio estrutural detectado"))
+                    break
+
+                previous_feedback = current_feedback
                 retry_log_path = self._start_llm_log(state, node.id, f"retry-{retry}")
                 self.state_mgr.save()
                 try:
                     result = delegate_with_feedback(
                         original_task=task_prompt,
-                        feedback=validation.feedback or "",
+                        feedback=current_feedback,
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=self._resolve_llm_engine(state, node=node),
@@ -1209,14 +1219,34 @@ class StepRunner:
 
         Delega ao LLM o motivo do bloqueio para que ele corrija os artefatos.
         Retorna True se os validators passarem após a correção.
+        Detecta erro idêntico ao anterior e faz early-BLOCKED.
         """
+        fix_count = self._auto_fix_counts.get(node.id, 0)
+
+        # Detectar erro idêntico ao anterior — bloqueio estrutural
+        prev_reason = self._auto_fix_prev_error.get(node.id)
+        if prev_reason and prev_reason == blocked_reason:
+            print(ui.fail("Auto-fix: erro idêntico ao da tentativa anterior — bloqueio estrutural"))
+            return False
+        self._auto_fix_prev_error[node.id] = blocked_reason
+
         state = self.state_mgr.load()
-        print(ui.info(f"Auto-fix: aplicando correção automática (tentativa {self._auto_fix_counts.get(node.id, 0) + 1}/{self._max_auto_fix})"))
+        print(ui.info(f"Auto-fix: aplicando correção automática (tentativa {fix_count + 1}/{self._max_auto_fix})"))
         print(ui.dim(f"  Motivo: {blocked_reason[:200]}"))
+
+        # Incluir histórico de erros para evitar que o LLM repita a mesma abordagem
+        history_block = ""
+        if fix_count > 0 and prev_reason:
+            history_block = (
+                f"\n\nTENTATIVA ANTERIOR QUE NÃO RESOLVEU:\n"
+                f"  - {prev_reason[:300]}\n"
+                f"\nNÃO repita a mesma abordagem. Tente algo diferente.\n"
+            )
 
         prompt = (
             f"O processo travou no node '{node.id}' ({node.title}).\n\n"
             f"ERRO:\n{blocked_reason}\n\n"
+            f"{history_block}"
             f"Analise o erro, identifique a causa raiz e corrija os arquivos necessários. "
             f"Não altere arquivos de estado ou de processo. "
             f"Quando terminar, diga DONE."

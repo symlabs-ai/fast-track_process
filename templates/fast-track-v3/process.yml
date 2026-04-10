@@ -6,14 +6,8 @@ id: fast_track_v3
 version: "1.0.0"
 title: "Fast Track V3 — MVP Completo"
 
-merge_on_end:
-  - docs/PRD.md
-  - docs/handoff.md
-  - docs/critical-analysis.md
-  - docs/tech_stack.md
-  - docs/api_contract.md
-  - docs/test_data.md
-  - docs/plano_de_voo.md
+# MVP completo: código + docs sobrevivem ao ciclo
+merge_on_end: full
 
 nodes:
 

@@ -1,0 +1,963 @@
+# FT UI Prototype — Processo genérico para validação de interface gráfica
+# Sem TDD, sem backend, sem delivery refactor.
+# Foco: demanda → scaffold → build → screenshots → guidelines review → E2E → stakeholder.
+# Toda especificidade do projeto vive em docs/ e process/scripts/.
+# Uso: ft run . --process process/FT_UI_PROTOTYPE.yml [--codex|--gemini|--claude]
+
+id: ft_ui_prototype
+version: "3.0.0"
+title: "FT UI Prototype — Validação Visual"
+
+# Protótipo: código é descartável, só docs sobrevivem ao ciclo
+merge_on_end:
+  - docs/PRD.md
+  - docs/handoff.md
+  - docs/critical-analysis.md
+  - docs/tech_stack.md
+  - docs/ui_guidelines.md
+
+nodes:
+  # ================================================================
+  # Fase 0: Onboarding — continuação com handoff ou ciclo novo?
+  # ================================================================
+
+  - id: ui.start
+    type: decision
+    title: "Handoff ou Novo Ciclo?"
+    description: "Verificando se existe um ciclo anterior para retomar ou se é um projeto novo."
+    condition: "file_exists:docs/handoff.md"
+    branches:
+      "true": ui.onboard.01.plano_draft
+      "false": ui.route
+    next: ui.route
+
+  - id: ui.onboard.01.plano_draft
+    type: document
+    title: "Redigir Plano de Voo — A partir do Handoff"
+    description: "O LLM lê o handoff do ciclo anterior e propõe as US e metas para este ciclo."
+    executor: llm_coach
+    sprint: sprint-00-onboard
+    max_turns: 10
+    no_pre_seed: true
+    outputs:
+      - docs/plano_de_voo.md
+    prompt: |
+      Leia docs/handoff.md do ciclo anterior e redija o Plano de Voo para este ciclo.
+
+      CONTEXTO CRÍTICO — LEIA ANTES DE QUALQUER COISA:
+      Este é um processo de PROTOTIPAGEM DESCARTÁVEL.
+      - O código do ciclo anterior foi DESCARTADO. O worktree atual está vazio de código.
+      - Cada ciclo reimplementa o PRD completo do zero — não há herança de código.
+      - "US implementadas" no handoff significa que já foram validadas em ciclos anteriores,
+        portanto já sabemos que são viáveis — mas precisam ser reimplementadas neste ciclo.
+      - O handoff serve para melhorar o PRD e acumular aprendizados, NÃO para reduzir escopo.
+
+      PASSO 1 — Leia docs/handoff.md integralmente.
+      PASSO 2 — Leia docs/PRD.md completo — TODAS as US devem ser implementadas neste ciclo.
+      PASSO 3 — Escreva docs/plano_de_voo.md com a estrutura OBRIGATÓRIA:
+
+        # Plano de Voo — [nome do projeto] — Ciclo [N]
+
+        ## Contexto
+        O que foi aprendido no ciclo anterior (2-3 linhas). Não liste o que foi implementado —
+        liste o que foi MELHORADO no processo e o que deve ser diferente neste ciclo.
+
+        ## User Stories do PRD
+        TODAS as US do PRD.md, numeradas. Este ciclo implementa tudo do zero.
+        Destaque as US que têm melhorias ou correções vindas do handoff (ex: "US-04 + fix #2 do handoff").
+
+        ## Melhorias do Handoff
+        Lista numerada dos itens do "Feedback do stakeholder" e "Sugestões para o próximo ciclo"
+        do handoff.md que devem ser incorporados neste ciclo além das US base.
+
+        ## Itens Críticos
+        Lista de 3-7 itens concretos e verificáveis que DEVEM estar presentes
+        antes de apresentar ao stakeholder. Priorize bugs recorrentes e itens ignorados em ciclos anteriores.
+
+        ## Atenção para o Próximo Agente
+
+        ### Ambiente
+        (copiar do handoff: porta, ferramentas, build, servidor)
+
+        ### Código
+        (copiar do handoff: estrutura, convenções, armadilhas — o agente parte do zero)
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/plano_de_voo.md
+      - min_lines: 30
+      - has_sections:
+          - Contexto
+          - User Stories Críticas do PRD
+          - Itens Críticos
+          - Atenção para o Próximo Agente
+    next: ui.onboard.plano_gate
+
+  - id: ui.onboard.plano_gate
+    type: human_gate
+    title: "Plano de Voo — Aprovação do Stakeholder"
+    description: "Revise o plano de voo em docs/plano_de_voo.md e aprove ou ajuste antes do ciclo começar."
+    sprint: sprint-00-onboard
+    prompt: |
+      O LLM redigiu o Plano de Voo para este ciclo em docs/plano_de_voo.md.
+
+        1. Revise docs/plano_de_voo.md — ajuste as US e Itens Críticos se necessário
+        2. Quando o plano estiver aprovado: ft approve
+        3. Para rejeitar e pedir revisão: ft reject "motivo"
+    next: ui.route
+
+  # ================================================================
+  # Fase 0b: Roteamento — seed pronto ou demanda bruta?
+  # ================================================================
+
+  - id: ui.route
+    type: decision
+    title: "Seed ou Demanda?"
+    description: "Verificando se o PRD já existe ou se a demanda precisa ser capturada do zero."
+    condition: "file_exists:docs/PRD.md"
+    branches:
+      "true": ui.proto.01.scaffold
+      "false": ui.demand.01.capture
+    next: ui.proto.01.scaffold
+
+  # ================================================================
+  # Caminho A: Demanda bruta → hipótese → PRD
+  # ================================================================
+
+  - id: ui.demand.01.capture
+    type: discovery
+    title: "Capturar Demanda"
+    description: "O LLM entende a demanda bruta e formula a hipótese do produto."
+    executor: llm_coach
+    sprint: sprint-01-discovery
+    outputs:
+      - docs/hipotese.md
+    prompt: |
+      Capture a demanda do stakeholder e produza a hipótese do produto.
+
+      Se existir docs/demanda.md, leia-o como input.
+      Caso contrário, use o contexto disponível no diretório do projeto.
+
+      Escreva docs/hipotese.md com:
+        # Hipótese
+        ## Problema
+        ## Oportunidade
+
+      Ao final diga DONE.
+    requires_approval: true
+    validators:
+      - file_exists: docs/hipotese.md
+      - min_lines: 8
+      - has_sections:
+          - Problema
+          - Oportunidade
+    next: ui.demand.02.prd
+
+  - id: ui.demand.02.prd
+    type: document
+    title: "Gerar PRD"
+    description: "O LLM transforma a hipótese em Product Requirements Document com user stories."
+    executor: llm_coach
+    sprint: sprint-01-discovery
+    outputs:
+      - docs/PRD.md
+    prompt: |
+      Com base na hipótese em docs/hipotese.md, produza o PRD do produto.
+
+      Se existir docs/ui_guidelines.md, leia para entender o escopo visual.
+
+      Escreva docs/PRD.md com:
+        ## Hipotese
+        ## Visao
+        ## User Stories
+        (cada US no formato ### US-NN — Título)
+        ## Fora de Escopo
+
+      Ao final diga DONE.
+    requires_approval: true
+    validators:
+      - file_exists: docs/PRD.md
+      - min_lines: 20
+      - has_sections:
+          - User Stories
+      - min_user_stories: 3
+    next: ui.demand.03.stack
+
+  - id: ui.demand.03.stack
+    type: document
+    title: "Propor Tech Stack"
+    description: "O LLM escolhe as tecnologias e estrutura do projeto com base no PRD."
+    executor: llm_coder
+    sprint: sprint-01-discovery
+    outputs:
+      - docs/tech_stack.md
+    prompt: |
+      Com base no PRD em docs/PRD.md, proponha o tech stack.
+
+      Se existir docs/tech_stack.md, use como referência.
+
+      Escreva docs/tech_stack.md com as decisões técnicas.
+      Inclua a linha: interface_type: ui
+
+      Ao final diga DONE.
+    requires_approval: true
+    validators:
+      - file_exists: docs/tech_stack.md
+      - min_lines: 8
+      - has_sections:
+          - interface_type
+    next: gate.discovery
+
+  - id: gate.discovery
+    type: gate
+    title: "Gate — Discovery"
+    description: "Verificando se hipótese, PRD e tech stack estão completos antes de construir."
+    executor: python
+    sprint: sprint-01-discovery
+    validators:
+      - file_exists: docs/hipotese.md
+      - file_exists: docs/PRD.md
+      - file_exists: docs/tech_stack.md
+      - demand_coverage:
+          prd_path: docs/PRD.md
+          demand_path: docs/demanda.md
+      - paths_clean:
+          allowed: [docs/, state/]
+    next: ui.proto.01.scaffold
+
+  # ================================================================
+  # Caminho B: Seed pronto → importar
+  # ================================================================
+
+  - id: ui.seed.01.hipotese
+    type: discovery
+    title: "Importar Hipótese do Seed"
+    description: "Extraindo a hipótese do PRD existente para iniciar o ciclo."
+    executor: llm_coach
+    sprint: sprint-01-seed
+    outputs:
+      - docs/hipotese.md
+    prompt: |
+      O PRD já existe em docs/PRD.md. Não faça discovery.
+
+      PASSO 1 — Leia docs/PRD.md
+      PASSO 2 — Extraia as seções ## Hipotese e ## Visao (ou equivalentes)
+      PASSO 3 — Escreva docs/hipotese.md com:
+
+        # Hipótese
+        ## Problema
+        ## Oportunidade
+
+      Cópia fiel do seed. Não invente conteúdo.
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/hipotese.md
+      - min_lines: 8
+    next: ui.seed.02.prd
+
+  - id: ui.seed.02.prd
+    type: document
+    title: "Importar PRD do Seed"
+    description: "Confirmando que o PRD está presente e íntegro no ciclo."
+    executor: llm_coach
+    sprint: sprint-01-seed
+    outputs:
+      - docs/PRD.md
+    prompt: |
+      Copie docs/PRD.md → docs/PRD.md, preservando 100% do conteúdo.
+      Não modifique, resuma ou reescreva. Cópia fiel.
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/PRD.md
+      - min_lines: 20
+      - has_sections:
+          - User Stories
+    next: ui.seed.03.stack
+
+  - id: ui.seed.03.stack
+    type: document
+    title: "Registrar Tech Stack"
+    description: "Confirmando o tech stack definido para o projeto."
+    executor: llm_coder
+    sprint: sprint-01-seed
+    outputs:
+      - docs/tech_stack.md
+    prompt: |
+      Leia docs/tech_stack.md (se existir) e copie para docs/tech_stack.md.
+
+      Se docs/tech_stack.md não existir, leia docs/PRD.md e extraia
+      as decisões técnicas mencionadas. Registre em docs/tech_stack.md.
+
+      Inclua a linha: interface_type: ui
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/tech_stack.md
+      - min_lines: 8
+      - has_sections:
+          - interface_type
+    next: ui.proto.01.scaffold
+
+  # ================================================================
+  # Fase 2: Prototype — scaffold, layout, build
+  # ================================================================
+
+  - id: ui.proto.01.scaffold
+    type: build
+    title: "Scaffold do Projeto"
+    description: "O LLM cria a estrutura de arquivos, componentes e configurações do frontend."
+    executor: llm_coder
+    sprint: sprint-02-prototype
+    max_turns: 40
+    outputs:
+      - .build_ok
+    prompt: |
+      Crie o scaffold do projeto.
+
+      LEIA OBRIGATORIAMENTE:
+        - docs/tech_stack.md     (stack, framework, dependências, estrutura de diretórios)
+        - docs/PRD.md            (contexto do produto)
+
+      PASSOS:
+        1. Crie a estrutura de diretórios conforme o tech stack definido
+        2. Crie todos os arquivos fonte (componentes, estilos, configurações)
+        3. Execute: bash process/scripts/scaffold_post.sh
+           (instala dependências e faz o build — não faça npm install manualmente)
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: .build_ok
+    next: ui.proto.02.layout
+
+  - id: ui.proto.02.layout
+    type: build
+    title: "Layout — UI completa"
+    description: "O LLM implementa todas as user stories do PRD: componentes, estilos e interações."
+    executor: llm_coder
+    sprint: sprint-02-prototype
+    max_turns: 80
+    prompt: |
+      Implemente a interface completa do projeto.
+
+      LEIA OBRIGATORIAMENTE antes de começar:
+        - docs/PRD.md              (user stories — TODAS são obrigatórias)
+        - docs/tech_stack.md       (stack decidido)
+        - docs/ui_guidelines.md    (OBRIGATÓRIO — especificações visuais completas)
+
+      REGRAS:
+        1. Cada User Story do PRD deve ser implementada
+        2. Siga TODAS as especificações de docs/ui_guidelines.md (layout, cores, dimensões, animações)
+        3. Use o tech stack definido em docs/tech_stack.md — não substitua
+        4. Se houver dados de exemplo (YAML, JSON) no projeto, carregue como fixture estática
+
+      Ao final diga DONE e liste os componentes criados.
+    next: ui.proto.03.build
+
+  - id: ui.proto.03.build
+    type: build
+    title: "Build e Verificar"
+    description: "Compilando o frontend e subindo o servidor para verificar que tudo funciona."
+    executor: llm_coder
+    sprint: sprint-02-prototype
+    max_turns: 30
+    env_setup:
+      - bash process/scripts/build.sh
+      - bash process/scripts/serve.sh
+    outputs:
+      - .build_ok
+    prompt: |
+      O projeto foi buildado e está servindo. Leia .serve_url para obter a URL.
+      Verifique que a URL responde com HTML válido usando curl.
+      Se o build falhou, corrija os erros e rebuilde.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: .build_ok
+    next: gate.prototype
+
+  - id: gate.prototype
+    type: gate
+    title: "Gate — Protótipo"
+    description: "Verificando que o build está ok antes de capturar screenshots."
+    executor: python
+    sprint: sprint-02-prototype
+    validators:
+      - file_exists: .build_ok
+      - paths_clean:
+          allowed: [docs/, frontend/, state/, .build_ok, .serve_url, .serve.pid]
+    next: ui.proto.04.screenshots
+
+  # ================================================================
+  # Fase 3: Screenshots — captura e validação visual
+  # ================================================================
+
+  - id: ui.proto.04.screenshots
+    type: review
+    title: "Screenshots — Captura e Auto-Review"
+    description: "O LLM captura screenshots da UI e verifica se estão alinhados com os guidelines."
+    executor: llm_coder
+    sprint: sprint-03-screenshots
+    max_turns: 60
+    env_setup:
+      - bash process/scripts/serve.sh
+    outputs:
+      - docs/screenshot-review.md
+      - docs/screenshots/
+    prompt: |
+      A aplicação está servindo. Leia .serve_url para obter a URL.
+      Capture screenshots do protótipo e faça auto-review.
+
+      PASSO 1 — Leia docs/ui_guidelines.md para saber:
+        - Qual ferramenta de captura usar e qual viewport
+        - Quais telas e elementos capturar
+
+      PASSO 2 — Capture screenshots distintos das telas obrigatórias em docs/screenshots/.
+
+      PASSO 3 — Compare cada screenshot com as especificações de docs/ui_guidelines.md.
+
+      PASSO 4 — Corrija falhas críticas de layout e recapture se necessário.
+
+      PASSO 5 — Gere docs/screenshot-review.md com veredicto APPROVED ou ITERATE.
+        APPROVED somente se os elementos obrigatórios do ui_guidelines.md estiverem presentes.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/screenshot-review.md
+      - screenshot_review_passed: true
+      - unique_screenshots:
+          screenshots_dir: docs/screenshots
+          min_count: 3
+    next: ui.proto.05.prd_coverage
+
+  - id: ui.proto.05.prd_coverage
+    type: review
+    title: "PRD Coverage — Todas as US implementadas?"
+    description: "O LLM verifica se cada user story do PRD foi implementada. Implementa o que faltar."
+    executor: llm_coder
+    sprint: sprint-03-screenshots
+    max_turns: 60
+    outputs:
+      - docs/prd-coverage-report.md
+    prompt: |
+      Verifique se TODAS as User Stories do PRD foram implementadas.
+
+      PASSO 1 — Leia docs/PRD.md e liste todas as US (### US-NN)
+      PASSO 2 — Para cada US, inspecione o código-fonte e procure evidências concretas
+      PASSO 3 — Gere docs/prd-coverage-report.md:
+
+        # PRD Coverage Report
+        ## Resumo
+        - Total: N | Implementadas: X | Faltando: Y
+
+        ## Status por US
+        | US | Titulo | Status | Evidencia / Gap |
+
+        ## US Nao Implementadas
+        (detalhe do que falta e como implementar)
+
+      PASSO 4 — Se houver US não implementadas: implemente-as agora.
+      PASSO 5 — Atualize o relatório e rode o build.
+
+      REGRA: Não encerre com US em FAIL. Implemente tudo antes de reportar.
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/prd-coverage-report.md
+      - min_lines: 10
+    next: ui.proto.06.guidelines_review
+
+  - id: ui.proto.06.guidelines_review
+    type: review
+    title: "Guidelines Review"
+    description: "O LLM compara os screenshots com o ui_guidelines.md e verifica conformidade visual."
+    executor: llm_coach
+    sprint: sprint-03-screenshots
+    max_turns: 30
+    outputs:
+      - docs/guidelines-review.md
+    prompt: |
+      Você é um revisor de UI. Valide se a interface implementada segue as especificações.
+
+      PASSO 1 — Leia docs/ui_guidelines.md integralmente.
+
+      PASSO 2 — Analise os screenshots capturados em docs/screenshots/.
+
+      PASSO 3 — Para CADA seção do ui_guidelines.md, verifique compliance nos screenshots.
+        Liste cada item obrigatório do guidelines e marque como conforme ou não conforme.
+
+      PASSO 4 — Gere docs/guidelines-review.md com:
+        - Uma tabela por seção do guidelines (Item | Status | Observação)
+        - Seção ## Veredicto no final:
+          APPROVED — se todos os itens obrigatórios estão presentes
+          ITERATE — lista os itens que precisam ser corrigidos
+          MOTIVO: <resumo em UMA linha do principal problema, se ITERATE>
+
+      REGRA: APPROVED somente se TODOS os itens marcados como obrigatórios no
+      ui_guidelines.md estiverem presentes nos screenshots.
+      REGRA: Se ITERATE, a linha MOTIVO: é obrigatória logo abaixo do veredicto.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/guidelines-review.md
+      - min_lines: 20
+      - has_sections:
+          - Veredicto
+      - guidelines_review_passed: true
+    next: gate.ui_ready
+
+  - id: gate.ui_ready
+    type: gate
+    title: "Gate — UI Pronta"
+    description: "Verificando que screenshots, coverage e guidelines estão todos aprovados."
+    executor: python
+    sprint: sprint-03-screenshots
+    validators:
+      - file_exists: docs/PRD.md
+      - file_exists: docs/screenshots/
+      - file_exists: docs/screenshot-review.md
+      - file_exists: docs/prd-coverage-report.md
+      - file_exists: docs/guidelines-review.md
+      - file_exists: .build_ok
+      - guidelines_review_passed: true
+      - paths_clean:
+          allowed: [docs/, frontend/, state/, .build_ok, .serve_url, .serve.pid]
+    next: ui.smoke.01.run
+
+  # ================================================================
+  # Fase 4: Smoke + E2E
+  # ================================================================
+
+  - id: ui.smoke.01.run
+    type: build
+    title: "Smoke Test"
+    description: "Teste rápido: o servidor responde e os arquivos estáticos estão acessíveis."
+    executor: llm_coder
+    sprint: sprint-04-smoke
+    env_setup:
+      - bash process/scripts/serve.sh
+    outputs:
+      - docs/smoke-report.md
+    prompt: |
+      A aplicação está servindo. Leia .serve_url para obter a URL.
+      Execute smoke tests:
+        1. Verifique que a URL responde com HTML válido (curl)
+        2. Verifique se os arquivos estáticos estão acessíveis via HTTP
+
+      Escreva docs/smoke-report.md com resultados (PASS/FAIL por item).
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/smoke-report.md
+      - min_lines: 8
+    next: gate.smoke
+
+  - id: gate.smoke
+    type: gate
+    title: "Gate — Smoke"
+    description: "Verificando que o smoke test passou antes de rodar E2E completo."
+    executor: python
+    sprint: sprint-04-smoke
+    validators:
+      - file_exists: docs/smoke-report.md
+      - paths_clean:
+          allowed: [docs/, frontend/, state/, .build_ok, .serve_url, .serve.pid]
+    next: ui.e2e.01.build
+
+  - id: ui.e2e.01.build
+    type: build
+    title: "E2E — Build"
+    description: "Rebuild final antes dos testes E2E para garantir binário limpo."
+    executor: llm_coder
+    sprint: sprint-04-smoke
+    max_turns: 20
+    env_setup:
+      - bash process/scripts/build.sh
+      - bash process/scripts/serve.sh
+    outputs:
+      - .build_ok
+    prompt: |
+      O projeto foi buildado e está servindo. Leia .serve_url para obter a URL.
+      Verifique que a URL responde com HTML válido.
+      Se houver erros de build, corrija e rebuilde.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: .build_ok
+    next: ui.e2e.02.screenshots
+
+  - id: ui.e2e.02.screenshots
+    type: build
+    title: "E2E — Captura de Screenshots"
+    description: "Capturando screenshots E2E interagindo com a UI: cliques, painéis, estados."
+    executor: llm_coder
+    sprint: sprint-04-smoke
+    max_turns: 30
+    env_setup:
+      - bash process/scripts/serve.sh
+    outputs:
+      - docs/screenshots/e2e/
+    prompt: |
+      A aplicação está servindo. Leia .serve_url para obter a URL.
+
+      Leia docs/ui_guidelines.md para saber:
+        - Qual ferramenta e viewport usar para captura
+        - Quais telas capturar
+
+      Capture pelo menos 4 screenshots distintos em docs/screenshots/e2e/.
+      Interaja com a UI (clique, abra painéis) para capturar estados diferentes.
+      Aguarde entre cada captura conforme especificado no guidelines.
+
+      IMPORTANTE: cada screenshot deve ser diferente — não copie arquivos.
+
+      Ao final diga DONE e liste os arquivos gerados.
+    validators:
+      - unique_screenshots:
+          screenshots_dir: docs/screenshots/e2e
+          min_count: 4
+    next: ui.e2e.03.report
+
+  - id: ui.e2e.03.report
+    type: build
+    title: "E2E — Relatório"
+    description: "Analisando os screenshots E2E e gerando relatório de conformidade visual."
+    executor: llm_coder
+    sprint: sprint-04-smoke
+    max_turns: 15
+    outputs:
+      - docs/e2e-browser-report.md
+    prompt: |
+      Analise os screenshots em docs/screenshots/e2e/ e gere o relatório E2E.
+
+      Leia docs/ui_guidelines.md para saber o que verificar em cada screenshot.
+      Para cada screenshot, avalie se os elementos obrigatórios estão presentes.
+
+      Gere docs/e2e-browser-report.md:
+        # E2E Browser Report
+
+        ## Resultados
+        | Teste | Screenshot | Elementos Encontrados | Status |
+
+        ## Veredicto
+        PASS ou FAIL
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/e2e-browser-report.md
+      - min_lines: 15
+      - has_sections:
+          - Resultados
+          - Veredicto
+    next: gate.e2e
+
+  - id: gate.e2e
+    type: gate
+    title: "Gate — E2E"
+    description: "Verificando que o relatório E2E está completo antes do visual check final."
+    executor: python
+    sprint: sprint-04-smoke
+    validators:
+      - file_exists: docs/e2e-browser-report.md
+      - has_sections:
+          file: docs/e2e-browser-report.md
+          sections:
+            - Veredicto
+      - paths_clean:
+          allowed: [docs/, frontend/, tests/, state/, .build_ok, .serve_url, .serve.pid]
+    next: ui.final.01.visual_check
+
+  # ================================================================
+  # Fase 5: Check visual final + Stakeholder
+  # ================================================================
+
+  - id: ui.final.01.visual_check
+    type: build
+    title: "Visual Check Final"
+    description: "Captura final de screenshots para detectar regressões visuais antes do stakeholder."
+    executor: llm_coder
+    sprint: sprint-05-final
+    max_turns: 40
+    env_setup:
+      - bash process/scripts/serve.sh
+    outputs:
+      - docs/visual-check-report.md
+      - docs/screenshots/final/
+    prompt: |
+      A aplicação está servindo. Leia .serve_url para obter a URL.
+
+      Leia docs/ui_guidelines.md para saber ferramenta e viewport de captura.
+      Capture as mesmas telas do E2E em docs/screenshots/final/.
+      Compare com docs/screenshots/e2e/ — reporte regressões.
+
+      Gere docs/visual-check-report.md:
+        ## Verificação Visual Final
+        | Tela | Status | Observação |
+
+        ## Veredicto
+        PASS ou FAIL
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/visual-check-report.md
+      - min_lines: 10
+      - has_sections:
+          - Verificação Visual Final
+          - Veredicto
+    next: gate.visual_check
+
+  - id: gate.visual_check
+    type: gate
+    title: "Gate — Visual Check"
+    description: "Verificando que o relatório visual está aprovado antes de apresentar ao stakeholder."
+    executor: python
+    sprint: sprint-05-final
+    validators:
+      - file_exists: docs/visual-check-report.md
+      - has_sections:
+          file: docs/visual-check-report.md
+          sections:
+            - Veredicto
+      - paths_clean:
+          allowed: [docs/, frontend/, tests/, state/, .build_ok, .serve_url, .serve.pid]
+    next: ui.final.00.plano_check
+
+  - id: ui.final.00.plano_check
+    type: review
+    title: "Plano de Voo — Verificação de Itens Críticos"
+    description: "O LLM verifica se todos os itens críticos do plano de voo foram cumpridos."
+    executor: llm_coach
+    sprint: sprint-05-final
+    max_turns: 40
+    outputs:
+      - docs/plano-check-report.md
+    prompt: |
+      Verifique se os itens críticos do Plano de Voo e todas as User Stories do PRD foram implementados.
+
+      PASSO 1 — Verifique se docs/plano_de_voo.md existe.
+        Se não existir: escreva docs/plano-check-report.md com:
+          "## Resultado: SKIP — Primeiro ciclo, sem Plano de Voo anterior."
+        e diga DONE.
+
+      PASSO 2 — Leia docs/plano_de_voo.md e extraia a seção ## Itens Críticos.
+
+      PASSO 3 — Leia docs/PRD.md e extraia TODAS as User Stories (US-01, US-02, …).
+        Para cada US, verifique se há implementação correspondente no código-fonte.
+        Uma US está implementada se: existe código que realiza o que ela descreve
+        E não há TODOs/stubs óbvios para aquela funcionalidade.
+
+      PASSO 4 — Para cada item crítico do Plano de Voo, verifique evidências no
+        código-fonte e screenshots em docs/screenshots/.
+
+      PASSO 5 — Escreva docs/plano-check-report.md:
+
+        # Plano de Voo — Check de Itens Críticos
+
+        ## Cobertura de User Stories (PRD)
+        | US | Título | Status | Evidência / Motivo |
+
+        ## Itens Críticos do Plano de Voo
+        | # | Item Crítico | Status | Evidência |
+
+        ## Resultado
+        PASS — todas as US e itens críticos implementados
+        FAIL — lista do que falta (US não implementadas + itens críticos pendentes)
+
+      REGRA: Não encerre com itens em FAIL. Implemente o que estiver faltando antes de reportar.
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/plano-check-report.md
+      - min_lines: 5
+    next: ui.final.02.stakeholder
+
+  - id: ui.final.02.stakeholder
+    type: build
+    title: "Preparar Apresentação ao Stakeholder"
+    description: "Gerando o documento de feedback com URL de acesso e itens para validação."
+    executor: llm_coder
+    sprint: sprint-05-final
+    max_turns: 10
+    env_setup:
+      - bash process/scripts/serve.sh
+    outputs:
+      - docs/stakeholder-feedback.md
+    prompt: |
+      A aplicação está servindo. O arquivo .serve_url está na raiz do projeto
+      (mesmo diretório onde você executa os comandos — NÃO dentro de frontend/).
+      Leia-o com: cat .serve_url
+
+      PASSO 1 — Leia docs/PRD.md para extrair o nome do projeto e os pontos de validação.
+      PASSO 2 — Leia docs/plano_de_voo.md (se existir) e extraia os Itens Críticos.
+      PASSO 3 — Leia .serve_url (cat .serve_url) para obter a URL do servidor.
+      PASSO 4 — Crie docs/stakeholder-feedback.md com o seguinte conteúdo:
+        - URL de acesso (a URL lida de .serve_url)
+        - Lista dos Itens Críticos do Plano de Voo (ou as US do PRD se não houver plano)
+        - Template de feedback (campos: aprovado/reprovado, observações por item, feedback livre)
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/stakeholder-feedback.md
+      - min_lines: 3
+    next: ui.final.02b.stakeholder_gate
+
+  - id: ui.final.02b.stakeholder_gate
+    type: human_gate
+    title: "Validação do Stakeholder"
+    description: "Acesse a URL, teste a aplicação e aprove ou reporte bugs para correção."
+    sprint: sprint-05-final
+    reject_next: ui.final.02c.stakeholder_fix
+    env_setup:
+      - bash process/scripts/serve.sh
+    prompt: |
+      A aplicação está pronta para validação.
+
+      Acesse a URL em .serve_url e valide os Itens Críticos listados em docs/stakeholder-feedback.md.
+
+      Quando terminar, use:
+        ft approve   — para aprovar e continuar
+        ft reject "motivo"   — para reprovar e iterar (o LLM corrigirá o bug)
+    next: ui.final.03.analysis
+
+  - id: ui.final.02c.stakeholder_fix
+    type: build
+    title: "Corrigir Feedback do Stakeholder"
+    description: "O LLM corrige o bug reportado pelo stakeholder e rebuilda a aplicação."
+    executor: llm_coder
+    sprint: sprint-05-final
+    max_turns: 40
+    env_setup:
+      - bash process/scripts/build.sh
+      - bash process/scripts/serve.sh
+    outputs:
+      - .build_ok
+    prompt: |
+      O stakeholder rejeitou a aplicação. Corrija o problema reportado.
+
+      PASSO 1 — Leia docs/stakeholder-feedback.md para entender o que foi reportado.
+      PASSO 2 — Leia o motivo da rejeição (fornecido acima em RESULTADO DA VALIDACAO).
+      PASSO 3 — Corrija o problema no código-fonte.
+      PASSO 4 — Rebuilde: bash process/scripts/build.sh
+      PASSO 5 — Verifique que o servidor responde: leia .serve_url e teste com curl.
+
+      Não modifique o que já está funcionando — corrija apenas o que foi reportado.
+      Ao final diga DONE.
+    validators:
+      - file_exists: .build_ok
+    next: ui.final.02b.stakeholder_gate
+
+  - id: ui.final.03.analysis
+    type: document
+    title: "Análise Crítica — Sugestões para Próximo Ciclo"
+    description: "O LLM analisa o ciclo e propõe melhorias para o próximo."
+    executor: llm_coach
+    sprint: sprint-05-final
+    max_turns: 20
+    outputs:
+      - docs/critical-analysis.md
+    prompt: |
+      Analise o ciclo e produza sugestões de melhoria.
+
+      Leia: docs/PRD.md, docs/prd-coverage-report.md,
+            docs/e2e-browser-report.md, docs/visual-check-report.md
+
+      Produza docs/critical-analysis.md:
+        ## Análise Crítica
+        ### O que foi entregue
+        ### Sugestões de Melhoria
+        | # | Sugestão | Impacto |
+        ### Próximos passos
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/critical-analysis.md
+      - min_lines: 15
+      - has_sections:
+          - Análise Crítica
+          - Sugestões de Melhoria
+    next: ui.handoff.00.handoff_draft
+
+  - id: ui.handoff.00.handoff_draft
+    type: document
+    title: "Redigir Handoff — Contexto para Próximo Ciclo"
+    description: "O LLM documenta o que foi feito, o que ficou pendente e as dicas para o próximo agente."
+    executor: llm_coach
+    sprint: sprint-05-final
+    max_turns: 10
+    no_pre_seed: true
+    outputs:
+      - docs/handoff.md
+    prompt: |
+      Redija o documento de handoff para o próximo ciclo.
+      Este documento é factual — registra o que foi feito, não planeja o futuro.
+
+      Leia (nesta ordem):
+        - docs/prd-coverage-report.md (o que foi implementado neste ciclo)
+        - docs/critical-analysis.md (sugestões de melhoria levantadas)
+        - docs/plano-check-report.md (o que foi verificado vs. plano)
+        - docs/PRD.md (identifique as US ainda não implementadas)
+        - .serve_url (porta usada neste ciclo)
+        - state/llm_logs/ — leia os logs de execução do ciclo para identificar padrões,
+          retries, travamentos, nodes que tomaram muito tempo, erros recorrentes.
+
+      Escreva docs/handoff.md com a seguinte estrutura OBRIGATÓRIA:
+
+        # Handoff — [nome do projeto] — Ciclo [N]
+
+        ## O que foi entregue
+        Lista concisa do que foi implementado neste ciclo (US concluídas, funcionalidades).
+
+        ## O que ficou pendente
+        US não implementadas, bugs conhecidos, dívidas técnicas.
+
+        ## Sugestões para o próximo ciclo
+        Lista numerada de sugestões para o PRODUTO.
+        Baseie-se na análise crítica e no feedback do stakeholder.
+        Não decida — apenas liste. A decisão é do stakeholder.
+
+        ## Análise do processo — o que melhorar
+        Lista numerada de sugestões para o PROCESSO e para o próximo agente.
+        Baseie-se na análise dos logs de execução: retries, nodes lentos, erros
+        recorrentes, instruções ignoradas, desvios de escopo.
+        Seja direto e crítico — o objetivo é que o próximo ciclo seja melhor.
+
+        Exemplos do que observar nos logs:
+        - Nodes que tiveram muitos retries (por que falharam?)
+        - Instruções do prompt que o agente ignorou repetidamente
+        - Arquivos escritos fora do escopo permitido
+        - Steps que travaram ou demoraram muito (possível complexidade excessiva)
+        - Padrões de erro que se repetiram
+
+        ## Contexto técnico
+
+        ### Ambiente
+        - Porta usada neste ciclo (lida de .serve_url)
+        - Ferramentas disponíveis (Node, npm, Playwright, etc.)
+        - Como subir o servidor: comando exato e onde fica a URL
+        - Como fazer o build: comando exato e onde fica o artefato
+
+        ### Código
+        - Estrutura de diretórios (onde frontend vive, onde ficam artefatos)
+        - Convenções CSS/namespace — o que não mudar
+        - Dados: fixture estática ou real, como organizados
+        - Armadilhas encontradas neste ciclo e como evitá-las
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: docs/handoff.md
+      - min_lines: 40
+      - has_sections:
+          - O que foi entregue
+          - O que ficou pendente
+          - Sugestões para o próximo ciclo
+          - Análise do processo
+          - Contexto técnico
+    next: ui.handoff.01.handoff_gate
+
+  - id: ui.handoff.01.handoff_gate
+    type: human_gate
+    title: "Handoff — Revisão do Stakeholder"
+    description: "Revise o handoff gerado. Você pode aceitar, ajustar sugestões ou pedir correções."
+    executor: python
+    sprint: sprint-05-final
+    outputs:
+      - docs/handoff.md
+    next: ui.end
+
+  - id: ui.end
+    type: end
+    title: "Protótipo UI Entregue e Validado"
+    description: "Ciclo concluído. Use ft close para fazer merge dos docs e encerrar o worktree."

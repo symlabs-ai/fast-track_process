@@ -1129,6 +1129,7 @@ class StepRunner:
                     self.explore_skip()
                     self._log_activity(node_id, node.title, "exploration", "BYPASSED",
                                        "exploração pulada (modo mvp/auto)", sprint=node_sprint)
+                    state = self.state_mgr.load()
                     continue
                 state = self.state_mgr.load()
                 if state.node_status == "exploring":

@@ -395,6 +395,7 @@ nodes:
       - bash process/scripts/serve.sh
     outputs:
       - docs/screenshot-review.md
+      - docs/screenshot-review-result.json
       - docs/screenshots/
     prompt: |
       A aplicação está servindo. Leia .serve_url para obter a URL.
@@ -410,13 +411,17 @@ nodes:
 
       PASSO 4 — Corrija falhas críticas de layout e recapture se necessário.
 
-      PASSO 5 — Gere docs/screenshot-review.md com veredicto APPROVED ou ITERATE.
-        APPROVED somente se os elementos obrigatórios do ui_guidelines.md estiverem presentes.
+      PASSO 5 — Gere DOIS artefatos:
+        a) docs/screenshot-review.md — relatório Markdown com veredicto APPROVED ou ITERATE.
+           APPROVED somente se os elementos obrigatórios do ui_guidelines.md estiverem presentes.
+        b) docs/screenshot-review-result.json — resultado estruturado para validação automática:
+           {"verdict": "APPROVED"} ou {"verdict": "ITERATE"}
 
       Ao final diga DONE.
     validators:
       - file_exists: docs/screenshot-review.md
-      - screenshot_review_passed: true
+      - file_exists: docs/screenshot-review-result.json
+      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/screenshot-review-result.json')); sys.exit(0 if d.get('verdict')=='APPROVED' else 1)\""
       - unique_screenshots:
           screenshots_dir: docs/screenshots
           min_count: 3
@@ -467,6 +472,7 @@ nodes:
     max_turns: 30
     outputs:
       - docs/guidelines-review.md
+      - docs/guidelines-review-result.json
     prompt: |
       Você é um revisor de UI. Valide se a interface implementada segue as especificações.
 
@@ -477,24 +483,28 @@ nodes:
       PASSO 3 — Para CADA seção do ui_guidelines.md, verifique compliance nos screenshots.
         Liste cada item obrigatório do guidelines e marque como conforme ou não conforme.
 
-      PASSO 4 — Gere docs/guidelines-review.md com:
-        - Uma tabela por seção do guidelines (Item | Status | Observação)
-        - Seção ## Veredicto no final:
-          APPROVED — se todos os itens obrigatórios estão presentes
-          ITERATE — lista os itens que precisam ser corrigidos
-          MOTIVO: <resumo em UMA linha do principal problema, se ITERATE>
+      PASSO 4 — Gere DOIS artefatos:
+        a) docs/guidelines-review.md — relatório Markdown com:
+           - Uma tabela por seção do guidelines (Item | Status | Observação)
+           - Seção ## Veredicto no final:
+             APPROVED — se todos os itens obrigatórios estão presentes
+             ITERATE — lista os itens que precisam ser corrigidos
+             MOTIVO: <resumo em UMA linha do principal problema, se ITERATE>
+        b) docs/guidelines-review-result.json — resultado estruturado para validação automática:
+           {"verdict": "APPROVED"} ou {"verdict": "ITERATE"}
 
       REGRA: APPROVED somente se TODOS os itens marcados como obrigatórios no
       ui_guidelines.md estiverem presentes nos screenshots.
-      REGRA: Se ITERATE, a linha MOTIVO: é obrigatória logo abaixo do veredicto.
+      REGRA: Se ITERATE, a linha MOTIVO: é obrigatória no Markdown logo abaixo do veredicto.
 
       Ao final diga DONE.
     validators:
       - file_exists: docs/guidelines-review.md
+      - file_exists: docs/guidelines-review-result.json
       - min_lines: 20
       - has_sections:
           - Veredicto
-      - guidelines_review_passed: true
+      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/guidelines-review-result.json')); sys.exit(0 if d.get('verdict')=='APPROVED' else 1)\""
     next: gate.ui_ready
 
   - id: gate.ui_ready
@@ -509,8 +519,9 @@ nodes:
       - file_exists: docs/screenshot-review.md
       - file_exists: docs/prd-coverage-report.md
       - file_exists: docs/guidelines-review.md
+      - file_exists: docs/guidelines-review-result.json
       - file_exists: .build_ok
-      - guidelines_review_passed: true
+      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/guidelines-review-result.json')); sys.exit(0 if d.get('verdict')=='APPROVED' else 1)\""
       - paths_clean:
           allowed: [docs/, project/, state/, .build_ok, .serve_url, .serve.pid]
     next: ui.smoke.01.run

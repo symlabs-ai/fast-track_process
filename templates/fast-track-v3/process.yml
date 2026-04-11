@@ -408,15 +408,22 @@ nodes:
   - id: ft.acceptance.01.cli
     type: build
     title: "Acceptance Test CLI"
-    description: "Executar a massa de dados de docs/test_data.md contra a API via curl/httpx. Verificar cada endpoint P0: criar, listar, editar, excluir. Verificar que agendamentos_hoje >= 1 se houver registros do dia. Gerar relatório com PASS/FAIL por cenário."
+    description: |
+      Executar a massa de dados de docs/test_data.md contra a API via curl/httpx.
+      Verificar cada endpoint P0: criar, listar, editar, excluir.
+      Produzir DOIS artefatos:
+        1. docs/acceptance-report.md — relatório legível para o stakeholder (Markdown com tabelas PASS/FAIL)
+        2. docs/acceptance-result.json — resultado estruturado para o validator: {"pass": N, "fail": M, "skip": K}
+      O validator lê o JSON. O relatório é para leitura humana.
     sprint: sprint-07-acceptance
     executor: claude
     max_turns: 60
     outputs:
       - docs/acceptance-report.md
+      - docs/acceptance-result.json
     validators:
-      - has_file: docs/acceptance-report.md
-      - command_succeeds: "grep -c 'FAIL' docs/acceptance-report.md | python -c \"import sys; sys.exit(0 if int(sys.stdin.read().strip()) == 0 else 1)\""
+      - has_file: docs/acceptance-result.json
+      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/acceptance-result.json')); sys.exit(0 if d.get('fail',1)==0 else 1)\""
     next: gate.acceptance
 
   - id: gate.acceptance

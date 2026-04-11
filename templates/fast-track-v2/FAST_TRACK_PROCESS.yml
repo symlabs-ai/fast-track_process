@@ -518,6 +518,7 @@ nodes:
     max_turns: 100
     outputs:
       - docs/screenshot-review.md
+      - docs/screenshot-review-result.json
       - docs/screenshots/
       - frontend/src/
     requires_approval: true
@@ -565,8 +566,8 @@ nodes:
           - Recapture apenas as rotas afetadas
           - Reavalie o critério
 
-      PASSO 6 — Gere o relatório
-        Crie docs/screenshot-review.md com este formato:
+      PASSO 6 — Gere DOIS artefatos:
+        a) docs/screenshot-review.md com este formato:
 
           # Screenshot Review — <nome do projeto>
           Data: <hoje>
@@ -586,10 +587,15 @@ nodes:
         em ui_criteria.md estiverem marcados com ✅ (ou N/A se não aplicável).
         Se algum critério permanece ❌ após as tentativas de correção, escreva
         Veredicto: REJECTED e descreva o bloqueador.
+
+        b) docs/screenshot-review-result.json — resultado estruturado:
+           {"verdict": "APPROVED"} ou {"verdict": "REJECTED"}
+
         Encerre dizendo DONE.
     validators:
       - file_exists: docs/screenshot-review.md
-      - screenshot_review_passed: true
+      - file_exists: docs/screenshot-review-result.json
+      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/screenshot-review-result.json')); sys.exit(0 if d.get('verdict')=='APPROVED' else 1)\""
     next: ft.tdd.02.red
 
   # ================================================================

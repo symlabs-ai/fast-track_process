@@ -204,7 +204,7 @@ O processo disponibiliza pontos de flexibilização:
 
 1. **Hooks para scripts**: `env_setup`, `on_init` — executam shell scripts do projeto
 2. **Hooks para LLM**: prompts que dizem "leia arquivo X e siga" — a LLM extrai o que precisa
-3. **Validators genéricos**: `file_exists`, `has_sections`, `guidelines_review_passed` — verificam estrutura, não conteúdo específico
+3. **Validators genéricos**: `file_exists`, `has_sections`, `command_succeeds` — verificam estrutura e resultados estruturados, não conteúdo Markdown
 
 ### Teste de genericidade
 

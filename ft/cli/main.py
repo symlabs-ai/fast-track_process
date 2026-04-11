@@ -1098,7 +1098,7 @@ def cmd_lint_process(args):
         "- Nomes de screenshots muito específicos do projeto (ex: 'graph.png', 'drawer-open.png')\n\n"
         "ACEITO — NÃO reporte:\n"
         "- Caminhos genéricos de artefatos (docs/PRD.md, docs/ui_guidelines.md, docs/tech_stack.md)\n"
-        "- Validators genéricos (file_exists, has_sections, guidelines_review_passed)\n"
+        "- Validators genéricos (file_exists, has_sections, command_succeeds)\n"
         "- Estrutura de pastas genérica (frontend/src/, docs/screenshots/, frontend/dist/)\n"
         "- IDs de nodes, títulos descritivos genéricos, nomes de sprints\n"
         "- Comandos de build genéricos (npm run build, npm install, npx serve)\n"

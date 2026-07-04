@@ -168,11 +168,13 @@ class TestValidateCLI:
         result = run_ft(["validate"], cwd=tmp_path)
         assert result.returncode == 1
 
-    def test_validate_real_process(self):
+    def test_validate_real_process(self, monkeypatch):
         """Validate the actual FAST_TRACK_PROCESS_V2.yml."""
         process = Path(__file__).parent.parent.parent / "process" / "fast_track" / "FAST_TRACK_PROCESS_V2.yml"
         if not process.exists():
             pytest.skip("V2 process not found")
+        # Roda dentro do repo do template (dev do engine) — precisa do override do guard
+        monkeypatch.setenv("FT_ALLOW_ENGINE_REPO", "1")
         # Need project/state for find_project_root
         result = run_ft(["-p", str(process), "validate"], cwd=process.parent.parent.parent)
         assert result.returncode == 0

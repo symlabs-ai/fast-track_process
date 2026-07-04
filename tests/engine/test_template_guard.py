@@ -28,13 +28,41 @@ class TestGuardEngineRepo:
         _guard_engine_repo(engine_root())  # não levanta
 
 
+def _run_ft_in_engine_repo(args: list[str]) -> subprocess.CompletedProcess:
+    env = {**os.environ, "PYTHONPATH": str(engine_root())}
+    env.pop("FT_ALLOW_ENGINE_REPO", None)
+    return subprocess.run(
+        [sys.executable, "-m", "ft.cli.main"] + args,
+        capture_output=True, text=True, cwd=engine_root(), env=env,
+    )
+
+
 class TestGuardViaCLI:
-    def test_ft_init_refuses_inside_engine_repo(self):
-        env = {**os.environ, "PYTHONPATH": str(engine_root())}
-        env.pop("FT_ALLOW_ENGINE_REPO", None)
-        result = subprocess.run(
-            [sys.executable, "-m", "ft.cli.main", "init"],
-            capture_output=True, text=True, cwd=engine_root(), env=env,
-        )
-        assert result.returncode == 1
+    """Guard global: todo comando (exceto --help) recusa rodar no repo do template."""
+
+    @pytest.mark.parametrize("args", [
+        ["init"],
+        ["status"],
+        ["continue"],
+        ["approve"],
+        ["reject", "motivo"],
+        ["graph"],
+        ["validate"],
+        ["close"],
+        ["abort"],
+        ["run", "."],
+        ["runs"],
+    ])
+    def test_command_refuses_inside_engine_repo(self, args):
+        result = _run_ft_in_engine_repo(args)
+        assert result.returncode == 1, f"ft {' '.join(args)} deveria bloquear no repo do template"
         assert "engine/template" in result.stdout + result.stderr
+
+    def test_help_still_works_inside_engine_repo(self):
+        result = _run_ft_in_engine_repo(["--help"])
+        assert result.returncode == 0
+
+    def test_run_allows_external_project_path_from_engine_repo(self, tmp_path):
+        """ft run <path-externo> a partir do CWD do template deve passar do guard."""
+        result = _run_ft_in_engine_repo(["runs", str(tmp_path)])
+        assert "engine/template" not in result.stdout + result.stderr

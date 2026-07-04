@@ -227,6 +227,20 @@ class TestInit:
         result = run_ft(["init"], cwd=ft_project)
         assert result.returncode == 0
 
+    def test_copies_agents_md_playbook(self, ft_project):
+        """ft init copia o AGENTS.md do engine para a raiz do projeto."""
+        run_ft(["init"], cwd=ft_project)
+        agents = ft_project / "AGENTS.md"
+        assert agents.exists(), "AGENTS.md deveria ser copiado pelo ft init"
+        assert "ft engine" in agents.read_text()
+
+    def test_does_not_overwrite_existing_agents_md(self, ft_project):
+        """AGENTS.md pré-existente do projeto não é sobrescrito."""
+        custom = "# AGENTS.md customizado do projeto\n"
+        (ft_project / "AGENTS.md").write_text(custom)
+        run_ft(["init"], cwd=ft_project)
+        assert (ft_project / "AGENTS.md").read_text() == custom
+
     def test_explicit_process_flag(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)
         process_file = tmp_path / "custom.yml"

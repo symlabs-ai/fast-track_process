@@ -1,172 +1,189 @@
-# Symbiotas e Agents — Guia Rápido
+# AGENTS.md — Conduzindo um projeto com o ft engine
 
-## Criar novo projeto
+> Playbook para um agente (ou humano) conduzir um projeto Fast Track de ponta a ponta
+> com o **motor determinístico V2**: do `ft init` ao `ft close`.
+> O `ft init` copia este arquivo para a raiz de cada projeto novo — se você está lendo
+> isto dentro de um projeto, este é o seu manual de condução.
+>
+> No V2 os papéis são: **Python orquestra** (grafo, gates, validadores, worktrees),
+> **LLM constrói** (código, docs — delegado pelo engine), **você conduz** (decide nos
+> human gates, destrava bloqueios, encerra o ciclo). Você não orquestra steps — o engine faz isso.
+>
+> Fluxo V1 (orquestração por LLM com symbiotas)? Veja [Legado V1](#legado-v1) no final.
 
-> **Requer**: `ft` instalado em `~/.local/bin/ft` (script global do Fast Track).
+---
+
+## Regra zero — nunca opere no repo do template
+
+O repositório do template/engine (`fast-track`) nunca é um projeto — o `ft` recusa rodar
+lá (guard global em todos os comandos). Projetos são criados **fora**, com `ft init <nome>`.
+
+- Nunca clone o repo do template para "virar projeto". Nunca rode `ft init`/`ft run .` dentro dele.
+- Desenvolvimento do próprio engine: `FT_ALLOW_ENGINE_REPO=1` (só nesse caso).
+
+## Visão geral do ciclo
+
+```
+ft init <nome> --template <T>          # 0. criar projeto
+  → preencher docs/PRD.md, TECH_STACK  # 1. semear conhecimento
+  → git commit                          # 2. snapshot (obrigatório antes de rodar)
+ft run . [--auto]                       # 3. rodar o ciclo (worktree externo)
+  → ft status / graph                   # 4. monitorar
+  → approve | reject | fix              # 5. decidir nos human gates / destravar
+ft close                                # 6. merge dos artefatos + remover worktree
+  → validação do stakeholder            # 7. feedback vira US no PRD → próximo ciclo
+```
+
+O ciclo roda num **worktree externo** em `~/.ft/worktrees/<projeto>/cycle-NN/` — o repo
+do projeto fica limpo até o `ft close` fazer o merge. Ciclos são **descartáveis**:
+mudanças de PRD/processo vão sempre na **raiz do projeto**, nunca dentro do ciclo.
+
+## 0. Criar o projeto
 
 ```bash
-ft init meu-projeto
-ft init meu-projeto --remote git@github.com:user/meu-projeto.git
-ft init meu-projeto --gateway anthropic:sk-sym_abc123
+ft init meu-projeto --template fast-track-v3   # cria a pasta e a estrutura (process/, docs/, src/)
+cd meu-projeto
+git init && git add -A && git commit -m "chore: bootstrap fast track"
 ```
 
-Isto clona o template, desconecta do remote original, inicializa o projeto (dirs, scaffold,
-agents do Claude Code, .gitignore, token tracking) e opcionalmente conecta ao remote do projeto.
+Templates disponíveis (`templates/` no repo do engine):
 
-`--gateway provider:apikey` configura `.claude/settings.local.json` para rotear pelo SymGateway.
+| Template | Uso |
+|----------|-----|
+| `base` | Estrutura mínima com docs seed: `process.yml` + `docs/PRD.md` + `docs/TECH_STACK.md` + `src/` |
+| `fast-track-v3` | Processo completo V3 (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
+| `fast-track-v2` | Processo V2 legado |
+| `ft-ui-prototype` | Prototipagem rápida de UI |
 
-## Projeto ja clonado — instalar agents
+Se `SYM_GATEWAY_PROJECT_KEY` estiver definida, o `ft init` provisiona `CLAUDE.md` e
+`.claude/settings.local.json` (SymGateway) automaticamente. Sem a env var, use depois:
+`ft setup-env`. Precisa da key? Peça ao DevOps — nunca ao usuário.
 
-Se o projeto ja foi clonado mas os agents do Claude Code ainda nao existem:
+## 1. Semear conhecimento
+
+O engine delega construção ao LLM com o contexto de `docs/`. Antes de rodar:
+
+- **Tem PRD pronto?** Preencha `docs/PRD.md` (e `docs/TECH_STACK.md`). O HyperMode do
+  template v3 detecta PRD existente e pula o discovery (MDD).
+- **Só uma ideia/demanda bruta?** Use `ft run . --input demanda.md` — o engine classifica
+  produto vs. processo e conduz o discovery.
+- **Hipótese já escrita?** `ft run . --hipotese hipotese.md` pula o step de hipótese.
+
+> **Commite antes de rodar.** O worktree do ciclo nasce do último commit — mudanças não
+> commitadas ficam de fora.
+
+## 2. Rodar o ciclo
 
 ```bash
-ft init            # de dentro do projeto — cria agents + configura tudo
-ft init --check    # verifica sem criar nada
+ft run .                       # interativo: para nos human_gates
+ft run . --auto                # autônomo: avança até MVP sem parar
+ft run . --codex               # trocar engine LLM (--claude [modelo] | --codex | --gemini)
+ft run . --force               # novo ciclo mesmo com um ativo
+ft run . --from-project PATH   # retomada: copia plano_de_voo do ciclo anterior
 ```
 
-Sem os agents instalados, os symbiotas nao estarao disponiveis no Claude Code.
+Modos de avanço (também no `ft continue`):
 
-## Ponto de entrada: `ft_manager`
+| Modo | Comando | Quando usar |
+|------|---------|-------------|
+| step | `ft continue` | Depurar node a node |
+| sprint | `ft continue --sprint` | Avançar uma sprint e revisar |
+| auto | `ft continue --auto` | Ciclo autônomo até MVP |
 
-**IMPORTANTE: O Claude Code principal É o ft_manager.** Ele não é um subagente — ele assume o
-papel diretamente. Os outros symbiotas (ft_coach, forge_coder, ft_gatekeeper, ft_acceptance)
-são lançados como subagentes pelo ft_manager quando necessário.
+`--bypass-human-gates` deixa o LLM decidir nos gates humanos (use com critério; `--auto` já pula).
 
-Ao iniciar uma sessão, o usuario dira algo como "inicie o projeto" ou "carregue o ft_manager".
-O Claude Code deve:
-1. Ler o prompt do ft_manager: `process/symbiotes/ft_manager/prompt.md`
-2. **Assumir o papel** — seguir todas as regras do prompt como persona principal
-3. Orquestrar os demais symbiotas como subprocessos (Agent tool)
-
-> **Nunca lance o ft_manager como subagente.** Ele morre ao terminar e perde o contexto.
-> O ft_manager é o Claude principal. Os outros sao subagentes.
-
-## Primeiros passos (nova sessão)
-
-O ft_manager (Claude principal) DEVE seguir este fluxo ao iniciar:
-
-1. Executar `ft init --check`.
-   - Se BLOCK: executar `ft init` para resolver. Repetir ate PASS.
-2. Ler `project/state/ft_state.yml`.
-3. **Se projeto novo** (`current_phase: null`):
-   - Verificar `project/docs/` por artefatos existentes (PRD.md, hipotese.md, briefings, specs).
-   - **Se encontrar documentos**: absorver tudo antes de perguntar. Hyper-mode — pular discovery
-     e avançar direto para a fase correspondente ao que já existe.
-   - **Se pasta vazia**: perguntar ao stakeholder o que ele tem (briefing, ideia, PRD pronto).
-   - Atualizar `ft_state.yml`: `current_phase: ft_mdd`, `current_cycle: cycle-01`.
-   - Delegar ao `ft_coach` (subagente): iniciar `ft.mdd.01.hipotese`.
-4. **Se projeto em andamento**:
-   - Informar: "Retomando de [next_step]. Último step: [last_completed_step]."
-   - Informar também a sprint ativa: `current_sprint` e `sprint_status`, quando preenchidos.
-   - Continuar o fluxo a partir dali, delegando ao symbiota correto (subagente).
-
-> **Regra**: Nunca ficar parado esperando. Leu o estado → age.
-
-## Regra de continuidade
-
-Ao completar uma sprint, gate ou step:
-1. **Não pare.** Atualize o ft_state.yml, reporte o progresso ao stakeholder em 3-5 linhas.
-2. **Inicie a próxima sprint/step imediatamente** — não espere input do usuário.
-3. Se precisar de decisão do stakeholder, pergunte de forma objetiva e **continue com o restante
-   que não depende da resposta**.
-4. Só pare se: (a) gate retornou BLOCK que requer input humano, (b) MVP finalizado, (c) erro
-   irrecuperável.
-
-> **Anti-pattern**: Anunciar "continuando para sprint-03" e parar. Se anunciou, execute.
-
-## Referências obrigatórias
-
-- Prompts dos symbiotas:
-  - `process/symbiotes/ft_manager/prompt.md` ← **ponto de entrada**
-  - `process/symbiotes/ft_gatekeeper/prompt.md`
-  - `process/symbiotes/ft_acceptance/prompt.md`
-  - `process/symbiotes/ft_coach/prompt.md`
-  - `process/symbiotes/forge_coder/prompt.md`
-- Processo e estado:
-  - `process/fast_track/FAST_TRACK_PROCESS.yml`
-  - `process/fast_track/FAST_TRACK_PROCESS.md`
-  - `project/state/ft_state.yml`
-  - `process/fast_track/SUMMARY_FOR_AGENTS.md`
-- Regras de arquitetura e código:
-  - `docs/integrations/forgebase_guides/usuarios/forgebase-rules.md`
-  - `docs/integrations/forgebase_guides/agentes-ia/`
-
-## Symbiotas
-
-| Symbiota | Modo | Papel | Prompt |
-|----------|------|-------|--------|
-| `ft_manager` | **PRINCIPAL** | Orquestrador — o Claude Code assume este papel diretamente | `process/symbiotes/ft_manager/prompt.md` |
-| `ft_gatekeeper` | subagente | Validador deterministico de stage gates — PASS ou BLOCK | `process/symbiotes/ft_gatekeeper/prompt.md` |
-| `ft_acceptance` | subagente | Design de cenarios de aceitacao por Value/Support Track | `process/symbiotes/ft_acceptance/prompt.md` |
-| `ft_coach` | subagente | MDD, Planning, Feedback — lancado pelo ft_manager | `process/symbiotes/ft_coach/prompt.md` |
-| `forge_coder` | subagente | Sprint-scoped TDD/Delivery — recebe sprint inteira, retorna sprint-report | `process/symbiotes/forge_coder/prompt.md` |
-
-## Modelo de delegacao
-
-O ft_manager delega **sprints inteiras** ao forge_coder (nao tasks individuais).
-Isso mantem o contexto do ft_manager enxuto — ele so ve sprint-reports, nao detalhes de implementacao.
-
-```
-ft_manager → forge_coder(sprint-03 inteira) → sprint-report.md volta (10 linhas)
-           → ft_gatekeeper(Sprint Expert Gate) → PASS/BLOCK
-           → forge_coder(sprint-04 inteira) → sprint-report.md volta
-           → ...
-```
-
-O forge_coder internamente itera pelas tasks, roda TDD, invoca ft_gatekeeper para gate.delivery
-por task, e gera o sprint-report ao final. Todo o contexto pesado vive e morre dentro do subagente.
-
-## CLI do processo (ft.py)
-
-Ferramenta de validação determinística em `process/fast_track/tools/ft.py`. Data-driven — lê o YAML
-do processo e schemas em runtime.
-
-Neste repositório, `ft` aponta para esta CLI do processo/template. A CLI do motor determinístico
-fica disponível separadamente como `ft-engine`.
+## 3. Monitorar
 
 ```bash
-ft <command>
+ft status          # node atual, fase, progresso
+ft status --full   # + grafo e artefatos
+ft status --report # tempo e tokens por node
+ft graph           # grafo com status de cada node
+ft runs            # tabela comparativa de todos os ciclos
 ```
 
-| Comando | Quem usa | Quando |
-|---------|----------|--------|
-| `init --check` | ft_manager | Bootstrap — antes de qualquer fase |
-| `init` | ft_manager / forge_coder | Criar dirs, scaffold, sincronizar versão |
-| `validate state` | ft_manager, ft_gatekeeper | Após cada atualização do ft_state.yml |
-| `validate artifacts` | ft_manager | Antes do handoff |
-| `validate integration` | ft_gatekeeper | Mock audit, dead code, wiring — antes do gate.audit |
-| `validate gate <id>` | ft_gatekeeper | Pre-flight mecânico antes de cada gate |
-| `generate check` | ft_manager | Verificar consistência YAML ↔ MD |
-| `generate ids` | ft_manager | Regenerar FAST_TRACK_IDS.md após mudança no processo |
-| `tokens snapshot --step <id>` | ft_manager | Momentos-chave de token tracking |
-| `self-check` | ft_manager | Verificar consistência interna da CLI vs. processo |
+Durante a delegação o engine mostra heartbeat com o log do LLM. Logs completos:
+`<worktree>/state/llm_logs/`.
 
-> **Regra**: Se qualquer comando retornar BLOCK, parar e resolver antes de prosseguir.
+## 4. Human gates e decisões
 
-## Defaults para qualquer symbiota
+Quando o processo pausa num `human_gate`, o engine sobe o ambiente (`env_setup`), mostra
+URL e artefatos, e espera sua decisão:
 
-- Clean/Hex: domínio é puro; adapters só via ports/usecases; nunca colocar I/O no domínio.
-- CLI-first e offline: validar via CLI; evitar HTTP/TUI no MVP; sem rede externa por padrão.
-- Persistência: estados em YAML; auto-commit Git por step quando habilitado.
-- Documentar sessões em `project/docs/sessions/` quando aplicável.
+```bash
+ft approve                       # aprova e continua (--no-continue para só aprovar)
+ft approve "mensagem"            # aprova com instrução injetada no próximo node
+ft reject "motivo objetivo"      # rejeita → engine reenvia ao LLM com o feedback
+ft reject "motivo" --no-retry    # rejeita e bloqueia (sem reenvio)
+ft fix "instrução de correção"   # correção dirigida no worktree + revalida
+ft explore "pedido livre"        # pedido ao LLM sem avançar o processo
+```
 
-## Symbiotas de código/tests (TDD)
+Regras de condução:
 
-- Consultar:
-  - `docs/integrations/forgebase_guides/agentes-ia/guia-completo.md`
-  - `docs/integrations/forgebase_guides/usuarios/forgebase-rules.md`
-  - Prompt em `process/symbiotes/forge_coder/prompt.md`.
-- Seguir o fluxo Fast Track:
-  - PRD em `project/docs/PRD.md`
-  - Task list em `project/docs/TASK_LIST.md`
-  - Testes em `tests/`
-  - Código em `src/` seguindo camadas ForgeBase.
-- Usar exceções específicas e logging/métricas do ForgeBase; Rich apenas para UX em CLI.
+1. **Não pare sem motivo.** Gate passou → siga. Só pare em: BLOCK que exige humano,
+   MVP completo, ou erro irrecuperável.
+2. **Rejeite com motivo acionável** — o texto vira contexto do retry do LLM.
+3. **Feedback do stakeholder vira US no PRD da raiz** — nunca edite PRD/processo dentro
+   do worktree do ciclo.
 
-## Outras observações
+## 5. Bloqueios e recuperação
 
-- Quando o usuário pedir para carregar/impersonar uma persona de symbiota ou agente,
-  responda sempre com o nome do symbiota na cor verde entre chaves, por exemplo:
-  `[ft_manager] diz: Retomando de ft.tdd.01.selecao...`.
-- O `ft_manager` usa colchetes verdes para identificar qual symbiota está falando em cada momento,
-  por exemplo: `[ft_coach]`, `[forge_coder]`, `[ft_manager]`.
+| Situação | Ação |
+|----------|------|
+| Node bloqueado, quer retentar igual | `ft retry` |
+| Node bloqueado, precisa de correção | `ft fix "o que corrigir"` (`--auto` para seguir até MVP após o fix) |
+| Ciclo deu errado, descartar tudo | `ft abort` (remove worktree e branch, sem merge) |
+| Cancelar com justificativa | `ft cancel "motivo"` |
+| Smart retry | O engine detecta erro idêntico repetido e marca BLOCKED cedo — leia o motivo no `ft status` antes de retentar |
+
+## 6. Encerrar o ciclo
+
+```bash
+ft close                     # merge interativo dos artefatos + remove worktree
+ft close --merge full        # merge de tudo | docs | selective (--merge-paths) | none
+ft close --keep-worktree     # preserva o worktree no disco
+ft close --force             # encerra mesmo incompleto
+```
+
+Depois do close:
+
+1. **Validação do stakeholder**: suba o servidor do projeto e apresente o link — feedback
+   vira User Stories no `docs/PRD.md` (raiz).
+2. **Análise crítica**: liste melhorias que o stakeholder não vislumbrou; as escolhidas
+   viram US também.
+3. **Próximo ciclo**: ajuste PRD/processo na raiz, commit, `ft run . --auto`.
+
+## Variáveis de ambiente
+
+| Variável | Efeito |
+|----------|--------|
+| `FT_HOME` | Base de dados do ft (default `~/.ft`); worktrees em `$FT_HOME/worktrees/<projeto>/` |
+| `FT_ALLOW_ENGINE_REPO` | Libera rodar no repo do template — só para dev do engine |
+| `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no `ft run` |
+| `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`) |
+| `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Provisionamento SymGateway no `init`/`setup-env` |
+
+## Referências
+
+No projeto:
+
+- Processo do ciclo: `process/process.yml`
+- Conhecimento seed: `docs/PRD.md`, `docs/TECH_STACK.md`
+
+No repo do engine (`fast-track`):
+
+- Guia completo do engine: `docs/ft_engine_usage.md`
+- Templates de processo: `templates/`
+- Regras de arquitetura e código: `docs/integrations/forgebase_guides/`
+
+---
+
+## Legado V1
+
+O fluxo original — Claude Code assume o papel de `ft_manager` e orquestra symbiotas
+(`ft_coach`, `forge_coder`, `ft_gatekeeper`, `ft_acceptance`) via prompts — foi
+substituído pelo engine determinístico. Os prompts continuam no repo do engine em
+`process/symbiotes/` e `process/fast_track/SUMMARY_FOR_AGENTS.md`, mas **referenciam comandos da
+CLI antiga (`ft.py`, `ft init --check`) que não existem no `ft` atual**. Use apenas como
+referência histórica ou em projetos antigos que ainda seguem o V1.

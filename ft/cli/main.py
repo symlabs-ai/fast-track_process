@@ -118,6 +118,17 @@ def copy_template(template_name: str, project_root: Path) -> Path:
     return dest
 
 
+def _copy_agents_md(project_root: Path) -> None:
+    """Copia o playbook AGENTS.md do engine para a raiz do projeto (não sobrescreve)."""
+    import shutil
+
+    src = engine_root() / "AGENTS.md"
+    dst = project_root / "AGENTS.md"
+    if src.exists() and not dst.exists():
+        shutil.copy(src, dst)
+        print("  AGENTS.md (playbook do condutor) copiado para o projeto")
+
+
 def find_project_root() -> Path:
     """Encontra a raiz do projeto subindo ate achar process/."""
     current = Path.cwd()
@@ -694,7 +705,7 @@ def cmd_init(args):
     # Copiar template se fornecido e processo não existe
     template = getattr(args, "template", None)
     root = find_project_root()
-    _guard_engine_repo(root)
+    _guard_engine_repo(root)  # revalida após chdir para <nome>
     if template:
         if not find_process_yaml(root):
             copy_template(template, root)
@@ -703,6 +714,9 @@ def cmd_init(args):
     (root / "process").mkdir(exist_ok=True)
     (root / "docs").mkdir(exist_ok=True)
     (root / "src").mkdir(exist_ok=True)
+
+    # Playbook do condutor — todo projeto novo ganha uma cópia
+    _copy_agents_md(root)
 
     # Provisionar ambiente SymGateway (se SYM_GATEWAY_PROJECT_KEY estiver definida)
     import os as _os
@@ -724,7 +738,6 @@ def cmd_init(args):
 def cmd_continue(args):
     import sys
     sys.stdout.reconfigure(line_buffering=True)
-    _guard_engine_repo(find_project_root())
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = getattr(args, "bypass_human_gates", False) or getattr(args, "auto", False)
 
@@ -751,6 +764,7 @@ def cmd_runs(args):
     import re as _re
 
     project_root = Path(args.project).resolve()
+    _guard_engine_repo(project_root)
 
     # Coletar ciclos de worktrees externos + runs/ legado
     cycles = []
@@ -1738,6 +1752,7 @@ def cmd_run(args):
             template = getattr(args, "template", None)
             if template:
                 process_path = copy_template(template, project_root)
+                _copy_agents_md(project_root)  # bootstrap de projeto novo via ft run
             else:
                 print("ERRO: Nenhum YAML de processo encontrado em ./process/")
                 print("  Use: ft run . --template fast-track-v2")
@@ -2067,6 +2082,12 @@ def main():
                     help="Avançar em modo autônomo até MVP (pula human_gates)")
 
     args = parser.parse_args()
+
+    # Guard global: o ft opera sempre num repo de projeto, nunca no template/engine.
+    # run/runs recebem o path do projeto como argumento e validam no próprio cmd_;
+    # todos os demais comandos resolvem o projeto a partir do CWD.
+    if args.command not in (None, "run", "runs"):
+        _guard_engine_repo(find_project_root())
 
     try:
         if args.command == "init":

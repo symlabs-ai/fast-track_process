@@ -97,7 +97,7 @@ Sem `--process`, o engine procura automaticamente (ordem de prioridade):
 | Variável | Efeito |
 |----------|--------|
 | `FT_HOME` | Redireciona o diretório base de dados do ft (default `~/.ft`). Worktrees externos vivem em `$FT_HOME/worktrees/<projeto>/`. Usado pelos testes para isolamento. |
-| `FT_ALLOW_ENGINE_REPO` | Permite rodar `init`/`run`/`continue` dentro do próprio repositório do engine/template (bloqueado por padrão). Só para desenvolvimento do engine. |
+| `FT_ALLOW_ENGINE_REPO` | O `ft` opera sempre num repo de projeto — **todos** os comandos são bloqueados dentro do repositório do engine/template. Esta variável libera o bloqueio, só para desenvolvimento do engine. |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no início do `ft run`. |
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`). |
 

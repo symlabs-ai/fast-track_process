@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 
+from ft.engine import paths
 from ft.engine.runner import StepRunner
 from ft.integrations.symgateway import provision_environment
 
@@ -45,6 +46,21 @@ def resolve_llm_model(args) -> str | None:
 def engine_root() -> Path:
     """Raiz do repositório do engine (onde templates/ e kb/ vivem)."""
     return Path(__file__).resolve().parent.parent.parent
+
+
+def _guard_engine_repo(root: Path) -> None:
+    """Impede usar o repositório do engine/template como projeto.
+
+    Override para desenvolvimento do próprio engine: FT_ALLOW_ENGINE_REPO=1.
+    """
+    if os.environ.get("FT_ALLOW_ENGINE_REPO"):
+        return
+    if root.resolve() == engine_root().resolve():
+        print("ERRO: este é o repositório do ft engine/template — não pode ser usado como projeto.")
+        print("  Crie um projeto novo: ft init <nome> --template fast-track-v3")
+        print("  Ou rode em outro diretório: ft run <path-do-projeto>")
+        print("  (override para desenvolvimento do engine: FT_ALLOW_ENGINE_REPO=1)")
+        sys.exit(1)
 
 
 def copy_template(template_name: str, project_root: Path) -> Path:
@@ -131,7 +147,7 @@ def find_process_yaml(root: Path) -> Path | None:
     if local_state.exists():
         state_globs.append(local_state)
     # Buscar em worktrees externos e runs/ legado
-    wt_home = Path.home() / ".ft" / "worktrees" / root.name
+    wt_home = paths.worktrees_home(root)
     if wt_home.is_dir():
         state_globs.extend(wt_home.glob("*/state/engine_state.yml"))
     if (root / "runs").is_dir():
@@ -232,7 +248,7 @@ def _find_latest_state(root: Path) -> Path:
         return continuous
 
     # 2. Worktrees externos (~/.ft/worktrees/<project>/)
-    wt_home = Path.home() / ".ft" / "worktrees" / root.name
+    wt_home = paths.worktrees_home(root)
     if wt_home.is_dir():
         wt_dirs = sorted(
             [d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d)],
@@ -287,6 +303,9 @@ def _api_health_check(project_root: Path) -> None:
     import urllib.request
     from ft.engine import ui as _ui
 
+    if os.environ.get("FT_SKIP_HEALTH_CHECK"):
+        return
+
     # Resolver base_url
     settings_file = project_root / ".claude" / "settings.local.json"
     base_url = None
@@ -303,7 +322,7 @@ def _api_health_check(project_root: Path) -> None:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     url = f"{base_url}/v1/messages"
     payload = json.dumps({
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-haiku-4-5-20251001",
         "max_tokens": 1,
         "messages": [{"role": "user", "content": "ping"}],
     }).encode()
@@ -322,12 +341,12 @@ def _api_health_check(project_root: Path) -> None:
             print(_ui.info(f"API health check: {resp.status} OK ({host})"))
     except urllib.error.HTTPError as e:
         code = e.code
-        if code in (429, 529):
-            # Rate limit ou overloaded = API funcionando
+        body = e.read().decode(errors="ignore")[:200]
+        if code in (429, 529) or (code == 404 and "model" in body):
+            # Rate limit, overloaded ou modelo desconhecido = API respondeu e autenticou
             host = base_url.split("//")[-1].split("/")[0]
             print(_ui.info(f"API health check: {code} ({host}) — API acessível"))
         else:
-            body = e.read().decode(errors="ignore")[:200]
             print(_ui.fail(f"API health check: {code} — {body}"))
             if code == 403:
                 print("    → Projeto não registrado. Registre com: ft setup-env")
@@ -471,7 +490,7 @@ def _next_cycle_num(project_root: Path) -> int:
     max_num = 0
 
     # Worktrees externos (~/.ft/worktrees/<project>/)
-    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    wt_home = paths.worktrees_home(project_root)
     if wt_home.is_dir():
         for d in wt_home.iterdir():
             if d.is_dir() and _is_cycle_dir(d):
@@ -488,8 +507,8 @@ def _next_cycle_num(project_root: Path) -> int:
 
 
 def _worktrees_home(project_root: Path) -> Path:
-    """Retorna ~/.ft/worktrees/<project_name>/. Cria se não existir."""
-    home = Path.home() / ".ft" / "worktrees" / project_root.name
+    """Retorna <ft_home>/worktrees/<project_name>/. Cria se não existir."""
+    home = paths.worktrees_home(project_root)
     home.mkdir(parents=True, exist_ok=True)
     return home
 
@@ -498,7 +517,7 @@ def _engine_from_last_cycle(project_root: Path) -> str | None:
     """Lê o llm_engine do ciclo mais recente (worktree externo ou runs/ legado)."""
     import yaml as _yaml
 
-    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    wt_home = paths.worktrees_home(project_root)
     candidates: list[Path] = []
 
     if wt_home.is_dir():
@@ -605,8 +624,8 @@ def _worktree_root_from_state(state_path: Path) -> Path | None:
     if git_file.exists() and git_file.is_file():
         # É um worktree (arquivo .git aponta para o repo original)
         return candidate
-    # Pode ser diretório simples (sem git) em ~/.ft/worktrees/
-    if ".ft" in str(candidate) and "worktrees" in str(candidate) and (candidate / "state").is_dir():
+    # Pode ser diretório simples (sem git) dentro da raiz de worktrees
+    if paths.is_worktree_path(candidate) and (candidate / "state").is_dir():
         return candidate
     return None
 
@@ -615,7 +634,7 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, llm_mo
     root = find_project_root()
     if cycle:
         # Buscar em worktrees externos primeiro, depois runs/ legado
-        wt_home = Path.home() / ".ft" / "worktrees" / root.name
+        wt_home = paths.worktrees_home(root)
         wt_path = wt_home / cycle / "state" / "engine_state.yml"
         legacy_path = root / "runs" / cycle / "state" / "engine_state.yml"
 
@@ -675,6 +694,7 @@ def cmd_init(args):
     # Copiar template se fornecido e processo não existe
     template = getattr(args, "template", None)
     root = find_project_root()
+    _guard_engine_repo(root)
     if template:
         if not find_process_yaml(root):
             copy_template(template, root)
@@ -704,6 +724,7 @@ def cmd_init(args):
 def cmd_continue(args):
     import sys
     sys.stdout.reconfigure(line_buffering=True)
+    _guard_engine_repo(find_project_root())
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = getattr(args, "bypass_human_gates", False) or getattr(args, "auto", False)
 
@@ -733,7 +754,7 @@ def cmd_runs(args):
 
     # Coletar ciclos de worktrees externos + runs/ legado
     cycles = []
-    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    wt_home = paths.worktrees_home(project_root)
     if wt_home.is_dir():
         cycles.extend(d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d))
 
@@ -1338,7 +1359,7 @@ def cmd_abort(args):
             print(_ui.success(f"Branch removida: {branch}"))
 
     # Limpar diretório em ~/.ft/worktrees se existir
-    ft_worktrees = Path.home() / ".ft" / "worktrees"
+    ft_worktrees = paths.worktrees_root()
     if ft_worktrees.exists():
         for project_dir in ft_worktrees.iterdir():
             wt_dir = project_dir / work.name
@@ -1576,7 +1597,7 @@ def _check_active_run(project_root: Path) -> str | None:
             pass
 
     # 2. Worktrees externos (~/.ft/worktrees/<project>/)
-    wt_home = Path.home() / ".ft" / "worktrees" / project_root.name
+    wt_home = paths.worktrees_home(project_root)
     if wt_home.is_dir():
         candidates = sorted(
             [d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d)],
@@ -1626,6 +1647,7 @@ def cmd_run(args):
     sys.stdout.reconfigure(line_buffering=True)
 
     project_root = Path(args.project).resolve()
+    _guard_engine_repo(project_root)
 
     # Verificar se já tem um ciclo ativo (em andamento, pausado ou bloqueado)
     # Deve rodar ANTES de criar worktree para não poluir em caso de erro.

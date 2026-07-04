@@ -399,9 +399,11 @@ nodes:
 # ---------------------------------------------------------------------------
 
 class TestRunGate:
-    def test_gate_passes_when_files_exist(self, tmp_path):
+    def test_gate_passes_when_files_exist(self, tmp_path, monkeypatch):
         """Gate PASS when required files exist."""
-        # Create required files
+        # project_root="." → isolar CWD no tmp_path para não escrever no repo
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "project" / "docs").mkdir(parents=True)
         (Path(".") / "project/docs/hipotese.md").write_text("x" * 100)
         (Path(".") / "project/docs/PRD.md").write_text("x" * 100)
 
@@ -423,8 +425,10 @@ class TestRunGate:
         assert state.node_status == "ready"
         assert "gate.01.discovery" in state.completed_nodes
 
-    def test_gate_can_recover_from_blocked_state(self, tmp_path):
+    def test_gate_can_recover_from_blocked_state(self, tmp_path, monkeypatch):
         """Gate reexecutado com sucesso deve limpar o bloqueio e avançar."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "project" / "docs").mkdir(parents=True)
         (Path(".") / "project/docs/hipotese.md").write_text("x" * 100)
         (Path(".") / "project/docs/PRD.md").write_text("x" * 100)
 

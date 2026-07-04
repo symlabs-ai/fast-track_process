@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from ft.engine import paths
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -29,7 +31,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 def _state_file(project_dir: Path) -> Path:
     """Retorna o caminho do engine_state.yml para um projeto (BL-20: worktree externo)."""
-    return Path.home() / ".ft" / "worktrees" / project_dir.name / "cycle-01" / "state" / "engine_state.yml"
+    return paths.worktrees_home(project_dir) / "cycle-01" / "state" / "engine_state.yml"
 
 
 def run_ft(args: list[str], cwd: Path, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -201,7 +203,7 @@ class TestInit:
     def test_creates_state_file(self, ft_project):
         run_ft(["init"], cwd=ft_project)
         # State lives in external worktree (BL-20)
-        wt_home = Path.home() / ".ft" / "worktrees" / ft_project.name
+        wt_home = paths.worktrees_home(ft_project)
         state_file = wt_home / "cycle-01" / "state" / "engine_state.yml"
         assert state_file.exists(), f"engine_state.yml should be created by ft init (checked {state_file})"
 
@@ -358,7 +360,7 @@ class TestContinue:
 
     def test_complete_process_via_mvp(self, ft_project_initialized):
         """--mvp mode runs all gates until end."""
-        result = run_ft(["continue", "--mvp"], cwd=ft_project_initialized)
+        result = run_ft(["continue", "--auto"], cwd=ft_project_initialized)
         assert result.returncode == 0
         output = result.stdout + result.stderr
         assert "COMPLETO" in output or "completo" in output.lower()

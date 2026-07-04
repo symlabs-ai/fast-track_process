@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from ft.engine import paths
 import yaml
 
 
@@ -103,7 +105,7 @@ class TestRunIsolated:
         """BL-20: isolated mode creates cycle in ~/.ft/worktrees/, not runs/."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        wt_home = Path.home() / ".ft" / "worktrees" / tmp_path.name
+        wt_home = paths.worktrees_home(tmp_path)
         assert wt_home.is_dir() and any(wt_home.iterdir())
 
     def test_output_shows_isolated(self, tmp_path):

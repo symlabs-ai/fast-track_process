@@ -14,7 +14,9 @@ from ft.engine.delegate import (
 class TestBuildExecutorCommand:
     def test_builds_claude_command_with_bypass(self):
         cmd = _build_executor_command("claude", "faça algo", "/tmp/proj", 7)
-        assert cmd[:3] == ["claude", "--print", "--dangerously-skip-permissions"]
+        assert cmd[0] == "claude"
+        assert "--dangerously-skip-permissions" in cmd
+        assert ["--output-format", "stream-json"] == cmd[1:3]
         assert "--max-turns" in cmd
         assert "7" in cmd
         assert "-p" in cmd

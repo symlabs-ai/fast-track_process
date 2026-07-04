@@ -14,6 +14,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from ft.engine import paths
 import yaml
 
 
@@ -108,7 +110,7 @@ class TestFindLatestState:
         from ft.cli.main import _find_latest_state
         result = _find_latest_state(tmp_path)
         # BL-20: default is external worktree, not runs/
-        expected = Path.home() / ".ft" / "worktrees" / tmp_path.name / "cycle-01" / "state" / "engine_state.yml"
+        expected = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
         assert result == expected
 
     def test_ignores_non_numeric_dirs_in_runs(self, tmp_path):
@@ -116,7 +118,7 @@ class TestFindLatestState:
         (tmp_path / "runs" / "archive").mkdir(parents=True)
         result = _find_latest_state(tmp_path)
         # BL-20: still defaults to external worktree when no real state found
-        expected = Path.home() / ".ft" / "worktrees" / tmp_path.name / "cycle-01" / "state" / "engine_state.yml"
+        expected = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
         assert result == expected
 
 
@@ -128,15 +130,17 @@ class TestNextRunDir:
     def test_creates_first_run(self, tmp_path):
         from ft.cli.main import _next_run_dir
         run_dir = _next_run_dir(tmp_path)
-        assert run_dir == tmp_path / "runs" / "cycle-01"
+        # BL-20: ciclos vivem em worktrees externos, não em runs/
+        assert run_dir == paths.worktrees_home(tmp_path) / "cycle-01"
         assert run_dir.is_dir()
 
     def test_increments_from_existing(self, tmp_path):
         from ft.cli.main import _next_run_dir
+        # runs/ legado ainda conta para a numeração do próximo ciclo
         (tmp_path / "runs" / "cycle-01").mkdir(parents=True)
         (tmp_path / "runs" / "cycle-02").mkdir()
         run_dir = _next_run_dir(tmp_path)
-        assert run_dir == tmp_path / "runs" / "cycle-03"
+        assert run_dir == paths.worktrees_home(tmp_path) / "cycle-03"
         assert run_dir.is_dir()
 
     def test_pads_with_zero(self, tmp_path):
@@ -191,7 +195,7 @@ class TestInitCreatesStructure:
         """BL-20: state lives in ~/.ft/worktrees/<project>/cycle-01/."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["init"], cwd=tmp_path)
-        state = Path.home() / ".ft" / "worktrees" / tmp_path.name / "cycle-01" / "state" / "engine_state.yml"
+        state = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
         assert state.exists()
 
 
@@ -204,7 +208,7 @@ class TestRunCreatesRunSubdir:
         """BL-20: ft run creates cycle in ~/.ft/worktrees/, not runs/."""
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        wt_home = Path.home() / ".ft" / "worktrees" / tmp_path.name
+        wt_home = paths.worktrees_home(tmp_path)
         assert wt_home.is_dir()
         cycles = list(wt_home.iterdir())
         assert len(cycles) >= 1
@@ -233,7 +237,7 @@ class TestRunIncrementsRunNumber:
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        wt_home = Path.home() / ".ft" / "worktrees" / tmp_path.name
+        wt_home = paths.worktrees_home(tmp_path)
         cycles = [d.name for d in wt_home.iterdir() if d.is_dir()]
         assert len(cycles) >= 2
 

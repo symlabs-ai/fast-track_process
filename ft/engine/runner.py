@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ft.engine import paths
 from ft.engine.graph import Node, ProcessGraph, load_graph
 from ft.engine.state import StateManager
 from ft.engine.delegate import delegate_to_llm, delegate_with_feedback
@@ -1451,7 +1452,7 @@ class StepRunner:
             print(ui.warn("env_setup falhou e .serve_url não encontrado — servidor pode não estar rodando"))
 
         gate_work_dir = str(self.state_mgr.path.parent.parent)
-        is_worktree = ".ft/worktrees" in gate_work_dir
+        is_worktree = paths.is_worktree_path(gate_work_dir)
         abs_files = [str(Path(gate_work_dir) / o) for o in (node.outputs or [])] if is_worktree else None
         print(ui.human_gate_card(
             title=node.title,
@@ -2417,7 +2418,7 @@ class StepRunner:
                 if serve_url_file.exists():
                     url = serve_url_file.read_text().strip() or None
                 _gate_wt = str(self.state_mgr.path.parent.parent)
-                _is_wt = ".ft/worktrees" in str(self.state_mgr.path)
+                _is_wt = paths.is_worktree_path(self.state_mgr.path)
                 _abs_files = [str(Path(_gate_wt) / o) for o in (pending_node.outputs or [])] if _is_wt else None
                 print(ui.human_gate_card(
                     title=pending_node.title,

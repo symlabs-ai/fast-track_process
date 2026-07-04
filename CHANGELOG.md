@@ -4,6 +4,19 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [Não lançado]
+
+### Novas funcionalidades
+- **Guard de template**: `ft init`/`ft run`/`ft continue` recusam rodar dentro do repositório do engine/template — impede contaminar o template com estado de projeto. Override para desenvolvimento: `FT_ALLOW_ENGINE_REPO=1`
+- **`FT_HOME`**: diretório base `~/.ft` agora é configurável via env var — novo módulo `ft/engine/paths.py` centraliza a resolução (worktrees, detecção de worktree por path real em vez de substring)
+- **`FT_SKIP_HEALTH_CHECK`**: pula o health check da API no `ft run`
+
+### Correções
+- **Health check com modelo aposentado**: `_api_health_check` usava `claude-sonnet-4-20250514` (404) e abortava todo `ft run` — modelo atualizado e 404 de modelo desconhecido agora conta como "API acessível"
+- **Testes isolados do `~/.ft` real**: fixture autouse define `FT_HOME` temporário — suíte não polui mais `~/.ft/worktrees/` com dezenas de `test_*` nem depende de estado acumulado; testes também não batem mais na API real
+- **Testes stale corrigidos**: expectativas de `_next_run_dir` atualizadas para BL-20 (worktrees externos), `--mvp`→`--auto`, comando claude com `stream-json`
+- **Descontaminação do template**: removidos `project/state/engine_state.yml` (estado runtime commitado por engano), `.context/`, `.serve_url` e `llm_logs/`; `.gitignore` cobre esses artefatos
+
 ## [v0.13.0] - 2026-04-08
 
 ### Novas funcionalidades

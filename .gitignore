@@ -24,6 +24,12 @@ environment/*.local.md
 .claude/scheduled_tasks.lock
 /*_log.md
 
+# ft engine — artefatos de runtime (nunca versionar no template)
+.serve_url
+.context/
+project/state/engine_state.yml
+project/state/llm_logs/
+
 # Fast Track — processo estatico
 # No template: process/ esta commitado (e o fonte)
 # No projeto do cliente: ft init adiciona process/ aqui automaticamente

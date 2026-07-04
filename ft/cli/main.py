@@ -798,46 +798,84 @@ def cmd_log(args):
 
     log_path = _current_log()
     if log_path is None:
-        print(_ui.warn("Nenhum log LLM encontrado para o ciclo ativo"))
+        print(_ui.warn("Nenhum log LLM encontrado para o ciclo ativo"), flush=True)
         return
 
     if args.path:
-        print(log_path)
+        print(log_path, flush=True)
         return
 
-    print(_ui.dim(f"── {log_path.name} ──"))
+    print(_ui.dim(f"── {log_path.name} ──"), flush=True)
     with log_path.open(errors="replace") as f:
         lines = f.readlines()
     shown = [x for x in (line.rstrip() if args.raw else _fmt(line) for line in lines) if x]
     for out in shown[-args.lines:]:
-        print(out)
+        print(out, flush=True)
 
     if not args.follow:
         return
 
-    # Follow: acompanha o arquivo e troca sozinho quando o engine abre um log novo
+    # Follow: acompanha o arquivo e troca sozinho quando o engine abre um log novo.
+    # Heartbeat: se ficar >15s sem linha impressa, mostra o que o worker está fazendo
+    # (thinking tokens, último evento) para não parecer travado.
+    import json as _json
+
+    def _track(raw: str, ctx: dict) -> None:
+        if not raw.startswith("{"):
+            return
+        try:
+            ev = _json.loads(raw)
+        except Exception:
+            return
+        etype = ev.get("type", "")
+        if etype == "system" and ev.get("subtype") == "thinking_tokens":
+            ctx["desc"] = f"pensando (~{ev.get('estimated_tokens', 0)} tokens)"
+        elif etype == "user":
+            ctx["desc"] = "resultado de ferramenta recebido, processando"
+        elif etype == "assistant":
+            ctx["desc"] = "gerando resposta"
+        elif etype:
+            ctx["desc"] = f"evento {etype}"
+
     try:
         f = log_path.open(errors="replace")
         f.seek(0, 2)
         idle = 0.0
+        last_print = _time.time()
+        hb = {"desc": ""}
+
+        def _heartbeat() -> None:
+            nonlocal last_print
+            now = _time.time()
+            if now - last_print >= 15.0:
+                desc = hb["desc"] or "aguardando eventos do LLM"
+                print(_ui.dim(f"  ⋯ {desc}"), flush=True)
+                last_print = now
+
         while True:
             line = f.readline()
             if line:
                 idle = 0.0
+                _track(line.strip(), hb)
                 out = line.rstrip() if args.raw else _fmt(line)
                 if out:
-                    print(out)
+                    print(out, flush=True)
+                    last_print = _time.time()
+                else:
+                    _heartbeat()
                 continue
             _time.sleep(0.5)
             idle += 0.5
+            _heartbeat()
             if idle >= 3.0:
                 idle = 0.0
                 newer = _current_log()
                 if newer and newer != log_path:
                     f.close()
                     log_path = newer
-                    print(_ui.dim(f"── {log_path.name} ──"))
+                    print(_ui.dim(f"── {log_path.name} ──"), flush=True)
                     f = log_path.open(errors="replace")
+                    hb["desc"] = ""
     except KeyboardInterrupt:
         pass
     finally:

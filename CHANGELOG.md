@@ -4,7 +4,7 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [Não lançado]
+## [v0.13.2] - 2026-07-04
 
 ### Melhorias
 - **Guard de template global**: o bloqueio de rodar dentro do repo do engine/template agora cobre **todos** os comandos da CLI (antes: só `init`/`run`/`continue`) — aplicado centralmente no dispatch; `ft run`/`ft runs` validam o path do projeto recebido como argumento, permitindo operar projetos externos a partir de qualquer CWD. Override para desenvolvimento: `FT_ALLOW_ENGINE_REPO=1`

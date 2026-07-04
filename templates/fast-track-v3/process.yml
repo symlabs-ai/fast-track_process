@@ -331,7 +331,7 @@ nodes:
   - id: ft.delivery.01.entrypoint
     type: build
     title: "Criar Entry Point HTTP"
-    description: "Garantir que o servidor HTTP sobe corretamente: uvicorn na porta 8000, middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
+    description: "Garantir que o servidor HTTP sobe corretamente: uvicorn na porta configurada do projeto (settings/.env — nunca hardcodar porta), middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
     sprint: sprint-05-delivery
     executor: claude
     validators:
@@ -349,7 +349,7 @@ nodes:
   - id: ft.delivery.03.makefile
     type: build
     title: "Criar Makefile"
-    description: "Criar Makefile com targets obrigatórios: make dev (sobe backend + frontend simultaneamente), make test (roda pytest), make build (build do frontend). Sem dependências externas além do que já está instalado."
+    description: "Criar Makefile com targets obrigatórios: make dev (sobe backend + frontend simultaneamente), make test (roda pytest), make build (build do frontend), make run (sobe o servidor completo pronto para smoke, com a configuração local do projeto) e make url (imprime só a base URL do servidor, ex.: http://localhost:8021). Sem dependências externas além do que já está instalado."
     sprint: sprint-05-delivery
     executor: claude
     outputs:
@@ -357,6 +357,7 @@ nodes:
     validators:
       - file_exists: project/Makefile
       - command_succeeds: "make --dry-run dev 2>&1 | head -3"
+      - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \"$(make -s url)\""
     next: gate.delivery
 
   - id: gate.delivery
@@ -378,16 +379,16 @@ nodes:
   - id: ft.smoke.01.run
     type: build
     title: "Smoke Test"
-    description: "Subir o servidor e verificar que GET /health retorna {status: ok, db: ok}. Este teste valida que o servidor sobe, o banco conecta e a rota de saúde responde corretamente."
+    description: "Subir o servidor via make run e verificar que GET /health responde status ok (padrão /health com versão). Este teste valida que o servidor sobe com a configuração real do projeto e a rota de saúde responde."
     sprint: sprint-06-smoke
     executor: claude
     env_setup:
-      - cd project && python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 &
+      - cd project && (make run &)
       - sleep 3
     outputs:
       - docs/smoke-report.md
     validators:
-      - command_succeeds: "curl -sf http://localhost:8000/health | python -c \"import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)\""
+      - command_succeeds: "cd project && curl -sf \"$(make -s url)/health\" | python -c \"import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)\""
       - file_exists: docs/smoke-report.md
     next: gate.smoke
 

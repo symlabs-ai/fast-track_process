@@ -758,6 +758,95 @@ def cmd_status(args):
         runner.status(full=args.full)
 
 
+def cmd_log(args):
+    """Mostra/acompanha o log LLM do ciclo ativo, formatado para leitura humana."""
+    import time as _time
+    from ft.engine.delegate import _format_stream_line
+    from ft.engine import ui as _ui
+
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args))
+
+    def _current_log() -> Path | None:
+        state = runner.state_mgr.load()
+        rel = state.active_llm_log or state.last_llm_log
+        if rel:
+            p = Path(rel)
+            if not p.is_absolute():
+                p = Path(runner._work_dir) / rel
+            if p.exists():
+                return p
+        # Fallback: arquivo mais recente em llm_logs/
+        log_dir = runner.state_mgr.path.parent / "llm_logs"
+        if log_dir.is_dir():
+            logs = sorted(log_dir.glob("*.log"), key=lambda f: f.stat().st_mtime)
+            if logs:
+                return logs[-1]
+        return None
+
+    _engine = runner._resolve_llm_engine()
+    _last_out: list[str | None] = [None]
+
+    def _fmt(line: str) -> str | None:
+        out = _format_stream_line(_engine, line)
+        if not out or (out.startswith("event ") and not args.raw):
+            return None
+        # Stream parcial repete o mesmo bloco várias vezes — dedupe consecutivo
+        if out == _last_out[0]:
+            return None
+        _last_out[0] = out
+        return out
+
+    log_path = _current_log()
+    if log_path is None:
+        print(_ui.warn("Nenhum log LLM encontrado para o ciclo ativo"))
+        return
+
+    if args.path:
+        print(log_path)
+        return
+
+    print(_ui.dim(f"── {log_path.name} ──"))
+    with log_path.open(errors="replace") as f:
+        lines = f.readlines()
+    shown = [x for x in (line.rstrip() if args.raw else _fmt(line) for line in lines) if x]
+    for out in shown[-args.lines:]:
+        print(out)
+
+    if not args.follow:
+        return
+
+    # Follow: acompanha o arquivo e troca sozinho quando o engine abre um log novo
+    try:
+        f = log_path.open(errors="replace")
+        f.seek(0, 2)
+        idle = 0.0
+        while True:
+            line = f.readline()
+            if line:
+                idle = 0.0
+                out = line.rstrip() if args.raw else _fmt(line)
+                if out:
+                    print(out)
+                continue
+            _time.sleep(0.5)
+            idle += 0.5
+            if idle >= 3.0:
+                idle = 0.0
+                newer = _current_log()
+                if newer and newer != log_path:
+                    f.close()
+                    log_path = newer
+                    print(_ui.dim(f"── {log_path.name} ──"))
+                    f = log_path.open(errors="replace")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            f.close()
+        except Exception:
+            pass
+
+
 def cmd_runs(args):
     """Mostra tabela comparativa de todos os ciclos (worktrees externos + runs/ legado)."""
     from ft.engine import ui as _ui
@@ -1987,6 +2076,14 @@ def main():
     st.add_argument("--full", "-f", action="store_true", help="Mostrar grafo e artefatos")
     st.add_argument("--report", "-r", action="store_true", help="Relatório de tempo e tokens por node")
 
+    # log — acompanhar o log LLM do ciclo ativo
+    lg = sub.add_parser("log", help="Mostrar/acompanhar o log LLM do ciclo ativo")
+    add_llm_engine_flags(lg)
+    lg.add_argument("--follow", "-f", "--tail", action="store_true", dest="follow", help="Acompanhar em tempo real (troca de log sozinho quando o node muda)")
+    lg.add_argument("--lines", "-n", type=int, default=30, help="Quantas linhas mostrar inicialmente (default: 30)")
+    lg.add_argument("--raw", action="store_true", help="NDJSON cru, sem formatação")
+    lg.add_argument("--path", action="store_true", help="Só imprimir o caminho do log ativo")
+
     # runs — tabela comparativa de todos os ciclos
     ru2 = sub.add_parser("runs", help="Tabela comparativa de todos os ciclos em runs/")
     ru2.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
@@ -2096,6 +2193,8 @@ def main():
             cmd_continue(args)
         elif args.command == "status":
             cmd_status(args)
+        elif args.command == "log":
+            cmd_log(args)
         elif args.command == "approve":
             cmd_approve(args)
         elif args.command == "reject":

@@ -44,7 +44,7 @@ nodes:
     outputs:
       - docs/hipotese.md
     validators:
-      - has_file: docs/hipotese.md
+      - file_exists: docs/hipotese.md
       - has_sections:
           - Hipótese Central
           - Problema Observado
@@ -72,7 +72,7 @@ nodes:
     outputs:
       - docs/PRD.md
     validators:
-      - has_file: docs/PRD.md
+      - file_exists: docs/PRD.md
       - has_sections:
           - Hipótese
           - Visão
@@ -99,8 +99,8 @@ nodes:
     sprint: sprint-01-mdd
     executor: python
     validators:
-      - has_file: docs/PRD.md
-      - has_file: docs/hipotese.md
+      - file_exists: docs/PRD.md
+      - file_exists: docs/hipotese.md
       - has_sections:
           - Hipótese
           - User Stories
@@ -120,7 +120,7 @@ nodes:
     outputs:
       - docs/task_list.md
     validators:
-      - has_file: docs/task_list.md
+      - file_exists: docs/task_list.md
     next: ft.plan.02.tech_stack
 
   - id: ft.plan.02.tech_stack
@@ -132,7 +132,7 @@ nodes:
     outputs:
       - docs/tech_stack.md
     validators:
-      - has_file: docs/tech_stack.md
+      - file_exists: docs/tech_stack.md
       - has_sections:
           - Framework
           - Banco de Dados
@@ -159,7 +159,7 @@ nodes:
     outputs:
       - docs/api_contract.md
     validators:
-      - has_file: docs/api_contract.md
+      - file_exists: docs/api_contract.md
       - has_sections:
           - Base URL
           - Endpoints
@@ -174,7 +174,7 @@ nodes:
     outputs:
       - docs/ui_criteria.md
     validators:
-      - has_file: docs/ui_criteria.md
+      - file_exists: docs/ui_criteria.md
     next: ft.plan.05.test_data
 
   - id: ft.plan.05.test_data
@@ -186,7 +186,7 @@ nodes:
     outputs:
       - docs/test_data.md
     validators:
-      - has_file: docs/test_data.md
+      - file_exists: docs/test_data.md
     next: ft.plan.gate
 
   - id: ft.plan.gate
@@ -196,11 +196,11 @@ nodes:
     sprint: sprint-02-planning
     executor: python
     validators:
-      - has_file: docs/task_list.md
-      - has_file: docs/tech_stack.md
-      - has_file: docs/api_contract.md
-      - has_file: docs/ui_criteria.md
-      - has_file: docs/test_data.md
+      - file_exists: docs/task_list.md
+      - file_exists: docs/tech_stack.md
+      - file_exists: docs/api_contract.md
+      - file_exists: docs/ui_criteria.md
+      - file_exists: docs/test_data.md
     next: ft.frontend.01.scaffold
 
   # ================================================================
@@ -217,7 +217,7 @@ nodes:
       - project/frontend/
       - .build_ok
     validators:
-      - has_file: project/frontend/package.json
+      - file_exists: project/frontend/package.json
       - command_succeeds: "cd project/frontend && npm install --silent && npm run build --silent"
     next: ft.frontend.02.implement
 
@@ -258,7 +258,7 @@ nodes:
       - docs/screenshots/
       - docs/screenshot-review.md
     validators:
-      - has_file: docs/screenshot-review.md
+      - file_exists: docs/screenshot-review.md
     on_fail:
       human_gate: "Screenshots não evidenciam conformidade com os critérios visuais. Corrija a UI e refaça."
       goto: ft.frontend.02.implement
@@ -271,7 +271,7 @@ nodes:
     sprint: sprint-03-frontend
     executor: python
     validators:
-      - has_file: docs/screenshot-review.md
+      - file_exists: docs/screenshot-review.md
       - command_succeeds: "cd project/frontend && npm run build --silent"
     next: ft.tdd.01.red
 
@@ -288,7 +288,7 @@ nodes:
     outputs:
       - project/tests/
     validators:
-      - has_file: project/tests/
+      - file_exists: project/tests/
     next: ft.tdd.02.green
 
   - id: ft.tdd.02.green
@@ -335,7 +335,7 @@ nodes:
     sprint: sprint-05-delivery
     executor: claude
     validators:
-      - has_file: project/backend/main.py
+      - file_exists: project/backend/main.py
     next: ft.delivery.02.self_review
 
   - id: ft.delivery.02.self_review
@@ -355,7 +355,7 @@ nodes:
     outputs:
       - project/Makefile
     validators:
-      - has_file: project/Makefile
+      - file_exists: project/Makefile
       - command_succeeds: "make --dry-run dev 2>&1 | head -3"
     next: gate.delivery
 
@@ -366,8 +366,8 @@ nodes:
     sprint: sprint-05-delivery
     executor: python
     validators:
-      - has_file: project/Makefile
-      - has_file: project/backend/main.py
+      - file_exists: project/Makefile
+      - file_exists: project/backend/main.py
       - command_succeeds: "cd project && python -m pytest tests/ -q 2>&1 | tail -5"
     next: ft.smoke.01.run
 
@@ -388,7 +388,7 @@ nodes:
       - docs/smoke-report.md
     validators:
       - command_succeeds: "curl -sf http://localhost:8000/health | python -c \"import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)\""
-      - has_file: docs/smoke-report.md
+      - file_exists: docs/smoke-report.md
     next: gate.smoke
 
   - id: gate.smoke
@@ -398,7 +398,7 @@ nodes:
     sprint: sprint-06-smoke
     executor: python
     validators:
-      - has_file: docs/smoke-report.md
+      - file_exists: docs/smoke-report.md
     next: ft.acceptance.01.cli
 
   # ================================================================
@@ -422,7 +422,7 @@ nodes:
       - docs/acceptance-report.md
       - docs/acceptance-result.json
     validators:
-      - has_file: docs/acceptance-result.json
+      - file_exists: docs/acceptance-result.json
       - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/acceptance-result.json')); sys.exit(0 if d.get('fail',1)==0 else 1)\""
     next: gate.acceptance
 
@@ -433,7 +433,7 @@ nodes:
     sprint: sprint-07-acceptance
     executor: python
     validators:
-      - has_file: docs/acceptance-report.md
+      - file_exists: docs/acceptance-report.md
     next: ft.e2e.01.browser
 
   # ================================================================
@@ -451,7 +451,7 @@ nodes:
     outputs:
       - project/tests/e2e/
     validators:
-      - has_file: project/tests/e2e/
+      - file_exists: project/tests/e2e/
     next: ft.e2e.02.screenshots
 
   - id: ft.e2e.02.screenshots
@@ -465,7 +465,7 @@ nodes:
       - docs/screenshots/e2e/
       - docs/e2e-report.md
     validators:
-      - has_file: docs/e2e-report.md
+      - file_exists: docs/e2e-report.md
     next: gate.e2e
 
   - id: gate.e2e
@@ -475,8 +475,8 @@ nodes:
     sprint: sprint-08-e2e
     executor: python
     validators:
-      - has_file: docs/e2e-report.md
-      - has_file: docs/screenshots/e2e/
+      - file_exists: docs/e2e-report.md
+      - file_exists: docs/screenshots/e2e/
     next: ft.final.01.visual_check
 
   # ================================================================
@@ -493,7 +493,7 @@ nodes:
     outputs:
       - docs/visual-check-report.md
     validators:
-      - has_file: docs/visual-check-report.md
+      - file_exists: docs/visual-check-report.md
     next: gate.visual_check
 
   - id: gate.visual_check
@@ -503,7 +503,7 @@ nodes:
     sprint: sprint-09-final
     executor: python
     validators:
-      - has_file: docs/visual-check-report.md
+      - file_exists: docs/visual-check-report.md
     next: ft.final.02.stakeholder
 
   - id: ft.final.02.stakeholder
@@ -541,7 +541,7 @@ nodes:
     outputs:
       - docs/retro.md
     validators:
-      - has_file: docs/retro.md
+      - file_exists: docs/retro.md
     next: ft.handoff.02.prd_rewrite
 
   - id: ft.handoff.02.prd_rewrite
@@ -553,7 +553,7 @@ nodes:
     outputs:
       - docs/PRD.md
     validators:
-      - has_file: docs/PRD.md
+      - file_exists: docs/PRD.md
     next: ft.handoff.03.critical_analysis
 
   - id: ft.handoff.03.critical_analysis
@@ -565,7 +565,7 @@ nodes:
     outputs:
       - docs/critical-analysis.md
     validators:
-      - has_file: docs/critical-analysis.md
+      - file_exists: docs/critical-analysis.md
     next: ft.handoff.04.plano_voo
 
   - id: ft.handoff.04.plano_voo
@@ -578,8 +578,8 @@ nodes:
       - docs/plano_de_voo.md
       - docs/handoff.md
     validators:
-      - has_file: docs/plano_de_voo.md
-      - has_file: docs/handoff.md
+      - file_exists: docs/plano_de_voo.md
+      - file_exists: docs/handoff.md
       - has_sections:
           - O que foi entregue
           - O que ficou pendente

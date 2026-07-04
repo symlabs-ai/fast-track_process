@@ -820,14 +820,23 @@ def cmd_log(args):
     # (thinking tokens, último evento) para não parecer travado.
     import json as _json
 
-    def _track(raw: str, ctx: dict) -> None:
+    def _track(raw: str, ctx: dict) -> str | None:
+        """Atualiza o contexto do heartbeat; retorna fragmento de thinking, se houver."""
         if not raw.startswith("{"):
-            return
+            return None
         try:
             ev = _json.loads(raw)
         except Exception:
-            return
+            return None
         etype = ev.get("type", "")
+        if etype == "stream_event":
+            inner = ev.get("event", {})
+            if inner.get("type") == "content_block_delta":
+                delta = inner.get("delta", {})
+                if delta.get("type") == "thinking_delta":
+                    ctx["desc"] = "raciocinando"
+                    return delta.get("thinking", "")
+            return None
         if etype == "system" and ev.get("subtype") == "thinking_tokens":
             ctx["desc"] = f"pensando (~{ev.get('estimated_tokens', 0)} tokens)"
         elif etype == "user":
@@ -836,6 +845,7 @@ def cmd_log(args):
             ctx["desc"] = "gerando resposta"
         elif etype:
             ctx["desc"] = f"evento {etype}"
+        return None
 
     try:
         f = log_path.open(errors="replace")
@@ -852,13 +862,32 @@ def cmd_log(args):
                 print(_ui.dim(f"  ⋯ {desc}"), flush=True)
                 last_print = now
 
+        think_buf = ""
+
+        def _flush_think(force: bool = False) -> None:
+            nonlocal think_buf, last_print
+            while "\n" in think_buf:
+                head, think_buf = think_buf.split("\n", 1)
+                if head.strip():
+                    print(_ui.dim(f"✻ {head.strip()[:160]}"), flush=True)
+                    last_print = _time.time()
+            if force and think_buf.strip():
+                print(_ui.dim(f"✻ {think_buf.strip()[:160]}"), flush=True)
+                think_buf = ""
+                last_print = _time.time()
+
         while True:
             line = f.readline()
             if line:
                 idle = 0.0
-                _track(line.strip(), hb)
+                frag = _track(line.strip(), hb)
+                if frag is not None and not args.raw:
+                    think_buf += frag
+                    _flush_think()
+                    continue
                 out = line.rstrip() if args.raw else _fmt(line)
                 if out:
+                    _flush_think(force=True)
                     print(out, flush=True)
                     last_print = _time.time()
                 else:

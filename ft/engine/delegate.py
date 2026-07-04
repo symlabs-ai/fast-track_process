@@ -107,6 +107,10 @@ def _format_stream_line(llm_engine: str, line: str) -> str:
         except json.JSONDecodeError:
             return text
         etype = event.get("type", "")
+        if etype == "stream_event":
+            # Chunks parciais (--include-partial-messages): consumidos por quem
+            # agrega (ft log); no stream linha-a-linha sao ruido.
+            return ""
         if etype == "assistant":
             msg = event.get("message", {})
             for block in msg.get("content", []):
@@ -117,6 +121,10 @@ def _format_stream_line(llm_engine: str, line: str) -> str:
                     return _describe_tool_call(block.get("name", ""), block.get("input", {}))
                 if btype == "text":
                     return f"→ {block.get('text', '').strip()[:120]}"
+                if btype == "thinking":
+                    t = (block.get("thinking") or "").strip()
+                    if t:
+                        return f"✻ {t[:120]}"
         if etype == "result":
             return f"result: {event.get('result', '')[:80]}"
         return f"event {etype}"

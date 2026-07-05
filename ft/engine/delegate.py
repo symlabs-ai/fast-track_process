@@ -634,6 +634,11 @@ def delegate_to_llm(
 {task}
 
 REGRAS:
+- DIRETORIO DE TRABALHO: {project_root} — todo o seu trabalho acontece DENTRO dele,
+  com paths RELATIVOS. NUNCA leia ou escreva fora dele (nem em outros checkouts do
+  mesmo projeto), exceto paths absolutos explicitamente listados abaixo. Se algum
+  documento citar um caminho absoluto fora do diretorio de trabalho, IGNORE o caminho
+  e use o equivalente relativo local.
 - Escreva APENAS nos paths permitidos: {paths_str}
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)

@@ -779,6 +779,13 @@ def cmd_log(args):
     from ft.engine.delegate import _format_stream_line
     from ft.engine import ui as _ui
 
+    # `ft log` puro (nenhum parâmetro) → help explicando os parâmetros.
+    # Para ver as últimas linhas sem acompanhar, use `ft log -n 30`.
+    if not (args.follow or args.raw or args.path or args.lines is not None):
+        args._parser.print_help()
+        return
+    lines = args.lines if args.lines is not None else 30
+
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args))
 
     def _current_log() -> Path | None:
@@ -822,9 +829,9 @@ def cmd_log(args):
 
     print(_ui.dim(f"── {log_path.name} ──"), flush=True)
     with log_path.open(errors="replace") as f:
-        lines = f.readlines()
-    shown = [x for x in (line.rstrip() if args.raw else _fmt(line) for line in lines) if x]
-    for out in shown[-args.lines:]:
+        raw_lines = f.readlines()
+    shown = [x for x in (line.rstrip() if args.raw else _fmt(line) for line in raw_lines) if x]
+    for out in shown[-lines:]:
         print(out, flush=True)
 
     if not args.follow:
@@ -2171,7 +2178,8 @@ def main():
     lg = sub.add_parser("log", help="Mostrar/acompanhar o log LLM do ciclo ativo")
     add_llm_engine_flags(lg)
     lg.add_argument("--follow", "-f", "--tail", action="store_true", dest="follow", help="Acompanhar em tempo real (troca de log sozinho quando o node muda)")
-    lg.add_argument("--lines", "-n", type=int, default=30, help="Quantas linhas mostrar inicialmente (default: 30)")
+    lg.add_argument("--lines", "-n", type=int, default=None, help="Quantas linhas mostrar inicialmente (default: 30)")
+    lg.set_defaults(_parser=lg)
     lg.add_argument("--raw", action="store_true", help="NDJSON cru, sem formatação")
     lg.add_argument("--path", action="store_true", help="Só imprimir o caminho do log ativo")
 

@@ -140,6 +140,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "read_artifact": val.read_artifact,
     "bash_passes": val.bash_passes,
     "command_succeeds": val.command_succeeds,
+    "git_diff_not_empty": val.git_diff_not_empty,
     "paths_clean": cp_val.paths_clean,
     # Test validators (Phase 3)
     "coverage_per_file": test_val.coverage_per_file,

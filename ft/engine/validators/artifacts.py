@@ -526,3 +526,45 @@ def command_succeeds(command: str, project_root: str = ".") -> tuple[bool, str]:
     output = (result.stdout + result.stderr).strip()
     preview = "\n".join(output.splitlines()[-5:]) if output else "(sem saída)"
     return False, f"command_succeeds FAIL: saiu com código {result.returncode}\n{preview}"
+
+
+def git_diff_not_empty(path: str = ".", project_root: str = ".") -> tuple[bool, str]:
+    """Passa se o ciclo produziu mudança versionável em `path` (código real).
+
+    Pega o node de build "ocioso" que recebe PASS sem tocar o código-alvo
+    (lição vibeos cycle-02: frontend.02.implement passou sem escrever o shell).
+    Considera: (a) mudanças uncommitted no working tree; (b) commits do branch
+    do ciclo desde o merge-base com main/master. Fora de um repo git (modo
+    diretório puro), passa com aviso explícito — não verificável ali.
+    """
+    import subprocess
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args], cwd=project_root, capture_output=True, text=True
+        )
+
+    if _git("rev-parse", "--git-dir").returncode != 0:
+        return True, f"git_diff_not_empty: {path} não verificável (sem git) — AVISO"
+
+    dirty = _git("status", "--porcelain", "--", path).stdout.strip()
+    if dirty:
+        n = len(dirty.splitlines())
+        return True, f"git_diff_not_empty: {path} tem {n} mudança(s) no working tree"
+
+    for base_branch in ("main", "master"):
+        if _git("rev-parse", "--verify", "--quiet", base_branch).returncode != 0:
+            continue
+        base = _git("merge-base", "HEAD", base_branch).stdout.strip()
+        if not base:
+            continue
+        changed = _git("diff", "--name-only", base, "HEAD", "--", path).stdout.strip()
+        if changed:
+            n = len(changed.splitlines())
+            return True, f"git_diff_not_empty: {path} tem {n} arquivo(s) alterado(s) desde {base[:7]}"
+        return False, (
+            f"git_diff_not_empty FAIL: nenhuma mudança em {path} neste ciclo "
+            f"(nem uncommitted, nem commits desde {base[:7]}) — node de build ocioso?"
+        )
+
+    return True, f"git_diff_not_empty: {path} sem branch base (main/master) — não verificável, AVISO"

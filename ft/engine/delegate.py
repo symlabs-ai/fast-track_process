@@ -634,14 +634,10 @@ REGRAS:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Chamar executor em modo nao-interativo, com streaming para arquivo.
-    # Remover Node/npm/npx do PATH para forçar stack Python puro.
+    # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
+    # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
     import os as _os
     _env = dict(_os.environ)
-    _clean_paths = [
-        p for p in _env.get("PATH", "").split(":")
-        if not any(seg in p for seg in ("nvm", "node_modules/.bin", "/npm", "nodejs"))
-    ]
-    _env["PATH"] = ":".join(_clean_paths)
 
     proc = subprocess.Popen(
         cmd,

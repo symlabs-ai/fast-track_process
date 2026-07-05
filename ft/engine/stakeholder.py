@@ -60,10 +60,23 @@ def hyper_mode_prompt(existing_docs: dict[str, str], original_prompt: str) -> st
     if not existing_docs:
         return original_prompt
 
+    # Docs de direcao entram INTEIROS (sao o contexto destilado do ciclo);
+    # os demais entram como preview — o worker le o resto do disco se precisar.
+    FULL_DOCS = ("plano_de_voo.md", "hipotese.md", "handoff.md")
+    FULL_MAX_LINES = 600
+    PREVIEW_LINES = 60
+
     context_parts = ["CONTEXTO EXISTENTE (documentos ja produzidos):"]
     for fname, content in existing_docs.items():
-        preview = "\n".join(content.splitlines()[:20])
-        context_parts.append(f"\n### {fname}\n{preview}\n...")
+        lines = content.splitlines()
+        if fname in FULL_DOCS:
+            body = "\n".join(lines[:FULL_MAX_LINES])
+            suffix = "" if len(lines) <= FULL_MAX_LINES else "\n... (truncado; leia o arquivo para o restante)"
+            context_parts.append(f"\n### {fname} (INTEGRAL)\n{body}{suffix}")
+        else:
+            preview = "\n".join(lines[:PREVIEW_LINES])
+            suffix = "" if len(lines) <= PREVIEW_LINES else "\n... (preview; leia o arquivo para o restante)"
+            context_parts.append(f"\n### {fname}\n{preview}{suffix}")
 
     context = "\n".join(context_parts)
     return f"""{context}

@@ -1385,6 +1385,9 @@ class StepRunner:
                 task_prompt = kb_lessons_prompt(lessons, task_prompt)
                 print(f"  KB-mode: lições de runs anteriores injetadas")
 
+        # cycle_memory: continuidade cumulativa entre nodes (intra-ciclo)
+        task_prompt = self._inject_cycle_memory(task_prompt)
+
         # Determinar paths permitidos
         allowed = self._resolve_allowed_paths(node)
 
@@ -1436,6 +1439,7 @@ class StepRunner:
         if validation.passed:
             # Auto-commit para nodes de build/test
             self._maybe_auto_commit(node)
+            self._record_node_summary(node, getattr(result, "output", None) or str(result))
 
             if node.requires_approval and not self._auto_approve:
                 print(ui.awaiting_approval(auto=self._auto_approve))
@@ -1483,6 +1487,7 @@ class StepRunner:
 
                 if validation.passed:
                     self._maybe_auto_commit(node)
+                    self._record_node_summary(node, getattr(result, "output", None) or str(result))
 
                     if node.requires_approval:
                         print(ui.awaiting_approval(auto=self._auto_approve))
@@ -1783,6 +1788,53 @@ class StepRunner:
         self._advance_state(node.id, next_id, "PASS")
         self._fire_hooks("on_gate_pass")
         print(ui.gate_pass(next_id))
+
+    def _cycle_memory_path(self) -> Path:
+        return self.state_mgr.path.parent / "cycle_memory.md"
+
+    def _inject_cycle_memory(self, task_prompt: str) -> str:
+        """Injeta a memoria cumulativa do ciclo no prompt do proximo node."""
+        cm = self._cycle_memory_path()
+        if not cm.exists():
+            return task_prompt
+        content = cm.read_text(errors="replace").strip()
+        if not content:
+            return task_prompt
+        print(ui.dim("  cycle_memory: injetada no prompt"))
+        return (
+            "MEMORIA DO CICLO (resumo cumulativo dos nodes anteriores — leia antes de agir;\n"
+            "'verificado' foi testado de fato, 'assumido' NAO foi):\n\n"
+            f"{content}\n\n---\n\n{task_prompt}"
+        )
+
+    def _record_node_summary(self, node: Node, result_text: str) -> None:
+        """Extrai o NODE_SUMMARY do output do worker e acumula em cycle_memory.md."""
+        summary = ""
+        text = result_text or ""
+        idx = text.rfind("NODE_SUMMARY")
+        if idx != -1:
+            block = text[idx:]
+            lines = []
+            for line in block.splitlines()[1:]:
+                stripped = line.strip()
+                if stripped.startswith("DONE") or stripped.startswith("BLOCKED"):
+                    break
+                if stripped:
+                    lines.append(stripped)
+                if len(lines) >= 12:
+                    break
+            summary = "\n".join(lines)
+        if not summary:
+            # Fallback: primeiras linhas uteis do resultado
+            useful = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("DONE")]
+            summary = "\n".join(f"- {l}" for l in useful[:3]) or "- (sem resumo emitido)"
+        try:
+            cm = self._cycle_memory_path()
+            cm.parent.mkdir(parents=True, exist_ok=True)
+            with cm.open("a", encoding="utf-8") as f:
+                f.write(f"## {node.id} — {node.title}\n{summary}\n\n")
+        except OSError as exc:
+            print(ui.dim(f"  cycle_memory: falha ao gravar ({exc})"))
 
     def _run_env_teardown(self, node: Node) -> None:
         """Executa env_teardown ao final do node — best-effort, nunca bloqueia.

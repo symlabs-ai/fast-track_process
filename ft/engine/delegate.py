@@ -624,6 +624,13 @@ REGRAS:
 - NAO tome decisoes sobre o processo (o motor decide)
 - Quando terminar, diga DONE e liste os arquivos criados/modificados
 - Se encontrar um problema que nao consegue resolver, diga BLOCKED e explique o motivo
+- ANTES do DONE, emita um bloco NODE_SUMMARY (max 10 linhas) neste formato:
+NODE_SUMMARY:
+- fiz: <o que foi feito, 1-2 linhas>
+- decisoes: <decisoes tomadas e porque, se houver>
+- verificado: <o que voce RODOU e confirmou funcionando>
+- assumido: <o que voce assumiu SEM testar, se houver>
+- armadilhas: <pegadinhas que o proximo node precisa saber, se houver>
 """
 
     cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns, model=llm_model)

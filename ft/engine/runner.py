@@ -16,6 +16,11 @@ from ft.engine import paths
 from ft.engine.graph import Node, ProcessGraph, load_graph
 from ft.engine.state import StateManager
 from ft.engine.delegate import delegate_to_llm, delegate_with_feedback
+
+# Prefixo de blocked_reason que identifica pausa por rate limit da API.
+# Falha de infra ≠ falha de conteúdo: não consome auto-fix e o node volta a
+# 'ready' para retomada via ft continue.
+RATE_LIMIT_MARKER = "[RATE_LIMIT]"
 from ft.engine.validators import artifacts as val
 from ft.engine.validators import gates
 from ft.engine.validators import tests as test_val
@@ -1237,6 +1242,9 @@ class StepRunner:
                 state = self.state_mgr.load()
                 if state.node_status == "blocked":
                     blocked_reason = state.blocked_reason or "gate falhou"
+                    if blocked_reason.startswith(RATE_LIMIT_MARKER):
+                        self._pause_for_rate_limit(node, node_sprint)
+                        break
                     fix_count = self._auto_fix_counts.get(node_id, 0)
                     if mode == "mvp" and fix_count < self._max_auto_fix:
                         self._auto_fix_counts[node_id] = fix_count + 1
@@ -1246,6 +1254,11 @@ class StepRunner:
                             self._log_activity(node_id, node.title, "gate", "AUTO_FIXED",
                                                f"corrigido automaticamente (tentativa {fix_count + 1})", sprint=node_sprint)
                             continue
+                        if (state.blocked_reason or "").startswith(RATE_LIMIT_MARKER):
+                            # Rate limit durante o auto-fix: devolve a tentativa
+                            self._auto_fix_counts[node_id] = fix_count
+                            self._pause_for_rate_limit(node, node_sprint)
+                            break
                     self._log_activity(node_id, node.title, "gate", "BLOCKED",
                                        state.blocked_reason or "gate falhou", sprint=node_sprint)
                     break
@@ -1289,6 +1302,9 @@ class StepRunner:
             state = self.state_mgr.load()
             if state.node_status == "blocked":
                 blocked_reason = state.blocked_reason or "bloqueado"
+                if blocked_reason.startswith(RATE_LIMIT_MARKER):
+                    self._pause_for_rate_limit(node, node_sprint)
+                    break
                 fix_count = self._auto_fix_counts.get(node_id, 0)
                 if mode == "mvp" and fix_count < self._max_auto_fix:
                     self._auto_fix_counts[node_id] = fix_count + 1
@@ -1298,6 +1314,11 @@ class StepRunner:
                         self._log_activity(node_id, node.title, node.type, "AUTO_FIXED",
                                            f"corrigido automaticamente (tentativa {fix_count + 1})", sprint=node_sprint)
                         continue
+                    if (state.blocked_reason or "").startswith(RATE_LIMIT_MARKER):
+                        # Rate limit durante o auto-fix: devolve a tentativa
+                        self._auto_fix_counts[node_id] = fix_count
+                        self._pause_for_rate_limit(node, node_sprint)
+                        break
                 self._log_activity(node_id, node.title, node.type, "BLOCKED",
                                    state.blocked_reason or "bloqueado", sprint=node_sprint)
                 break
@@ -1438,6 +1459,12 @@ class StepRunner:
             self._clear_active_llm_log(state)
 
         if not result.success:
+            if getattr(result, "rate_limited", False):
+                self.state_mgr.block(
+                    f"{RATE_LIMIT_MARKER} API do LLM indisponível (rate limit persistiu "
+                    f"após todo o backoff) no node {node.id}"
+                )
+                return
             print(ui.fail(f"LLM reportou BLOCKED: {result.output[:200]}"))
             self.state_mgr.block(f"LLM falhou: {result.output[:500]}")
             return
@@ -1498,6 +1525,13 @@ class StepRunner:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
+                if getattr(result, "rate_limited", False):
+                    self.state_mgr.block(
+                        f"{RATE_LIMIT_MARKER} API do LLM indisponível (rate limit persistiu "
+                        f"após todo o backoff) no retry do node {node.id}"
+                    )
+                    return
+
                 validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
                 self._print_validation(validation)
 
@@ -1554,6 +1588,20 @@ class StepRunner:
             files=abs_files or None,
         ))
         self.state_mgr.set_pending_approval(node.id)
+
+    def _pause_for_rate_limit(self, node: Node, node_sprint) -> None:
+        """Pausa o run por rate limit da API sem penalizar o node.
+
+        Rate limit é falha de infra, não de conteúdo: o node volta a 'ready'
+        (nenhum auto-fix consumido) e o run para — 'ft continue --auto' retoma
+        do mesmo node quando a API normalizar.
+        """
+        self.state_mgr.unblock()
+        self._log_activity(node.id, node.title, node.type, "RATE_LIMITED",
+                           "pausado por rate limit da API — auto-fix não consumido",
+                           sprint=node_sprint)
+        print(ui.fail("Rate limit da API persistiu após todo o backoff."))
+        print(ui.info("Node preservado como 'ready' — rode 'ft continue --auto' quando a API normalizar."))
 
     def _run_auto_fix(self, node: Node, blocked_reason: str) -> bool:
         """Tenta corrigir automaticamente um node bloqueado (modo MVP).
@@ -1618,6 +1666,15 @@ class StepRunner:
         self.state_mgr.save()
 
         if not result.success:
+            if getattr(result, "rate_limited", False):
+                # Sinaliza pausa por infra — o caller devolve a tentativa de auto-fix
+                self.state_mgr.block(
+                    f"{RATE_LIMIT_MARKER} API do LLM indisponível (rate limit persistiu "
+                    f"após todo o backoff) durante auto-fix do node {node.id}"
+                )
+                # Erro de infra não conta como "mesmo erro" para o detector de loop
+                self._auto_fix_prev_error.pop(node.id, None)
+                return False
             print(ui.fail("Auto-fix: LLM não conseguiu aplicar correção"))
             return False
 
@@ -2006,6 +2063,12 @@ class StepRunner:
             if pre_check.passed:
                 print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
+            elif getattr(result, "rate_limited", False):
+                self.state_mgr.block(
+                    f"{RATE_LIMIT_MARKER} API do LLM indisponível (rate limit persistiu "
+                    f"após todo o backoff) no review do node {node.id}"
+                )
+                return
             else:
                 self.state_mgr.block(f"Review falhou: {result.output[:300]}")
                 print(f"  REVIEW BLOCK: LLM nao conseguiu revisar")

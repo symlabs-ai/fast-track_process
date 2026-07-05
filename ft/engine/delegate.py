@@ -21,7 +21,24 @@ _RATE_LIMIT_PATTERNS = re.compile(
     r"RESOURCE_EXHAUSTED|rateLimitExceeded",
     re.IGNORECASE,
 )
-_RATE_LIMIT_WAIT = [60, 120, 240]  # segundos de backoff (3 tentativas)
+# Cronograma default de backoff: ~1h40 de espera acumulada (fora o tempo de
+# execução de cada tentativa) — dimensionado para atravessar indisponibilidades
+# longas da API, não só picos momentâneos.
+# Override por env: FT_RATE_LIMIT_BACKOFF="60,120,240" (segundos, CSV).
+_RATE_LIMIT_WAIT = [60, 120, 240, 480, 900, 1800, 1800, 1800]
+
+
+def _rate_limit_backoff_schedule() -> list[int]:
+    """Cronograma de backoff para rate limit, configurável via FT_RATE_LIMIT_BACKOFF."""
+    raw = os.environ.get("FT_RATE_LIMIT_BACKOFF", "").strip()
+    if raw:
+        try:
+            schedule = [int(x) for x in raw.split(",") if x.strip()]
+            if schedule:
+                return schedule
+        except ValueError:
+            print(f"  ⚠️  FT_RATE_LIMIT_BACKOFF inválido ({raw!r}) — usando cronograma default.")
+    return list(_RATE_LIMIT_WAIT)
 
 
 @dataclass
@@ -30,6 +47,10 @@ class DelegateResult:
     output: str
     files_created: list[str]
     files_modified: list[str]
+    # True quando a falha foi rate limit da API que persistiu após todo o
+    # backoff — o runner NÃO deve tratar como falha de conteúdo (não consome
+    # auto-fix; pausa o run para retomada via ft continue).
+    rate_limited: bool = False
 
 
 def _build_executor_command(
@@ -721,9 +742,10 @@ NODE_SUMMARY:
 
     # Detectar rate limit e fazer retry com backoff exponencial
     if _RATE_LIMIT_PATTERNS.search(output):
-        for attempt, wait in enumerate(_RATE_LIMIT_WAIT, start=1):
+        _backoff_schedule = _rate_limit_backoff_schedule()
+        for attempt, wait in enumerate(_backoff_schedule, start=1):
             print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
-                  f"Aguardando {wait}s antes da tentativa {attempt}/{len(_RATE_LIMIT_WAIT)}…")
+                  f"Aguardando {wait}s antes da tentativa {attempt}/{len(_backoff_schedule)}…")
             time.sleep(wait)
             proc2 = subprocess.Popen(
                 cmd,
@@ -773,6 +795,7 @@ NODE_SUMMARY:
 
     token = _final_protocol_token(output)
     success = returncode == 0 and token != "BLOCKED"
+    rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
 
     # Extrair arquivos criados/modificados do git status
     git_result = subprocess.run(
@@ -796,6 +819,7 @@ NODE_SUMMARY:
         output=output,
         files_created=created,
         files_modified=modified,
+        rate_limited=rate_limited,
     )
 
 

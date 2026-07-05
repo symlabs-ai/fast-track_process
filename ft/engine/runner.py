@@ -838,6 +838,9 @@ class StepRunner:
 
         wt = self._detect_worktree()
         if not wt:
+            # Cycle dir não é git worktree (diretório puro em ~/.ft/worktrees/):
+            # merge por cópia — nunca retornar em silêncio.
+            self._merge_by_copy(strategy, paths)
             return
         work, original_root, branch = wt
 
@@ -879,6 +882,67 @@ class StepRunner:
 
         if count:
             print(ui.success(f"Merge: {count} item(ns) copiado(s) para {original_root.name}/"))
+
+    def _merge_by_copy(self, strategy: str, paths: list[str] | None = None) -> None:
+        """Fallback do merge quando o cycle dir não é git worktree.
+
+        full      → project/ vira <root>/project/ + docs do ciclo em <root>/docs/<cycle>/
+        docs      → só docs do ciclo em <root>/docs/<cycle>/ (+ process/ se houver)
+        selective → paths informados, copiados 1:1
+        O PRD/process da raiz nunca são sobrescritos (regra do playbook).
+        """
+        import shutil as _shutil
+
+        from ft.engine import paths as _paths
+
+        # project_root pode ter sido redirecionado para o próprio cycle dir
+        # (descoberta de state) — o projeto original é o cwd de quem invocou.
+        work = Path(self._work_dir).resolve()
+        root = Path.cwd().resolve()
+        if not _paths.is_worktree_path(work):
+            print(ui.warn("Merge: nada a mergear — modo continuous (código já está na raiz)"))
+            return
+        if root == work or _paths.is_worktree_path(root):
+            print(ui.fail("Merge: rode o ft close a partir da raiz do projeto (cwd atual é o próprio ciclo)"))
+            return
+        if not ((root / ".git").exists() or (root / "process").is_dir()):
+            print(ui.fail(f"Merge: {root} não parece a raiz de um projeto ft — merge manual necessário"))
+            return
+        cycle = work.name  # ex.: cycle-01
+        ignore = _shutil.ignore_patterns(
+            "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "*.pyc"
+        )
+        copied: list[str] = []
+
+        def _copy(src: Path, dst: Path, label: str) -> None:
+            if not src.exists():
+                print(ui.dim(f"  Skip: {label} (não existe no ciclo)"))
+                return
+            if src.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+                _shutil.copytree(src, dst, dirs_exist_ok=True, ignore=ignore)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _shutil.copy2(src, dst)
+            copied.append(label)
+
+        if strategy == "selective" and paths:
+            for p in paths:
+                _copy(work / p, root / p, p)
+        else:
+            # docs do ciclo ficam versionados por ciclo — não clobberam a raiz
+            _copy(work / "docs", root / "docs" / cycle, f"docs/ → docs/{cycle}/")
+            log_file = work / f"{cycle}_log.md"
+            _copy(log_file, root / "docs" / cycle / log_file.name, f"{cycle}_log.md")
+            if strategy == "full":
+                _copy(work / "project", root / "project", "project/")
+
+        if copied:
+            print(ui.success(f"Merge por cópia ({strategy}): {len(copied)} item(ns) → {root.name}/"))
+            for c in copied:
+                print(ui.dim(f"  ✓ {c}"))
+        else:
+            print(ui.warn("Merge por cópia: NENHUM artefato encontrado no ciclo — verifique manualmente"))
 
     # Compatibilidade: alias para código legado que ainda chama _merge_on_end
     def _merge_on_end(self) -> None:
@@ -1249,6 +1313,14 @@ class StepRunner:
                 print(ui.dim("  → ft continue   para continuar o próximo step"))
 
     def _run_llm_step(self, node: Node):
+        """Wrapper: garante env_teardown em qualquer saída (PASS, retry, block)."""
+        try:
+            return self._run_llm_step_inner(node)
+        finally:
+            if node.env_teardown:
+                self._run_env_teardown(node)
+
+    def _run_llm_step_inner(self, node: Node):
         """Delega ao LLM, valida resultado, avanca ou retenta."""
         state = self.state_mgr.state
         self._prepare_validator_snapshots(node)
@@ -1711,6 +1783,24 @@ class StepRunner:
         self._advance_state(node.id, next_id, "PASS")
         self._fire_hooks("on_gate_pass")
         print(ui.gate_pass(next_id))
+
+    def _run_env_teardown(self, node: Node) -> None:
+        """Executa env_teardown ao final do node — best-effort, nunca bloqueia.
+
+        Uso típico: derrubar servidor subido no env_setup para não deixar
+        processo sobrevivente atendendo na porta do projeto.
+        """
+        print(ui.info(f"env_teardown: {len(node.env_teardown)} comando(s)"))
+        for cmd in node.env_teardown:
+            print(f"    $ {cmd}")
+            try:
+                proc = subprocess.Popen(
+                    cmd, shell=True, cwd=self._work_dir,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                proc.wait(timeout=60)
+            except Exception as exc:  # noqa: BLE001 — teardown nunca derruba o node
+                print(ui.dim(f"    env_teardown falhou (ignorado): {exc}"))
 
     def _run_env_setup(self, node: Node) -> bool:
         """Executa comandos de env_setup antes da delegação ao LLM.

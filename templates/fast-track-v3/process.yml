@@ -387,6 +387,8 @@ nodes:
       - sleep 3
     outputs:
       - docs/smoke-report.md
+    env_teardown:
+      - 'p=$(cd project && make -s url | grep -oE "[0-9]+$"); [ -n "$p" ] && fuser -k -TERM "$p/tcp" 2>/dev/null; true'
     validators:
       - command_succeeds: "cd project && curl -sf \"$(make -s url)/health\" | python -c \"import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)\""
       - file_exists: docs/smoke-report.md

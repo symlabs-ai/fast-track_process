@@ -600,11 +600,25 @@ nodes:
       - docs/handoff.md
       - docs/plano_de_voo.md
     reject_next: ft.handoff.04.plano_voo
-    next: ft.explore
+    next: ft.handoff.05.process_evolve
 
   # ================================================================
   # Exploração Livre (opcional)
   # ================================================================
+
+  - id: ft.handoff.05.process_evolve
+    type: document
+    title: "Meta-Melhoria do Processo"
+    description: "Analisar o ciclo pelo lado do PROCESSO, não do produto. Fontes: o log do ciclo (<cycle>_log.md na raiz do ciclo), docs/retro.md, docs/critical-analysis.md e os motivos de retry/BLOCK registrados. Identificar meta-melhorias no processo — validators frágeis ou específicos demais, descrições ambíguas que geraram retrabalho, gates que deixaram passar problemas, env_setup/env_teardown faltando, hardcodes de porta/path — e APLICÁ-LAS cirurgicamente no process/process.yml do projeto (fork local), mantendo o YAML válido e a estrutura de sprints. NÃO redesenhar o processo nem criar/remover sprints. Registrar em docs/process-improvements.md: cada mudança aplicada (antes/depois + evidência do ciclo que a motivou) e as sugestões NÃO aplicadas com o porquê."
+    sprint: sprint-10-handoff
+    executor: claude
+    outputs:
+      - docs/process-improvements.md
+      - process/process.yml
+    validators:
+      - file_exists: docs/process-improvements.md
+      - command_succeeds: "python3 -c \"import yaml; yaml.safe_load(open('process/process.yml'))\""
+    next: ft.explore
 
   - id: ft.explore
     type: exploration

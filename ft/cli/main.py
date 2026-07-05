@@ -529,6 +529,14 @@ def _next_cycle_num(project_root: Path) -> int:
             if d.is_dir() and _is_cycle_dir(d):
                 max_num = max(max_num, _cycle_num_strict(d) or 0)
 
+    # Ledger persistente: o close remove os dirs dos ciclos encerrados; sem isto
+    # a numeração regride (ex.: cycle-02 fechado → censo de dirs sugere 02 de novo).
+    ledger = wt_home / ".cycles"
+    if ledger.exists():
+        for tok in ledger.read_text().split():
+            if tok.isdigit():
+                max_num = max(max_num, int(tok))
+
     return max_num + 1
 
 
@@ -1910,8 +1918,19 @@ def cmd_run(args):
             run_dir = project_root
         elif git_ok and has_commits:
             # Modo isolado padrão: worktree externo em ~/.ft/worktrees/
-            wt_name = _effective_engine or "run"
+            # Nome = cycle-NN, não o nome do engine (lição vibeos: 'claude' como
+            # nome de ciclo quebrava parsing e não identifica nada). O ledger
+            # .cycles preserva a numeração mesmo depois que o close remove o dir.
+            next_num = _next_cycle_num(project_root)
+            wt_name = f"cycle-{next_num:02d}"
             run_dir = _setup_worktree(project_root, wt_name)
+            try:
+                _ledger = _worktrees_home(project_root) / ".cycles"
+                _nums = set(_ledger.read_text().split()) if _ledger.exists() else set()
+                _nums.add(f"{next_num:02d}")
+                _ledger.write_text("\n".join(sorted(_nums)) + "\n")
+            except OSError:
+                pass
         else:
             # Fallback sem git: diretório simples em ~/.ft/worktrees/
             wt_home = _worktrees_home(project_root)

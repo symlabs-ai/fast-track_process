@@ -240,12 +240,27 @@ def _is_cycle_dir(d: Path) -> bool:
     return False
 
 
-def _cycle_num(d: Path) -> int:
-    """Extrai o número do ciclo de 'cycle-NN', 'cycle-NN-engine' ou 'NN'."""
+def _cycle_num_strict(d: Path) -> int | None:
+    """Número do ciclo de 'cycle-NN', 'cycle-NN-engine' ou 'NN'; None se não-numérico."""
     name = d.name
-    if name.startswith("cycle-"):
-        return int(name[6:].split("-")[0])
-    return int(name)
+    try:
+        if name.startswith("cycle-"):
+            return int(name[6:].split("-")[0])
+        return int(name)
+    except ValueError:
+        return None
+
+
+def _cycle_num(d: Path) -> int:
+    """Chave de ordenação de ciclos. Nomes sem número (ex.: worktree 'claude')
+    ordenam pelo mtime — mais recente ganha, sem quebrar o sort."""
+    n = _cycle_num_strict(d)
+    if n is not None:
+        return n
+    try:
+        return int(d.stat().st_mtime)
+    except OSError:
+        return 0
 
 
 def _find_latest_state(root: Path) -> Path:
@@ -505,14 +520,14 @@ def _next_cycle_num(project_root: Path) -> int:
     if wt_home.is_dir():
         for d in wt_home.iterdir():
             if d.is_dir() and _is_cycle_dir(d):
-                max_num = max(max_num, _cycle_num(d))
+                max_num = max(max_num, _cycle_num_strict(d) or 0)
 
     # Fallback legado: runs/ dentro do projeto
     runs_dir = project_root / "runs"
     if runs_dir.is_dir():
         for d in runs_dir.iterdir():
             if d.is_dir() and _is_cycle_dir(d):
-                max_num = max(max_num, _cycle_num(d))
+                max_num = max(max_num, _cycle_num_strict(d) or 0)
 
     return max_num + 1
 
@@ -1841,7 +1856,7 @@ def cmd_run(args):
     if worktree_name:
         from ft.engine import ui as _ui
         wt_name = worktree_name if isinstance(worktree_name, str) and worktree_name != "True" else (
-            _effective_engine or "run"
+            f"cycle-{_next_cycle_num(project_root):02d}"
         )
         project_root = _setup_worktree(project_root, wt_name)
         _outer_worktree_used = True

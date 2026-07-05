@@ -820,7 +820,7 @@ class StepRunner:
 
         return work, original_root, branch
 
-    def merge_on_close(self, strategy: str, paths: list[str] | None = None) -> None:
+    def merge_on_close(self, strategy: str, paths: list[str] | None = None) -> bool:
         """Merge artefatos do worktree de volta para o repo original.
 
         strategy:
@@ -829,19 +829,21 @@ class StepRunner:
           "selective"  → copia apenas os paths informados
           "none"      → nada
         paths: lista de paths para modo selective (ex: ["docs/", "project/backend/"])
+
+        Retorna True se o merge foi concluído (ou intencionalmente não havia nada
+        a fazer); False se falhou — o chamador NÃO deve destruir worktree/branch.
         """
         import shutil as _shutil
         import subprocess as _sp
 
         if strategy == "none":
-            return
+            return True
 
         wt = self._detect_worktree()
         if not wt:
             # Cycle dir não é git worktree (diretório puro em ~/.ft/worktrees/):
             # merge por cópia — nunca retornar em silêncio.
-            self._merge_by_copy(strategy, paths)
-            return
+            return self._merge_by_copy(strategy, paths)
         work, original_root, branch = wt
 
         if strategy == "full":
@@ -852,9 +854,19 @@ class StepRunner:
                 )
                 if result.returncode == 0:
                     print(ui.success(f"Merge: branch {branch} mergida em {original_root.name}"))
-                else:
-                    print(ui.fail(f"Merge: falha — {result.stderr.strip()[:200]}"))
-            return
+                    return True
+                # git manda conflitos para o STDOUT; stderr costuma vir vazio
+                reason = (result.stdout.strip() or result.stderr.strip())[:300]
+                print(ui.fail(f"Merge: falha — {reason}"))
+                merging = (original_root / ".git" / "MERGE_HEAD").exists()
+                if merging:
+                    print(ui.warn(
+                        f"Merge em andamento com conflitos em {original_root}. "
+                        f"Resolva-os e conclua com git commit, depois rode ft close de novo."
+                    ))
+                return False
+            print(ui.fail("Merge: worktree sem branch — merge manual necessário"))
+            return False
 
         # Resolver lista de paths a copiar
         if strategy == "docs":
@@ -862,7 +874,7 @@ class StepRunner:
         elif strategy == "selective" and paths:
             copy_paths = paths
         else:
-            return
+            return True
 
         count = 0
         for p in copy_paths:
@@ -882,14 +894,16 @@ class StepRunner:
 
         if count:
             print(ui.success(f"Merge: {count} item(ns) copiado(s) para {original_root.name}/"))
+        return True
 
-    def _merge_by_copy(self, strategy: str, paths: list[str] | None = None) -> None:
+    def _merge_by_copy(self, strategy: str, paths: list[str] | None = None) -> bool:
         """Fallback do merge quando o cycle dir não é git worktree.
 
         full      → project/ vira <root>/project/ + docs do ciclo em <root>/docs/<cycle>/
         docs      → só docs do ciclo em <root>/docs/<cycle>/ (+ process/ se houver)
         selective → paths informados, copiados 1:1
         O PRD/process da raiz nunca são sobrescritos (regra do playbook).
+        Retorna True se copiou (ou nada a fazer por design); False se falhou.
         """
         import shutil as _shutil
 
@@ -901,13 +915,13 @@ class StepRunner:
         root = Path.cwd().resolve()
         if not _paths.is_worktree_path(work):
             print(ui.warn("Merge: nada a mergear — modo continuous (código já está na raiz)"))
-            return
+            return True
         if root == work or _paths.is_worktree_path(root):
             print(ui.fail("Merge: rode o ft close a partir da raiz do projeto (cwd atual é o próprio ciclo)"))
-            return
+            return False
         if not ((root / ".git").exists() or (root / "process").is_dir()):
             print(ui.fail(f"Merge: {root} não parece a raiz de um projeto ft — merge manual necessário"))
-            return
+            return False
         cycle = work.name  # ex.: cycle-01
         ignore = _shutil.ignore_patterns(
             "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "*.pyc"
@@ -941,8 +955,9 @@ class StepRunner:
             print(ui.success(f"Merge por cópia ({strategy}): {len(copied)} item(ns) → {root.name}/"))
             for c in copied:
                 print(ui.dim(f"  ✓ {c}"))
-        else:
-            print(ui.warn("Merge por cópia: NENHUM artefato encontrado no ciclo — verifique manualmente"))
+            return True
+        print(ui.warn("Merge por cópia: NENHUM artefato encontrado no ciclo — verifique manualmente"))
+        return False
 
     # Compatibilidade: alias para código legado que ainda chama _merge_on_end
     def _merge_on_end(self) -> None:

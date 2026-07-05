@@ -1139,16 +1139,25 @@ def cmd_close(args):
 
     work = Path(runner.project_root)
 
+    merge_ok = True
     if merge_strategy:
         # Via CLI flags (não-interativo)
-        runner.merge_on_close(merge_strategy, merge_paths)
+        merge_ok = runner.merge_on_close(merge_strategy, merge_paths)
     else:
         # Prompt interativo
         wt = runner._detect_worktree()
         if wt:
             strategy, paths = _prompt_merge_strategy(work)
-            runner.merge_on_close(strategy, paths)
+            merge_ok = runner.merge_on_close(strategy, paths)
         # Se não é worktree, nada a mergear
+
+    if merge_ok is False:
+        # NUNCA destruir worktree/branch com merge falho — os commits do ciclo
+        # só existem lá. (Lição vibeos cycle-02: close removeu branch com
+        # conflitos abertos; recuperação exigiu resgate via SHA solto.)
+        print(_ui.fail("Merge falhou — worktree e branch PRESERVADOS."))
+        print(_ui.warn("Resolva o merge (ou use --merge none) e rode ft close novamente."))
+        return
 
     # 2. Descobrir se estamos num worktree
     git_file = work / ".git"

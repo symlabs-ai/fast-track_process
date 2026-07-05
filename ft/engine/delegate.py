@@ -163,6 +163,21 @@ def _format_stream_line(llm_engine: str, line: str) -> str:
     return f"event {event_type}"
 
 
+def _final_protocol_token(output: str) -> str | None:
+    """Último token de protocolo (DONE/BLOCKED) emitido como marcador.
+
+    Só conta o token no início de linha (admitindo decoração markdown leve),
+    como o protocolo pede — citar a palavra em prosa NÃO conta. Lição vibeos
+    cycle-02: um plano de voo que discutia nodes BLOCKED em prosa era tratado
+    como falha pelo antigo `"BLOCKED" in output`. O ÚLTIMO token vence: um
+    worker que menciona um bloqueio e encerra com DONE está reportando sucesso.
+    """
+    token = None
+    for m in re.finditer(r"^[\s*_`#>\-]*(DONE|BLOCKED)\b", output, re.MULTILINE):
+        token = m.group(1)
+    return token
+
+
 def _extract_codex_output(raw_output: str) -> str:
     """Extrai a resposta final do agent a partir do stream JSONL do Codex."""
     messages: list[str] = []
@@ -751,7 +766,8 @@ NODE_SUMMARY:
     except ImportError:
         pass
 
-    success = returncode == 0 and "BLOCKED" not in output
+    token = _final_protocol_token(output)
+    success = returncode == 0 and token != "BLOCKED"
 
     # Extrair arquivos criados/modificados do git status
     git_result = subprocess.run(

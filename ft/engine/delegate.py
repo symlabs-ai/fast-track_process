@@ -321,6 +321,57 @@ def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
         return None
 
 
+_STALL_RECONCILE_SECS = 120.0
+
+
+def _claude_session_transcript(cwd: str, session_id: str) -> "Path | None":
+    """Path do transcript da sessão em ~/.claude/projects/<slug>/<sid>.jsonl.
+
+    Slug do Claude Code: path absoluto do cwd com [/_.] -> "-".
+    """
+    import re as _re
+    if not cwd or not session_id:
+        return None
+    slug = _re.sub(r"[/_.]", "-", str(Path(cwd).resolve()))
+    return Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+
+
+def _transcript_terminal_output(transcript: "Path | None") -> str | None:
+    """Se a sessão já terminou segundo o transcript, retorna o texto final; senão None.
+
+    Terminal = último assistant com bloco text, sem tool_use pendente e
+    stop_reason end_turn (padrão de reconciliação do sym_doctor).
+    """
+    if transcript is None or not transcript.exists():
+        return None
+    try:
+        lines = transcript.read_text(errors="replace").splitlines()
+    except Exception:
+        return None
+    for line in reversed(lines[-300:]):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        etype = entry.get("type", "")
+        if etype == "result":
+            return str(entry.get("result", "")) or None
+        if etype != "assistant":
+            continue
+        msg = entry.get("message", {})
+        content = msg.get("content", [])
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content):
+            return None  # ainda no meio de tools — não é terminal
+        texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        if texts and msg.get("stop_reason") in ("end_turn", "stop_sequence", None):
+            return "\n".join(t for t in texts if t).strip() or None
+        return None
+    return None
+
+
 def _stream_process_output(
     proc: subprocess.Popen,
     llm_engine: str,
@@ -397,7 +448,73 @@ def _stream_process_output(
             heartbeat = threading.Thread(target=_print_heartbeat, daemon=True)
             heartbeat.start()
 
-        for line in iter(stream.readline, ""):
+        import queue as _queue
+        line_q: "_queue.Queue[str | None]" = _queue.Queue()
+
+        def _pump() -> None:
+            try:
+                for _l in iter(stream.readline, ""):
+                    line_q.put(_l)
+            finally:
+                line_q.put(None)
+
+        pump = threading.Thread(target=_pump, daemon=True)
+        pump.start()
+
+        session_meta: dict = {"sid": None, "cwd": None, "saw_result": False}
+        last_data = time.time()
+
+        def _reconcile_from_transcript(reason: str) -> str | None:
+            """Tenta recuperar o desfecho no transcript da sessão do Claude."""
+            if llm_engine != "claude" or session_meta["saw_result"]:
+                return None
+            tp = _claude_session_transcript(session_meta["cwd"] or "", session_meta["sid"] or "")
+            final = _transcript_terminal_output(tp)
+            if final is None:
+                return None
+            synth = json.dumps({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": final}]},
+                "ft_reconciled_from": str(tp),
+            })
+            if log_file:
+                log_file.write(f"# ft: reconciliado via transcript ({reason})\n{synth}\n")
+                log_file.flush()
+            return synth + "\n"
+
+        while True:
+            try:
+                line = line_q.get(timeout=1.0)
+            except _queue.Empty:
+                if (time.time() - last_data) >= _STALL_RECONCILE_SECS and proc.poll() is None:
+                    synth = _reconcile_from_transcript("pipe sem dados, sessão concluída")
+                    if synth is not None:
+                        chunks.append(synth)
+                        proc.kill()
+                        break
+                    last_data = time.time()  # não re-checar a cada 1s
+                continue
+            if line is None:
+                # EOF: se o pipe morreu sem evento result, tentar o transcript
+                if proc.poll() is None:
+                    proc.wait(timeout=30)
+                synth = _reconcile_from_transcript("EOF sem result")
+                if synth is not None:
+                    chunks.append(synth)
+                break
+            last_data = time.time()
+            _stripped_probe = line.strip()
+            if _stripped_probe.startswith("{"):
+                try:
+                    _ev = json.loads(_stripped_probe)
+                    _et = _ev.get("type", "")
+                    if _et == "system" and _ev.get("subtype") == "init":
+                        session_meta["sid"] = _ev.get("session_id")
+                        session_meta["cwd"] = _ev.get("cwd")
+                    elif _et == "result":
+                        session_meta["saw_result"] = True
+                except json.JSONDecodeError:
+                    pass
             chunks.append(line)
             if log_file:
                 log_file.write(line)

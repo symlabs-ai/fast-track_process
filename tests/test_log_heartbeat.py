@@ -48,6 +48,29 @@ def test_system_sem_subtype_cai_no_generico():
     assert ctx["desc"] == "evento system"
 
 
+def test_result_sucesso_mostra_turnos_tempo_custo():
+    ctx = _track({
+        "type": "result", "subtype": "success", "is_error": False,
+        "num_turns": 12, "duration_ms": 82763, "total_cost_usd": 0.8166435,
+    })
+    assert ctx["desc"] == "resultado ok — 12 turnos · 82.8s · US$ 0.82"
+
+
+def test_result_erro_mostra_subtype_e_marca_erro():
+    ctx = _track({
+        "type": "result", "subtype": "error_max_turns", "is_error": True,
+        "num_turns": 40, "duration_ms": 120000, "total_cost_usd": 2.5,
+    })
+    assert ctx["desc"].startswith("resultado com erro")
+    assert "error_max_turns" in ctx["desc"]
+    assert "US$ 2.50" in ctx["desc"]
+
+
+def test_result_sem_campos_opcionais_nao_quebra():
+    ctx = _track({"type": "result", "is_error": False})
+    assert ctx["desc"] == "resultado ok"
+
+
 def test_thinking_delta_retorna_fragmento():
     ctx = {"desc": ""}
     frag = _track_heartbeat(json.dumps({

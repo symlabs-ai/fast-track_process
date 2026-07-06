@@ -838,6 +838,23 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
         ctx["desc"] = "resultado de ferramenta recebido, processando"
     elif etype == "assistant":
         ctx["desc"] = "gerando resposta"
+    elif etype == "result":
+        # Evento final do worker: resume desfecho, turnos, tempo e custo em vez
+        # de um "evento result" opaco.
+        head = "resultado com erro" if ev.get("is_error") else "resultado ok"
+        subtype = ev.get("subtype") or ""
+        parts: list[str] = []
+        if subtype and subtype != "success":
+            parts.append(subtype)
+        if ev.get("num_turns") is not None:
+            parts.append(f"{ev['num_turns']} turnos")
+        dur = ev.get("duration_ms")
+        if isinstance(dur, (int, float)):
+            parts.append(f"{dur / 1000:.1f}s")
+        cost = ev.get("total_cost_usd")
+        if isinstance(cost, (int, float)):
+            parts.append(f"US$ {cost:.2f}")
+        ctx["desc"] = head + (" — " + " · ".join(parts) if parts else "")
     elif etype:
         ctx["desc"] = f"evento {etype}"
     return None

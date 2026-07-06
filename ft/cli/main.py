@@ -921,6 +921,10 @@ def cmd_log(args):
 
     _engine = runner._resolve_llm_engine()
     _last_out: list[str | None] = [None]
+    _md = getattr(args, "markdown", False)
+
+    def _paint(s: str) -> str:
+        return _ui.paint_stream_line(s) if _md else s
 
     def _fmt(line: str) -> str | None:
         out = _format_stream_line(_engine, line)
@@ -946,7 +950,7 @@ def cmd_log(args):
         raw_lines = f.readlines()
     shown = [x for x in (line.rstrip() if args.raw else _fmt(line) for line in raw_lines) if x]
     for out in shown[-lines:]:
-        print(out, flush=True)
+        print(_paint(out) if not args.raw else out, flush=True)
 
     if not args.follow:
         return
@@ -978,10 +982,12 @@ def cmd_log(args):
             while "\n" in think_buf:
                 head, think_buf = think_buf.split("\n", 1)
                 if head.strip():
-                    print(_ui.dim(f"✻ {head.strip()[:160]}"), flush=True)
+                    msg = f"✻ {head.strip()[:160]}"
+                    print(_paint(msg) if _md else _ui.dim(msg), flush=True)
                     last_print = _time.time()
             if force and think_buf.strip():
-                print(_ui.dim(f"✻ {think_buf.strip()[:160]}"), flush=True)
+                msg = f"✻ {think_buf.strip()[:160]}"
+                print(_paint(msg) if _md else _ui.dim(msg), flush=True)
                 think_buf = ""
                 last_print = _time.time()
 
@@ -997,7 +1003,7 @@ def cmd_log(args):
                 out = line.rstrip() if args.raw else _fmt(line)
                 if out:
                     _flush_think(force=True)
-                    print(out, flush=True)
+                    print(out if args.raw else _paint(out), flush=True)
                     last_print = _time.time()
                 else:
                     _heartbeat()
@@ -2279,6 +2285,7 @@ def main():
     lg.add_argument("--lines", "-n", type=int, default=None, help="Quantas linhas mostrar inicialmente (default: 30)")
     lg.set_defaults(_parser=lg)
     lg.add_argument("--raw", action="store_true", help="NDJSON cru, sem formatação")
+    lg.add_argument("--markdown", "-m", action="store_true", help="Realça a saída por cor/ênfase: comandos bash, ferramentas, resposta e raciocínio")
     lg.add_argument("--path", action="store_true", help="Só imprimir o caminho do log ativo")
 
     # runs — tabela comparativa de todos os ciclos

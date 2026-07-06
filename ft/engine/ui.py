@@ -31,6 +31,7 @@ def _ansi(code: str) -> str:
 RESET = _ansi("0")
 BOLD = _ansi("1")
 DIM = _ansi("2")
+ITALIC = _ansi("3")
 
 RED = _ansi("31")
 GREEN = _ansi("32")
@@ -338,3 +339,42 @@ def problem_explanation(
     lines.append(f"    {BOLD_CYAN}ft fix \"{RESET}faça X e Y em vez disso{BOLD_CYAN}\"{RESET}")
     lines.append(f"")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Realce markdown do stream (ft log --follow --markdown)
+# ---------------------------------------------------------------------------
+
+# Prefixos de ferramentas de arquivo/busca emitidos por _format_stream_line.
+_TOOL_PREFIXES = ("Read ", "Write ", "Edit ", "Glob ", "Grep ", "NotebookEdit")
+
+
+def paint_stream_line(s: str) -> str:
+    """Realça uma linha já formatada por `_format_stream_line`, separando por
+    cor/ênfase: comandos bash, chamadas de ferramenta, resposta e raciocínio.
+
+    Idempotente em relação a cores desabilitadas: se NO_COLOR/pipe, as
+    constantes ANSI são vazias e a string volta inalterada.
+    """
+    if not s:
+        return s
+    # Comando bash: "$ <cmd>" — verde, cifrão em negrito.
+    if s.startswith("$ "):
+        return f"{BOLD_GREEN}${RESET} {GREEN}{s[2:]}{RESET}"
+    # Raciocínio: "✻ <thinking>" — cinza itálico, recua para o fundo.
+    if s.startswith("✻"):
+        return f"{DIM}{ITALIC}{s}{RESET}"
+    # Resposta/texto do assistente: "→ <texto>" — branco, é o modelo "falando".
+    if s.startswith("→"):
+        return f"{BOLD_WHITE}{s}{RESET}"
+    # Resultado final do worker: "result: ..." — ciano em negrito.
+    if s.startswith("result:"):
+        return f"{BOLD_CYAN}{s}{RESET}"
+    # Chamadas de ferramenta de arquivo/busca — azul.
+    for kw in _TOOL_PREFIXES:
+        if s.startswith(kw):
+            return f"{BLUE}{s}{RESET}"
+    # Ferramenta genérica "[Nome]" ou metadado "event ..." — apagado.
+    if s.startswith("event ") or s.startswith("["):
+        return f"{DIM}{s}{RESET}"
+    return s

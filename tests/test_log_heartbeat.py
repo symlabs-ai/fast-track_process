@@ -274,3 +274,33 @@ def test_wait_reason_gate_vence_orquestrador_morto():
     kind, _ = _wait_reason("awaiting_approval", "gate.final", None, "gate.final",
                            orchestrator_alive=False)
     assert kind == "gate"
+
+
+# --- sanitização de texto do estado (vazamento de cor no bloqueio) ---------
+
+from ft.cli.main import _oneline
+
+
+def test_oneline_colapsa_multilinha():
+    assert _oneline("Review falhou:\n\nNow let's check\nthe tests") == "Review falhou: Now let's check the tests"
+
+
+def test_oneline_tira_ansi():
+    assert _oneline("\x1b[31mvermelho\x1b[0m aqui") == "vermelho aqui"
+
+
+def test_oneline_trunca_com_reticencias():
+    out = _oneline("x" * 200, limit=50)
+    assert out == "x" * 50 + "…"
+
+
+def test_oneline_vazio():
+    assert _oneline(None) == "" and _oneline("") == ""
+
+
+def test_wait_reason_blocked_sanitiza_multilinha():
+    # o motivo real que vazou a cor: 315 chars com \n
+    reason = "Review falhou: Now let's check the test file\n\nand run the frontend suite\n" * 5
+    kind, text = _wait_reason("blocked", None, reason, "loop.s03.mission_check")
+    assert kind == "blocked"
+    assert "\n" not in text  # NUNCA multilinha — senão a cor vaza

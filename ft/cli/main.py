@@ -6,7 +6,21 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
+
+# Sequências ANSI (para higienizar texto do estado antes de exibir).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _oneline(s: str | None, limit: int = 100) -> str:
+    """Colapsa para UMA linha (sem \\n) e sem ANSI, truncado. Necessário para
+    texto livre do estado (ex. blocked_reason, um dump de review multi-linha)
+    que, cru, quebraria o heartbeat sobrescrito com \\r e vazaria a cor."""
+    if not s:
+        return ""
+    s = " ".join(_ANSI_RE.sub("", str(s)).split())
+    return s[:limit] + ("…" if len(s) > limit else "")
 from pathlib import Path
 
 from ft.engine import paths
@@ -925,7 +939,7 @@ def _wait_reason(node_status: str | None, pending_approval: str | None,
         gate = pending_approval or node or "?"
         return "gate", f"aguardando APROVAÇÃO em {gate} — ft approve / ft reject"
     if node_status == "blocked":
-        return "blocked", f"BLOQUEADO em {node or '?'}: {blocked_reason or 'sem motivo registrado'}"
+        return "blocked", f"BLOQUEADO em {node or '?'}: {_oneline(blocked_reason) or 'sem motivo registrado'}"
     if not orchestrator_alive:
         return "stalled", f"ciclo PARADO em {node or '?'} — nenhum orquestrador rodando; rode `ft continue --auto`"
     return None, None
@@ -1115,6 +1129,10 @@ def cmd_log(args):
                     node = (st.current_node if st else None) or _node_from_log_name(log_path.name)
                     node_ctx = f" ({node})" if node else ""
                     line = _ui.dim(f"  ⋯ aguardando eventos do LLM{node_ctx} · {elapsed}")
+                # Cinto de segurança: um heartbeat é SEMPRE uma linha. Qualquer
+                # \n vindo de texto do estado quebraria o overwrite com \r e
+                # vazaria a cor para o resto do log.
+                line = line.replace("\n", " ")
                 if _tty:
                     # Sobrescreve a mesma linha (\r + limpa até o fim), sem newline:
                     # o contador de silêncio atualiza no lugar, sem empilhar linhas.

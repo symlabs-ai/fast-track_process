@@ -924,6 +924,16 @@ def _node_from_log_name(name: str) -> str | None:
     return parts[1] if len(parts) >= 2 and parts[1] else None
 
 
+def _log_mtime(path) -> float:
+    """mtime do log (última escrita) — âncora do contador de silêncio. Assim
+    reabrir `ft log -f` continua do silêncio real, em vez de zerar o relógio."""
+    import time as _t
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return _t.time()
+
+
 def cmd_log(args):
     """Mostra/acompanha o log LLM do ciclo ativo, formatado para leitura humana."""
     import time as _time
@@ -1040,7 +1050,7 @@ def cmd_log(args):
         f.seek(0, 2)
         idle = 0.0
         last_print = _time.time()
-        hb = {"desc": "", "t": _time.time()}
+        hb = {"desc": "", "t": _log_mtime(log_path)}
 
         def _heartbeat() -> None:
             nonlocal last_print
@@ -1131,7 +1141,7 @@ def cmd_log(args):
                     print(_ui.dim(f"── {log_path.name} ──"), flush=True)
                     f = log_path.open(errors="replace")
                     hb["desc"] = ""
-                    hb["t"] = _time.time()
+                    hb["t"] = _log_mtime(log_path)
     except KeyboardInterrupt:
         pass
     finally:

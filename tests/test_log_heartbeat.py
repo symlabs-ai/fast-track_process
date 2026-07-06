@@ -216,3 +216,22 @@ def test_wait_reason_blocked_sem_motivo():
 def test_wait_reason_rodando_e_none():
     assert _wait_reason("delegated", None, None, "loop.s04.green") == (None, None)
     assert _wait_reason("ready", None, None, "n1") == (None, None)
+
+
+# --- âncora do contador de silêncio no mtime do log ------------------------
+
+from ft.cli.main import _log_mtime
+
+
+def test_log_mtime_le_mtime_do_arquivo(tmp_path):
+    import os
+    p = tmp_path / "x.log"
+    p.write_text("hi")
+    os.utime(p, (1000.0, 1000.0))
+    assert _log_mtime(p) == 1000.0
+
+
+def test_log_mtime_arquivo_inexistente_cai_em_now(tmp_path):
+    import time
+    t = _log_mtime(tmp_path / "nao-existe.log")
+    assert abs(t - time.time()) < 5

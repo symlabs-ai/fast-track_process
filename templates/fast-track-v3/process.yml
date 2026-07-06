@@ -112,6 +112,7 @@ nodes:
   # ================================================================
 
   - id: ft.plan.01.task_list
+    no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Criar Task List"
     description: "Decompor as user stories P0 do PRD em tasks técnicas ordenadas. Cada task deve ser verificável e ter escopo claro de implementação."
@@ -536,6 +537,7 @@ nodes:
   # ================================================================
 
   - id: ft.handoff.01.retro
+    no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: retro
     title: "Retro do Ciclo"
     description: "Registrar os aprendizados do ciclo: o que funcionou, o que travou, quantas intervenções manuais foram necessárias e por quê. Este registro alimenta o processo do próximo ciclo."
@@ -548,6 +550,7 @@ nodes:
     next: ft.handoff.02.prd_rewrite
 
   - id: ft.handoff.02.prd_rewrite
+    no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Reescrever PRD — Incorporar Aprendizados"
     description: "Atualizar o PRD com os aprendizados do ciclo: dívidas técnicas identificadas, decisões tomadas (decision log), US entregues vs pendentes e ajustes na hipótese. Este PRD vira o seed do próximo ciclo."
@@ -560,6 +563,7 @@ nodes:
     next: ft.handoff.03.critical_analysis
 
   - id: ft.handoff.03.critical_analysis
+    no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Análise Crítica — Sugestões do LLM"
     description: "O LLM produz uma análise crítica honesta do produto entregue: o que está bom, o que está frágil, oportunidades de melhoria que o stakeholder pode não ter visto. Numeradas e priorizadas."
@@ -572,6 +576,7 @@ nodes:
     next: ft.handoff.04.plano_voo
 
   - id: ft.handoff.04.plano_voo
+    no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Gerar Plano de Voo — Próximo Ciclo"
     description: "Documentar o contexto para o próximo ciclo: estado atual do produto, US pendentes, dívidas técnicas P1/P2, sugestões da análise crítica escolhidas pelo stakeholder e qualquer contexto técnico necessário."
@@ -607,6 +612,7 @@ nodes:
   # ================================================================
 
   - id: ft.handoff.05.process_evolve
+    no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Meta-Melhoria do Processo"
     description: "Analisar o ciclo pelo lado do PROCESSO, não do produto. Fontes: o log do ciclo (<cycle>_log.md na raiz do ciclo), docs/retro.md, docs/critical-analysis.md e os motivos de retry/BLOCK registrados. Identificar meta-melhorias no processo — validators frágeis ou específicos demais, descrições ambíguas que geraram retrabalho, gates que deixaram passar problemas, env_setup/env_teardown faltando, hardcodes de porta/path — e APLICÁ-LAS cirurgicamente no process/process.yml do projeto (fork local), mantendo o YAML válido e a estrutura de sprints. NÃO redesenhar o processo nem criar/remover sprints. Registrar em docs/process-improvements.md: cada mudança aplicada (antes/depois + evidência do ciclo que a motivou) e as sugestões NÃO aplicadas com o porquê."

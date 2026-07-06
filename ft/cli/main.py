@@ -915,7 +915,7 @@ def _fmt_elapsed(seconds: float) -> str:
     s = max(0, int(seconds))
     if s < 60:
         return f"há {s}s"
-    return f"há {s // 60}min {s % 60:02d}s"
+    return f"há {s // 60} min {s % 60:02d}s"
 
 
 def _node_from_log_name(name: str) -> str | None:

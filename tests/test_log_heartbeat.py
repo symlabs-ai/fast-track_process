@@ -138,8 +138,8 @@ def test_fmt_elapsed_segundos():
 
 
 def test_fmt_elapsed_minutos():
-    assert _fmt_elapsed(60) == "há 1min 00s"
-    assert _fmt_elapsed(135) == "há 2min 15s"
+    assert _fmt_elapsed(60) == "há 1 min 00s"
+    assert _fmt_elapsed(135) == "há 2 min 15s"
 
 
 def test_fmt_elapsed_nunca_negativo():

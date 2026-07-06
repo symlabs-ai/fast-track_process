@@ -27,6 +27,20 @@ _RATE_LIMIT_PATTERNS = re.compile(
 # Override por env: FT_RATE_LIMIT_BACKOFF="60,120,240" (segundos, CSV).
 _RATE_LIMIT_WAIT = [60, 120, 240, 480, 900, 1800, 1800, 1800]
 
+# Acima deste tamanho o prompt não cabe com folga num argumento de execve
+# (MAX_ARG_STRLEN ≈ 128 KiB no Linux) e vai via stdin.
+_MAX_ARGV_PROMPT_BYTES = 100_000
+
+
+def _feed_stdin(proc: subprocess.Popen, prompt: str) -> None:
+    """Escreve o prompt no stdin do executor e fecha o pipe (EOF sinaliza fim)."""
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass  # executor morreu antes de ler o prompt — o wait() reporta o erro
+
 
 def _rate_limit_backoff_schedule() -> list[int]:
     """Cronograma de backoff para rate limit, configurável via FT_RATE_LIMIT_BACKOFF."""
@@ -676,6 +690,21 @@ NODE_SUMMARY:
 
     cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns, model=llm_model)
 
+    # Linux limita cada argumento de execve a ~128 KiB (MAX_ARG_STRLEN).
+    # Prompts hyper-mode estouram isso ([Errno 7] Argument list too long) —
+    # acima do limiar, o prompt sai do argv e vai via stdin (o Claude CLI lê
+    # o prompt de stdin quando -p vem sem argumento).
+    stdin_prompt: str | None = None
+    if (
+        llm_engine.lower().strip() == "claude"
+        and cmd
+        and cmd[-1] == prompt
+        and len(prompt.encode("utf-8")) > _MAX_ARGV_PROMPT_BYTES
+    ):
+        cmd = cmd[:-1]  # mantém o -p final; prompt segue via stdin
+        stdin_prompt = prompt
+        print(f"  ⚠️  Prompt grande ({len(prompt) // 1024} KiB) — enviando via stdin.")
+
     if log_path and llm_engine != "codex":
         _write_log_preamble(log_path, llm_engine, cmd, prompt)
     elif log_path:
@@ -692,6 +721,7 @@ NODE_SUMMARY:
         cwd=project_root,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE if stdin_prompt is not None else None,
         text=True,
         bufsize=1,
         env=_env,
@@ -710,6 +740,11 @@ NODE_SUMMARY:
         daemon=True,
     )
     reader.start()
+
+    # Alimentar stdin só depois do reader ativo: o reader drena o stdout do
+    # filho enquanto escrevemos, evitando deadlock de pipes cheios.
+    if stdin_prompt is not None:
+        _feed_stdin(proc, stdin_prompt)
 
     try:
         returncode = proc.wait(timeout=1800)  # 30 min max (projetos complexos)
@@ -752,6 +787,7 @@ NODE_SUMMARY:
                 cwd=project_root,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE if stdin_prompt is not None else None,
                 text=True,
                 bufsize=1,
             )
@@ -769,6 +805,8 @@ NODE_SUMMARY:
                 daemon=True,
             )
             t2.start()
+            if stdin_prompt is not None:
+                _feed_stdin(proc2, stdin_prompt)
             try:
                 rc2 = proc2.wait(timeout=1800)
             except subprocess.TimeoutExpired:

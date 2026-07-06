@@ -225,3 +225,93 @@ class TestRunnerPause:
         assert (state.blocked_reason or "").startswith(RATE_LIMIT_MARKER)
         # detector de "mesmo erro" não deve reter erro de infra
         assert node.id not in runner._auto_fix_prev_error
+
+
+class TestLargePromptViaStdin:
+    """Prompts acima de MAX_ARG_STRLEN (~128 KiB) quebram o execve com
+    [Errno 7] Argument list too long — devem ir via stdin."""
+
+    def _fake_env(self, captured):
+        import io
+
+        class FakeStdin(io.StringIO):
+            def close(self):
+                captured["stdin_data"] = self.getvalue()
+                super().close()
+
+        class FakeProc:
+            def __init__(self):
+                self.stdin = FakeStdin()
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["stdin_kwarg"] = kwargs.get("stdin")
+            return FakeProc()
+
+        return fake_popen
+
+    def test_large_prompt_goes_via_stdin(self, tmp_path):
+        import subprocess as sp
+
+        from ft.engine.delegate import _MAX_ARGV_PROMPT_BYTES
+
+        big_task = "x" * (_MAX_ARGV_PROMPT_BYTES + 1)
+        raw_done = '{"type":"result","result":"DONE"}'
+        captured = {}
+        fake_git = SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        with (
+            patch(
+                "ft.engine.delegate.subprocess.Popen",
+                side_effect=self._fake_env(captured),
+            ),
+            patch("ft.engine.delegate.subprocess.run", return_value=fake_git),
+            patch(
+                "ft.engine.delegate._stream_process_output",
+                return_value=raw_done,
+            ),
+        ):
+            result = delegate_to_llm(
+                task=big_task,
+                project_root=str(tmp_path),
+                llm_engine="claude",
+            )
+
+        assert result.success is True
+        assert captured["stdin_kwarg"] == sp.PIPE
+        # o prompt não pode estar no argv...
+        assert all(len(arg) < _MAX_ARGV_PROMPT_BYTES for arg in captured["cmd"])
+        assert captured["cmd"][-1] == "-p"
+        # ...e o conteúdo integral foi escrito no stdin
+        assert big_task in captured["stdin_data"]
+
+    def test_small_prompt_stays_in_argv(self, tmp_path):
+        raw_done = '{"type":"result","result":"DONE"}'
+        captured = {}
+        fake_git = SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        with (
+            patch(
+                "ft.engine.delegate.subprocess.Popen",
+                side_effect=self._fake_env(captured),
+            ),
+            patch("ft.engine.delegate.subprocess.run", return_value=fake_git),
+            patch(
+                "ft.engine.delegate._stream_process_output",
+                return_value=raw_done,
+            ),
+        ):
+            delegate_to_llm(
+                task="tarefa pequena",
+                project_root=str(tmp_path),
+                llm_engine="claude",
+            )
+
+        assert captured["stdin_kwarg"] is None
+        assert "tarefa pequena" in captured["cmd"][-1]

@@ -943,9 +943,24 @@ def cmd_log(args):
     _engine = runner._resolve_llm_engine()
     _last_out: list[str | None] = [None]
     _md = getattr(args, "markdown", False)
+    _tty = sys.stdout.isatty()
 
     def _paint(s: str) -> str:
         return _ui.paint_stream_line(s) if _md else s
+
+    # Heartbeat "vivo": num terminal, a linha de silêncio se sobrescreve
+    # (carriage return, sem newline) em vez de acumular uma linha por tick.
+    # `_hb_live` marca que há uma linha pendente a ser apagada antes de imprimir
+    # conteúdo de verdade. Fora de terminal (pipe), cai no comportamento antigo.
+    _hb_live = [False]
+
+    def _clear_hb() -> None:
+        """Apaga a linha de heartbeat viva antes de imprimir conteúdo real."""
+        if _hb_live[0]:
+            if _tty:
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+            _hb_live[0] = False
 
     # Espaçamento (modo markdown): um BLOCO de comandos bash consecutivos é
     # isolado por uma única linha em branco no topo e outra no fim. Os bashes
@@ -963,6 +978,7 @@ def cmd_log(args):
     def _emit(out_plain: str) -> None:
         """Imprime uma linha de conteúdo (não-raw) já formatada, com o
         espaçamento de borda de bloco bash do modo markdown."""
+        _clear_hb()
         _space_for(out_plain.startswith("$ "))
         print(_paint(out_plain), flush=True)
 
@@ -1021,7 +1037,15 @@ def cmd_log(args):
                     node = _node_from_log_name(log_path.name)
                     node_ctx = f" ({node})" if node else ""
                     desc = f"aguardando eventos do LLM{node_ctx} · {elapsed}"
-                print(_ui.dim(f"  ⋯ {desc}"), flush=True)
+                line = _ui.dim(f"  ⋯ {desc}")
+                if _tty:
+                    # Sobrescreve a mesma linha (\r + limpa até o fim), sem newline:
+                    # o contador de silêncio atualiza no lugar, sem empilhar linhas.
+                    sys.stdout.write("\r\033[K" + line)
+                    sys.stdout.flush()
+                    _hb_live[0] = True
+                else:
+                    print(line, flush=True)
                 last_print = now
 
         think_buf = ""
@@ -1031,11 +1055,13 @@ def cmd_log(args):
             while "\n" in think_buf:
                 head, think_buf = think_buf.split("\n", 1)
                 if head.strip():
+                    _clear_hb()
                     _space_for(False)  # texto de raciocínio fecha bloco bash aberto
                     msg = f"✻ {head.strip()[:160]}"
                     print(_paint(msg) if _md else _ui.dim(msg), flush=True)
                     last_print = _time.time()
             if force and think_buf.strip():
+                _clear_hb()
                 _space_for(False)
                 msg = f"✻ {think_buf.strip()[:160]}"
                 print(_paint(msg) if _md else _ui.dim(msg), flush=True)
@@ -1070,6 +1096,7 @@ def cmd_log(args):
                 idle = 0.0
                 newer = _current_log()
                 if newer and newer != log_path:
+                    _clear_hb()
                     f.close()
                     log_path = newer
                     print(_ui.dim(f"── {log_path.name} ──"), flush=True)
@@ -1079,6 +1106,11 @@ def cmd_log(args):
     except KeyboardInterrupt:
         pass
     finally:
+        # Fixa a linha de heartbeat viva com um newline para não deixar o prompt
+        # do shell colado nela.
+        if _hb_live[0] and _tty:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
         try:
             f.close()
         except Exception:

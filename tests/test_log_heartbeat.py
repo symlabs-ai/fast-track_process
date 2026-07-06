@@ -154,3 +154,29 @@ def test_node_from_log_name_extrai_node():
 def test_node_from_log_name_sem_padrao():
     assert _node_from_log_name("arquivo_solto.log") is None
     assert _node_from_log_name("semseparador") is None
+
+
+# --- espaçamento de bloco bash (ft log -m): branco só nas bordas -----------
+
+from ft.cli.main import _needs_block_blank
+
+
+def test_bloco_bash_branco_so_nas_bordas():
+    # Sequência: texto, 3 bashes, texto  →  branco ao ENTRAR e ao SAIR do bloco,
+    # nunca entre bashes consecutivos.
+    flags = [False, True, True, True, False]  # is_bash de cada linha de conteúdo
+    prev = False
+    layout = []
+    for is_bash in flags:
+        if _needs_block_blank(prev, is_bash):
+            layout.append("·")  # linha em branco
+        layout.append("$" if is_bash else "T")
+        prev = is_bash
+    assert layout == ["T", "·", "$", "$", "$", "·", "T"]
+
+
+def test_transicoes_do_bloco():
+    assert _needs_block_blank(False, True) is True   # abre
+    assert _needs_block_blank(True, False) is True   # fecha
+    assert _needs_block_blank(True, True) is False   # dentro do bloco
+    assert _needs_block_blank(False, False) is False  # fora do bloco

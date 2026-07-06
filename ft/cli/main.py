@@ -887,6 +887,13 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
     return None
 
 
+def _needs_block_blank(prev_is_bash: bool, cur_is_bash: bool) -> bool:
+    """True quando a transição de linha cruza a borda de um bloco bash — ou
+    seja, entra (não-bash→bash) ou sai (bash→não-bash). Linha em branco só nas
+    bordas: bashes consecutivos ficam colados, lidos como um bloco só."""
+    return prev_is_bash != cur_is_bash
+
+
 def _fmt_elapsed(seconds: float) -> str:
     """Formata um intervalo de silêncio como 'há Ns' ou 'há Nmin Ss'."""
     s = max(0, int(seconds))
@@ -940,23 +947,24 @@ def cmd_log(args):
     def _paint(s: str) -> str:
         return _ui.paint_stream_line(s) if _md else s
 
-    # Espaçamento: em modo markdown, comandos bash ganham uma linha em branco
-    # acima e abaixo para destacá-los. `_last_blank` evita brancos duplicados
-    # (bash em sequência não vira uma cascata de linhas vazias).
-    _last_blank = [True]
+    # Espaçamento (modo markdown): um BLOCO de comandos bash consecutivos é
+    # isolado por uma única linha em branco no topo e outra no fim. Os bashes
+    # do meio ficam colados, lidos como um bloco só. `_prev_bash` detecta as
+    # transições de/para o bloco — o branco só sai na borda, não a cada comando.
+    _prev_bash = [False]
+
+    def _space_for(is_bash: bool) -> None:
+        if not _md:
+            return
+        if _needs_block_blank(_prev_bash[0], is_bash):
+            print(flush=True)      # borda do bloco bash (abre ou fecha)
+        _prev_bash[0] = is_bash
 
     def _emit(out_plain: str) -> None:
-        """Imprime uma linha de conteúdo (não-raw) já formatada, isolando
-        comandos bash com uma linha em branco antes e depois no modo markdown."""
-        is_bash = _md and out_plain.startswith("$ ")
-        if is_bash and not _last_blank[0]:
-            print(flush=True)
+        """Imprime uma linha de conteúdo (não-raw) já formatada, com o
+        espaçamento de borda de bloco bash do modo markdown."""
+        _space_for(out_plain.startswith("$ "))
         print(_paint(out_plain), flush=True)
-        if is_bash:
-            print(flush=True)
-            _last_blank[0] = True
-        else:
-            _last_blank[0] = False
 
     def _fmt(line: str) -> str | None:
         out = _format_stream_line(_engine, line)
@@ -1023,15 +1031,15 @@ def cmd_log(args):
             while "\n" in think_buf:
                 head, think_buf = think_buf.split("\n", 1)
                 if head.strip():
+                    _space_for(False)  # texto de raciocínio fecha bloco bash aberto
                     msg = f"✻ {head.strip()[:160]}"
                     print(_paint(msg) if _md else _ui.dim(msg), flush=True)
-                    _last_blank[0] = False
                     last_print = _time.time()
             if force and think_buf.strip():
+                _space_for(False)
                 msg = f"✻ {think_buf.strip()[:160]}"
                 print(_paint(msg) if _md else _ui.dim(msg), flush=True)
                 think_buf = ""
-                _last_blank[0] = False
                 last_print = _time.time()
 
         while True:

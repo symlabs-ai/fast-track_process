@@ -837,7 +837,34 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
     elif etype == "user":
         ctx["desc"] = "resultado de ferramenta recebido, processando"
     elif etype == "assistant":
-        ctx["desc"] = "gerando resposta"
+        # Mostra o que o worker está fazendo (ferramenta + alvo, ou trecho do
+        # texto) em vez de um "gerando resposta" genérico.
+        blocks = ev.get("message", {}).get("content", []) or []
+        tool = next((b for b in blocks if b.get("type") == "tool_use"), None)
+        if tool:
+            name = tool.get("name") or "ferramenta"
+            inp = tool.get("input") or {}
+            target = str(
+                inp.get("file_path") or inp.get("command")
+                or inp.get("pattern") or inp.get("path") or ""
+            )
+            # Para ferramentas de arquivo, mostra só o basename.
+            if name in ("Read", "Edit", "Write", "NotebookEdit") and "/" in target:
+                target = target.rsplit("/", 1)[-1]
+            target = " ".join(target.split())  # colapsa quebras/espaços
+            ctx["desc"] = f"{name}: {target[:60]}" if target else name
+        else:
+            txt = next(
+                (b.get("text", "") for b in blocks
+                 if b.get("type") == "text" and b.get("text", "").strip()),
+                "",
+            )
+            if txt:
+                ctx["desc"] = "escrevendo: " + " ".join(txt.split())[:60]
+            elif any(b.get("type") == "thinking" for b in blocks):
+                ctx["desc"] = "raciocinando"
+            else:
+                ctx["desc"] = "gerando resposta"
     elif etype == "result":
         # Evento final do worker: resume desfecho, turnos, tempo e custo em vez
         # de um "evento result" opaco.

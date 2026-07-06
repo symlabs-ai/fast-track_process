@@ -71,6 +71,44 @@ def test_result_sem_campos_opcionais_nao_quebra():
     assert ctx["desc"] == "resultado ok"
 
 
+def _assistant(blocks):
+    return _track({"type": "assistant", "message": {"role": "assistant", "content": blocks}})
+
+
+def test_assistant_tool_use_arquivo_mostra_basename():
+    ctx = _assistant([{"type": "tool_use", "name": "Edit",
+                       "input": {"file_path": "/home/x/project/app/api/projects.py"}}])
+    assert ctx["desc"] == "Edit: projects.py"
+
+
+def test_assistant_tool_use_bash_mostra_comando():
+    ctx = _assistant([{"type": "tool_use", "name": "Bash",
+                       "input": {"command": "python -m pytest -q"}}])
+    assert ctx["desc"] == "Bash: python -m pytest -q"
+
+
+def test_assistant_tool_use_comando_longo_truncado():
+    cmd = "echo " + "a" * 200
+    ctx = _assistant([{"type": "tool_use", "name": "Bash", "input": {"command": cmd}}])
+    assert ctx["desc"].startswith("Bash: ")
+    assert len(ctx["desc"]) <= len("Bash: ") + 60
+
+
+def test_assistant_texto_mostra_trecho():
+    ctx = _assistant([{"type": "text", "text": "Now let me run the suite\nto confirm"}])
+    assert ctx["desc"] == "escrevendo: Now let me run the suite to confirm"
+
+
+def test_assistant_so_thinking_e_raciocinando():
+    ctx = _assistant([{"type": "thinking", "thinking": "hmm"}])
+    assert ctx["desc"] == "raciocinando"
+
+
+def test_assistant_vazio_cai_no_generico():
+    ctx = _assistant([])
+    assert ctx["desc"] == "gerando resposta"
+
+
 def test_thinking_delta_retorna_fragmento():
     ctx = {"desc": ""}
     frag = _track_heartbeat(json.dumps({

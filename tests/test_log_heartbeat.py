@@ -180,3 +180,39 @@ def test_transicoes_do_bloco():
     assert _needs_block_blank(True, False) is True   # fecha
     assert _needs_block_blank(True, True) is False   # dentro do bloco
     assert _needs_block_blank(False, False) is False  # fora do bloco
+
+
+# --- motivo real da espera: gate humano / bloqueio / LLM -------------------
+
+from ft.cli.main import _wait_reason
+
+
+def test_wait_reason_gate_por_pending_approval():
+    kind, text = _wait_reason("awaiting_approval", "gate.s04", None, "gate.s04")
+    assert kind == "gate"
+    assert "gate.s04" in text
+    assert "ft approve" in text and "ft reject" in text
+
+
+def test_wait_reason_gate_por_status():
+    kind, text = _wait_reason("awaiting_approval", None, None, "gate.value_core")
+    assert kind == "gate"
+    assert "gate.value_core" in text
+
+
+def test_wait_reason_blocked():
+    kind, text = _wait_reason("blocked", None, "git_diff_not_empty falhou", "loop.s04.green")
+    assert kind == "blocked"
+    assert "loop.s04.green" in text
+    assert "git_diff_not_empty falhou" in text
+
+
+def test_wait_reason_blocked_sem_motivo():
+    kind, text = _wait_reason("blocked", None, None, "n1")
+    assert kind == "blocked"
+    assert "sem motivo" in text
+
+
+def test_wait_reason_rodando_e_none():
+    assert _wait_reason("delegated", None, None, "loop.s04.green") == (None, None)
+    assert _wait_reason("ready", None, None, "n1") == (None, None)

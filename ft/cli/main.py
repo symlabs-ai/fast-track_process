@@ -894,6 +894,22 @@ def _needs_block_blank(prev_is_bash: bool, cur_is_bash: bool) -> bool:
     return prev_is_bash != cur_is_bash
 
 
+def _wait_reason(node_status: str | None, pending_approval: str | None,
+                 blocked_reason: str | None, node: str | None) -> tuple[str | None, str | None]:
+    """Motivo REAL da espera, derivado do estado do engine (não do log).
+
+    Retorna (kind, texto): kind ∈ {"gate", "blocked", None}. None significa que
+    não é gate humano nem bloqueio — a espera é genuinamente pelo LLM/ferramenta,
+    e o heartbeat cai no comportamento normal.
+    """
+    if pending_approval or node_status == "awaiting_approval":
+        gate = pending_approval or node or "?"
+        return "gate", f"aguardando APROVAÇÃO em {gate} — ft approve / ft reject"
+    if node_status == "blocked":
+        return "blocked", f"BLOQUEADO em {node or '?'}: {blocked_reason or 'sem motivo registrado'}"
+    return None, None
+
+
 def _fmt_elapsed(seconds: float) -> str:
     """Formata um intervalo de silêncio como 'há Ns' ou 'há Nmin Ss'."""
     s = max(0, int(seconds))
@@ -1031,13 +1047,26 @@ def cmd_log(args):
             now = _time.time()
             if now - last_print >= 15.0:
                 elapsed = _fmt_elapsed(now - hb["t"])
-                if hb["desc"]:
-                    desc = f"{hb['desc']} · {elapsed}"
+                # Consulta o estado do engine: a espera pode ser por um GATE
+                # humano ou um BLOQUEIO — não pelo LLM. O log sozinho não sabe.
+                kind = text = st = None
+                try:
+                    st = runner.state_mgr.load()
+                    node = st.current_node or _node_from_log_name(log_path.name)
+                    kind, text = _wait_reason(st.node_status, st.pending_approval,
+                                              st.blocked_reason, node)
+                except Exception:
+                    pass
+                if kind == "gate":
+                    line = f"  {_ui.BOLD_YELLOW}⏸ {text} · {elapsed}{_ui.RESET}"
+                elif kind == "blocked":
+                    line = f"  {_ui.BOLD_RED}⛔ {text} · {elapsed}{_ui.RESET}"
+                elif hb["desc"]:
+                    line = _ui.dim(f"  ⋯ {hb['desc']} · {elapsed}")
                 else:
-                    node = _node_from_log_name(log_path.name)
+                    node = (st.current_node if st else None) or _node_from_log_name(log_path.name)
                     node_ctx = f" ({node})" if node else ""
-                    desc = f"aguardando eventos do LLM{node_ctx} · {elapsed}"
-                line = _ui.dim(f"  ⋯ {desc}")
+                    line = _ui.dim(f"  ⋯ aguardando eventos do LLM{node_ctx} · {elapsed}")
                 if _tty:
                     # Sobrescreve a mesma linha (\r + limpa até o fim), sem newline:
                     # o contador de silêncio atualiza no lugar, sem empilhar linhas.

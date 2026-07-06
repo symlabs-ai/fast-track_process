@@ -5,6 +5,7 @@ UI helpers — cores e formatacao para output de terminal.
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 
@@ -348,6 +349,34 @@ def problem_explanation(
 # Prefixos de ferramentas de arquivo/busca emitidos por _format_stream_line.
 _TOOL_PREFIXES = ("Read ", "Write ", "Edit ", "Glob ", "Grep ", "NotebookEdit")
 
+# Markdown leve para linhas de prosa (o prompt do nó, que vem com ##, -, **, `).
+_MD_HEADER = re.compile(r"^(#{1,6})\s+(.*)$")
+_MD_BULLET = re.compile(r"^(\s*)[-*]\s+(.*)$")
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_MD_CODE = re.compile(r"`([^`]+)`")
+
+
+def _md_inline(text: str) -> str:
+    """Aplica ênfases inline: **negrito** e `código`."""
+    text = _MD_BOLD.sub(lambda m: f"{BOLD}{m.group(1)}{RESET}", text)
+    text = _MD_CODE.sub(lambda m: f"{CYAN}{m.group(1)}{RESET}", text)
+    return text
+
+
+def render_md(text: str) -> str:
+    """Renderiza markdown leve de uma linha de prosa (header, bullet, negrito,
+    código) com ANSI. Sem cor (pipe/NO_COLOR) devolve o texto CRU — não mexe na
+    sintaxe, para não corromper capturas em arquivo."""
+    if not _COLOR or not text:
+        return text
+    m = _MD_HEADER.match(text)
+    if m:  # "## Titulo" → negrito branco (sem o #)
+        return f"{BOLD_WHITE}{m.group(2)}{RESET}"
+    b = _MD_BULLET.match(text)
+    if b:  # "- item" / "* item" → bullet •
+        return f"{b.group(1)}{CYAN}•{RESET} {_md_inline(b.group(2))}"
+    return _md_inline(text)
+
 
 def paint_stream_line(s: str) -> str:
     """Realça uma linha já formatada por `_format_stream_line`, separando por
@@ -377,4 +406,5 @@ def paint_stream_line(s: str) -> str:
     # Ferramenta genérica "[Nome]" ou metadado "event ..." — apagado.
     if s.startswith("event ") or s.startswith("["):
         return f"{DIM}{s}{RESET}"
-    return s
+    # Prosa (o prompt do nó, texto solto): renderiza markdown leve.
+    return render_md(s)

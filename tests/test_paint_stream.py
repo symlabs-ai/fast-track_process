@@ -28,10 +28,11 @@ def cores(monkeypatch):
     marks = {
         "RESET": "[/]", "DIM": "[dim]", "ITALIC": "[it]", "GREEN": "[grn]",
         "BLUE": "[blu]", "BOLD_GREEN": "[BGRN]", "BOLD_WHITE": "[BWHT]",
-        "BOLD_CYAN": "[BCYN]",
+        "BOLD_CYAN": "[BCYN]", "BOLD": "[B]", "CYAN": "[cyn]",
     }
     for name, val in marks.items():
         monkeypatch.setattr(ui, name, val)
+    monkeypatch.setattr(ui, "_COLOR", True)  # render_md exige cor ligada
     return marks
 
 
@@ -70,3 +71,39 @@ def test_evento_generico_apagado(cores):
 
 def test_linha_desconhecida_intacta(cores):
     assert ui.paint_stream_line("NODE_SUMMARY: - fiz: impl") == "NODE_SUMMARY: - fiz: impl"
+
+
+# --- markdown leve na prosa (o prompt do nó) -------------------------------
+
+def test_md_sem_cor_texto_cru():
+    # Sem cor (pipe), a sintaxe markdown é preservada — não corrompe captura.
+    assert ui.render_md("## Output") == "## Output"
+    assert ui.render_md("- item") == "- item"
+    assert ui.render_md("um **negrito** e `codigo`") == "um **negrito** e `codigo`"
+
+
+def test_md_header(cores):
+    assert ui.render_md("## Output") == "[BWHT]Output[/]"
+    assert ui.render_md("### Sub titulo") == "[BWHT]Sub titulo[/]"
+
+
+def test_md_bullet(cores):
+    assert ui.render_md("- primeiro item") == "[cyn]•[/] primeiro item"
+    assert ui.render_md("* outro") == "[cyn]•[/] outro"
+
+
+def test_md_negrito_e_codigo_inline(cores):
+    assert ui.render_md("use **isto**") == "use [B]isto[/]"
+    assert ui.render_md("rode `pytest -q` agora") == "rode [cyn]pytest -q[/] agora"
+
+
+def test_md_linha_de_prosa_no_paint(cores):
+    # prosa cai no fallback do paint_stream_line → render_md
+    assert ui.paint_stream_line("## Output") == "[BWHT]Output[/]"
+    assert ui.paint_stream_line("- Escreva APENAS nos paths permitidos") == "[cyn]•[/] Escreva APENAS nos paths permitidos"
+
+
+def test_md_nao_toca_comando_bash(cores):
+    # linhas de stream (bash) NÃO viram markdown (um '-' no comando é literal)
+    out = ui.paint_stream_line("$ grep -rn '**' arquivo")
+    assert out.startswith("[BGRN]$[/]")

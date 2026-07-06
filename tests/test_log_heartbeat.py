@@ -116,8 +116,13 @@ def test_assistant_texto_mostra_trecho():
     assert ctx["desc"] == "escrevendo: Now let me run the suite to confirm"
 
 
-def test_assistant_so_thinking_e_raciocinando():
-    ctx = _assistant([{"type": "thinking", "thinking": "hmm"}])
+def test_assistant_so_thinking_mostra_trecho():
+    ctx = _assistant([{"type": "thinking", "thinking": "analisando o runner"}])
+    assert ctx["desc"] == "raciocinando: …analisando o runner"
+
+
+def test_assistant_thinking_vazio_cai_no_generico():
+    ctx = _assistant([{"type": "thinking", "thinking": ""}])
     assert ctx["desc"] == "raciocinando"
 
 
@@ -134,7 +139,7 @@ def test_thinking_delta_retorna_fragmento():
                   "delta": {"type": "thinking_delta", "thinking": "hmm"}},
     }), ctx)
     assert frag == "hmm"
-    assert ctx["desc"] == "raciocinando"
+    assert ctx["desc"] == "raciocinando: …hmm"
 
 
 def test_linha_nao_json_ignorada():

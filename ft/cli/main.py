@@ -815,6 +815,12 @@ def cmd_status(args):
         runner.status(full=args.full)
 
 
+def _think_snippet(text: str | None, n: int = 70) -> str:
+    """Últimos ~n chars do raciocínio, numa linha só — para o heartbeat mostrar
+    SOBRE o que o worker está pensando."""
+    return " ".join((text or "").split())[-n:]
+
+
 def _track_heartbeat(raw: str, ctx: dict) -> str | None:
     """Atualiza o contexto do heartbeat de ``ft log --follow``.
 
@@ -839,19 +845,20 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
         if inner.get("type") == "content_block_delta":
             delta = inner.get("delta", {})
             if delta.get("type") == "thinking_delta":
-                ctx["desc"] = "raciocinando"
                 frag = delta.get("thinking", "")
                 if frag:
                     # tail rolante do raciocínio, para o heartbeat mostrar SOBRE
                     # o que ele está pensando quando o pensamento fica denso.
                     ctx["think"] = (ctx.get("think", "") + frag)[-200:]
+                snip = _think_snippet(ctx.get("think"))
+                ctx["desc"] = f"raciocinando: …{snip}" if snip else "raciocinando"
                 return frag
         return None
     if etype == "system":
         subtype = ev.get("subtype", "")
         if subtype == "thinking_tokens":
             toks = ev.get("estimated_tokens", 0)
-            snippet = " ".join((ctx.get("think") or "").split())[-70:]
+            snippet = _think_snippet(ctx.get("think"))
             ctx["desc"] = f"pensando (~{toks} tokens)" + (f": …{snippet}" if snippet else "")
         elif subtype == "init":
             # Evento de abertura de sessão: expõe modelo, modo de permissão e
@@ -892,10 +899,14 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
             )
             if txt:
                 ctx["desc"] = "escrevendo: " + " ".join(txt.split())[:60]
-            elif any(b.get("type") == "thinking" for b in blocks):
-                ctx["desc"] = "raciocinando"
             else:
-                ctx["desc"] = "gerando resposta"
+                think = next((b.get("thinking", "") for b in blocks
+                              if b.get("type") == "thinking"), None)
+                if think is not None:
+                    snip = _think_snippet(think)
+                    ctx["desc"] = f"raciocinando: …{snip}" if snip else "raciocinando"
+                else:
+                    ctx["desc"] = "gerando resposta"
     elif etype == "result":
         # Evento final do worker: resume desfecho, turnos, tempo e custo em vez
         # de um "evento result" opaco.

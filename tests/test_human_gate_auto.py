@@ -48,3 +48,36 @@ def test_run_mode_default_step():
 
 def test_run_mode_auto_vence_sprint():
     assert resolve_run_mode(Namespace(auto=True, sprint=True)) == "mvp"
+
+
+# --- _cycle_complete: continue num ciclo done não reinicia (footgun) --------
+
+from ft.cli.main import _cycle_complete
+
+
+class _St:
+    def __init__(self, node_status="ready", current_node=None, completed_nodes=None):
+        self.node_status = node_status
+        self.current_node = current_node
+        self.completed_nodes = completed_nodes or []
+
+
+def test_cycle_complete_por_node_status_done():
+    assert _cycle_complete(_St(node_status="done", current_node=None,
+                               completed_nodes=["a", "b"])) is True
+
+
+def test_cycle_complete_current_none_com_nos_feitos():
+    assert _cycle_complete(_St(node_status="ready", current_node=None,
+                               completed_nodes=["a"])) is True
+
+
+def test_estado_novo_nunca_rodou_nao_e_completo():
+    # fresh: current_node None mas SEM nós completos → pode init/rodar
+    assert _cycle_complete(_St(node_status="ready", current_node=None,
+                               completed_nodes=[])) is False
+
+
+def test_ciclo_em_andamento_nao_e_completo():
+    assert _cycle_complete(_St(node_status="delegated", current_node="n1",
+                               completed_nodes=["a"])) is False

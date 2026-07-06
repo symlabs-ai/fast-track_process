@@ -59,6 +59,16 @@ def resolve_run_mode(args) -> str:
     return "step"
 
 
+def _cycle_complete(state) -> bool:
+    """True se o ciclo JÁ concluiu (node_status done, ou current_node None mas
+    com nós já completos). Distingue de um estado NOVO (nunca rodou, sem nós
+    completos) — evita que `continue` num ciclo pronto chame init_state e
+    reinicie tudo do zero."""
+    if getattr(state, "node_status", "") == "done":
+        return True
+    return state.current_node is None and bool(getattr(state, "completed_nodes", None))
+
+
 def resolve_llm_engine(args) -> str | None:
     if getattr(args, "codex", None) is not None:
         return "codex"
@@ -799,8 +809,14 @@ def cmd_continue(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
-    # Inicializar estado se nao existe
+    # Ciclo já concluído? NÃO reiniciar do zero (footgun: continue num ciclo
+    # done chamava init_state e recomeçava tudo).
     state = runner.state_mgr.load()
+    if _cycle_complete(state):
+        from ft.engine import ui as _ui
+        print(_ui.warn("Ciclo já concluído — nada a retomar. Para um novo ciclo: ft run . --force"))
+        return
+    # Inicializar estado só se nunca rodou
     if state.current_node is None:
         runner.init_state()
 
@@ -976,6 +992,8 @@ def _wait_reason(node_status: str | None, pending_approval: str | None,
     normal do heartbeat). "stalled" = o node não é gate nem bloqueio, mas nenhum
     orquestrador está vivo para avançá-lo — o ciclo está parado.
     """
+    if node_status == "done":
+        return "done", "ciclo COMPLETO"
     if pending_approval or node_status == "awaiting_approval":
         gate = pending_approval or node or "?"
         return "gate", f"aguardando APROVAÇÃO em {gate} — ft approve / ft reject"
@@ -1158,7 +1176,9 @@ def cmd_log(args):
                                               _orchestrator_alive(runner.state_mgr, st))
                 except Exception:
                     pass
-                if kind == "gate":
+                if kind == "done":
+                    line = f"  {_ui.BOLD_GREEN}✓ {text}{_ui.RESET}"
+                elif kind == "gate":
                     line = f"  {_ui.BOLD_YELLOW}⏸ {text} · {elapsed}{_ui.RESET}"
                 elif kind == "blocked":
                     line = f"  {_ui.BOLD_RED}⛔ {text} · {elapsed}{_ui.RESET}"

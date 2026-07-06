@@ -335,3 +335,14 @@ def test_truncate_visible_garante_reset():
     assert out.endswith("\x1b[0m")
     assert out.startswith("\x1b[31m")
     assert "…" in out
+
+
+# --- ciclo DONE não é 'stalled' (footgun que induziu o restart) ------------
+
+def test_wait_reason_done_nao_e_stalled():
+    # ciclo concluído: node_status done + orquestrador morto NÃO pode virar
+    # 'PARADO — rode ft continue' (isso induziu o restart do zero)
+    kind, text = _wait_reason("done", None, None, "loop.close.retro",
+                              orchestrator_alive=False)
+    assert kind == "done"
+    assert "COMPLETO" in text

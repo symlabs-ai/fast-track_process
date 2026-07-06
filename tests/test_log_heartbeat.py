@@ -252,3 +252,25 @@ def test_log_mtime_arquivo_inexistente_cai_em_now(tmp_path):
     import time
     t = _log_mtime(tmp_path / "nao-existe.log")
     assert abs(t - time.time()) < 5
+
+
+# --- ciclo parado: ready/delegated sem orquestrador vivo -------------------
+
+def test_wait_reason_stalled_sem_orquestrador():
+    kind, text = _wait_reason("ready", None, None, "loop.s03.mission_check",
+                              orchestrator_alive=False)
+    assert kind == "stalled"
+    assert "PARADO" in text and "loop.s03.mission_check" in text
+    assert "ft continue" in text
+
+
+def test_wait_reason_ready_com_orquestrador_e_normal():
+    # orquestrador vivo → não é stall, cai no comportamento normal (LLM)
+    assert _wait_reason("ready", None, None, "n1", orchestrator_alive=True) == (None, None)
+
+
+def test_wait_reason_gate_vence_orquestrador_morto():
+    # um human gate é pausa legítima, não "stalled", mesmo sem orquestrador
+    kind, _ = _wait_reason("awaiting_approval", "gate.final", None, "gate.final",
+                           orchestrator_alive=False)
+    assert kind == "gate"

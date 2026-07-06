@@ -34,6 +34,17 @@ def resolve_bypass_human_gates(args) -> bool:
     return bool(getattr(args, "bypass_human_gates", False))
 
 
+def resolve_run_mode(args) -> str:
+    """Resolve o modo de execução a partir dos flags: --auto → 'mvp' (avança
+    até o próximo human gate), --sprint → 'sprint' (até fim da sprint), senão
+    'step' (um node). Compartilhado por `continue` e `approve`."""
+    if getattr(args, "auto", False):
+        return "mvp"
+    if getattr(args, "sprint", False):
+        return "sprint"
+    return "step"
+
+
 def resolve_llm_engine(args) -> str | None:
     if getattr(args, "codex", None) is not None:
         return "codex"
@@ -779,8 +790,7 @@ def cmd_continue(args):
     if state.current_node is None:
         runner.init_state()
 
-    mode = "mvp" if args.auto else ("sprint" if args.sprint else "step")
-    runner.run(mode=mode)
+    runner.run(mode=resolve_run_mode(args))
 
 
 def cmd_status(args):
@@ -902,19 +912,37 @@ def _needs_block_blank(prev_is_bash: bool, cur_is_bash: bool) -> bool:
 
 
 def _wait_reason(node_status: str | None, pending_approval: str | None,
-                 blocked_reason: str | None, node: str | None) -> tuple[str | None, str | None]:
+                 blocked_reason: str | None, node: str | None,
+                 orchestrator_alive: bool = True) -> tuple[str | None, str | None]:
     """Motivo REAL da espera, derivado do estado do engine (não do log).
 
-    Retorna (kind, texto): kind ∈ {"gate", "blocked", None}. None significa que
-    não é gate humano nem bloqueio — a espera é genuinamente pelo LLM/ferramenta,
-    e o heartbeat cai no comportamento normal.
+    Retorna (kind, texto): kind ∈ {"gate", "blocked", "stalled", None}. None
+    significa que a espera é genuinamente pelo LLM/ferramenta (comportamento
+    normal do heartbeat). "stalled" = o node não é gate nem bloqueio, mas nenhum
+    orquestrador está vivo para avançá-lo — o ciclo está parado.
     """
     if pending_approval or node_status == "awaiting_approval":
         gate = pending_approval or node or "?"
         return "gate", f"aguardando APROVAÇÃO em {gate} — ft approve / ft reject"
     if node_status == "blocked":
         return "blocked", f"BLOQUEADO em {node or '?'}: {blocked_reason or 'sem motivo registrado'}"
+    if not orchestrator_alive:
+        return "stalled", f"ciclo PARADO em {node or '?'} — nenhum orquestrador rodando; rode `ft continue --auto`"
     return None, None
+
+
+def _orchestrator_alive(state_mgr, st) -> bool:
+    """True se o processo que segura o lock do estado ainda está vivo. O lock é
+    reescrito com o pid a cada save e nunca liberado, então um pid morto = o
+    orquestrador saiu (ciclo parado)."""
+    lock = getattr(st, "_lock", None)
+    pid = lock.get("pid") if isinstance(lock, dict) else None
+    if not pid:
+        return False
+    try:
+        return state_mgr._is_pid_alive(int(pid))
+    except Exception:
+        return True  # na dúvida, não alarma falso
 
 
 def _fmt_elapsed(seconds: float) -> str:
@@ -1071,13 +1099,16 @@ def cmd_log(args):
                     st = runner.state_mgr.load()
                     node = st.current_node or _node_from_log_name(log_path.name)
                     kind, text = _wait_reason(st.node_status, st.pending_approval,
-                                              st.blocked_reason, node)
+                                              st.blocked_reason, node,
+                                              _orchestrator_alive(runner.state_mgr, st))
                 except Exception:
                     pass
                 if kind == "gate":
                     line = f"  {_ui.BOLD_YELLOW}⏸ {text} · {elapsed}{_ui.RESET}"
                 elif kind == "blocked":
                     line = f"  {_ui.BOLD_RED}⛔ {text} · {elapsed}{_ui.RESET}"
+                elif kind == "stalled":
+                    line = f"  {_ui.BOLD_YELLOW}⚠ {text} · {elapsed}{_ui.RESET}"
                 elif hb["desc"]:
                     line = _ui.dim(f"  ⋯ {hb['desc']} · {elapsed}")
                 else:
@@ -1263,11 +1294,13 @@ def cmd_runs(args):
 
 def cmd_approve(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner._bypass_human_gates = resolve_bypass_human_gates(args)
     message = getattr(args, "message", None)
     runner.approve(message=message)
-    # Continuar automaticamente apos aprovacao
+    # Continuar automaticamente após aprovação, no modo pedido (--auto avança
+    # sozinho até o próximo human gate, sem o dança approve-step + continue).
     if not args.no_continue:
-        runner.run(mode="step")
+        runner.run(mode=resolve_run_mode(args))
 
 
 def cmd_reject(args):
@@ -2432,6 +2465,9 @@ def main():
     ap.add_argument("message", nargs="?", default=None,
                     help="Nota opcional registrada no log (ex: 'Aprovado após revisão')")
     ap.add_argument("--no-continue", action="store_true", help="Nao continuar automaticamente")
+    ap.add_argument("--auto", action="store_true", help="Após aprovar, avança sozinho até o próximo human gate (modo autônomo)")
+    ap.add_argument("--sprint", action="store_true", help="Após aprovar, avança até o fim da sprint")
+    ap.add_argument("--bypass-human-gates", action="store_true", help="Pular human_gates automaticamente (LLM decide)")
 
     # reject
     rj = sub.add_parser("reject", help="Rejeitar artefato pendente")

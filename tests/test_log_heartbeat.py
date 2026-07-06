@@ -309,3 +309,29 @@ def test_wait_reason_blocked_sanitiza_multilinha():
     kind, text = _wait_reason("blocked", None, reason, "loop.s03.mission_check")
     assert kind == "blocked"
     assert "\n" not in text  # NUNCA multilinha — senão a cor vaza
+
+
+# --- truncar linha à largura do terminal (empilhamento do heartbeat longo) --
+
+from ft.cli.main import _truncate_visible
+
+
+def test_truncate_visible_curto_intacto():
+    assert _truncate_visible("abc", 10) == "abc"
+
+
+def test_truncate_visible_trunca_com_reticencias():
+    assert _truncate_visible("abcdefghij", 5) == "abcd…"
+
+
+def test_truncate_visible_ignora_ansi_na_largura():
+    # 5 chars visíveis cabem em width=5, apesar dos códigos ANSI
+    s = "\x1b[31mabcde\x1b[0m"
+    assert _truncate_visible(s, 5) == s
+
+
+def test_truncate_visible_garante_reset():
+    out = _truncate_visible("\x1b[31mabcdefgh", 4, reset="\x1b[0m")
+    assert out.endswith("\x1b[0m")
+    assert out.startswith("\x1b[31m")
+    assert "…" in out

@@ -815,6 +815,36 @@ def cmd_status(args):
         runner.status(full=args.full)
 
 
+def _truncate_visible(s: str, width: int, reset: str = "") -> str:
+    """Trunca `s` (pode conter ANSI) para `width` COLUNAS VISÍVEIS — sequências
+    ANSI não contam. Garante `reset` no fim (cor não vaza). Evita que uma linha
+    longa de heartbeat quebre em várias e empilhe sob o overwrite com \\r."""
+    if width <= 0:
+        return s
+    out: list[str] = []
+    vis = 0
+    i = 0
+    truncated = False
+    while i < len(s):
+        m = _ANSI_RE.match(s, i)
+        if m:
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        if vis >= width:
+            truncated = True
+            break
+        out.append(s[i])
+        vis += 1
+        i += 1
+    res = "".join(out)
+    if truncated and vis > 0:
+        res = res[:-1] + "…"
+    if reset and not res.endswith(reset):
+        res += reset
+    return res
+
+
 def _think_snippet(text: str | None, n: int = 70) -> str:
     """Últimos ~n chars do raciocínio, numa linha só — para o heartbeat mostrar
     SOBRE o que o worker está pensando."""
@@ -952,7 +982,7 @@ def _wait_reason(node_status: str | None, pending_approval: str | None,
     if node_status == "blocked":
         return "blocked", f"BLOQUEADO em {node or '?'}: {_oneline(blocked_reason) or 'sem motivo registrado'}"
     if not orchestrator_alive:
-        return "stalled", f"ciclo PARADO em {node or '?'} — nenhum orquestrador rodando; rode `ft continue --auto`"
+        return "stalled", f"ciclo PARADO em {node or '?'} — rode `ft continue --auto`"
     return None, None
 
 
@@ -1145,6 +1175,12 @@ def cmd_log(args):
                 # vazaria a cor para o resto do log.
                 line = line.replace("\n", " ")
                 if _tty:
+                    # Trunca à largura do terminal: uma linha que quebra em duas
+                    # faz o overwrite com \r empilhar (o \r\033[K limpa só a
+                    # última). Uma linha só = overwrite limpo.
+                    import shutil as _shutil
+                    cols = _shutil.get_terminal_size((80, 24)).columns
+                    line = _truncate_visible(line, cols - 1, _ui.RESET)
                     # Sobrescreve a mesma linha (\r + limpa até o fim), sem newline:
                     # o contador de silêncio atualiza no lugar, sem empilhar linhas.
                     sys.stdout.write("\r\033[K" + line)

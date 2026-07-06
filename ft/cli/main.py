@@ -816,12 +816,19 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
             delta = inner.get("delta", {})
             if delta.get("type") == "thinking_delta":
                 ctx["desc"] = "raciocinando"
-                return delta.get("thinking", "")
+                frag = delta.get("thinking", "")
+                if frag:
+                    # tail rolante do raciocínio, para o heartbeat mostrar SOBRE
+                    # o que ele está pensando quando o pensamento fica denso.
+                    ctx["think"] = (ctx.get("think", "") + frag)[-200:]
+                return frag
         return None
     if etype == "system":
         subtype = ev.get("subtype", "")
         if subtype == "thinking_tokens":
-            ctx["desc"] = f"pensando (~{ev.get('estimated_tokens', 0)} tokens)"
+            toks = ev.get("estimated_tokens", 0)
+            snippet = " ".join((ctx.get("think") or "").split())[-70:]
+            ctx["desc"] = f"pensando (~{toks} tokens)" + (f": …{snippet}" if snippet else "")
         elif subtype == "init":
             # Evento de abertura de sessão: expõe modelo, modo de permissão e
             # nº de ferramentas em vez de um "evento system" opaco.

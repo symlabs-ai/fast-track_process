@@ -41,6 +41,23 @@ def test_system_subtype_desconhecido_mostra_subtype():
 def test_system_thinking_tokens_preservado():
     ctx = _track({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 1234})
     assert "1234" in ctx["desc"]
+    assert ctx["desc"] == "pensando (~1234 tokens)"  # sem trecho quando não há raciocínio
+
+
+def test_thinking_tokens_anexa_trecho_do_raciocinio():
+    ctx = {"desc": ""}
+    # primeiro chega o raciocínio (thinking_delta), depois a contagem de tokens
+    _track_heartbeat(json.dumps({
+        "type": "stream_event",
+        "event": {"type": "content_block_delta",
+                  "delta": {"type": "thinking_delta",
+                            "thinking": "analisando o call site do runner"}},
+    }), ctx)
+    _track_heartbeat(json.dumps({
+        "type": "system", "subtype": "thinking_tokens", "estimated_tokens": 5600,
+    }), ctx)
+    assert ctx["desc"].startswith("pensando (~5600 tokens): …")
+    assert "call site do runner" in ctx["desc"]
 
 
 def test_system_sem_subtype_cai_no_generico():

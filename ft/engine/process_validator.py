@@ -16,11 +16,16 @@ from ft.engine.graph import ProcessGraph, Node
 VALID_NODE_TYPES = frozenset({
     "discovery", "document", "build", "test_red", "test_green",
     "refactor", "review", "retro", "gate", "decision", "sync", "end",
-    "human_gate",
+    "human_gate", "exploration",
 })
 
+# Nomes PÓS-normalização do graph loader (claude→llm_claude etc.) — o validator
+# roda sobre o ProcessGraph carregado, nunca sobre o YAML cru. llm_coder/llm_coach
+# são os nomes legados da V2, mantidos por compatibilidade.
 VALID_EXECUTORS = frozenset({
-    "python", "llm_coder", "llm_coach", "human",
+    "python", "human",
+    "llm_claude", "llm_codex", "llm_gemini",
+    "llm_coder", "llm_coach",
 })
 
 

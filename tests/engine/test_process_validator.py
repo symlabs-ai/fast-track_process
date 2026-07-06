@@ -160,3 +160,42 @@ class TestRealProcess:
         report = validate_process(graph)
         # Pode ter warnings, mas não deve ter erros
         assert report.passed, f"Erros: {[e.message for e in report.errors]}"
+
+
+class TestV3RuntimeNames:
+    """Regressão: validator rejeitava os nomes que o runtime de fato usa.
+
+    O graph loader normaliza claude->llm_claude (V3) e o runner executa
+    node.type == "exploration" — mas VALID_EXECUTORS/VALID_NODE_TYPES
+    estavam presos nos nomes da V2, então `ft validate` reprovava processos
+    que rodavam em produção (vibeos cycles 01-03)."""
+
+    def test_llm_engine_executors_validos(self):
+        for executor in ("llm_claude", "llm_codex", "llm_gemini"):
+            assert executor in VALID_EXECUTORS
+
+    def test_exploration_type_valido(self):
+        assert "exploration" in VALID_NODE_TYPES
+
+    def test_processo_v3_com_nomes_curtos_passa(self):
+        """YAML V3 usa executor curto ('claude'); via load_graph deve validar."""
+        raw = {
+            "id": "mini_v3", "version": "1.0.0", "title": "mini",
+            "nodes": [
+                {"id": "a", "type": "build", "title": "A", "executor": "claude",
+                 "outputs": ["docs/x.md"], "next": "b"},
+                {"id": "b", "type": "exploration", "title": "B", "next": "fim"},
+                {"id": "fim", "type": "end", "title": "Fim"},
+            ],
+        }
+        import tempfile, os
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as f:
+            yaml.safe_dump(raw, f)
+            path = f.name
+        try:
+            graph = load_graph(Path(path))
+            report = validate_process(graph)
+            executor_errors = [e for e in report.errors if "executor" in e.message or "type" in e.message]
+            assert executor_errors == []
+        finally:
+            os.unlink(path)

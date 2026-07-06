@@ -124,3 +124,33 @@ def test_linha_nao_json_ignorada():
     ctx = {"desc": "prev"}
     assert _track_heartbeat("não é json", ctx) is None
     assert ctx["desc"] == "prev"
+
+
+# --- heartbeat de silêncio: tempo + node -----------------------------------
+
+from ft.cli.main import _fmt_elapsed, _node_from_log_name
+
+
+def test_fmt_elapsed_segundos():
+    assert _fmt_elapsed(0) == "há 0s"
+    assert _fmt_elapsed(45) == "há 45s"
+    assert _fmt_elapsed(59.9) == "há 59s"
+
+
+def test_fmt_elapsed_minutos():
+    assert _fmt_elapsed(60) == "há 1min 00s"
+    assert _fmt_elapsed(135) == "há 2min 15s"
+
+
+def test_fmt_elapsed_nunca_negativo():
+    assert _fmt_elapsed(-5) == "há 0s"
+
+
+def test_node_from_log_name_extrai_node():
+    assert _node_from_log_name("20260706-143226__loop.s04.mission_check__review-retry.log") == "loop.s04.mission_check"
+    assert _node_from_log_name("20260706-122637__loop.s06.red__run.log") == "loop.s06.red"
+
+
+def test_node_from_log_name_sem_padrao():
+    assert _node_from_log_name("arquivo_solto.log") is None
+    assert _node_from_log_name("semseparador") is None

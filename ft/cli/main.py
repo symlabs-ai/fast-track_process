@@ -887,6 +887,20 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
     return None
 
 
+def _fmt_elapsed(seconds: float) -> str:
+    """Formata um intervalo de silêncio como 'há Ns' ou 'há Nmin Ss'."""
+    s = max(0, int(seconds))
+    if s < 60:
+        return f"há {s}s"
+    return f"há {s // 60}min {s % 60:02d}s"
+
+
+def _node_from_log_name(name: str) -> str | None:
+    """Extrai o id do node do nome do log (``TIMESTAMP__<node>__sufixo.log``)."""
+    parts = name.split("__")
+    return parts[1] if len(parts) >= 2 and parts[1] else None
+
+
 def cmd_log(args):
     """Mostra/acompanha o log LLM do ciclo ativo, formatado para leitura humana."""
     import time as _time
@@ -986,13 +1000,19 @@ def cmd_log(args):
         f.seek(0, 2)
         idle = 0.0
         last_print = _time.time()
-        hb = {"desc": ""}
+        hb = {"desc": "", "t": _time.time()}
 
         def _heartbeat() -> None:
             nonlocal last_print
             now = _time.time()
             if now - last_print >= 15.0:
-                desc = hb["desc"] or "aguardando eventos do LLM"
+                elapsed = _fmt_elapsed(now - hb["t"])
+                if hb["desc"]:
+                    desc = f"{hb['desc']} · {elapsed}"
+                else:
+                    node = _node_from_log_name(log_path.name)
+                    node_ctx = f" ({node})" if node else ""
+                    desc = f"aguardando eventos do LLM{node_ctx} · {elapsed}"
                 print(_ui.dim(f"  ⋯ {desc}"), flush=True)
                 last_print = now
 
@@ -1018,6 +1038,7 @@ def cmd_log(args):
             line = f.readline()
             if line:
                 idle = 0.0
+                hb["t"] = _time.time()  # marca atividade — silêncio conta a partir daqui
                 frag = _track(line.strip(), hb)
                 if frag is not None and not args.raw:
                     think_buf += frag
@@ -1046,6 +1067,7 @@ def cmd_log(args):
                     print(_ui.dim(f"── {log_path.name} ──"), flush=True)
                     f = log_path.open(errors="replace")
                     hb["desc"] = ""
+                    hb["t"] = _time.time()
     except KeyboardInterrupt:
         pass
     finally:

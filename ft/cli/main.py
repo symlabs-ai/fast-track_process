@@ -926,6 +926,24 @@ def cmd_log(args):
     def _paint(s: str) -> str:
         return _ui.paint_stream_line(s) if _md else s
 
+    # Espaçamento: em modo markdown, comandos bash ganham uma linha em branco
+    # acima e abaixo para destacá-los. `_last_blank` evita brancos duplicados
+    # (bash em sequência não vira uma cascata de linhas vazias).
+    _last_blank = [True]
+
+    def _emit(out_plain: str) -> None:
+        """Imprime uma linha de conteúdo (não-raw) já formatada, isolando
+        comandos bash com uma linha em branco antes e depois no modo markdown."""
+        is_bash = _md and out_plain.startswith("$ ")
+        if is_bash and not _last_blank[0]:
+            print(flush=True)
+        print(_paint(out_plain), flush=True)
+        if is_bash:
+            print(flush=True)
+            _last_blank[0] = True
+        else:
+            _last_blank[0] = False
+
     def _fmt(line: str) -> str | None:
         out = _format_stream_line(_engine, line)
         if not out or (out.startswith("event ") and not args.raw):
@@ -950,7 +968,10 @@ def cmd_log(args):
         raw_lines = f.readlines()
     shown = [x for x in (line.rstrip() if args.raw else _fmt(line) for line in raw_lines) if x]
     for out in shown[-lines:]:
-        print(_paint(out) if not args.raw else out, flush=True)
+        if args.raw:
+            print(out, flush=True)
+        else:
+            _emit(out)
 
     if not args.follow:
         return
@@ -984,11 +1005,13 @@ def cmd_log(args):
                 if head.strip():
                     msg = f"✻ {head.strip()[:160]}"
                     print(_paint(msg) if _md else _ui.dim(msg), flush=True)
+                    _last_blank[0] = False
                     last_print = _time.time()
             if force and think_buf.strip():
                 msg = f"✻ {think_buf.strip()[:160]}"
                 print(_paint(msg) if _md else _ui.dim(msg), flush=True)
                 think_buf = ""
+                _last_blank[0] = False
                 last_print = _time.time()
 
         while True:
@@ -1003,7 +1026,10 @@ def cmd_log(args):
                 out = line.rstrip() if args.raw else _fmt(line)
                 if out:
                     _flush_think(force=True)
-                    print(out if args.raw else _paint(out), flush=True)
+                    if args.raw:
+                        print(out, flush=True)
+                    else:
+                        _emit(out)
                     last_print = _time.time()
                 else:
                     _heartbeat()

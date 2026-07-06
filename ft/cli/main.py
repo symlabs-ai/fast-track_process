@@ -24,6 +24,16 @@ def add_llm_engine_flags(parser):
                        help="Usar Gemini CLI (opcional: modelo, ex: --gemini gemini-2.5-pro)")
 
 
+def resolve_bypass_human_gates(args) -> bool:
+    """Human gates so sao pulados com o flag EXPLICITO --bypass-human-gates.
+
+    --auto NAO implica bypass (PV-9 vibeos, 2026-07-06): modo autonomo avanca
+    sozinho entre nodes LLM/validators, mas PARA em human_gate aguardando
+    ft approve / ft reject.
+    """
+    return bool(getattr(args, "bypass_human_gates", False))
+
+
 def resolve_llm_engine(args) -> str | None:
     if getattr(args, "codex", None) is not None:
         return "codex"
@@ -762,7 +772,7 @@ def cmd_continue(args):
     import sys
     sys.stdout.reconfigure(line_buffering=True)
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
-    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False) or getattr(args, "auto", False)
+    runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     # Inicializar estado se nao existe
     state = runner.state_mgr.load()
@@ -1974,7 +1984,7 @@ def cmd_run(args):
         llm_model=llm_model,
         verbose=getattr(args, "verbose", False),
     )
-    runner._bypass_human_gates = getattr(args, "bypass_human_gates", False) or getattr(args, "auto", False)
+    runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     # Provisionar ambiente SymGateway (se SYM_GATEWAY_PROJECT_KEY estiver definida)
     import os as _os
@@ -2182,7 +2192,7 @@ def main():
     add_llm_engine_flags(cont)
     cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
     cont.add_argument("--sprint", action="store_true", help="Avancar ate fim da sprint")
-    cont.add_argument("--auto", action="store_true", help="Avancar ate MVP (modo autonomo)")
+    cont.add_argument("--auto", action="store_true", help="Avancar ate MVP (modo autonomo; PARA em human_gates)")
     cont.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
                       help="Pular human_gates automaticamente (LLM decide)")
     cont.add_argument("--cycle", help="Ciclo específico a retomar (ex: cycle-07)")
@@ -2294,7 +2304,8 @@ def main():
                     help="Rodar em git worktree isolado (cycle-NN-NAME). "
                          "NAME opcional: default = engine LLM ou 'run'")
     ru.add_argument("--auto", action="store_true",
-                    help="Avançar em modo autônomo até MVP (pula human_gates)")
+                    help="Avançar em modo autônomo até MVP (PARA em human_gates; "
+                         "para pular use --bypass-human-gates)")
 
     args = parser.parse_args()
 

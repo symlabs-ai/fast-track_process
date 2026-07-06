@@ -791,6 +791,58 @@ def cmd_status(args):
         runner.status(full=args.full)
 
 
+def _track_heartbeat(raw: str, ctx: dict) -> str | None:
+    """Atualiza o contexto do heartbeat de ``ft log --follow``.
+
+    Recebe uma linha crua do stream-json e o dict de contexto ``ctx`` (mutado
+    in-place: escreve ``ctx["desc"]`` com uma descrição legível do último
+    evento). Retorna um fragmento de thinking quando houver, senão ``None``.
+
+    Extraído para nível de módulo para ser testável — não depende de nada do
+    escopo de ``cmd_log``.
+    """
+    import json as _json
+
+    if not raw.startswith("{"):
+        return None
+    try:
+        ev = _json.loads(raw)
+    except Exception:
+        return None
+    etype = ev.get("type", "")
+    if etype == "stream_event":
+        inner = ev.get("event", {})
+        if inner.get("type") == "content_block_delta":
+            delta = inner.get("delta", {})
+            if delta.get("type") == "thinking_delta":
+                ctx["desc"] = "raciocinando"
+                return delta.get("thinking", "")
+        return None
+    if etype == "system":
+        subtype = ev.get("subtype", "")
+        if subtype == "thinking_tokens":
+            ctx["desc"] = f"pensando (~{ev.get('estimated_tokens', 0)} tokens)"
+        elif subtype == "init":
+            # Evento de abertura de sessão: expõe modelo, modo de permissão e
+            # nº de ferramentas em vez de um "evento system" opaco.
+            model = ev.get("model") or "?"
+            n_tools = len(ev.get("tools") or [])
+            mode = ev.get("permissionMode") or ""
+            mode_txt = f", {mode}" if mode else ""
+            ctx["desc"] = f"sessão iniciada ({model}, {n_tools} tools{mode_txt})"
+        elif subtype:
+            ctx["desc"] = f"evento system/{subtype}"
+        else:
+            ctx["desc"] = "evento system"
+    elif etype == "user":
+        ctx["desc"] = "resultado de ferramenta recebido, processando"
+    elif etype == "assistant":
+        ctx["desc"] = "gerando resposta"
+    elif etype:
+        ctx["desc"] = f"evento {etype}"
+    return None
+
+
 def cmd_log(args):
     """Mostra/acompanha o log LLM do ciclo ativo, formatado para leitura humana."""
     import time as _time
@@ -858,34 +910,7 @@ def cmd_log(args):
     # Follow: acompanha o arquivo e troca sozinho quando o engine abre um log novo.
     # Heartbeat: se ficar >15s sem linha impressa, mostra o que o worker está fazendo
     # (thinking tokens, último evento) para não parecer travado.
-    import json as _json
-
-    def _track(raw: str, ctx: dict) -> str | None:
-        """Atualiza o contexto do heartbeat; retorna fragmento de thinking, se houver."""
-        if not raw.startswith("{"):
-            return None
-        try:
-            ev = _json.loads(raw)
-        except Exception:
-            return None
-        etype = ev.get("type", "")
-        if etype == "stream_event":
-            inner = ev.get("event", {})
-            if inner.get("type") == "content_block_delta":
-                delta = inner.get("delta", {})
-                if delta.get("type") == "thinking_delta":
-                    ctx["desc"] = "raciocinando"
-                    return delta.get("thinking", "")
-            return None
-        if etype == "system" and ev.get("subtype") == "thinking_tokens":
-            ctx["desc"] = f"pensando (~{ev.get('estimated_tokens', 0)} tokens)"
-        elif etype == "user":
-            ctx["desc"] = "resultado de ferramenta recebido, processando"
-        elif etype == "assistant":
-            ctx["desc"] = "gerando resposta"
-        elif etype:
-            ctx["desc"] = f"evento {etype}"
-        return None
+    _track = _track_heartbeat
 
     try:
         f = log_path.open(errors="replace")

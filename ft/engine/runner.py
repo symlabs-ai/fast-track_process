@@ -1461,7 +1461,7 @@ class StepRunner:
                     opencode_deny_read_paths = [f"docs/{name}" for name in existing]
                     if node.type == "document":
                         opencode_restrict_tools = True
-                        opencode_steps = 4
+                        opencode_steps = 8
                 task_prompt = hyper_mode_prompt(
                     existing,
                     task_prompt,

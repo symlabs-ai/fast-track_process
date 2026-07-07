@@ -253,7 +253,7 @@ nodes:
             assert "NAO releia este arquivo inteiro" in kwargs["task"]
             assert kwargs["opencode_deny_read_paths"] == ["docs/task_list.md"]
             assert kwargs["opencode_restrict_tools"] is True
-            assert kwargs["opencode_steps"] == 4
+            assert kwargs["opencode_steps"] == 8
             (docs / "out.md").write_text("# Out\n")
             return DelegateResult(
                 success=True,

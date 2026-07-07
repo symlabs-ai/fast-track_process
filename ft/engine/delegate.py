@@ -821,6 +821,9 @@ REGRAS:
 {restricted_tools_rule}
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)
+- OBRIGATORIO: antes de dizer DONE, use uma ferramenta de escrita
+  (Write/Edit/Patch) para criar ou modificar cada arquivo de saida esperado.
+  Nao declare que um arquivo foi criado sem antes executar a escrita real.
 - Quando terminar, diga DONE e liste os arquivos criados/modificados
 - Se encontrar um problema que nao consegue resolver, diga BLOCKED e explique o motivo
 - ANTES do DONE, emita um bloco NODE_SUMMARY (max 10 linhas) neste formato:

@@ -95,7 +95,7 @@ class TestBuildExecutorCommand:
             opencode_deny_read_paths=["docs/PRD.md"],
             project_root="/tmp/project",
             opencode_restrict_tools=True,
-            opencode_steps=4,
+            opencode_steps=8,
         )
 
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
@@ -109,7 +109,7 @@ class TestBuildExecutorCommand:
         assert config["permission"]["glob"] == "deny"
         assert config["permission"]["grep"] == "deny"
         assert config["permission"]["list"] == "deny"
-        assert config["agent"]["build"]["steps"] == 4
+        assert config["agent"]["build"]["steps"] == 8
 
     def test_non_opencode_env_is_unchanged(self):
         env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})
@@ -173,10 +173,10 @@ class TestDelegateWithFeedback:
                 llm_engine="opencode",
                 opencode_deny_read_paths=["docs/PRD.md"],
                 opencode_restrict_tools=True,
-                opencode_steps=4,
+                opencode_steps=8,
             )
 
         kwargs = delegate_mock.call_args.kwargs
         assert kwargs["opencode_deny_read_paths"] == ["docs/PRD.md"]
         assert kwargs["opencode_restrict_tools"] is True
-        assert kwargs["opencode_steps"] == 4
+        assert kwargs["opencode_steps"] == 8

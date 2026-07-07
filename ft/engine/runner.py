@@ -1625,8 +1625,6 @@ class StepRunner:
             )
             if existing:
                 is_opencode = effective_engine == "opencode"
-                if is_opencode:
-                    opencode_deny_read_paths = [f"docs/{name}" for name in existing]
                 task_prompt = hyper_mode_prompt(
                     existing,
                     task_prompt,

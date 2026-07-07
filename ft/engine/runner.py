@@ -654,9 +654,7 @@ class StepRunner:
             resolved_steps = default_steps
 
         if restrict_tools is None:
-            restrict_tools = node.type in {"document", "retro"} or (
-                node.type == "review" and not self._node_needs_shell_tools(node)
-            )
+            restrict_tools = node.type == "review" and not self._node_needs_shell_tools(node)
 
         early_success_paths: list[str] = []
         if node.type in {"discovery", "document", "retro"}:

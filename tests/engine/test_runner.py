@@ -252,7 +252,7 @@ nodes:
             assert "opencode compact line 30" not in kwargs["task"]
             assert "NAO releia este arquivo inteiro" in kwargs["task"]
             assert "opencode_deny_read_paths" not in kwargs
-            assert kwargs["opencode_restrict_tools"] is True
+            assert "opencode_restrict_tools" not in kwargs
             assert kwargs["opencode_steps"] == 8
             (docs / "out.md").write_text("# Out\n")
             return DelegateResult(
@@ -319,6 +319,7 @@ nodes:
         assert build_options.deny_edit_tools is True
         assert build_options.early_success_paths == []
         assert doc_options.deny_edit_tools is False
+        assert doc_options.restrict_tools is False
         assert doc_options.early_success_paths == ["docs/out.md"]
         assert runner._resolve_allowed_paths(build_node) == ["project/frontend", ".build_ok"]
         assert runner._resolve_allowed_paths(doc_node) == ["docs/out.md"]

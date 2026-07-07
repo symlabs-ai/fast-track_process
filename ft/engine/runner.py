@@ -1433,6 +1433,8 @@ class StepRunner:
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
         opencode_deny_read_paths: list[str] = []
+        opencode_restrict_tools = False
+        opencode_steps: int | None = None
 
         # Injetar mensagem do último ft approve como contexto para o LLM
         approval_msg = self.state_mgr.state.last_approval_message
@@ -1457,6 +1459,9 @@ class StepRunner:
                 is_opencode = effective_engine == "opencode"
                 if is_opencode:
                     opencode_deny_read_paths = [f"docs/{name}" for name in existing]
+                    if node.type == "document":
+                        opencode_restrict_tools = True
+                        opencode_steps = 4
                 task_prompt = hyper_mode_prompt(
                     existing,
                     task_prompt,
@@ -1502,6 +1507,10 @@ class StepRunner:
         )
         if opencode_deny_read_paths:
             delegate_kwargs["opencode_deny_read_paths"] = opencode_deny_read_paths
+        if opencode_restrict_tools:
+            delegate_kwargs["opencode_restrict_tools"] = True
+        if opencode_steps is not None:
+            delegate_kwargs["opencode_steps"] = opencode_steps
         if node.max_turns is not None:
             delegate_kwargs["max_turns"] = node.max_turns
 
@@ -1573,6 +1582,8 @@ class StepRunner:
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
                         opencode_deny_read_paths=opencode_deny_read_paths,
+                        opencode_restrict_tools=opencode_restrict_tools,
+                        opencode_steps=opencode_steps,
                     )
                 finally:
                     self._clear_active_llm_log(state)

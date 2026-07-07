@@ -57,6 +57,8 @@ def _opencode_runtime_config(
     existing: str | None = None,
     deny_read_paths: list[str] | None = None,
     project_root: str | None = None,
+    restrict_tools: bool = False,
+    steps: int | None = None,
 ) -> str:
     """Config inline para isolar OpenCode no workdir e poupar contexto."""
     config: dict = {}
@@ -91,7 +93,24 @@ def _opencode_runtime_config(
             read_rules[pattern] = "deny"
         permission["read"] = read_rules
 
+    if restrict_tools:
+        permission["bash"] = "deny"
+        permission["glob"] = "deny"
+        permission["grep"] = "deny"
+        permission["list"] = "deny"
+
     config["permission"] = permission
+
+    if steps is not None:
+        agent = config.get("agent")
+        if not isinstance(agent, dict):
+            agent = {}
+        build_agent = agent.get("build")
+        if not isinstance(build_agent, dict):
+            build_agent = {}
+        build_agent["steps"] = steps
+        agent["build"] = build_agent
+        config["agent"] = agent
 
     compaction = config.get("compaction")
     if not isinstance(compaction, dict):
@@ -111,6 +130,8 @@ def _executor_env(
     base_env: dict[str, str] | None = None,
     opencode_deny_read_paths: list[str] | None = None,
     project_root: str | None = None,
+    opencode_restrict_tools: bool = False,
+    opencode_steps: int | None = None,
 ) -> dict[str, str]:
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
@@ -119,6 +140,8 @@ def _executor_env(
             env.get("OPENCODE_CONFIG_CONTENT"),
             deny_read_paths=opencode_deny_read_paths,
             project_root=project_root,
+            restrict_tools=opencode_restrict_tools,
+            steps=opencode_steps,
         )
     return env
 
@@ -756,6 +779,8 @@ def delegate_to_llm(
     log_path: str | None = None,
     stream_prefix: str | None = None,
     opencode_deny_read_paths: list[str] | None = None,
+    opencode_restrict_tools: bool = False,
+    opencode_steps: int | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -770,6 +795,12 @@ def delegate_to_llm(
         deny_reads_rule = (
             "\n- NAO use Read/Grep/Glob nestes arquivos ja resumidos no prompt: "
             f"{', '.join(deny_reads)}. Esses reads serao bloqueados para poupar contexto."
+        )
+    restricted_tools_rule = ""
+    if opencode_restrict_tools:
+        restricted_tools_rule = (
+            "\n- NAO use shell/bash/list/grep/glob. Escreva o arquivo de saida "
+            "diretamente usando apenas o contexto presente no prompt."
         )
 
     prompt = f"""Voce e um executor de construcao. Sua unica tarefa:
@@ -787,6 +818,7 @@ REGRAS:
   markdown grandes que ja apareceram no prompt; se precisar de um detalhe,
   busque apenas o trecho minimo necessario dentro do diretorio de trabalho.
 {deny_reads_rule}
+{restricted_tools_rule}
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)
 - Quando terminar, diga DONE e liste os arquivos criados/modificados
@@ -829,6 +861,8 @@ NODE_SUMMARY:
         llm_engine,
         opencode_deny_read_paths=deny_reads,
         project_root=project_root,
+        opencode_restrict_tools=opencode_restrict_tools,
+        opencode_steps=opencode_steps,
     )
 
     proc = subprocess.Popen(
@@ -979,6 +1013,8 @@ def delegate_with_feedback(
     log_path: str | None = None,
     stream_prefix: str | None = None,
     opencode_deny_read_paths: list[str] | None = None,
+    opencode_restrict_tools: bool = False,
+    opencode_steps: int | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -1000,4 +1036,6 @@ Nao modifique o que ja esta funcionando."""
         log_path=log_path,
         stream_prefix=stream_prefix,
         opencode_deny_read_paths=opencode_deny_read_paths,
+        opencode_restrict_tools=opencode_restrict_tools,
+        opencode_steps=opencode_steps,
     )

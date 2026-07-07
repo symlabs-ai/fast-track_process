@@ -204,6 +204,69 @@ class TestApproveReject:
 
 
 class TestRewriteGuard:
+    def test_no_pre_seed_output_is_removed_before_document_delegation(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        (docs / "PRD.md").write_text("# PRD\n\n## User Stories\nUS-01 base.\n")
+        old_task_list = docs / "task_list.md"
+        old_task_list.write_text("# OLD TASK LIST\nstale cycle content\n")
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.plan.01.task_list
+    no_pre_seed: true
+    type: document
+    title: Task List
+    executor: llm_coach
+    outputs:
+      - docs/task_list.md
+    validators:
+      - file_exists: docs/task_list.md
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.plan.01.task_list")
+
+        def delegate_side_effect(**kwargs):
+            assert not old_task_list.exists()
+            assert "OLD TASK LIST" not in kwargs["task"]
+            assert "PRD.md" in kwargs["task"]
+            old_task_list.write_text("# New Task List\n")
+            return DelegateResult(
+                success=True,
+                output="DONE",
+                files_created=[],
+                files_modified=[],
+            )
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            side_effect=delegate_side_effect,
+        ):
+            runner._run_llm_step(node)
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "ft.end"
+        assert old_task_list.read_text() == "# New Task List\n"
+
     def test_rewrite_node_with_immutable_sections_still_delegates(self, tmp_path):
         project_root = tmp_path / "project_root"
         docs = project_root / "project" / "docs"

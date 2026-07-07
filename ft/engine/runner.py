@@ -730,6 +730,43 @@ class StepRunner:
 
         return ["project/", "docs/"]
 
+    def _clear_no_pre_seed_outputs(self, node: Node) -> None:
+        """Remove outputs herdados quando o node precisa gerar artefato fresco."""
+        if not getattr(node, "no_pre_seed", False):
+            return
+        root = Path(self.project_root).resolve()
+        for output in node.outputs:
+            target = (root / output).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
+                continue
+            try:
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
+                elif target.is_dir():
+                    import shutil as _shutil
+                    _shutil.rmtree(target)
+            except OSError:
+                pass
+
+    def _filter_no_pre_seed_docs(
+        self,
+        node: Node,
+        docs: dict[str, str],
+    ) -> dict[str, str]:
+        """Remove do Hyper-mode os docs que são outputs frescos do node atual."""
+        if not getattr(node, "no_pre_seed", False) or not docs:
+            return docs
+        excluded = {
+            Path(output).name
+            for output in node.outputs
+            if Path(output).parts and Path(output).parts[0] == "docs"
+        }
+        if not excluded:
+            return docs
+        return {name: content for name, content in docs.items() if name not in excluded}
+
     def _start_llm_log(self, state: Any, node_id: str, phase: str) -> str:
         """Registra no estado o log ativo para a delegação corrente."""
         log_path = self._build_llm_log_path(node_id, phase)
@@ -1391,6 +1428,7 @@ class StepRunner:
                     print(ui.step_pass(next_id, "PASS (pre-seed)"))
                     return
 
+        self._clear_no_pre_seed_outputs(node)
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
 
@@ -1409,7 +1447,10 @@ class StepRunner:
 
         # Hyper-mode: enriquecer prompt com docs existentes
         if node.type in ("discovery", "document", "retro"):
-            existing = scan_existing_docs(self.project_root)
+            existing = self._filter_no_pre_seed_docs(
+                node,
+                scan_existing_docs(self.project_root),
+            )
             if existing:
                 task_prompt = hyper_mode_prompt(existing, task_prompt)
                 print(f"  Hyper-mode: {len(existing)} docs existentes carregados")

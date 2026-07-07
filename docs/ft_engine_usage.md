@@ -110,7 +110,7 @@ Sem `--process`, o engine procura automaticamente (ordem de prioridade):
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`). |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Sobrescreve a janela de contexto anunciada ao OpenCode para o modelo selecionado. O default de `pgx/zai-org_glm-4.7-flash` é 200000. |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Sobrescreve o limite de saída anunciado ao OpenCode. O default de `pgx/zai-org_glm-4.7-flash` é 32768. |
-| `FT_OPENCODE_DEBUG` | Ativa `opencode run --print-logs --log-level DEBUG --thinking`. |
+| `FT_OPENCODE_DEBUG` | Ativa `opencode run --print-logs --log-level DEBUG`. |
 | `FT_OPENCODE_PRINT_LOGS` / `FT_OPENCODE_LOG_LEVEL` / `FT_OPENCODE_THINKING` | Ajustes finos de log do OpenCode sem ativar todo o modo debug. |
 
 ---

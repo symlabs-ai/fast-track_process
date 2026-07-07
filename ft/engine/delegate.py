@@ -303,7 +303,7 @@ def _build_executor_command(
             cmd.append("--print-logs")
         if log_level:
             cmd += ["--log-level", log_level]
-        if debug_enabled or os.environ.get("FT_OPENCODE_THINKING", "").strip().lower() in {"1", "true", "yes", "on"}:
+        if os.environ.get("FT_OPENCODE_THINKING", "").strip().lower() in {"1", "true", "yes", "on"}:
             cmd.append("--thinking")
         cmd.append(prompt)
         return cmd

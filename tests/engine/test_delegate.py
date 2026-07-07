@@ -71,7 +71,7 @@ class TestBuildExecutorCommand:
 
         assert "--print-logs" in cmd
         assert ["--log-level", "DEBUG"] == cmd[cmd.index("--log-level"):cmd.index("--log-level") + 2]
-        assert "--thinking" in cmd
+        assert "--thinking" not in cmd
         assert cmd[-1] == "faça algo"
 
     def test_builds_opencode_command_with_custom_log_level(self, monkeypatch):
@@ -83,6 +83,14 @@ class TestBuildExecutorCommand:
         assert "--print-logs" in cmd
         assert ["--log-level", "INFO"] == cmd[cmd.index("--log-level"):cmd.index("--log-level") + 2]
         assert "--thinking" not in cmd
+        assert cmd[-1] == "faça algo"
+
+    def test_builds_opencode_command_with_thinking_flag(self, monkeypatch):
+        monkeypatch.setenv("FT_OPENCODE_THINKING", "1")
+
+        cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
+
+        assert "--thinking" in cmd
         assert cmd[-1] == "faça algo"
 
     def test_invalid_engine_raises(self):

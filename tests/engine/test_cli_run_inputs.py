@@ -319,3 +319,33 @@ class TestApiHealthCheck:
             cli_main._api_health_check(tmp_path, "opencode")
 
         urlopen.assert_not_called()
+
+
+class TestAbort:
+    def test_abort_from_project_root_removes_plain_external_worktree(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "service_mate_15"
+        (project / "process").mkdir(parents=True)
+        monkeypatch.chdir(project)
+
+        cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01-opencode"
+        state = cycle / "state" / "engine_state.yml"
+        state.parent.mkdir(parents=True)
+        state.write_text(
+            "process_id: fast_track_v3\n"
+            "current_node: ft.plan.03.api_contract\n"
+            "node_status: blocked\n"
+        )
+
+        args = Namespace(
+            process=None,
+            force=True,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+        cli_main.cmd_abort(args)
+
+        assert not cycle.exists()

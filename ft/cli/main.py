@@ -1867,43 +1867,59 @@ def cmd_fix(args):
 
 def cmd_abort(args):
     """Aborta o ciclo: descarta worktree e branch sem merge nenhum."""
+    import shutil
     import subprocess as _sp
     from ft.engine import ui as _ui
 
     root = find_project_root()
     work = Path(root)
     git_file = work / ".git"
+    is_git_worktree = git_file.exists() and git_file.is_file()
 
-    # Verificar se estamos num worktree
-    if not git_file.exists() or git_file.is_dir():
+    # Se o comando veio da raiz principal, localizar o ciclo externo ativo.
+    if not is_git_worktree:
+        state_path = _find_latest_state(root)
+        if state_path.exists() and paths.is_worktree_path(state_path):
+            work = state_path.parent.parent
+            git_file = work / ".git"
+            is_git_worktree = git_file.exists() and git_file.is_file()
+
+    is_plain_worktree = paths.is_worktree_path(work) and (work / "state").is_dir()
+
+    if not is_git_worktree and not is_plain_worktree:
         print(_ui.fail("Não está numa worktree — nada para abortar."))
-        print(_ui.dim("Use ft cancel para cancelar um run no repo principal."))
+        print(_ui.dim("Use ft cancel para cancelar um run em modo continuous no repo principal."))
         return
 
-    gitdir_line = git_file.read_text().strip()
-    if not gitdir_line.startswith("gitdir:"):
-        print(_ui.fail("Formato .git inválido — não é worktree."))
-        return
+    original_root = None
+    branch = ""
+    if is_git_worktree:
+        gitdir_line = git_file.read_text().strip()
+        if not gitdir_line.startswith("gitdir:"):
+            print(_ui.fail("Formato .git inválido — não é worktree."))
+            return
 
-    gitdir = Path(gitdir_line.split(":", 1)[1].strip())
-    original_root = gitdir.parent.parent.parent
+        gitdir = Path(gitdir_line.split(":", 1)[1].strip())
+        original_root = gitdir.parent.parent.parent
 
-    branch = _sp.run(
-        ["git", "branch", "--show-current"],
-        cwd=work, capture_output=True, text=True,
-    ).stdout.strip()
+        branch = _sp.run(
+            ["git", "branch", "--show-current"],
+            cwd=work, capture_output=True, text=True,
+        ).stdout.strip()
 
     # Confirmação
     print()
     print(_ui.warn(f"ABORT: vai descartar TUDO do ciclo em {work.name}"))
     print(_ui.dim(f"  Worktree: {work}"))
-    print(_ui.dim(f"  Branch:   {branch}"))
+    if branch:
+        print(_ui.dim(f"  Branch:   {branch}"))
     print(_ui.dim(f"  Nenhum merge será feito — todo código será perdido."))
     print()
-    confirm = input("Confirma? [s/N]: ").strip().lower()
-    if confirm not in ("s", "sim", "y", "yes"):
-        print(_ui.dim("Abortado pelo usuário."))
-        return
+    if not getattr(args, "force", False):
+        confirm = input("Confirma? [s/N]: ").strip().lower()
+        if confirm not in ("s", "sim", "y", "yes"):
+            print(_ui.dim("Abortado pelo usuário."))
+            return
 
     # Matar servidores que possam estar rodando
     for pid_file in (".serve_backend.pid", ".serve_frontend.pid", ".serve.pid"):
@@ -1915,19 +1931,22 @@ def cmd_abort(args):
             except (ValueError, ProcessLookupError, OSError):
                 pass
 
-    # Remover worktree
-    result = _sp.run(
-        ["git", "worktree", "remove", str(work), "--force"],
-        cwd=original_root, capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        print(_ui.success(f"Worktree removido: {work.name}"))
+    if is_git_worktree and original_root is not None:
+        result = _sp.run(
+            ["git", "worktree", "remove", str(work), "--force"],
+            cwd=original_root, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print(_ui.success(f"Worktree removido: {work.name}"))
+        else:
+            print(_ui.fail(f"Erro ao remover worktree: {result.stderr.strip()[:200]}"))
+            return
     else:
-        print(_ui.fail(f"Erro ao remover worktree: {result.stderr.strip()[:200]}"))
-        return
+        shutil.rmtree(work)
+        print(_ui.success(f"Worktree removido: {work.name}"))
 
     # Remover branch
-    if branch:
+    if branch and original_root is not None:
         result = _sp.run(
             ["git", "branch", "-D", branch],
             cwd=original_root, capture_output=True, text=True,
@@ -1941,7 +1960,6 @@ def cmd_abort(args):
         for project_dir in ft_worktrees.iterdir():
             wt_dir = project_dir / work.name
             if wt_dir.exists():
-                import shutil
                 shutil.rmtree(wt_dir, ignore_errors=True)
                 print(_ui.dim(f"  Limpou {wt_dir}"))
 
@@ -2743,6 +2761,7 @@ def main():
     # abort
     ab = sub.add_parser("abort", help="Abortar ciclo: descarta worktree e branch sem merge")
     add_llm_engine_flags(ab)
+    ab.add_argument("--force", action="store_true", help="Abortar sem prompt de confirmação")
 
     # cancel
     ca = sub.add_parser("cancel", help="Cancelar o run ativo com justificativa")

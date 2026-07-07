@@ -2225,7 +2225,7 @@ class StepRunner:
         print(ui.exploration_item(len(state.exploration_log) + 1, request))
 
         allowed = self._resolve_allowed_paths(self.graph.nodes.get(state.current_node))
-        log_path = str(self._log_dir / f"exploration_{len(state.exploration_log) + 1:02d}.log")
+        log_path = str(self._llm_log_dir() / f"exploration_{len(state.exploration_log) + 1:02d}.log")
 
         from ft.engine.delegate import delegate_to_llm
         result = delegate_to_llm(
@@ -2292,7 +2292,7 @@ class StepRunner:
                 allowed_paths=self._delegate_allowed_paths(allowed),
                 llm_engine=self._resolve_llm_engine(state),
                 llm_model=self._resolve_llm_model(state),
-                log_path=str(self._log_dir / "exploration_report.log"),
+                log_path=str(self._llm_log_dir() / "exploration_report.log"),
             )
             if report_result.success:
                 report_path = Path(self._work_dir) / "docs" / "exploration-report.md"

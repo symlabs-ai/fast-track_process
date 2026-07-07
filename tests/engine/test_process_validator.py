@@ -1,13 +1,15 @@
 """Tests for ft.engine.process_validator."""
 
+import os
+from pathlib import Path
+import tempfile
+
 import pytest
 import yaml
-from pathlib import Path
 
 from ft.engine.graph import ProcessGraph, Node, load_graph
 from ft.engine.process_validator import (
     validate_process,
-    ValidationReport,
     VALID_NODE_TYPES,
     VALID_EXECUTORS,
 )
@@ -28,6 +30,7 @@ def _make_graph(nodes_raw: list[dict], meta: dict | None = None) -> ProcessGraph
             branches=n.get("branches"),
             condition=n.get("condition"),
             max_turns=n.get("max_turns"),
+            reject_next=n.get("reject_next"),
         ))
     return ProcessGraph(nodes, meta or {"id": "test", "version": "1.0.0"})
 
@@ -89,6 +92,17 @@ class TestGraphIntegrity:
         ])
         report = validate_process(graph)
         assert report.passed
+
+    def test_reject_next_is_reachable_edge(self):
+        graph = _make_graph([
+            {"id": "build", "type": "build", "title": "Build", "next": "gate", "outputs": ["src/app.py"]},
+            {"id": "gate", "type": "human_gate", "title": "Gate", "next": "end", "reject_next": "fix"},
+            {"id": "fix", "type": "build", "title": "Fix", "next": "gate", "outputs": ["src/app.py"]},
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+        report = validate_process(graph)
+        assert not any(e.node_id == "fix" and "órfão" in e.message for e in report.errors)
+        assert not any(e.node_id == "fix" and "inalcançável" in e.message for e in report.errors)
 
     def test_non_terminal_without_next_error(self):
         graph = _make_graph([
@@ -161,6 +175,17 @@ class TestRealProcess:
         # Pode ter warnings, mas não deve ter erros
         assert report.passed, f"Erros: {[e.message for e in report.errors]}"
 
+    @pytest.mark.parametrize("template", [
+        "templates/base/process.yml",
+        "templates/fast-track-v3/process.yml",
+        "templates/ft-ui-prototype/process.yml",
+    ])
+    def test_templates_pass_process_validation(self, template):
+        process_path = Path(__file__).parent.parent.parent / template
+        graph = load_graph(process_path)
+        report = validate_process(graph)
+        assert report.passed, f"{template}: {[e.message for e in report.errors]}"
+
 
 class TestV3RuntimeNames:
     """Regressão: validator rejeitava os nomes que o runtime de fato usa.
@@ -171,24 +196,25 @@ class TestV3RuntimeNames:
     que rodavam em produção (vibeos cycles 01-03)."""
 
     def test_llm_engine_executors_validos(self):
-        for executor in ("llm_claude", "llm_codex", "llm_gemini"):
+        for executor in ("llm_claude", "llm_codex", "llm_gemini", "llm_opencode"):
             assert executor in VALID_EXECUTORS
 
     def test_exploration_type_valido(self):
         assert "exploration" in VALID_NODE_TYPES
 
     def test_processo_v3_com_nomes_curtos_passa(self):
-        """YAML V3 usa executor curto ('claude'); via load_graph deve validar."""
+        """YAML V3 usa executor curto ('claude/opencode'); via load_graph deve validar."""
         raw = {
             "id": "mini_v3", "version": "1.0.0", "title": "mini",
             "nodes": [
                 {"id": "a", "type": "build", "title": "A", "executor": "claude",
                  "outputs": ["docs/x.md"], "next": "b"},
-                {"id": "b", "type": "exploration", "title": "B", "next": "fim"},
+                {"id": "b", "type": "build", "title": "B", "executor": "opencode",
+                 "outputs": ["docs/y.md"], "next": "c"},
+                {"id": "c", "type": "exploration", "title": "C", "next": "fim"},
                 {"id": "fim", "type": "end", "title": "Fim"},
             ],
         }
-        import tempfile, os
         with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as f:
             yaml.safe_dump(raw, f)
             path = f.name

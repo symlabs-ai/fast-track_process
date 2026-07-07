@@ -2,7 +2,7 @@
 # Sem TDD, sem backend, sem delivery refactor.
 # Foco: demanda → scaffold → build → screenshots → guidelines review → E2E → stakeholder.
 # Toda especificidade do projeto vive em docs/ e process/scripts/.
-# Uso: ft run . --process process/FT_UI_PROTOTYPE.yml [--codex|--gemini|--claude]
+# Uso: ft run . --process process/FT_UI_PROTOTYPE.yml [--codex|--gemini|--claude|--opencode]
 
 id: ft_ui_prototype
 version: "3.0.0"
@@ -110,9 +110,9 @@ nodes:
     description: "Verificando se o PRD já existe ou se a demanda precisa ser capturada do zero."
     condition: "file_exists:docs/PRD.md"
     branches:
-      "true": ui.proto.01.scaffold
+      "true": ui.seed.01.hipotese
       "false": ui.demand.01.capture
-    next: ui.proto.01.scaffold
+    next: ui.seed.01.hipotese
 
   # ================================================================
   # Caminho A: Demanda bruta → hipótese → PRD
@@ -289,7 +289,7 @@ nodes:
       - min_lines: 8
       - has_sections:
           - interface_type
-    next: ui.proto.01.scaffold
+    next: gate.discovery
 
   # ================================================================
   # Fase 2: Prototype — scaffold, layout, build

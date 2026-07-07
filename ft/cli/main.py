@@ -25,7 +25,6 @@ from pathlib import Path
 
 from ft.engine import paths
 from ft.engine.runner import StepRunner
-from ft.integrations.symgateway import provision_environment
 
 
 def add_llm_engine_flags(parser):
@@ -36,6 +35,8 @@ def add_llm_engine_flags(parser):
                        help="Usar Codex CLI (opcional: modelo, ex: --codex gpt-5.3)")
     group.add_argument("--gemini", nargs="?", const=True, metavar="MODEL",
                        help="Usar Gemini CLI (opcional: modelo, ex: --gemini gemini-2.5-pro)")
+    group.add_argument("--opencode", nargs="?", const=True, metavar="MODEL",
+                       help="Usar OpenCode CLI (default: pgx/zai-org_glm-4.7-flash)")
 
 
 def resolve_bypass_human_gates(args) -> bool:
@@ -76,12 +77,14 @@ def resolve_llm_engine(args) -> str | None:
         return "claude"
     if getattr(args, "gemini", None) is not None:
         return "gemini"
+    if getattr(args, "opencode", None) is not None:
+        return "opencode"
     return None
 
 
 def resolve_llm_model(args) -> str | None:
     """Extrai o modelo passado junto à flag de engine (ex: --codex gpt-5.3)."""
-    for attr in ("claude", "codex", "gemini"):
+    for attr in ("claude", "codex", "gemini", "opencode"):
         val = getattr(args, attr, None)
         if val is not None and val is not True:
             return str(val)
@@ -172,6 +175,31 @@ def _copy_agents_md(project_root: Path) -> None:
     if src.exists() and not dst.exists():
         shutil.copy(src, dst)
         print("  AGENTS.md (playbook do condutor) copiado para o projeto")
+
+
+def _run_environment_script(project_root: Path, script: str) -> bool:
+    """Executa um script opcional de process/scripts sem acoplar o engine à integração."""
+    import subprocess
+
+    project_root = project_root.resolve()
+    script_path = project_root / "process" / "scripts" / script
+    if not script_path.exists():
+        return False
+
+    result = subprocess.run(
+        [str(script_path)],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    output = (result.stdout or result.stderr).strip()
+    if output:
+        print(output)
+    if result.returncode != 0:
+        print(f"  ERRO: process/scripts/{script} falhou com exit code {result.returncode}")
+        sys.exit(result.returncode)
+    return True
 
 
 def find_project_root() -> Path:
@@ -420,7 +448,7 @@ def _api_health_check(project_root: Path) -> None:
         else:
             print(_ui.fail(f"API health check: {code} — {body}"))
             if code == 403:
-                print("    → Projeto não registrado. Registre com: ft setup-env")
+                print("    → Acesso negado. Verifique credenciais ou rode: ft setup-env")
             elif code == 405:
                 print("    → Rota inválida. Verifique ANTHROPIC_BASE_URL.")
             raise SystemExit(1)
@@ -479,7 +507,7 @@ def _next_run_dir(project_root: Path) -> Path:
     """Calcula e cria o próximo diretório de run em ~/.ft/worktrees/<project>/.
 
     Propaga CLAUDE.md e .claude/ da raiz para o run dir
-    (necessário para o SymGateway identificar o projeto).
+    (útil para integrações de ambiente opt-in).
     Copia artefatos do run anterior (seed de código).
     """
     import shutil as _shutil
@@ -786,11 +814,11 @@ def cmd_init(args):
     # Playbook do condutor — todo projeto novo ganha uma cópia
     _copy_agents_md(root)
 
-    # Provisionar ambiente SymGateway (se SYM_GATEWAY_PROJECT_KEY estiver definida)
-    import os as _os
-    if _os.environ.get("SYM_GATEWAY_PROJECT_KEY"):
-        provision_environment(project_root=root)
-        print(f"  Ambiente SymGateway provisionado")
+    if os.environ.get("SYM_GATEWAY_PROJECT_KEY"):
+        if _run_environment_script(root, "register_gateway.sh"):
+            print("  Ambiente externo provisionado por process/scripts/register_gateway.sh")
+        else:
+            print("  SYM_GATEWAY_PROJECT_KEY definida, mas nenhum process/scripts/register_gateway.sh foi encontrado")
 
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     # Limpar estado anterior se existir
@@ -1829,7 +1857,7 @@ def cmd_fix(args):
             mode = "mvp" if getattr(args, "auto", False) else "step"
             runner.run(mode=mode)
         else:
-            print(_ui.info("Para continuar o processo: ft continue --mvp"))
+            print(_ui.info("Para continuar o processo: ft continue --auto"))
     else:
         print(_ui.fail(f"LLM não conseguiu aplicar: {result.output[:300]}"))
 
@@ -2026,7 +2054,7 @@ def cmd_cancel(args):
 
 
 def cmd_setup_env(args):
-    """Provisiona CLAUDE.md e .claude/settings.local.json via SYM_GATEWAY_PROJECT_KEY."""
+    """Executa o script opcional de provisionamento do ambiente do projeto."""
     import os
     key = os.environ.get("SYM_GATEWAY_PROJECT_KEY")
     if not key:
@@ -2036,9 +2064,11 @@ def cmd_setup_env(args):
         print("      export SYM_GATEWAY_ADMIN_KEY=sk-sym_...  # opcional")
         sys.exit(1)
     project_root = Path(args.project) if args.project else find_project_root()
-    provision_environment(project_root=project_root)
+    if not _run_environment_script(project_root, "register_gateway.sh"):
+        print("  ✗ process/scripts/register_gateway.sh não encontrado")
+        print("    Use um template de ambiente, por exemplo: ft init --template symgateway")
+        sys.exit(1)
     print(f"  Projeto: {project_root}")
-    print(f"  gateway_project: {project_root.name}")
 
 
 def _normalize_hipotese(hipotese_path: Path, project_root: Path, llm_engine: str = "claude") -> None:
@@ -2209,8 +2239,13 @@ def cmd_run(args):
     # --worktree: criar worktree git e redirecionar project_root para ele
     # Quando --worktree é usado, o worktree externo já É o ambiente isolado —
     # o engine não deve criar outro worktree interno (flag para suprimir).
-    # Engine efetivo: CLI flag > último ciclo > "claude"
-    _effective_engine = resolve_llm_engine(args) or _engine_from_last_cycle(project_root)
+    # Engine efetivo: CLI flag > último ciclo > env > "claude"
+    _effective_engine = (
+        resolve_llm_engine(args)
+        or _engine_from_last_cycle(project_root)
+        or os.environ.get("FT_LLM_ENGINE", "").strip().lower()
+        or "claude"
+    )
 
     worktree_name = getattr(args, "worktree", None)
     _outer_worktree_used = False
@@ -2313,12 +2348,6 @@ def cmd_run(args):
     )
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
-    # Provisionar ambiente SymGateway (se SYM_GATEWAY_PROJECT_KEY estiver definida)
-    import os as _os
-    if _os.environ.get("SYM_GATEWAY_PROJECT_KEY"):
-        provision_environment(project_root=project_root)
-        print(f"  Ambiente SymGateway provisionado")
-
     # Disparar hooks on_env_setup se definidos no environment.yml
     from ft.engine.hooks import run_hooks
     run_hooks("on_env_setup", str(project_root))
@@ -2361,7 +2390,7 @@ def cmd_run(args):
                 demand=demand_text,
                 process_yaml_path=process_path,
                 project_root=str(project_root),
-                llm_engine=llm_engine or "claude",
+                llm_engine=_effective_engine,
             )
 
         print(present_triage(classification))
@@ -2387,7 +2416,7 @@ def cmd_run(args):
                         demand=enriched_demand,
                         process_yaml_path=process_path,
                         project_root=str(project_root),
-                        llm_engine=llm_engine or "claude",
+                        llm_engine=_effective_engine,
                     )
                 print(present_triage(classification))
 
@@ -2406,7 +2435,7 @@ def cmd_run(args):
                     requirements=process_reqs.get("requirements", []),
                     conflicts=process_reqs.get("conflicts", []),
                     project_root=str(project_root),
-                    llm_engine=llm_engine or "claude",
+                    llm_engine=_effective_engine,
                 )
 
             if adapted:
@@ -2444,7 +2473,7 @@ def cmd_run(args):
                             process_path=process_path,
                             state_path=state_path,
                             project_root=project_root,
-                            llm_engine=llm_engine,
+                            llm_engine=_effective_engine,
                             llm_model=llm_model,
                             verbose=getattr(args, "verbose", False),
                         )
@@ -2466,7 +2495,7 @@ def cmd_run(args):
         hypothesis = generate_hypothesis(classification)
         (dst_docs / "hipotese.md").write_text(hypothesis)
         print(_ui.success("Hipótese gerada a partir da demanda"))
-        _normalize_hipotese(dst_docs / "hipotese.md", project_root, llm_engine=llm_engine or "claude")
+        _normalize_hipotese(dst_docs / "hipotese.md", project_root, llm_engine=_effective_engine)
 
     # Copiar e normalizar hipótese inicial se fornecida (pre-seed de ft.mdd.01.hipotese)
     elif args.hipotese:
@@ -2479,7 +2508,7 @@ def cmd_run(args):
         dst = dst_docs / "hipotese.md"
         shutil.copy(src, dst)
         print(f"  hipotese.md copiado de {src}")
-        _normalize_hipotese(dst, project_root, llm_engine=llm_engine or "claude")
+        _normalize_hipotese(dst, project_root, llm_engine=_effective_engine)
 
     # Health check da API antes de começar
     _api_health_check(project_root)
@@ -2611,14 +2640,14 @@ def main():
     ca.add_argument("reason", help="Motivo do cancelamento (entre aspas)")
 
     # setup-env
-    se = sub.add_parser("setup-env", help="Provisionar CLAUDE.md e .claude/settings.local.json (lê SYM_GATEWAY_PROJECT_KEY e SYM_GATEWAY_ADMIN_KEY do ambiente)")
+    se = sub.add_parser("setup-env", help="Executar process/scripts/register_gateway.sh do projeto")
     se.add_argument("--project", help="Diretório do projeto (default: CWD ou raiz detectada)")
 
-    # run — bootstrap completo: cria projeto, provisiona, init, continue --mvp
+    # run — bootstrap completo: cria projeto, provisiona, init, continue --auto
     ru = sub.add_parser("run", help="Bootstrap completo de um novo projeto até MVP")
     add_llm_engine_flags(ru)
     ru.add_argument("project", help="Caminho do diretório do projeto (criado se não existir)")
-    ru.add_argument("--process", help="YAML do processo (default: FAST_TRACK_PROCESS_V2.yml)")
+    ru.add_argument("--process", help="YAML do processo (default: process/process.yml auto-detectado)")
     ru.add_argument("--from-project", metavar="PATH",
                     help="Copiar plano_de_voo.md do ciclo anterior (para retomada de ciclo)")
     ru.add_argument("--hipotese", metavar="FILE",

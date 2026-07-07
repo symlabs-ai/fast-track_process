@@ -12,7 +12,7 @@ YAML de processo → ft engine → LLM executa → validadores Python → avanç
 ```
 
 O engine lê um processo definido em YAML, executa cada step delegando ao LLM via CLI configurada
-(`claude` ou `codex`), valida os artefatos produzidos com verificações determinísticas (Python puro)
+(`claude`, `codex`, `gemini` ou `opencode`), valida os artefatos produzidos com verificações determinísticas (Python puro)
 e só avança se tudo passar.
 O LLM nunca decide sobre o processo — só constrói.
 
@@ -25,7 +25,7 @@ O LLM nunca decide sobre o processo — só constrói.
 pip install -e .
 
 # Verificar
-ft-engine --help
+ft --help
 ```
 
 ---
@@ -33,15 +33,15 @@ ft-engine --help
 ## Comandos
 
 ```bash
-ft-engine init                    # Inicializar/resetar estado do processo
-ft-engine continue                # Avançar 1 step
-ft-engine continue --sprint       # Avançar até fim da sprint atual
-ft-engine continue --mvp          # Modo autônomo até MVP ou BLOCK
-ft-engine status                  # Status resumido
-ft-engine status --full           # Grafo completo agrupado por sprint
-ft-engine approve                 # Aprovar artefato pendente
-ft-engine reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
-ft-engine reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
+ft init                    # Inicializar/resetar estado do processo
+ft continue                # Avançar 1 step
+ft continue --sprint       # Avançar até fim da sprint atual
+ft continue --auto         # Modo autônomo até human gate, MVP ou BLOCK
+ft status                  # Status resumido
+ft status --full           # Grafo completo agrupado por sprint
+ft approve                 # Aprovar artefato pendente
+ft reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
+ft reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
 ft lint-process                   # Lint semântico — detecta especificidades de projeto no YAML
 ```
 
@@ -64,33 +64,41 @@ específicas. Retorna PASS (genérico) ou FAIL (com lista de violações e suges
 Por padrão, o engine usa `claude`. Você pode trocar o executor por comando:
 
 ```bash
-ft-engine init --codex
-ft-engine continue --codex --sprint
-ft-engine run ~/dev/projects/examples/pokemon --hipotese ~/dev/projects/examples/pokemon.md --codex
+ft init --codex
+ft continue --codex --sprint
+ft run ~/dev/projects/examples/pokemon --hipotese ~/dev/projects/examples/pokemon.md --codex
+ft run . --opencode
+ft run . --opencode anthropic/claude-sonnet-4-5
 ```
 
 Ou definir o default por ambiente:
 
 ```bash
-export FT_LLM_ENGINE=codex
+export FT_LLM_ENGINE=opencode
 ```
 
-O executor selecionado é persistido em `project/state/engine_state.yml`, então `status`,
-`approve` e `reject` continuam usando o mesmo engine nas execuções seguintes.
+Quando `--opencode` é usado sem modelo explícito, o comando chama
+`opencode run -m pgx/zai-org_glm-4.7-flash "<prompt>"`.
+
+O executor selecionado é persistido em `state/engine_state.yml` no modo continuous
+ou em `~/.ft/worktrees/<projeto>/cycle-NN/state/engine_state.yml` no modo isolated.
+Assim, `status`, `approve` e `reject` continuam usando o mesmo engine nas execuções
+seguintes.
 
 ### Opção `--process`
 
 Especificar YAML de processo manualmente:
 
 ```bash
-ft-engine --process process/fast_track/FAST_TRACK_PROCESS_V2.yml continue --sprint
+ft --process process/process.yml continue --sprint
 ```
 
 Sem `--process`, o engine procura automaticamente (ordem de prioridade):
-1. `process/test_process_v2.yml`
-2. `process/test_process.yml`
-3. `process/fast_track/FAST_TRACK_PROCESS_V2.yml`
-4. `process/fast_track/FAST_TRACK_PROCESS.yml`
+1. YAML cujo `id` bate com o `process_id` do estado ativo
+2. `process/process.yml`
+3. `process/FAST_TRACK_PROCESS.yml`
+4. Qualquer `process/*.yml` local
+5. `process/fast_track/FAST_TRACK_PROCESS_V2.yml` ou `FAST_TRACK_PROCESS.yml` legado
 
 ### Variáveis de ambiente
 
@@ -99,7 +107,7 @@ Sem `--process`, o engine procura automaticamente (ordem de prioridade):
 | `FT_HOME` | Redireciona o diretório base de dados do ft (default `~/.ft`). Worktrees externos vivem em `$FT_HOME/worktrees/<projeto>/`. Usado pelos testes para isolamento. |
 | `FT_ALLOW_ENGINE_REPO` | O `ft` opera sempre num repo de projeto — **todos** os comandos são bloqueados dentro do repositório do engine/template. Esta variável libera o bloqueio, só para desenvolvimento do engine. |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no início do `ft run`. |
-| `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`). |
+| `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`). |
 
 ---
 
@@ -119,7 +127,7 @@ nodes:
     sprint: sprint-01        # opcional — agrupa nodes por sprint
     outputs:
       - project/docs/requisitos.md
-    requires_approval: true  # opcional — pausa para ft-engine approve
+    requires_approval: true  # opcional — pausa para ft approve
     validators:
       - file_exists: project/docs/requisitos.md
       - min_lines: 20
@@ -249,6 +257,7 @@ a especificidade vazou para o processo.
 | `min_lines` | `min_lines: 20` | Mínimo de linhas (usa `outputs[0]`) |
 | `has_sections` | `has_sections: [A, B, C]` | Seções presentes |
 | `min_user_stories` | `min_user_stories: 3` | Mínimo de US no formato `### US-` |
+| `demand_coverage` | `demand_coverage: {prd_path: docs/PRD.md, demand_path: docs/demanda.md}` | Cobertura determinística da demanda por keywords normalizadas |
 
 ### Testes
 | Validador | Uso | Descrição |
@@ -332,15 +341,15 @@ O engine faz **auto-commit** após PASS em cada fase:
 
 ```bash
 # Rodar sprint por sprint
-ft-engine init
-ft-engine continue --sprint    # sprint-01-discovery
-ft-engine approve              # aprovar artefatos pendentes
-ft-engine continue --sprint    # sprint-02-tdd
-ft-engine continue --sprint    # sprint-03-quality
+ft init
+ft continue --sprint    # sprint-01-discovery
+ft approve              # aprovar artefatos pendentes
+ft continue --sprint    # sprint-02-tdd
+ft continue --sprint    # sprint-03-quality
 ...
 
 # Ou modo autônomo
-ft-engine continue --mvp       # roda tudo até MVP ou BLOCK
+ft continue --auto      # roda até human gate, MVP ou BLOCK
 ```
 
 O sprint report é gerado automaticamente ao cruzar boundaries de sprint.
@@ -349,33 +358,27 @@ O sprint report é gerado automaticamente ao cruzar boundaries de sprint.
 
 ## Hyper-mode
 
-Quando docs existem em `project/docs/`, o engine automaticamente enriquece o
+Quando docs existem em `docs/`, o engine automaticamente enriquece o
 prompt com contexto dos documentos existentes (evita repetição, foca em completar).
 
 Ativa automaticamente para nodes de tipo `discovery` e `document`.
 
 ---
 
-## Processo Fast Track V2
+## Processo Fast Track V3
 
-O processo completo está em `process/fast_track/FAST_TRACK_PROCESS_V2.yml`:
-
-```
-sprint-01-mdd:       hipotese → PRD → gate
-sprint-02-planning:  task_list → tech_stack → diagrams → gate
-sprint-03-tdd:       red → green → gate
-sprint-04-delivery:  self_review → refactor → gate
-sprint-05-smoke:     smoke_run → gate
-sprint-06-e2e:       e2e_validation → gate
-sprint-07-feedback:  retro
-sprint-08-audit:     forgebase_audit → gate
-sprint-09-handoff:   SPEC.md → gate_mvp
-```
+O template recomendado está em `templates/fast-track-v3/process.yml` e é copiado
+para `process/process.yml` em projetos novos:
 
 ```bash
-ft --process process/fast_track/FAST_TRACK_PROCESS_V2.yml init
-ft --process process/fast_track/FAST_TRACK_PROCESS_V2.yml continue --sprint
+ft init meu-projeto --template fast-track-v3
+cd meu-projeto
+git init && git add -A && git commit -m "chore: bootstrap fast track"
+ft run . --auto
 ```
+
+O processo V2 legado continua disponível em `process/fast_track/FAST_TRACK_PROCESS_V2.yml`
+para compatibilidade e testes históricos.
 
 ---
 
@@ -399,13 +402,14 @@ ft/
       review.py       # no_large_files, no_print_statements, ...
   cli/
     main.py           # argparse CLI — ft init/continue/status/approve/reject
-project/
+~/.ft/worktrees/<projeto>/cycle-NN/
   state/
-    engine_state.yml  # Estado do motor (NUNCA editar manualmente)
+    engine_state.yml  # Estado do ciclo em modo isolated (NUNCA editar manualmente)
 process/
-  fast_track/
-    FAST_TRACK_PROCESS_V2.yml   # Processo completo
-  test_process*.yml             # Processos de teste
+  process.yml          # Processo local do projeto
+templates/
+  fast-track-v3/
+    process.yml        # Template recomendado
 ```
 
 ---
@@ -420,20 +424,23 @@ pip install -e .
 
 **BLOCKED após validação**
 ```bash
-ft-engine status    # ver motivo do block
-ft-engine init      # resetar e recomeçar (perde progresso)
+ft status    # ver motivo do block
+ft init      # resetar e recomeçar (perde progresso)
 ```
 
 **Artefato rejeitado pelo stakeholder**
 ```bash
-ft-engine reject "feedback específico"    # reenvia ao LLM com o motivo
-ft-engine reject --no-retry "motivo"      # bloqueia sem retry
+ft reject "feedback específico"    # reenvia ao LLM com o motivo
+ft reject --no-retry "motivo"      # bloqueia sem retry
 ```
 
 **LLM não encontrado**
-O engine usa a CLI selecionada (`claude` por default, ou `codex` com `--codex` / `FT_LLM_ENGINE=codex`).
+O engine usa a CLI selecionada (`claude` por default, ou `codex`, `gemini` e `opencode`
+via flag/`FT_LLM_ENGINE`).
 Certifique-se de que o binário escolhido está instalado:
 ```bash
 claude --version
 codex --version
+gemini --version
+opencode --version
 ```

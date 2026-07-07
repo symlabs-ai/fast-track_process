@@ -1,0 +1,207 @@
+"""Regressions for ft run pre-seed inputs and exploration mode."""
+
+from argparse import Namespace
+from pathlib import Path
+from unittest.mock import patch
+
+from ft.cli import main as cli_main
+from ft.engine.delegate import DelegateResult
+from ft.engine.runner import StepRunner
+
+
+class FakeRunner:
+    instances: list["FakeRunner"] = []
+
+    def __init__(
+        self,
+        process_path,
+        state_path,
+        project_root=".",
+        llm_engine=None,
+        llm_model=None,
+        verbose=False,
+    ):
+        self.process_path = process_path
+        self.state_path = state_path
+        self.project_root = Path(project_root)
+        self.llm_engine = llm_engine
+        self.llm_model = llm_model
+        self.verbose = verbose
+        self._bypass_human_gates = False
+        self.inited = False
+        self.run_mode = None
+        self.instances.append(self)
+
+    def init_state(self):
+        self.inited = True
+
+    def run(self, mode="step"):
+        self.run_mode = mode
+
+
+def _args(project: Path, **overrides) -> Namespace:
+    base = {
+        "project": str(project),
+        "process": None,
+        "from_project": None,
+        "hipotese": None,
+        "demand_input": None,
+        "bypass_human_gates": False,
+        "force": True,
+        "template": "base",
+        "worktree": None,
+        "auto": True,
+        "claude": None,
+        "codex": None,
+        "gemini": None,
+        "opencode": None,
+        "verbose": False,
+    }
+    base.update(overrides)
+    return Namespace(**base)
+
+
+def _valid_hypothesis() -> str:
+    return "\n".join([
+        "# Hipótese",
+        "Contexto inicial.",
+        "## Problema",
+        "Linha 1 do problema.",
+        "Linha 2 do problema.",
+        "Linha 3 do problema.",
+        "## Oportunidade",
+        "Linha 1 da oportunidade.",
+        "Linha 2 da oportunidade.",
+        "Linha 3 da oportunidade.",
+        "Linha 4 da oportunidade.",
+    ])
+
+
+class TestRunInputs:
+    def test_run_input_uses_effective_llm_engine(self, tmp_path):
+        FakeRunner.instances = []
+        project = tmp_path / "project"
+        demand = tmp_path / "demanda.md"
+        demand.write_text("Quero criar tarefas e filtrar por status.\n")
+
+        with (
+            patch("ft.cli.main.StepRunner", FakeRunner),
+            patch("ft.engine.triage.classify_demand") as classify,
+            patch("ft.engine.triage.generate_hypothesis", return_value=_valid_hypothesis()),
+        ):
+            classify.return_value = {"questions": [], "process": {}}
+
+            cli_main.cmd_run(_args(project, demand_input=str(demand), codex=True))
+
+        assert classify.call_args.kwargs["llm_engine"] == "codex"
+        assert FakeRunner.instances[-1].llm_engine == "codex"
+        assert FakeRunner.instances[-1].run_mode == "mvp"
+        assert (project / "docs" / "demanda.md").exists()
+        assert (project / "docs" / "hipotese.md").exists()
+
+    def test_run_hipotese_uses_default_engine_without_name_error(self, tmp_path):
+        FakeRunner.instances = []
+        project = tmp_path / "project"
+        hipotese = tmp_path / "hipotese.md"
+        hipotese.write_text(_valid_hypothesis())
+
+        with patch("ft.cli.main.StepRunner", FakeRunner):
+            cli_main.cmd_run(_args(project, hipotese=str(hipotese)))
+
+        assert FakeRunner.instances[-1].llm_engine == "claude"
+        assert FakeRunner.instances[-1].run_mode == "mvp"
+        assert (project / "docs" / "hipotese.md").exists()
+
+    def test_run_input_uses_opencode_engine_and_model(self, tmp_path):
+        FakeRunner.instances = []
+        project = tmp_path / "project"
+        demand = tmp_path / "demanda.md"
+        demand.write_text("Quero criar tarefas e filtrar por status.\n")
+
+        with (
+            patch("ft.cli.main.StepRunner", FakeRunner),
+            patch("ft.engine.triage.classify_demand") as classify,
+            patch("ft.engine.triage.generate_hypothesis", return_value=_valid_hypothesis()),
+        ):
+            classify.return_value = {"questions": [], "process": {}}
+
+            cli_main.cmd_run(
+                _args(
+                    project,
+                    demand_input=str(demand),
+                    opencode="pgx/zai-org_glm-4.7-flash",
+                )
+            )
+
+        assert classify.call_args.kwargs["llm_engine"] == "opencode"
+        assert FakeRunner.instances[-1].llm_engine == "opencode"
+        assert FakeRunner.instances[-1].llm_model == "pgx/zai-org_glm-4.7-flash"
+
+
+class TestExplore:
+    def test_explore_request_and_finish_write_logs_under_llm_logs(self, tmp_path):
+        process = tmp_path / "process.yml"
+        process.write_text(
+            """
+id: explore_process
+version: "1.0.0"
+title: Explore
+nodes:
+  - id: explore
+    type: exploration
+    title: Explore
+    optional: true
+    next: end
+  - id: end
+    type: end
+    title: End
+"""
+        )
+        runner = StepRunner(
+            process_path=process,
+            state_path=tmp_path / "state" / "engine_state.yml",
+            project_root=tmp_path,
+        )
+        runner.init_state()
+        runner._run_exploration(runner.graph.get_node("explore"))
+
+        result = DelegateResult(True, "DONE", [], [])
+        with patch("ft.engine.delegate.delegate_to_llm", return_value=result) as delegate:
+            runner.explore_request("ajuste rápido")
+            runner.explore_finish()
+
+        log_paths = [call.kwargs["log_path"] for call in delegate.call_args_list]
+        assert str(tmp_path / "state" / "llm_logs" / "exploration_01.log") in log_paths
+        assert str(tmp_path / "state" / "llm_logs" / "exploration_report.log") in log_paths
+        state = runner.state_mgr.load()
+        assert state.current_node == "end"
+
+
+class TestSetupEnv:
+    def test_setup_env_runs_project_script(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        scripts = project / "process" / "scripts"
+        scripts.mkdir(parents=True)
+        marker = project / "configured.txt"
+        script = scripts / "register_gateway.sh"
+        script.write_text(f"#!/usr/bin/env bash\nset -e\ntouch {marker}\n")
+        script.chmod(0o755)
+        monkeypatch.setenv("SYM_GATEWAY_PROJECT_KEY", "sk-sym_test")
+
+        cli_main.cmd_setup_env(Namespace(project=str(project)))
+
+        assert marker.exists()
+
+    def test_setup_env_runs_relative_project_script_from_parent_cwd(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        scripts = project / "process" / "scripts"
+        scripts.mkdir(parents=True)
+        script = scripts / "register_gateway.sh"
+        script.write_text("#!/usr/bin/env bash\nset -e\ntouch configured-from-cwd.txt\n")
+        script.chmod(0o755)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("SYM_GATEWAY_PROJECT_KEY", "sk-sym_test")
+
+        cli_main.cmd_setup_env(Namespace(project="project"))
+
+        assert (project / "configured-from-cwd.txt").exists()

@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 .venv/
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/
+.coverage
 
 # IDE
 .idea/
@@ -21,12 +25,23 @@ __pycache__/
 # Environment — configuração local (cada usuário tem o seu, não commitar)
 environment/gateway.md
 environment/*.local.md
+.claude/settings.json
+.claude/settings.local.json
+.claude/worktrees/
 .claude/scheduled_tasks.lock
+CLAUDE.md
 /*_log.md
+*.log
 
 # ft engine — artefatos de runtime (nunca versionar no template)
 .serve_url
 .context/
+artifacts/
+runs/
+state/
+project/
+project/state/
+project/runs/
 project/state/engine_state.yml
 project/state/llm_logs/
 

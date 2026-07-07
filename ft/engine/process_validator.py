@@ -24,7 +24,7 @@ VALID_NODE_TYPES = frozenset({
 # são os nomes legados da V2, mantidos por compatibilidade.
 VALID_EXECUTORS = frozenset({
     "python", "human",
-    "llm_claude", "llm_codex", "llm_gemini",
+    "llm_claude", "llm_codex", "llm_gemini", "llm_opencode",
     "llm_coder", "llm_coach",
 })
 
@@ -89,14 +89,20 @@ def _check_graph_integrity(graph: ProcessGraph, report: ValidationReport) -> Non
     ids = set(graph.nodes.keys())
     first_id = next(iter(graph.nodes)).strip() if graph.nodes else None
 
+    def _edge_targets(node: Node) -> list[str]:
+        targets: list[str] = []
+        if node.next:
+            targets.append(node.next)
+        if node.branches:
+            targets.extend(node.branches.values())
+        if node.reject_next:
+            targets.append(node.reject_next)
+        return targets
+
     # Nós apontados por algum outro nó
     pointed_to: set[str] = set()
     for node in graph.nodes.values():
-        if node.next:
-            pointed_to.add(node.next)
-        if node.branches:
-            for target in node.branches.values():
-                pointed_to.add(target)
+        pointed_to.update(_edge_targets(node))
 
     # Nós órfãos (ninguém aponta para eles, exceto o primeiro)
     for node_id in ids:
@@ -115,12 +121,9 @@ def _check_graph_integrity(graph: ProcessGraph, report: ValidationReport) -> Non
             node = graph.nodes.get(current)
             if not node:
                 continue
-            if node.next and node.next not in reachable:
-                queue.append(node.next)
-            if node.branches:
-                for target in node.branches.values():
-                    if target not in reachable:
-                        queue.append(target)
+            for target in _edge_targets(node):
+                if target not in reachable:
+                    queue.append(target)
 
         unreachable = ids - reachable
         for node_id in unreachable:

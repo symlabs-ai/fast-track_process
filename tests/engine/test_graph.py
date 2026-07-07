@@ -28,6 +28,7 @@ def make_graph(nodes_data: list[dict]) -> ProcessGraph:
             parallel_group=n.get("parallel_group"),
             branches=n.get("branches"),
             condition=n.get("condition"),
+            reject_next=n.get("reject_next"),
         ))
     return ProcessGraph(nodes, {"id": "test", "title": "Test"})
 
@@ -137,6 +138,13 @@ class TestGraphValidation:
         with pytest.raises(ValueError, match="nao existe"):
             make_graph([
                 {"id": "a", "next": "nonexistent"},
+                {"id": "b", "type": "end"},
+            ])
+
+    def test_missing_reject_next_target_raises(self):
+        with pytest.raises(ValueError, match="reject_next.*nao existe"):
+            make_graph([
+                {"id": "a", "type": "human_gate", "next": "b", "reject_next": "missing"},
                 {"id": "b", "type": "end"},
             ])
 

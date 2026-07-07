@@ -1,7 +1,7 @@
 """Tests for BL-12: Base/Environment separation.
 
 Covers: find_process_yaml, copy_template, ft validate CLI,
-gate_kb_review with kb_path, FT_KB_PATH env var, SymGateway extraction.
+gate_kb_review with kb_path, FT_KB_PATH env var, external integration separation.
 """
 
 from __future__ import annotations
@@ -252,49 +252,30 @@ class TestKbPathInRunner:
 
 
 # ---------------------------------------------------------------------------
-# SymGateway extraction
+# External environment integrations
 # ---------------------------------------------------------------------------
 
-class TestSymGatewayExtraction:
-    def test_import_from_integrations(self):
-        from ft.integrations.symgateway import (
-            provision_environment,
-            check_gateway_403,
-            SYMGATEWAY_BASE,
-        )
-        assert SYMGATEWAY_BASE == "https://symgateway.symlabs.ai"
-        assert callable(provision_environment)
-        assert callable(check_gateway_403)
+class TestExternalIntegrationSeparation:
+    def test_symgateway_not_packaged_as_engine_module(self):
+        import importlib.util
 
-    def test_check_gateway_403_detects_error(self):
-        from ft.integrations.symgateway import check_gateway_403
-        output = "Error 403: project not found in workspace folder_name='my_proj'"
-        result = check_gateway_403(output)
-        assert result is not None
-        assert "my_proj" in result
+        assert importlib.util.find_spec("ft.integrations.symgateway") is None
 
-    def test_check_gateway_403_returns_none_for_normal(self):
-        from ft.integrations.symgateway import check_gateway_403
-        result = check_gateway_403("DONE\nAll good")
-        assert result is None
+    def test_symgateway_template_contains_register_script(self):
+        root = Path(__file__).parent.parent.parent
+        script = root / "templates" / "symgateway" / "scripts" / "register_gateway.sh"
 
-    def test_provision_creates_claude_md(self, tmp_path):
-        from ft.integrations.symgateway import provision_environment
-        provision_environment(project_root=tmp_path, base_url="https://example.com/api")
-        assert (tmp_path / "CLAUDE.md").exists()
-        assert "gateway_project" in (tmp_path / "CLAUDE.md").read_text()
+        assert script.exists()
+        assert "SYM_GATEWAY_PROJECT_KEY" in script.read_text()
 
-    def test_provision_creates_settings(self, tmp_path):
-        from ft.integrations.symgateway import provision_environment
-        provision_environment(project_root=tmp_path, base_url="https://example.com/api")
-        settings = tmp_path / ".claude" / "settings.local.json"
-        assert settings.exists()
-        import json
-        data = json.loads(settings.read_text())
-        assert data["env"]["ANTHROPIC_BASE_URL"] == "https://example.com/api"
+    def test_symgateway_template_wires_script_as_hook(self):
+        root = Path(__file__).parent.parent.parent
+        env_yml = root / "templates" / "symgateway" / "environment.yml"
+        data = yaml.safe_load(env_yml.read_text())
 
-    def test_delegate_works_without_symgateway(self):
-        """Import lazy: delegate should handle missing symgateway gracefully."""
-        # This tests that the try/except ImportError in delegate.py works
+        assert "scripts/register_gateway.sh" in data["hooks"]["on_init"]
+
+    def test_delegate_has_no_external_integration_dependency(self):
+        """Delegate remains importable without provider-specific modules."""
         from ft.engine.delegate import delegate_to_llm
         assert callable(delegate_to_llm)

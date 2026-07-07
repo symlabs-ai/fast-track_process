@@ -31,6 +31,8 @@ _RATE_LIMIT_WAIT = [60, 120, 240, 480, 900, 1800, 1800, 1800]
 # (MAX_ARG_STRLEN ≈ 128 KiB no Linux) e vai via stdin.
 _MAX_ARGV_PROMPT_BYTES = 100_000
 
+DEFAULT_OPENCODE_MODEL = "pgx/zai-org_glm-4.7-flash"
+
 
 def _feed_stdin(proc: subprocess.Popen, prompt: str) -> None:
     """Escreve o prompt no stdin do executor e fecha o pipe (EOF sinaliza fim)."""
@@ -110,6 +112,14 @@ def _build_executor_command(
             cmd += ["-m", model]
         cmd += ["-p", prompt]
         return cmd
+
+    if engine == "opencode":
+        return [
+            "opencode",
+            "run",
+            "-m", model or DEFAULT_OPENCODE_MODEL,
+            prompt,
+        ]
 
     raise ValueError(f"Executor LLM desconhecido: {llm_engine}")
 
@@ -821,15 +831,6 @@ NODE_SUMMARY:
                 returncode = rc2
                 break
             output = out2  # última tentativa falhou também
-
-    # Detectar erro 403 de gateway (integração opcional)
-    try:
-        from ft.integrations.symgateway import check_gateway_403
-        gw_msg = check_gateway_403(output)
-        if gw_msg:
-            raise RuntimeError(gw_msg)
-    except ImportError:
-        pass
 
     token = _final_protocol_token(output)
     success = returncode == 0 and token != "BLOCKED"

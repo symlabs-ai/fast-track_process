@@ -6,6 +6,7 @@ from unittest.mock import patch
 from ft.engine.delegate import (
     _build_executor_command,
     _extract_codex_output,
+    DEFAULT_OPENCODE_MODEL,
     DelegateResult,
     delegate_with_feedback,
 )
@@ -31,6 +32,30 @@ class TestBuildExecutorCommand:
         assert "-C" in cmd
         assert "/tmp/proj" in cmd
         assert "faça algo" == cmd[-1]
+
+    def test_builds_opencode_command_with_default_model(self):
+        cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
+        assert cmd == [
+            "opencode",
+            "run",
+            "-m", DEFAULT_OPENCODE_MODEL,
+            "faça algo",
+        ]
+
+    def test_builds_opencode_command_with_model_override(self):
+        cmd = _build_executor_command(
+            "opencode",
+            "faça algo",
+            "/tmp/proj",
+            7,
+            model="anthropic/claude-sonnet-4-5",
+        )
+        assert cmd == [
+            "opencode",
+            "run",
+            "-m", "anthropic/claude-sonnet-4-5",
+            "faça algo",
+        ]
 
     def test_invalid_engine_raises(self):
         with pytest.raises(ValueError, match="Executor LLM desconhecido"):

@@ -1,14 +1,19 @@
 """Unit tests for ft.engine.validators.*"""
 
-import pytest
 from pathlib import Path
 
+import pytest
+
+from ft.engine.parallel import check_independence
 from ft.engine.validators.artifacts import (
-    file_exists, min_lines, has_sections, min_user_stories, sections_unchanged,
+    demand_coverage,
+    file_exists,
+    has_sections,
+    min_lines,
+    min_user_stories,
+    sections_unchanged,
 )
 from ft.engine.validators.gates import gate_acceptance_cli, gate_kb_review
-from ft.engine.parallel import check_independence
-
 
 # ---------------------------------------------------------------------------
 # artifacts
@@ -155,6 +160,61 @@ class TestSectionsUnchanged:
 
         assert not passed
         assert "Visao" in detail
+
+
+class TestDemandCoverage:
+    def test_passes_when_prd_mentions_requested_features(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "demanda.md").write_text(
+            "- Quero criar tarefas com prioridade\n"
+            "- Preciso filtrar tarefas por status\n"
+        )
+        (docs / "PRD.md").write_text(
+            "## User Stories\n"
+            "### US-01 - Criar tarefas\n"
+            "Como usuário, quero criar tarefas com prioridade.\n\n"
+            "### US-02 - Filtrar por status\n"
+            "Como usuário, quero filtrar tarefas por status.\n"
+        )
+
+        passed, detail = demand_coverage(project_root=str(tmp_path))
+
+        assert passed
+        assert "PASS" in detail
+
+    def test_fails_when_feature_is_missing(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "demanda.md").write_text(
+            "- Quero criar tarefas com prioridade\n"
+            "- Preciso exportar relatórios em CSV\n"
+        )
+        (docs / "PRD.md").write_text(
+            "## User Stories\n"
+            "### US-01 - Criar tarefas\n"
+            "Como usuário, quero criar tarefas com prioridade.\n"
+        )
+
+        passed, detail = demand_coverage(project_root=str(tmp_path))
+
+        assert not passed
+        assert "exportar" in detail
+
+    def test_fails_when_short_format_requirement_is_replaced(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "demanda.md").write_text("- Preciso exportar relatórios em CSV\n")
+        (docs / "PRD.md").write_text(
+            "## User Stories\n"
+            "### US-01 - Exportar relatórios\n"
+            "Como usuário, quero exportar relatórios em PDF.\n"
+        )
+
+        passed, detail = demand_coverage(project_root=str(tmp_path))
+
+        assert not passed
+        assert "csv" in detail.lower()
 
 
 # ---------------------------------------------------------------------------

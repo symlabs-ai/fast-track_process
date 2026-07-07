@@ -1,75 +1,91 @@
-# ForgeProcess — Fast Track
+# ft engine — Fast Track
 
-> Processo ágil para solo dev + AI. 19 steps, 9 fases, valor > cerimônia, com sprints técnicas.
+Motor determinístico de processos para solo dev + AI. O pacote se chama
+`ft-engine`, mas o comando instalado é `ft`.
 
-**5 symbiotas** · **TDD obrigatório** · **E2E CLI gate** · **Hyper-mode** · **Maintenance mode**
-
----
+Versão atual: **0.13.2**.
 
 ## O que é
 
-Fast Track é uma variante do ForgeProcess para desenvolvedor solo trabalhando com assistentes de IA.
-Define um fluxo completo — do insight à entrega — com rigor (TDD, Sprint Expert Gate, E2E gate) e sem burocracia
-de squad (cerimônias tradicionais, BDD Gherkin, reviews de 3 pessoas).
+O Fast Track executa um processo definido em YAML: o Python controla grafo,
+estado, gates, worktrees e validadores; o LLM apenas constrói artefatos quando
+um node delega trabalho.
 
-## Symbiotas
+Projetos reais ficam fora deste repositório. Este repo é o template/engine e o
+guard bloqueia `ft init`/`ft run .` aqui, exceto com `FT_ALLOW_ENGINE_REPO=1`
+para desenvolvimento do próprio engine.
 
-| Symbiota | Papel |
-|----------|-------|
-| `ft_manager` | Orquestra o processo, delega validações ao gatekeeper e interage com o stakeholder |
-| `ft_gatekeeper` | Valida stage gates (PASS/BLOCK) — determinístico, sem interpretação criativa |
-| `ft_acceptance` | Projeta cenários de teste de aceitação por Value/Support Track |
-| `ft_coach` | Conduz MDD, planning e feedback |
-| `forge_coder` | Executa TDD, delivery e E2E |
-
-## Início rápido
+## Instalação local
 
 ```bash
-# 1. Clone e desconecte do template
-git clone https://github.com/symlabs-ai/fast-track_process.git meu-projeto
+pip install -e .
+ft --help
+```
+
+## Criar um projeto
+
+```bash
+ft init meu-projeto --template fast-track-v3
 cd meu-projeto
-git remote remove origin
-git remote add origin <url-do-seu-repo>
-git push -u origin main
-
-# 2. Carregue o ft_manager como system prompt
-#    → process/symbiotes/ft_manager/prompt.md
-
-# 3. O ft_manager conduz tudo a partir daí
+git init
+git add -A
+git commit -m "chore: bootstrap fast track"
+ft run . --auto
 ```
 
-## ft engine (v0.7+)
+O ciclo roda em worktree externo:
 
-O Fast Track agora inclui um **motor determinístico Python** que substitui a orquestração por LLM:
+```text
+~/.ft/worktrees/<projeto>/cycle-NN/
+```
+
+A raiz do projeto permanece limpa até `ft close` fazer o merge escolhido.
+
+## Comandos principais
 
 ```bash
-ft-engine init               # inicializar engine_state.yml
-ft-engine continue --sprint  # rodar sprint completa
-ft-engine approve            # aprovar artefato pendente
-ft-engine status --full      # ver grafo com progresso
-ft-engine continue --codex   # usar Codex CLI em vez de Claude
+ft run .                       # iniciar ciclo
+ft run . --auto                # avançar automaticamente até human gate/MVP/BLOCK
+ft continue                    # avançar um node
+ft continue --sprint           # avançar uma sprint
+ft continue --auto             # avançar até o próximo human gate/MVP/BLOCK
+ft status --full               # status + grafo
+ft graph                       # grafo com status
+ft approve "nota opcional"     # aprovar human gate
+ft reject "motivo objetivo"    # rejeitar e reenviar com feedback
+ft fix "instrução"             # corrigir pending_fix
+ft close                       # encerrar ciclo e escolher merge
 ```
 
-O LLM só executa tarefas de construção — o Python controla todo o fluxo, validações e gates.
-Neste repositório, `ft` é a CLI do template/processo; `ft-engine` é a CLI do motor determinístico.
+Use `--codex`, `--claude [modelo]`, `--gemini [modelo]` ou `--opencode [modelo]`
+para escolher o executor LLM. O default de `--opencode` é
+`pgx/zai-org_glm-4.7-flash`. Também é possível definir `FT_LLM_ENGINE=opencode`.
 
-- **Guia completo**: [`docs/ft_engine_usage.md`](docs/ft_engine_usage.md)
-- **Processo V2**: `process/fast_track/FAST_TRACK_PROCESS_V2.yml`
+## Templates
 
----
+| Template | Uso |
+|----------|-----|
+| `base` | Estrutura mínima com `process/process.yml`, `docs/` e `src/` |
+| `fast-track-v3` | Processo completo recomendado para MVP |
+| `fast-track-v2` | Processo V2 legado |
+| `ft-ui-prototype` | Prototipagem rápida de UI |
+| `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
+
+Integrações externas pertencem ao projeto/template de ambiente. O engine chama
+scripts em `process/scripts/` e não precisa conhecer o provedor.
 
 ## Documentação
 
-- **Processo**: `process/fast_track/FAST_TRACK_PROCESS.md`
-- **YAML (machine-readable)**: `process/fast_track/FAST_TRACK_PROCESS.yml`
-- **YAML V2 (engine)**: `process/fast_track/FAST_TRACK_PROCESS_V2.yml`
-- **ft engine**: `docs/ft_engine_usage.md`
-- **Resumo para agentes**: `process/fast_track/SUMMARY_FOR_AGENTS.md`
-- **Diagrama de fluxo**: `docs/fast-track-flow.md`
-- **Guia de agentes**: `AGENTS.md`
+- Guia do engine: [`docs/ft_engine_usage.md`](docs/ft_engine_usage.md)
+- Arquitetura V3: [`docs/V3_ARCHITECTURE.md`](docs/V3_ARCHITECTURE.md)
+- Playbook de condução: [`AGENTS.md`](AGENTS.md)
+- Templates: [`templates/`](templates/)
+- Processo legado V2: [`process/fast_track/`](process/fast_track/)
 
----
+## Validação local
 
-## Changelog
-
-Versão atual: **v0.8.0** — Changelog completo em [`CHANGELOG.md`](CHANGELOG.md)
+```bash
+python -m pytest -q
+FT_ALLOW_ENGINE_REPO=1 ft --process templates/fast-track-v3/process.yml validate
+FT_ALLOW_ENGINE_REPO=1 ft --process templates/ft-ui-prototype/process.yml validate
+```

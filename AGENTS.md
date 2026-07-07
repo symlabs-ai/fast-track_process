@@ -54,10 +54,12 @@ Templates disponíveis (`templates/` no repo do engine):
 | `fast-track-v3` | Processo completo V3 (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
 | `fast-track-v2` | Processo V2 legado |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
+| `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
 
-Se `SYM_GATEWAY_PROJECT_KEY` estiver definida, o `ft init` provisiona `CLAUDE.md` e
-`.claude/settings.local.json` (SymGateway) automaticamente. Sem a env var, use depois:
-`ft setup-env`. Precisa da key? Peça ao DevOps — nunca ao usuário.
+Integrações externas são opt-in via scripts em `process/scripts/`. Para SymGateway,
+use um template de ambiente que forneça `process/scripts/register_gateway.sh` e rode
+`ft setup-env` com `SYM_GATEWAY_PROJECT_KEY` definida. Precisa da key? Peça ao
+DevOps — nunca ao usuário.
 
 ## 1. Semear conhecimento
 
@@ -77,7 +79,7 @@ O engine delega construção ao LLM com o contexto de `docs/`. Antes de rodar:
 ```bash
 ft run .                       # interativo: para nos human_gates
 ft run . --auto                # autônomo: avança até MVP sem parar
-ft run . --codex               # trocar engine LLM (--claude [modelo] | --codex | --gemini)
+ft run . --codex               # trocar engine LLM (--claude [modelo] | --codex | --gemini | --opencode)
 ft run . --force               # novo ciclo mesmo com um ativo
 ft run . --from-project PATH   # retomada: copia plano_de_voo do ciclo anterior
 ```
@@ -161,8 +163,8 @@ Depois do close:
 | `FT_HOME` | Base de dados do ft (default `~/.ft`); worktrees em `$FT_HOME/worktrees/<projeto>/` |
 | `FT_ALLOW_ENGINE_REPO` | Libera rodar no repo do template — só para dev do engine |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no `ft run` |
-| `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`) |
-| `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Provisionamento SymGateway no `init`/`setup-env` |
+| `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`) |
+| `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `process/scripts/register_gateway.sh` |
 
 ## Referências
 

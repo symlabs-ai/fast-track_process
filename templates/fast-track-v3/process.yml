@@ -1,6 +1,6 @@
 # Fast Track V3 — Processo Completo de MVP
 # Incorpora aprendizados dos ciclos SM1-SM13 e ft-studio ciclos 1-5.
-# Uso: ft run . --template fast-track-v3 [--claude|--codex|--gemini]
+# Uso: ft run . --template fast-track-v3 [--claude|--codex|--gemini|--opencode]
 #
 # Estrutura de diretórios:
 #   docs/     — documentação (PRD, handoff, tech_stack, etc.)

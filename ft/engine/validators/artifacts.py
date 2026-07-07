@@ -238,14 +238,11 @@ def demand_coverage(
     demand_path: str = "docs/demanda.md",
     project_root: str = ".",
 ) -> tuple[bool, str]:
-    """Verifica se o PRD cobre todas as features da demanda original.
+    """Verifica deterministicamente se o PRD cobre a demanda original.
 
     Só roda na primeira run (quando demanda.md existe).
     Nas runs seguintes, demanda.md não existe e o validator passa automaticamente.
     """
-    from pathlib import Path
-    import json
-
     demand_file = Path(project_root) / demand_path
     prd_file = Path(project_root) / prd_path
 
@@ -259,58 +256,110 @@ def demand_coverage(
     demand_text = demand_file.read_text()
     prd_text = prd_file.read_text()
 
-    # Usar LLM para verificar cobertura
-    try:
-        from ft.engine.delegate import delegate_to_llm
+    stop_words = {
+        "como", "quero", "preciso", "para", "que", "com", "sem", "por", "uma",
+        "um", "de", "do", "da", "dos", "das", "no", "na", "nos", "nas", "ao",
+        "em", "os", "as", "se", "ou", "ter", "ser", "ver", "usar", "deve",
+        "devem", "deveria", "produto", "sistema", "usuario", "usuaria",
+        "eu", "meu", "minha", "us",
+        "the", "a", "an", "in", "on", "of", "to", "and", "or", "is", "with",
+        "from", "for", "by", "at", "be", "have", "this", "that", "user",
+        "system", "should", "must", "can", "want", "need",
+    }
+    short_requirement_tokens = {
+        "ai", "ia", "ui", "ux", "api", "csv", "pdf", "xml", "sms", "sso",
+        "mfa", "2fa", "otp", "pix", "cpf",
+    }
 
-        prompt = (
-            "Compare a demanda original do usuário com o PRD gerado.\n\n"
-            "DEMANDA ORIGINAL:\n---\n"
-            f"{demand_text}\n---\n\n"
-            "PRD GERADO:\n---\n"
-            f"{prd_text}\n---\n\n"
-            "Verifique se CADA feature/requisito mencionado na demanda tem "
-            "pelo menos uma User Story correspondente no PRD.\n\n"
-            "Responda APENAS com JSON (sem markdown):\n"
-            '{"covered": ["feature coberta 1", "feature coberta 2"], '
-            '"missing": ["feature que faltou 1", "feature que faltou 2"], '
-            '"verdict": "PASS" ou "FAIL"}\n\n'
-            "Se todas as features estão cobertas, verdict=PASS.\n"
-            "Se alguma feature da demanda não tem US correspondente, verdict=FAIL."
-        )
+    def _is_significant_short_token(raw_word: str, word: str) -> bool:
+        if not 2 <= len(word) <= 3:
+            return False
+        raw_ascii = unicodedata.normalize("NFD", raw_word).encode("ascii", "ignore").decode("ascii")
+        if not any(char.isalpha() for char in raw_ascii):
+            return False
+        return any(char.isdigit() for char in word) or word in short_requirement_tokens or raw_ascii.isupper()
 
-        result = delegate_to_llm(
-            task=prompt,
-            project_root=project_root,
-            allowed_paths=[],
-            max_turns=5,
-            llm_engine="claude",
-        )
+    def _tokens(text: str) -> list[str]:
+        tokens: list[str] = []
+        for raw_word in re.findall(r"[A-Za-z0-9áéíóúãõâêôçàÁÉÍÓÚÃÕÂÊÔÇÀ]+", text):
+            word = _normalize(raw_word)
+            if not word or word in stop_words:
+                continue
+            if len(word) > 3 or _is_significant_short_token(raw_word, word):
+                tokens.append(word)
+        return tokens
 
-        output = result.output.strip()
-        # Extrair JSON
-        start = output.find("{")
-        end = output.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(output[start:end])
-            missing = data.get("missing", [])
-            covered = data.get("covered", [])
-            verdict = data.get("verdict", "FAIL")
-
-            if verdict == "PASS" or not missing:
-                return True, f"demand_coverage: PASS — {len(covered)} features cobertas no PRD"
-
-            missing_str = "; ".join(missing[:5])
-            return False, (
-                f"demand_coverage FAIL: {len(missing)} feature(s) da demanda sem US no PRD: "
-                f"{missing_str}"
+    def _requirement_lines(text: str) -> list[str]:
+        candidates: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip(" \t-*•0123456789.)")
+            if len(line) < 12:
+                continue
+            lower = _normalize(line)
+            explicit = raw_line.lstrip().startswith(("-", "*", "•")) or re.match(r"^\s*\d+[.)]", raw_line)
+            intent = any(
+                marker in lower
+                for marker in (
+                    "quero", "preciso", "deve", "devem", "permitir", "visualizar",
+                    "criar", "editar", "remover", "listar", "filtrar", "buscar",
+                    "acompanhar", "exportar", "importar", "validar", "mostrar",
+                    "i want", "i need", "should", "must", "allow", "create",
+                    "edit", "delete", "list", "filter", "search", "export",
+                    "import", "validate", "show",
+                )
             )
+            if explicit or intent:
+                candidates.append(line)
+        if candidates:
+            return candidates[:20]
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if len(p.strip()) >= 40]
+        return paragraphs[:10]
 
-    except Exception as e:
-        # Se LLM não disponível, passar (não bloquear por falha de infra)
-        return True, f"demand_coverage: LLM indisponível, pulando ({e})"
+    prd_tokens = set(_tokens(prd_text))
+    if not prd_tokens:
+        return False, "demand_coverage FAIL: PRD sem termos verificáveis"
 
-    return True, "demand_coverage: verificação concluída"
+    missing: list[str] = []
+    covered = 0
+    for requirement in _requirement_lines(demand_text):
+        req_tokens = list(dict.fromkeys(_tokens(requirement)))
+        if not req_tokens:
+            continue
+        missing_short = [
+            tok for tok in req_tokens
+            if len(tok) <= 3 and tok not in prd_tokens
+        ]
+        if missing_short:
+            missing.append(f"{requirement[:120]} (faltam termos: {', '.join(missing_short)})")
+            continue
+        hits = [tok for tok in req_tokens if tok in prd_tokens]
+        ratio = len(hits) / len(req_tokens)
+        if ratio >= 0.45 or len(hits) >= min(3, len(req_tokens)):
+            covered += 1
+        else:
+            missing.append(requirement[:120])
+
+    total = covered + len(missing)
+    if total == 0:
+        demand_tokens = set(_tokens(demand_text))
+        if not demand_tokens:
+            return True, "demand_coverage: demanda sem requisitos verificáveis — pulando"
+        missing_short = [tok for tok in demand_tokens if len(tok) <= 3 and tok not in prd_tokens]
+        if missing_short:
+            return False, f"demand_coverage FAIL: faltam termos curtos: {', '.join(sorted(missing_short))}"
+        overlap = len(demand_tokens & prd_tokens) / len(demand_tokens)
+        if overlap >= 0.35:
+            return True, f"demand_coverage: PASS — overlap global {overlap:.0%}"
+        return False, f"demand_coverage FAIL: overlap global {overlap:.0%} < 35%"
+
+    if not missing:
+        return True, f"demand_coverage: PASS — {covered}/{total} requisito(s) coberto(s)"
+
+    missing_str = "; ".join(missing[:5])
+    return False, (
+        f"demand_coverage FAIL: {covered}/{total} requisito(s) coberto(s); "
+        f"faltam: {missing_str}"
+    )
 
 
 def prd_coverage(

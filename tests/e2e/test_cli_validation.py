@@ -6,7 +6,7 @@ Validates all CLI commands via subprocess:
   ft init
   ft status [--full / -f]
   ft graph
-  ft continue [--sprint / --mvp]
+  ft continue [--sprint / --auto]
   ft approve [--no-continue]
   ft reject <reason> [--no-retry]
 """
@@ -163,6 +163,7 @@ class TestHelpAndUsage:
         output = result.stdout + result.stderr
         assert "--claude" in output
         assert "--codex" in output
+        assert "--opencode" in output
 
     def test_no_args_shows_usage(self, tmp_path):
         result = run_ft([], cwd=tmp_path)
@@ -261,6 +262,12 @@ class TestInit:
         assert result.returncode == 0
         state_file = _state_file(ft_project)
         assert "llm_engine: codex" in state_file.read_text()
+
+    def test_opencode_flag_persists_engine_choice(self, ft_project):
+        result = run_ft(["init", "--opencode"], cwd=ft_project)
+        assert result.returncode == 0
+        state_file = _state_file(ft_project)
+        assert "llm_engine: opencode" in state_file.read_text()
 
     def test_missing_process_file_exits_nonzero(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)
@@ -372,8 +379,8 @@ class TestContinue:
         result = run_ft(["continue", "--sprint"], cwd=ft_project_initialized)
         assert result.returncode == 0
 
-    def test_complete_process_via_mvp(self, ft_project_initialized):
-        """--mvp mode runs all gates until end."""
+    def test_complete_process_via_auto(self, ft_project_initialized):
+        """--auto mode runs all gates until end."""
         result = run_ft(["continue", "--auto"], cwd=ft_project_initialized)
         assert result.returncode == 0
         output = result.stdout + result.stderr

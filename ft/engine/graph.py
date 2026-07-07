@@ -75,6 +75,10 @@ class ProcessGraph:
                         raise ValueError(
                             f"Node '{node.id}' branch aponta para '{target}' que nao existe"
                         )
+            if node.reject_next and node.reject_next not in ids:
+                raise ValueError(
+                    f"Node '{node.id}' reject_next aponta para '{node.reject_next}' que nao existe"
+                )
 
         # Verificar que existe exatamente 1 end node
         end_nodes = [n for n in self.nodes.values() if n.type == "end"]
@@ -177,9 +181,14 @@ def load_graph(path: str | Path) -> ProcessGraph:
             elif isinstance(v, str):
                 validators.append({v: True})
 
-        # Normalizar executor: V3 usa nomes curtos (claude/codex/gemini),
+        # Normalizar executor: V3 usa nomes curtos (claude/codex/gemini/opencode),
         # runner usa o prefixo "llm" para detectar delegação ao LLM.
-        _EXECUTOR_ALIASES = {"claude": "llm_claude", "codex": "llm_codex", "gemini": "llm_gemini"}
+        _EXECUTOR_ALIASES = {
+            "claude": "llm_claude",
+            "codex": "llm_codex",
+            "gemini": "llm_gemini",
+            "opencode": "llm_opencode",
+        }
         raw_executor = node_raw.get("executor", "python")
         executor = _EXECUTOR_ALIASES.get(raw_executor, raw_executor)
 

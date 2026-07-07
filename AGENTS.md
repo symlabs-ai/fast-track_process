@@ -78,7 +78,8 @@ O engine delega construção ao LLM com o contexto de `docs/`. Antes de rodar:
 
 ```bash
 ft run .                       # interativo: para nos human_gates
-ft run . --auto                # autônomo: avança até MVP sem parar
+ft run . --auto                # autônomo: avança até human_gate, MVP ou BLOCK
+ft run . --auto --bypass-human-gates  # sem intervenção: LLM decide human_gates
 ft run . --codex               # trocar engine LLM (--claude [modelo] | --codex | --gemini | --opencode)
 ft run . --force               # novo ciclo mesmo com um ativo
 ft run . --from-project PATH   # retomada: copia plano_de_voo do ciclo anterior
@@ -90,9 +91,11 @@ Modos de avanço (também no `ft continue`):
 |------|---------|-------------|
 | step | `ft continue` | Depurar node a node |
 | sprint | `ft continue --sprint` | Avançar uma sprint e revisar |
-| auto | `ft continue --auto` | Ciclo autônomo até MVP |
+| auto | `ft continue --auto` | Avançar até o próximo human_gate, MVP ou BLOCK |
+| sem intervenção | `ft continue --auto --bypass-human-gates` | Ciclo autônomo até MVP deixando o LLM decidir human_gates |
 
-`--bypass-human-gates` deixa o LLM decidir nos gates humanos (use com critério; `--auto` já pula).
+`--bypass-human-gates` deixa o LLM decidir nos gates humanos. Use com critério:
+`--auto` sozinho **não** pula human_gates.
 
 ## 3. Monitorar
 

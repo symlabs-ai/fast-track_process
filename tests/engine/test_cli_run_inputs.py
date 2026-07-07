@@ -7,6 +7,7 @@ from unittest.mock import patch
 from ft.cli import main as cli_main
 from ft.engine.delegate import DelegateResult
 from ft.engine.runner import StepRunner
+from ft.engine.state import EngineState
 
 
 class FakeRunner:
@@ -349,3 +350,48 @@ class TestAbort:
         cli_main.cmd_abort(args)
 
         assert not cycle.exists()
+
+
+class TestRetry:
+    def test_retry_recovers_orphaned_delegated_state(self):
+        state = EngineState(
+            current_node="ft.plan.03.api_contract",
+            node_status="delegated",
+            active_llm_log="state/llm_logs/stale.log",
+            _lock={"pid": 999999},
+        )
+
+        class StateMgr:
+            def load(self):
+                return state
+
+            def save(self):
+                self.saved = True
+
+        class Runner:
+            def __init__(self):
+                self.state_mgr = StateMgr()
+                self._auto_fix_counts = {"ft.plan.03.api_contract": 1}
+                self.run_mode = None
+
+            def run(self, mode="step"):
+                self.run_mode = mode
+
+        runner = Runner()
+        args = Namespace(
+            process=None,
+            auto=False,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+
+        with patch("ft.cli.main.get_runner", return_value=runner):
+            cli_main.cmd_retry(args)
+
+        assert state.node_status == "ready"
+        assert state.active_llm_log is None
+        assert runner._auto_fix_counts == {}
+        assert runner.run_mode == "step"

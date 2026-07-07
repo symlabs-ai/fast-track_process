@@ -1787,8 +1787,20 @@ def cmd_retry(args):
 
     state = runner.state_mgr.load()
     if state.node_status != "blocked":
-        print(_ui.warn(f"Node atual não está bloqueado (status: {state.node_status})"))
-        return
+        orphaned_delegation = False
+        if state.node_status == "delegated" and isinstance(state._lock, dict):
+            pid = state._lock.get("pid")
+            if pid:
+                try:
+                    os.kill(int(pid), 0)
+                except (OSError, ProcessLookupError, ValueError):
+                    orphaned_delegation = True
+        if orphaned_delegation:
+            print(_ui.warn("Delegação órfã detectada — limpando estado antes do retry"))
+            state.active_llm_log = None
+        else:
+            print(_ui.warn(f"Node atual não está bloqueado (status: {state.node_status})"))
+            return
 
     node_id = state.current_node
     print(_ui.info(f"Retentando node: {node_id}"))

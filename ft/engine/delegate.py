@@ -34,7 +34,30 @@ _MAX_ARGV_PROMPT_BYTES = 100_000
 DEFAULT_OPENCODE_MODEL = "pgx/zai-org_glm-4.7-flash"
 
 
-def _opencode_runtime_config(existing: str | None = None) -> str:
+def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -> list[str]:
+    """Expande paths de leitura negada para formas relativas e absolutas."""
+    patterns: list[str] = []
+    root = Path(project_root).resolve() if project_root else None
+    for raw in paths:
+        path = raw.strip()
+        if not path:
+            continue
+        variants = [path]
+        if not path.startswith("/"):
+            variants.append(f"*/{path}")
+            if root is not None:
+                variants.append(str(root / path))
+        for variant in variants:
+            if variant not in patterns:
+                patterns.append(variant)
+    return patterns
+
+
+def _opencode_runtime_config(
+    existing: str | None = None,
+    deny_read_paths: list[str] | None = None,
+    project_root: str | None = None,
+) -> str:
     """Config inline para isolar OpenCode no workdir e poupar contexto."""
     config: dict = {}
     if existing:
@@ -46,9 +69,28 @@ def _opencode_runtime_config(existing: str | None = None) -> str:
             config = {}
 
     permission = config.get("permission")
-    if not isinstance(permission, dict):
+    if isinstance(permission, str):
+        permission = {"*": permission}
+    elif not isinstance(permission, dict):
         permission = {}
     permission["external_directory"] = "deny"
+
+    if deny_read_paths:
+        read_permission = permission.get("read")
+        if isinstance(read_permission, str):
+            read_rules = {"*": read_permission}
+        elif isinstance(read_permission, dict):
+            read_rules = dict(read_permission)
+        else:
+            read_rules = {}
+        read_rules.setdefault("*", "allow")
+        read_rules.setdefault("*.env", "deny")
+        read_rules.setdefault("*.env.*", "deny")
+        read_rules.setdefault("*.env.example", "allow")
+        for pattern in _opencode_read_patterns(deny_read_paths, project_root=project_root):
+            read_rules[pattern] = "deny"
+        permission["read"] = read_rules
+
     config["permission"] = permission
 
     compaction = config.get("compaction")
@@ -61,15 +103,22 @@ def _opencode_runtime_config(existing: str | None = None) -> str:
     })
     config["compaction"] = compaction
 
-    return json.dumps(config, ensure_ascii=False, sort_keys=True)
+    return json.dumps(config, ensure_ascii=False)
 
 
-def _executor_env(llm_engine: str, base_env: dict[str, str] | None = None) -> dict[str, str]:
+def _executor_env(
+    llm_engine: str,
+    base_env: dict[str, str] | None = None,
+    opencode_deny_read_paths: list[str] | None = None,
+    project_root: str | None = None,
+) -> dict[str, str]:
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
     if llm_engine.lower().strip() == "opencode":
         env["OPENCODE_CONFIG_CONTENT"] = _opencode_runtime_config(
-            env.get("OPENCODE_CONFIG_CONTENT")
+            env.get("OPENCODE_CONFIG_CONTENT"),
+            deny_read_paths=opencode_deny_read_paths,
+            project_root=project_root,
         )
     return env
 
@@ -706,6 +755,7 @@ def delegate_to_llm(
     llm_model: str | None = None,
     log_path: str | None = None,
     stream_prefix: str | None = None,
+    opencode_deny_read_paths: list[str] | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -714,6 +764,13 @@ def delegate_to_llm(
     nao pode editar ft_state.yml, nao pode tomar decisoes de processo.
     """
     paths_str = ", ".join(allowed_paths) if allowed_paths else "src/, tests/, docs/"
+    deny_reads = list(dict.fromkeys(opencode_deny_read_paths or []))
+    deny_reads_rule = ""
+    if deny_reads:
+        deny_reads_rule = (
+            "\n- NAO use Read/Grep/Glob nestes arquivos ja resumidos no prompt: "
+            f"{', '.join(deny_reads)}. Esses reads serao bloqueados para poupar contexto."
+        )
 
     prompt = f"""Voce e um executor de construcao. Sua unica tarefa:
 
@@ -729,6 +786,7 @@ REGRAS:
 - Use o CONTEXTO EXISTENTE do prompt como fonte primaria. Evite reler arquivos
   markdown grandes que ja apareceram no prompt; se precisar de um detalhe,
   busque apenas o trecho minimo necessario dentro do diretorio de trabalho.
+{deny_reads_rule}
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)
 - Quando terminar, diga DONE e liste os arquivos criados/modificados
@@ -767,7 +825,11 @@ NODE_SUMMARY:
     # Chamar executor em modo nao-interativo, com streaming para arquivo.
     # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
     # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
-    _env = _executor_env(llm_engine)
+    _env = _executor_env(
+        llm_engine,
+        opencode_deny_read_paths=deny_reads,
+        project_root=project_root,
+    )
 
     proc = subprocess.Popen(
         cmd,
@@ -916,6 +978,7 @@ def delegate_with_feedback(
     max_turns: int = 50,
     log_path: str | None = None,
     stream_prefix: str | None = None,
+    opencode_deny_read_paths: list[str] | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -936,4 +999,5 @@ Nao modifique o que ja esta funcionando."""
         max_turns=max_turns,
         log_path=log_path,
         stream_prefix=stream_prefix,
+        opencode_deny_read_paths=opencode_deny_read_paths,
     )

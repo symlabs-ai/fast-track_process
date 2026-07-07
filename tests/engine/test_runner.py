@@ -251,6 +251,7 @@ nodes:
             assert "opencode compact line 29" in kwargs["task"]
             assert "opencode compact line 30" not in kwargs["task"]
             assert "NAO releia este arquivo inteiro" in kwargs["task"]
+            assert kwargs["opencode_deny_read_paths"] == ["docs/task_list.md"]
             (docs / "out.md").write_text("# Out\n")
             return DelegateResult(
                 success=True,

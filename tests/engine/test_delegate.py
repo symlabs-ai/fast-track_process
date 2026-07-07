@@ -88,6 +88,22 @@ class TestBuildExecutorCommand:
         }
         assert config["theme"] == "system"
 
+    def test_opencode_env_can_deny_large_doc_reads(self):
+        env = _executor_env(
+            "opencode",
+            {},
+            opencode_deny_read_paths=["docs/PRD.md"],
+            project_root="/tmp/project",
+        )
+
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        read_rules = config["permission"]["read"]
+        assert read_rules["*"] == "allow"
+        assert read_rules["*.env"] == "deny"
+        assert read_rules["docs/PRD.md"] == "deny"
+        assert read_rules["*/docs/PRD.md"] == "deny"
+        assert read_rules["/tmp/project/docs/PRD.md"] == "deny"
+
     def test_non_opencode_env_is_unchanged(self):
         env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})
         assert env["OPENCODE_CONFIG_CONTENT"] == "{}"
@@ -133,3 +149,23 @@ class TestDelegateWithFeedback:
         assert kwargs["max_turns"] == 12
         assert kwargs["log_path"] == "/tmp/proj/run.jsonl"
         assert kwargs["stream_prefix"] == "codex>"
+
+    def test_forwards_opencode_read_denies_to_delegate(self):
+        expected = DelegateResult(
+            success=True,
+            output="DONE",
+            files_created=[],
+            files_modified=[],
+        )
+
+        with patch("ft.engine.delegate.delegate_to_llm", return_value=expected) as delegate_mock:
+            delegate_with_feedback(
+                original_task="escreva o contrato",
+                feedback="faltou arquivo",
+                project_root="/tmp/proj",
+                llm_engine="opencode",
+                opencode_deny_read_paths=["docs/PRD.md"],
+            )
+
+        kwargs = delegate_mock.call_args.kwargs
+        assert kwargs["opencode_deny_read_paths"] == ["docs/PRD.md"]

@@ -1429,6 +1429,7 @@ class StepRunner:
                     return
 
         self._clear_no_pre_seed_outputs(node)
+        effective_engine = self._resolve_llm_engine(state, node=node)
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
 
@@ -1452,7 +1453,13 @@ class StepRunner:
                 scan_existing_docs(self.project_root),
             )
             if existing:
-                task_prompt = hyper_mode_prompt(existing, task_prompt)
+                is_opencode = effective_engine == "opencode"
+                task_prompt = hyper_mode_prompt(
+                    existing,
+                    task_prompt,
+                    preview_lines=30 if is_opencode else 60,
+                    allow_followup_reads=not is_opencode,
+                )
                 print(f"  Hyper-mode: {len(existing)} docs existentes carregados")
 
         # KB-mode: injetar lições de runs anteriores em nodes de build, refactor e retro
@@ -1475,7 +1482,6 @@ class StepRunner:
                 self.state_mgr.block(f"env_setup falhou no node {node.id}")
                 return
 
-        effective_engine = self._resolve_llm_engine(state, node=node)
         print(ui.info(f"Delegando ao LLM ({effective_engine})..."))
         state.node_status = "delegated"
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1

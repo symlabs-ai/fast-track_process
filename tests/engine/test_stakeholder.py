@@ -64,6 +64,19 @@ class TestHyperModePrompt:
         result = hyper_mode_prompt({}, "Tarefa original")
         assert result == "Tarefa original"
 
+    def test_can_disable_followup_full_doc_reads(self):
+        docs = {"task_list.md": "\n".join(f"linha {i}" for i in range(5))}
+        result = hyper_mode_prompt(
+            docs,
+            "Tarefa original",
+            preview_lines=2,
+            allow_followup_reads=False,
+        )
+        assert "linha 0" in result
+        assert "linha 1" in result
+        assert "linha 2" not in result
+        assert "NAO releia este arquivo inteiro" in result
+
 
 class TestBuildRejectionPrompt:
     def test_includes_reason(self):

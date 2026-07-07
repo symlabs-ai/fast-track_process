@@ -34,6 +34,46 @@ _MAX_ARGV_PROMPT_BYTES = 100_000
 DEFAULT_OPENCODE_MODEL = "pgx/zai-org_glm-4.7-flash"
 
 
+def _opencode_runtime_config(existing: str | None = None) -> str:
+    """Config inline para isolar OpenCode no workdir e poupar contexto."""
+    config: dict = {}
+    if existing:
+        try:
+            parsed = json.loads(existing)
+            if isinstance(parsed, dict):
+                config = parsed
+        except json.JSONDecodeError:
+            config = {}
+
+    permission = config.get("permission")
+    if not isinstance(permission, dict):
+        permission = {}
+    permission["external_directory"] = "deny"
+    config["permission"] = permission
+
+    compaction = config.get("compaction")
+    if not isinstance(compaction, dict):
+        compaction = {}
+    compaction.update({
+        "auto": True,
+        "prune": True,
+        "reserved": 10000,
+    })
+    config["compaction"] = compaction
+
+    return json.dumps(config, ensure_ascii=False, sort_keys=True)
+
+
+def _executor_env(llm_engine: str, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Monta env do executor, aplicando hardening específico por provider."""
+    env = dict(os.environ if base_env is None else base_env)
+    if llm_engine.lower().strip() == "opencode":
+        env["OPENCODE_CONFIG_CONTENT"] = _opencode_runtime_config(
+            env.get("OPENCODE_CONFIG_CONTENT")
+        )
+    return env
+
+
 def _feed_stdin(proc: subprocess.Popen, prompt: str) -> None:
     """Escreve o prompt no stdin do executor e fecha o pipe (EOF sinaliza fim)."""
     try:
@@ -686,6 +726,9 @@ REGRAS:
   documento citar um caminho absoluto fora do diretorio de trabalho, IGNORE o caminho
   e use o equivalente relativo local.
 - Escreva APENAS nos paths permitidos: {paths_str}
+- Use o CONTEXTO EXISTENTE do prompt como fonte primaria. Evite reler arquivos
+  markdown grandes que ja apareceram no prompt; se precisar de um detalhe,
+  busque apenas o trecho minimo necessario dentro do diretorio de trabalho.
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)
 - Quando terminar, diga DONE e liste os arquivos criados/modificados
@@ -724,8 +767,7 @@ NODE_SUMMARY:
     # Chamar executor em modo nao-interativo, com streaming para arquivo.
     # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
     # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
-    import os as _os
-    _env = dict(_os.environ)
+    _env = _executor_env(llm_engine)
 
     proc = subprocess.Popen(
         cmd,
@@ -801,6 +843,7 @@ NODE_SUMMARY:
                 stdin=subprocess.PIPE if stdin_prompt is not None else None,
                 text=True,
                 bufsize=1,
+                env=_env,
             )
             holder2: dict[str, str] = {"output": ""}
             t2 = threading.Thread(

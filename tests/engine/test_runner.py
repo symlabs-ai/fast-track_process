@@ -210,6 +210,9 @@ class TestDelegationDisplay:
         state_dir = project_root / "state"
         docs.mkdir(parents=True)
         state_dir.mkdir()
+        (docs / "task_list.md").write_text(
+            "\n".join(f"opencode compact line {i}" for i in range(35))
+        )
 
         process_path = tmp_path / "process.yml"
         process_path.write_text(
@@ -245,6 +248,9 @@ nodes:
 
         def delegate_side_effect(**kwargs):
             assert kwargs["llm_engine"] == "opencode"
+            assert "opencode compact line 29" in kwargs["task"]
+            assert "opencode compact line 30" not in kwargs["task"]
+            assert "NAO releia este arquivo inteiro" in kwargs["task"]
             (docs / "out.md").write_text("# Out\n")
             return DelegateResult(
                 success=True,

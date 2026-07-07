@@ -1,10 +1,13 @@
 """Unit tests for ft.engine.delegate command selection."""
 
+import json
+
 import pytest
 from unittest.mock import patch
 
 from ft.engine.delegate import (
     _build_executor_command,
+    _executor_env,
     _extract_codex_output,
     DEFAULT_OPENCODE_MODEL,
     DelegateResult,
@@ -62,6 +65,32 @@ class TestBuildExecutorCommand:
     def test_invalid_engine_raises(self):
         with pytest.raises(ValueError, match="Executor LLM desconhecido"):
             _build_executor_command("unknown_engine_xyz", "x", "/tmp/proj", 3)
+
+    def test_opencode_env_enforces_runtime_config(self):
+        env = _executor_env(
+            "opencode",
+            {
+                "OPENCODE_CONFIG_CONTENT": json.dumps({
+                    "permission": {"bash": "ask"},
+                    "compaction": {"reserved": 2000},
+                    "theme": "system",
+                })
+            },
+        )
+
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        assert config["permission"]["bash"] == "ask"
+        assert config["permission"]["external_directory"] == "deny"
+        assert config["compaction"] == {
+            "auto": True,
+            "prune": True,
+            "reserved": 10000,
+        }
+        assert config["theme"] == "system"
+
+    def test_non_opencode_env_is_unchanged(self):
+        env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})
+        assert env["OPENCODE_CONFIG_CONTENT"] == "{}"
 
     def test_extracts_final_codex_message_from_json_stream(self):
         raw = "\n".join([

@@ -52,7 +52,12 @@ def should_skip_node(node_id: str, existing_docs: dict[str, str]) -> bool:
     return False
 
 
-def hyper_mode_prompt(existing_docs: dict[str, str], original_prompt: str) -> str:
+def hyper_mode_prompt(
+    existing_docs: dict[str, str],
+    original_prompt: str,
+    preview_lines: int = 60,
+    allow_followup_reads: bool = True,
+) -> str:
     """
     Gera prompt enriquecido com contexto dos docs existentes.
     Usado quando o projeto ja tem docs parciais.
@@ -64,18 +69,30 @@ def hyper_mode_prompt(existing_docs: dict[str, str], original_prompt: str) -> st
     # os demais entram como preview — o worker le o resto do disco se precisar.
     FULL_DOCS = ("plano_de_voo.md", "hipotese.md", "handoff.md")
     FULL_MAX_LINES = 600
-    PREVIEW_LINES = 60
+    read_hint = (
+        "leia apenas trechos relevantes se precisar de detalhe especifico"
+        if allow_followup_reads
+        else "NAO releia este arquivo inteiro; use este preview como contexto"
+    )
 
     context_parts = ["CONTEXTO EXISTENTE (documentos ja produzidos):"]
     for fname, content in existing_docs.items():
         lines = content.splitlines()
         if fname in FULL_DOCS:
             body = "\n".join(lines[:FULL_MAX_LINES])
-            suffix = "" if len(lines) <= FULL_MAX_LINES else "\n... (truncado; leia o arquivo para o restante)"
+            suffix = (
+                ""
+                if len(lines) <= FULL_MAX_LINES
+                else f"\n... (truncado; {read_hint})"
+            )
             context_parts.append(f"\n### {fname} (INTEGRAL)\n{body}{suffix}")
         else:
-            preview = "\n".join(lines[:PREVIEW_LINES])
-            suffix = "" if len(lines) <= PREVIEW_LINES else "\n... (preview; leia o arquivo para o restante)"
+            preview = "\n".join(lines[:preview_lines])
+            suffix = (
+                ""
+                if len(lines) <= preview_lines
+                else f"\n... (preview; {read_hint})"
+            )
             context_parts.append(f"\n### {fname}\n{preview}{suffix}")
 
     context = "\n".join(context_parts)

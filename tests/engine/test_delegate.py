@@ -9,7 +9,9 @@ from ft.engine.delegate import (
     _build_executor_command,
     _executor_env,
     _extract_codex_output,
+    DEFAULT_OPENCODE_CONTEXT_LIMIT,
     DEFAULT_OPENCODE_MODEL,
+    DEFAULT_OPENCODE_OUTPUT_LIMIT,
     DelegateResult,
     delegate_with_feedback,
 )
@@ -132,6 +134,44 @@ class TestBuildExecutorCommand:
         assert config["permission"]["list"] == "deny"
         assert config["agent"]["build"]["steps"] == 8
         assert config["agent"]["build"]["maxSteps"] == 8
+
+    def test_opencode_env_announces_default_model_context_limit(self):
+        env = _executor_env("opencode", {}, opencode_model=DEFAULT_OPENCODE_MODEL)
+
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        limit = config["provider"]["pgx"]["models"]["zai-org_glm-4.7-flash"]["limit"]
+        assert limit == {
+            "context": DEFAULT_OPENCODE_CONTEXT_LIMIT,
+            "output": DEFAULT_OPENCODE_OUTPUT_LIMIT,
+        }
+
+    def test_opencode_env_can_override_context_limit_for_custom_model(self, monkeypatch):
+        monkeypatch.setenv("FT_OPENCODE_CONTEXT_LIMIT", "123456")
+        monkeypatch.setenv("FT_OPENCODE_OUTPUT_LIMIT", "8192")
+
+        env = _executor_env(
+            "opencode",
+            {
+                "OPENCODE_CONFIG_CONTENT": json.dumps({
+                    "provider": {
+                        "pgx": {
+                            "options": {"baseURL": "http://example.test/v1"},
+                            "models": {
+                                "openai/gpt-oss-20b": {"name": "GPT-OSS 20B"}
+                            },
+                        }
+                    }
+                })
+            },
+            opencode_model="pgx/openai/gpt-oss-20b",
+        )
+
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        provider = config["provider"]["pgx"]
+        model = provider["models"]["openai/gpt-oss-20b"]
+        assert provider["options"]["baseURL"] == "http://example.test/v1"
+        assert model["name"] == "GPT-OSS 20B"
+        assert model["limit"] == {"context": 123456, "output": 8192}
 
     def test_non_opencode_env_is_unchanged(self):
         env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})

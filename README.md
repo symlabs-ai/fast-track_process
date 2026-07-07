@@ -60,6 +60,9 @@ ft close                       # encerrar ciclo e escolher merge
 Use `--codex`, `--claude [modelo]`, `--gemini [modelo]` ou `--opencode [modelo]`
 para escolher o executor LLM. O default de `--opencode` é
 `pgx/zai-org_glm-4.7-flash`. Também é possível definir `FT_LLM_ENGINE=opencode`.
+Para esse modelo default, o `ft` anuncia ao OpenCode uma janela de contexto de
+200k tokens e saída de 32k tokens; sobrescreva com `FT_OPENCODE_CONTEXT_LIMIT`
+e `FT_OPENCODE_OUTPUT_LIMIT` se o servidor expuser limites diferentes.
 
 ## Templates
 

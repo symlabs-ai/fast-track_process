@@ -164,6 +164,9 @@ Depois do close:
 | `FT_ALLOW_ENGINE_REPO` | Libera rodar no repo do template — só para dev do engine |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no `ft run` |
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`) |
+| `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Janela de contexto anunciada ao OpenCode; default 200000 para `pgx/zai-org_glm-4.7-flash` |
+| `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Limite de saída anunciado ao OpenCode; default 32768 para `pgx/zai-org_glm-4.7-flash` |
+| `FT_OPENCODE_DEBUG` | Ativa logs detalhados do OpenCode (`--print-logs --log-level DEBUG --thinking`) |
 | `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `process/scripts/register_gateway.sh` |
 
 ## Referências

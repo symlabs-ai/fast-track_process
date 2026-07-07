@@ -32,6 +32,23 @@ _RATE_LIMIT_WAIT = [60, 120, 240, 480, 900, 1800, 1800, 1800]
 _MAX_ARGV_PROMPT_BYTES = 100_000
 
 DEFAULT_OPENCODE_MODEL = "pgx/zai-org_glm-4.7-flash"
+DEFAULT_OPENCODE_CONTEXT_LIMIT = 200_000
+DEFAULT_OPENCODE_OUTPUT_LIMIT = 32_768
+
+
+def _env_positive_int(*names: str) -> int | None:
+    """Lê o primeiro inteiro positivo definido em env entre os nomes dados."""
+    for name in names:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return None
 
 
 def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -> list[str]:
@@ -59,6 +76,7 @@ def _opencode_runtime_config(
     project_root: str | None = None,
     restrict_tools: bool = False,
     steps: int | None = None,
+    model: str | None = None,
 ) -> str:
     """Config inline para isolar OpenCode no workdir e poupar contexto."""
     config: dict = {}
@@ -113,6 +131,39 @@ def _opencode_runtime_config(
         agent["build"] = build_agent
         config["agent"] = agent
 
+    effective_model = model or DEFAULT_OPENCODE_MODEL
+    context_limit = _env_positive_int("FT_OPENCODE_CONTEXT_LIMIT", "FT_OPENCODE_CONTEXT_WINDOW")
+    output_limit = _env_positive_int("FT_OPENCODE_OUTPUT_LIMIT", "FT_OPENCODE_MAX_OUTPUT")
+    if effective_model == DEFAULT_OPENCODE_MODEL:
+        context_limit = context_limit or DEFAULT_OPENCODE_CONTEXT_LIMIT
+        output_limit = output_limit or DEFAULT_OPENCODE_OUTPUT_LIMIT
+    if context_limit is not None:
+        output_limit = output_limit or DEFAULT_OPENCODE_OUTPUT_LIMIT
+        provider_id, _, model_id = effective_model.partition("/")
+        if provider_id and model_id:
+            providers = config.get("provider")
+            if not isinstance(providers, dict):
+                providers = {}
+            provider = providers.get(provider_id)
+            if not isinstance(provider, dict):
+                provider = {}
+            models = provider.get("models")
+            if not isinstance(models, dict):
+                models = {}
+            model_config = models.get(model_id)
+            if not isinstance(model_config, dict):
+                model_config = {}
+            limit = model_config.get("limit")
+            if not isinstance(limit, dict):
+                limit = {}
+            limit["context"] = context_limit
+            limit["output"] = output_limit
+            model_config["limit"] = limit
+            models[model_id] = model_config
+            provider["models"] = models
+            providers[provider_id] = provider
+            config["provider"] = providers
+
     compaction = config.get("compaction")
     if not isinstance(compaction, dict):
         compaction = {}
@@ -133,6 +184,7 @@ def _executor_env(
     project_root: str | None = None,
     opencode_restrict_tools: bool = False,
     opencode_steps: int | None = None,
+    opencode_model: str | None = None,
 ) -> dict[str, str]:
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
@@ -143,6 +195,7 @@ def _executor_env(
             project_root=project_root,
             restrict_tools=opencode_restrict_tools,
             steps=opencode_steps,
+            model=opencode_model,
         )
     return env
 
@@ -814,6 +867,10 @@ def delegate_to_llm(
         restricted_tools_rule = (
             "\n- NAO use shell/bash/list/grep/glob. Escreva o arquivo de saida "
             "diretamente usando apenas o contexto presente no prompt."
+            "\n- Para OpenCode em modo restrito, sua PRIMEIRA tool call deve ser "
+            "Write/Edit/Patch no arquivo de saida esperado. NAO use Read antes "
+            "da primeira escrita; se faltar detalhe, produza um best-effort "
+            "conciso com o contexto injetado."
         )
 
     prompt = f"""Voce e um executor de construcao. Sua unica tarefa:
@@ -879,6 +936,7 @@ NODE_SUMMARY:
         project_root=project_root,
         opencode_restrict_tools=opencode_restrict_tools,
         opencode_steps=opencode_steps,
+        opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
     )
 
     proc = subprocess.Popen(

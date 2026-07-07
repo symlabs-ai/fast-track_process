@@ -203,6 +203,67 @@ class TestApproveReject:
         assert "Rejeitado" in state.blocked_reason
 
 
+class TestDelegationDisplay:
+    def test_delegation_message_uses_effective_llm_engine(self, tmp_path, capsys):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.plan.01.doc
+    type: document
+    title: Doc
+    executor: claude
+    outputs:
+      - docs/out.md
+    validators:
+      - file_exists: docs/out.md
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.plan.01.doc")
+        assert node.executor == "llm_claude"
+
+        def delegate_side_effect(**kwargs):
+            assert kwargs["llm_engine"] == "opencode"
+            (docs / "out.md").write_text("# Out\n")
+            return DelegateResult(
+                success=True,
+                output="DONE",
+                files_created=[],
+                files_modified=[],
+            )
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            side_effect=delegate_side_effect,
+        ):
+            runner._run_llm_step(node)
+
+        out = capsys.readouterr().out
+        assert "Delegando ao LLM (opencode)" in out
+        assert "Delegando ao LLM (llm_claude)" not in out
+
+
 class TestRewriteGuard:
     def test_no_pre_seed_output_is_removed_before_document_delegation(self, tmp_path):
         project_root = tmp_path / "project"

@@ -1475,13 +1475,13 @@ class StepRunner:
                 self.state_mgr.block(f"env_setup falhou no node {node.id}")
                 return
 
-        print(ui.info(f"Delegando ao LLM ({node.executor})..."))
+        effective_engine = self._resolve_llm_engine(state, node=node)
+        print(ui.info(f"Delegando ao LLM ({effective_engine})..."))
         state.node_status = "delegated"
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
         log_path = self._start_llm_log(state, node.id, "run")
         self.state_mgr.save()
 
-        effective_engine = self._resolve_llm_engine(state, node=node)
         delegate_kwargs: dict = dict(
             task=task_prompt,
             project_root=self._work_dir,

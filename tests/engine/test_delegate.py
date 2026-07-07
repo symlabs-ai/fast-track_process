@@ -1,6 +1,7 @@
 """Unit tests for ft.engine.delegate command selection."""
 
 import json
+import subprocess
 
 import pytest
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from ft.engine.delegate import (
     _executor_env,
     _extract_codex_output,
     _prepare_opencode_sandbox_mounts,
+    _wait_for_process,
     _wrap_opencode_sandbox_command,
     DEFAULT_OPENCODE_CONTEXT_LIMIT,
     DEFAULT_OPENCODE_MODEL,
@@ -239,6 +241,25 @@ class TestBuildExecutorCommand:
         assert cmd[-3:] == ["opencode", "run", "prompt"]
         assert [mount.path for mount in mounts] == [tmp_path / "docs/out.md"]
 
+    def test_wait_for_process_returns_success_when_outputs_exist(self, tmp_path):
+        output = tmp_path / "docs/out.md"
+        output.parent.mkdir()
+        output.write_text("# pronto\n")
+        proc = subprocess.Popen(["sleep", "10"])
+        try:
+            returncode, early = _wait_for_process(
+                proc,
+                timeout=10,
+                early_success_paths=[output],
+                early_success_grace=1,
+            )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+        assert returncode == 0
+        assert early is True
+
     def test_extracts_final_codex_message_from_json_stream(self):
         raw = "\n".join([
             '{"type":"thread.started","thread_id":"t1"}',
@@ -299,6 +320,7 @@ class TestDelegateWithFeedback:
                 opencode_restrict_tools=True,
                 opencode_steps=8,
                 opencode_deny_edit_tools=True,
+                opencode_early_success_paths=["docs/out.md"],
             )
 
         kwargs = delegate_mock.call_args.kwargs
@@ -306,3 +328,4 @@ class TestDelegateWithFeedback:
         assert kwargs["opencode_restrict_tools"] is True
         assert kwargs["opencode_steps"] == 8
         assert kwargs["opencode_deny_edit_tools"] is True
+        assert kwargs["opencode_early_success_paths"] == ["docs/out.md"]

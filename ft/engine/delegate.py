@@ -152,6 +152,68 @@ def _cleanup_empty_placeholders(mounts: list[_SandboxMount]) -> None:
             pass
 
 
+def _resolve_existing_file_paths(project_root: str, paths: list[str] | None) -> list[Path]:
+    root = Path(project_root).resolve()
+    resolved: list[Path] = []
+    for raw in paths or []:
+        value = str(raw).strip()
+        if not value or value.endswith("/"):
+            continue
+        path = Path(value)
+        target = path.resolve() if path.is_absolute() else (root / path).resolve()
+        if _path_relative_to(target, root):
+            resolved.append(target)
+    return list(dict.fromkeys(resolved))
+
+
+def _paths_have_content(paths: list[Path]) -> bool:
+    if not paths:
+        return False
+    for path in paths:
+        try:
+            if not path.is_file() or path.stat().st_size <= 0:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _wait_for_process(
+    proc: subprocess.Popen,
+    timeout: int,
+    early_success_paths: list[Path] | None = None,
+    early_success_grace: int = 20,
+) -> tuple[int, bool]:
+    """Espera o processo, podendo encerrar cedo quando outputs já existem."""
+    if not hasattr(proc, "poll"):
+        return proc.wait(timeout=timeout), False
+
+    started = time.time()
+    satisfied_since: float | None = None
+    while True:
+        returncode = proc.poll()
+        if returncode is not None:
+            return returncode, False
+        now = time.time()
+        if now - started > timeout:
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+        if early_success_paths and _paths_have_content(early_success_paths):
+            if satisfied_since is None:
+                satisfied_since = now
+            elif now - satisfied_since >= early_success_grace:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                    return 0, True
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    return 0, True
+        else:
+            satisfied_since = None
+        time.sleep(1)
+
+
 def _wrap_opencode_sandbox_command(
     cmd: list[str],
     project_root: str,
@@ -966,6 +1028,7 @@ def delegate_to_llm(
     opencode_restrict_tools: bool = False,
     opencode_steps: int | None = None,
     opencode_deny_edit_tools: bool = False,
+    opencode_early_success_paths: list[str] | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -1085,6 +1148,8 @@ NODE_SUMMARY:
             allowed_paths=allowed_paths,
             runtime_dir=sandbox_tmp.name,
         )
+    early_success_paths = _resolve_existing_file_paths(project_root, opencode_early_success_paths)
+    early_success_grace = _env_positive_int("FT_OPENCODE_EARLY_SUCCESS_GRACE") or 20
 
     if log_path and llm_engine != "codex":
         _write_log_preamble(log_path, llm_engine, cmd, prompt)
@@ -1126,7 +1191,12 @@ NODE_SUMMARY:
         _feed_stdin(proc, stdin_prompt)
 
     try:
-        returncode = proc.wait(timeout=1800)  # 30 min max (projetos complexos)
+        returncode, early_success = _wait_for_process(
+            proc,
+            timeout=1800,
+            early_success_paths=early_success_paths,
+            early_success_grace=early_success_grace,
+        )
     except subprocess.TimeoutExpired:
         proc.kill()
         reader.join(timeout=5)
@@ -1146,6 +1216,15 @@ NODE_SUMMARY:
         )
 
     reader.join(timeout=5)
+    early_success_msg = ""
+    if early_success:
+        early_success_msg = (
+            "\n[EARLY_SUCCESS] Outputs esperados existem; encerrando OpenCode "
+            "para validação determinística.\n"
+        )
+        if log_path:
+            with Path(log_path).open("a", encoding="utf-8") as f:
+                f.write(early_success_msg)
 
     def _extract_output(raw: str, engine: str) -> str:
         if engine == "codex":
@@ -1154,7 +1233,7 @@ NODE_SUMMARY:
             return _extract_claude_json_output(raw)
         return raw
 
-    raw_output = output_holder["output"]
+    raw_output = output_holder["output"] + early_success_msg
     output = _extract_output(raw_output, llm_engine)
 
     # Detectar rate limit e fazer retry com backoff exponencial
@@ -1191,13 +1270,27 @@ NODE_SUMMARY:
             if stdin_prompt is not None:
                 _feed_stdin(proc2, stdin_prompt)
             try:
-                rc2 = proc2.wait(timeout=1800)
+                rc2, early_success2 = _wait_for_process(
+                    proc2,
+                    timeout=1800,
+                    early_success_paths=early_success_paths,
+                    early_success_grace=early_success_grace,
+                )
             except subprocess.TimeoutExpired:
                 proc2.kill()
                 t2.join(timeout=5)
                 break
             t2.join(timeout=5)
-            raw2 = holder2["output"]
+            early_success_msg2 = ""
+            if early_success2:
+                early_success_msg2 = (
+                    "\n[EARLY_SUCCESS] Outputs esperados existem; encerrando OpenCode "
+                    "para validação determinística.\n"
+                )
+                if log_path:
+                    with Path(log_path).open("a", encoding="utf-8") as f:
+                        f.write(early_success_msg2)
+            raw2 = holder2["output"] + early_success_msg2
             out2 = _extract_output(raw2, llm_engine)
             if not _RATE_LIMIT_PATTERNS.search(out2):
                 output = out2
@@ -1252,6 +1345,7 @@ def delegate_with_feedback(
     opencode_restrict_tools: bool = False,
     opencode_steps: int | None = None,
     opencode_deny_edit_tools: bool = False,
+    opencode_early_success_paths: list[str] | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -1276,4 +1370,5 @@ Nao modifique o que ja esta funcionando."""
         opencode_restrict_tools=opencode_restrict_tools,
         opencode_steps=opencode_steps,
         opencode_deny_edit_tools=opencode_deny_edit_tools,
+        opencode_early_success_paths=opencode_early_success_paths,
     )

@@ -314,8 +314,12 @@ nodes:
 
         build_node = runner.graph.get_node("ft.frontend.01.scaffold")
         doc_node = runner.graph.get_node("ft.plan.01.doc")
-        assert runner._opencode_options_for_node(build_node, "opencode").deny_edit_tools is True
-        assert runner._opencode_options_for_node(doc_node, "opencode").deny_edit_tools is False
+        build_options = runner._opencode_options_for_node(build_node, "opencode")
+        doc_options = runner._opencode_options_for_node(doc_node, "opencode")
+        assert build_options.deny_edit_tools is True
+        assert build_options.early_success_paths == []
+        assert doc_options.deny_edit_tools is False
+        assert doc_options.early_success_paths == ["docs/out.md"]
         assert runner._resolve_allowed_paths(build_node) == ["project/frontend", ".build_ok"]
         assert runner._resolve_allowed_paths(doc_node) == ["docs/out.md"]
 

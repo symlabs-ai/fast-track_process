@@ -90,6 +90,18 @@ class TestRateLimitedFlag:
         )
         assert _RATE_LIMIT_PATTERNS.search(output)
 
+    def test_pattern_matches_429_only_with_error_context(self):
+        assert _RATE_LIMIT_PATTERNS.search("API Error: 429 rate_limit — try again later")
+        assert _RATE_LIMIT_PATTERNS.search("HTTP 429 Too Many Requests")
+
+    def test_pattern_ignores_opencode_timestamps_and_step_limits(self):
+        output = (
+            "timestamp=2026-07-07T22:19:42.005Z level=INFO "
+            "messageID=msg_f3eaa6429001nzRj15FjKgS666\n"
+            "Bloqueio: Limite de passos excedido — limpar arquivos temporários"
+        )
+        assert _RATE_LIMIT_PATTERNS.search(output) is None
+
     def test_delegate_sets_flag_after_backoff_exhausted(self, tmp_path, monkeypatch):
         """Sobe um delegate com Popen falso sempre retornando 429 e cronograma
         zerado — o resultado final deve vir com rate_limited=True."""

@@ -16,8 +16,11 @@ from pathlib import Path
 
 # Padrões que indicam rate limit / quota esgotada no output do LLM
 _RATE_LIMIT_PATTERNS = re.compile(
-    r"rate.limit|429|quota.exceeded|resource.?exhausted|"
-    r"too.many.requests|overloaded|try.again.in|"
+    r"rate[ _.-]?limit|"
+    r"(?:api error|http|status|status_code|code|error)[^\n]{0,80}\b429\b|"
+    r"\b429\b[^\n]{0,80}(?:rate[ _.-]?limit|too[ _.-]?many[ _.-]?requests)|"
+    r"quota[ _.-]?exceeded|resource[ _.-]?exhausted|"
+    r"too[ _.-]?many[ _.-]?requests|overloaded|try[ _.-]?again[ _.-]?in|"
     r"RESOURCE_EXHAUSTED|rateLimitExceeded",
     re.IGNORECASE,
 )

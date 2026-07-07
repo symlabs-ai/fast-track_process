@@ -323,7 +323,7 @@ nodes:
         assert doc_options.restrict_tools is False
         assert doc_options.early_success_paths == ["docs/out.md"]
         assert doc_options.capture_output_path == "docs/out.md"
-        assert runner._resolve_allowed_paths(build_node) == ["project/frontend", ".build_ok"]
+        assert runner._resolve_allowed_paths(build_node) == ["project", ".build_ok"]
         assert runner._resolve_allowed_paths(doc_node) == ["docs/out.md"]
 
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):

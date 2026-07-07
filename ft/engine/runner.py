@@ -912,8 +912,15 @@ class StepRunner:
             return list(dict.fromkeys(node.write_scope))
 
         allowed = []
+        code_node_writes_project = node.type in {"build", "test_red", "test_green", "refactor"} and any(
+            str(output).startswith("project/") for output in node.outputs
+        )
+        if code_node_writes_project:
+            allowed.append("project")
         for output in node.outputs:
             output_str = str(output)
+            if code_node_writes_project and output_str.startswith("project/"):
+                continue
             if output_str.endswith("/"):
                 allowed_path = output_str.rstrip("/") or "."
             else:

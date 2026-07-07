@@ -2003,7 +2003,7 @@ def cmd_cancel(args):
         return
 
     # Matar PID se ainda estiver rodando
-    lock = data.get("_lock", {})
+    lock = data.get("_lock") or {}
     pid = lock.get("pid")
     if pid and _is_pid_alive(pid):
         try:
@@ -2021,6 +2021,11 @@ def cmd_cancel(args):
     # Gerar relatório de cancelamento (determinístico)
     run_dir = state_path.parent.parent  # runs/<N>/state/ → runs/<N>/
     cancel_report = run_dir / "CANCELLED.md"
+    cancel_report_rel = Path("CANCELLED.md")
+    try:
+        cancel_report_display = cancel_report.relative_to(root)
+    except ValueError:
+        cancel_report_display = cancel_report
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     gate_log = data.get("gate_log", {})
     blocked = data.get("blocked_reason", "")
@@ -2061,7 +2066,7 @@ def cmd_cancel(args):
         f"## Aprendizados para o próximo ciclo\n"
         f"- O que o ciclo parcial ensinou\n"
         f"- O que deveria mudar no próximo run\n\n"
-        f"Escreva o relatório completo em: {cancel_report.relative_to(root)}\n"
+        f"Escreva o relatório completo em: {cancel_report_rel}\n"
         f"Comece com o conteúdo base que já preparei, e adicione as seções de análise.\n"
         f"Ao final diga DONE."
     )
@@ -2071,8 +2076,8 @@ def cmd_cancel(args):
 
     result = delegate_to_llm(
         task=analysis_prompt,
-        project_root=str(root),
-        allowed_paths=[str(cancel_report.relative_to(root))],
+        project_root=str(run_dir),
+        allowed_paths=[str(cancel_report_rel)],
         max_turns=10,
         llm_engine=llm_engine,
     )
@@ -2082,7 +2087,7 @@ def cmd_cancel(args):
     else:
         print(_ui.warn("LLM não disponível — relatório base salvo sem análise"))
 
-    print(_ui.dim(f"Relatório: {cancel_report.relative_to(root)}"))
+    print(_ui.dim(f"Relatório: {cancel_report_display}"))
     print(_ui.info("Para iniciar um novo run: ft run ."))
 
 

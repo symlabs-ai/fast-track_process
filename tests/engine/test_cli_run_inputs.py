@@ -352,6 +352,59 @@ class TestAbort:
         assert not cycle.exists()
 
 
+class TestCancel:
+    def test_cancel_external_worktree_writes_report_in_cycle_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "service_mate_15"
+        (project / "process").mkdir(parents=True)
+        monkeypatch.chdir(project)
+
+        cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-02-opencode"
+        state = cycle / "state" / "engine_state.yml"
+        state.parent.mkdir(parents=True)
+        state.write_text(
+            "process_id: fast_track_v3\n"
+            "current_node: ft.plan.01.task_list\n"
+            "node_status: ready\n"
+            "completed_nodes:\n"
+            "  - ft.start.route\n"
+            "gate_log:\n"
+            "  ft.start.route: PASS\n"
+            "artifacts: {}\n"
+            "blocked_reason: null\n"
+            "_lock: null\n"
+            "metrics:\n"
+            "  steps_total: 44\n"
+        )
+
+        args = Namespace(
+            reason="descartar ciclo interrompido",
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=True,
+        )
+
+        with patch("ft.engine.delegate.delegate_to_llm") as delegate_mock:
+            delegate_mock.return_value = DelegateResult(
+                success=False,
+                output="sem llm",
+                files_created=[],
+                files_modified=[],
+            )
+            cli_main.cmd_cancel(args)
+
+        report = cycle / "CANCELLED.md"
+        assert report.exists()
+        data = state.read_text()
+        assert "node_status: cancelled" in data
+        assert "CANCELADO: descartar ciclo interrompido" in data
+        kwargs = delegate_mock.call_args.kwargs
+        assert kwargs["project_root"] == str(cycle)
+        assert kwargs["allowed_paths"] == ["CANCELLED.md"]
+        assert kwargs["llm_engine"] == "opencode"
+
+
 class TestRetry:
     def test_retry_recovers_orphaned_delegated_state(self):
         state = EngineState(

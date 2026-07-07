@@ -1080,7 +1080,16 @@ def delegate_to_llm(
             "nao crie `frontend/`, `backend/`, `src/` ou outros diretorios de produto na raiz."
         )
     else:
+        placeholder_rule = ""
+        if llm_engine.lower().strip() == "opencode":
+            placeholder_rule = (
+                "- Se um arquivo de saida ja existir vazio, trate-o como placeholder "
+                "do sandbox. Nao leia esse arquivo antes de escrever; sobrescreva-o "
+                "com Write/Edit/Patch.\n"
+            )
         write_tool_rule = (
+            placeholder_rule
+            +
             "- OBRIGATORIO: antes de dizer DONE, use uma ferramenta de escrita\n"
             "  (Write/Edit/Patch) para criar ou modificar cada arquivo de saida esperado.\n"
             "  Nao declare que um arquivo foi criado sem antes executar a escrita real."

@@ -2286,7 +2286,7 @@ def _check_active_run(project_root: Path) -> str | None:
     """Verifica se há um ciclo ativo (em andamento, pausado ou bloqueado). Retorna descrição ou None."""
     import yaml as _yaml
 
-    _TERMINAL_STATUSES = {"done", "completed", "failed", "aborted"}
+    _TERMINAL_STATUSES = {"done", "completed", "failed", "aborted", "cancelled", "canceled"}
 
     def _is_active_state(data: dict) -> bool:
         """Retorna True se o state indica ciclo em andamento (não finalizado)."""

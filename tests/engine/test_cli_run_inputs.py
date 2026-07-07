@@ -311,6 +311,17 @@ class TestActiveRunDetection:
         assert cli_main._cleanup_pristine_runs(project) == 0
         assert cycle.exists()
 
+    def test_cancelled_state_is_not_active(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        cycle = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01"
+        self._write_state(cycle / "state" / "engine_state.yml", completed=True)
+        state = cycle / "state" / "engine_state.yml"
+        state.write_text(state.read_text().replace("node_status: ready", "node_status: cancelled"))
+
+        assert cli_main._check_active_run(project) is None
+
 
 class TestApiHealthCheck:
     def test_opencode_skips_anthropic_health_check(self, tmp_path, monkeypatch):

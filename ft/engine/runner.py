@@ -896,9 +896,13 @@ class StepRunner:
 
         allowed = []
         for output in node.outputs:
-            parent = str(Path(output).parent)
-            if parent not in allowed:
-                allowed.append(parent)
+            output_str = str(output)
+            if output_str.endswith("/"):
+                allowed_path = output_str.rstrip("/") or "."
+            else:
+                allowed_path = output_str
+            if allowed_path not in allowed:
+                allowed.append(allowed_path)
         if allowed:
             return allowed
 

@@ -8,7 +8,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -37,6 +39,13 @@ _MAX_ARGV_PROMPT_BYTES = 100_000
 DEFAULT_OPENCODE_MODEL = "pgx/zai-org_glm-4.7-flash"
 DEFAULT_OPENCODE_CONTEXT_LIMIT = 200_000
 DEFAULT_OPENCODE_OUTPUT_LIMIT = 32_768
+
+
+@dataclass
+class _SandboxMount:
+    path: Path
+    is_file: bool = False
+    placeholder: bool = False
 
 
 def _env_positive_int(*names: str) -> int | None:
@@ -71,6 +80,107 @@ def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -
             if variant not in patterns:
                 patterns.append(variant)
     return patterns
+
+
+def _env_falsey(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"0", "false", "no", "off"}
+
+
+def _path_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _looks_like_file_path(raw_path: str, path: Path) -> bool:
+    if raw_path.endswith("/"):
+        return False
+    if path.exists():
+        return path.is_file() or path.is_symlink()
+    name = path.name
+    return (
+        "." in name
+        or name in {"Makefile", "Dockerfile", "Procfile"}
+        or name.startswith(".")
+    )
+
+
+def _prepare_opencode_sandbox_mounts(
+    project_root: str,
+    allowed_paths: list[str] | None,
+) -> list[_SandboxMount]:
+    """Prepara mounts writable do OpenCode, restritos aos allowed_paths."""
+    root = Path(project_root).resolve()
+    mounts: list[_SandboxMount] = []
+    seen: set[Path] = set()
+
+    for raw in allowed_paths or []:
+        value = str(raw).strip()
+        if not value:
+            continue
+        path = Path(value)
+        target = path.resolve() if path.is_absolute() else (root / path).resolve()
+        if not _path_relative_to(target, root):
+            continue
+        is_file = _looks_like_file_path(value, target)
+        placeholder = False
+        if is_file:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                target.touch()
+                placeholder = True
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+        if target not in seen:
+            mounts.append(_SandboxMount(target, is_file=is_file, placeholder=placeholder))
+            seen.add(target)
+
+    mounts.sort(key=lambda item: (item.is_file, len(str(item.path))))
+    return mounts
+
+
+def _cleanup_empty_placeholders(mounts: list[_SandboxMount]) -> None:
+    for mount in mounts:
+        if not mount.placeholder:
+            continue
+        try:
+            if mount.path.is_file() and mount.path.stat().st_size == 0:
+                mount.path.unlink()
+        except OSError:
+            pass
+
+
+def _wrap_opencode_sandbox_command(
+    cmd: list[str],
+    project_root: str,
+    allowed_paths: list[str] | None,
+    runtime_dir: str,
+) -> tuple[list[str], list[_SandboxMount]]:
+    """Envolve o OpenCode em bubblewrap: worktree read-only, allowlist writable."""
+    if _env_falsey("FT_OPENCODE_SANDBOX"):
+        return cmd, []
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        print("  ! FT_OPENCODE_SANDBOX: bwrap não encontrado — seguindo sem sandbox de filesystem.")
+        return cmd, []
+
+    mounts = _prepare_opencode_sandbox_mounts(project_root, allowed_paths)
+    runtime_path = Path(runtime_dir).resolve()
+    runtime_path.mkdir(parents=True, exist_ok=True)
+
+    wrapped = [
+        bwrap,
+        "--ro-bind", "/", "/",
+        "--dev-bind", "/dev", "/dev",
+        "--proc", "/proc",
+        "--bind", str(runtime_path), str(runtime_path),
+    ]
+    for mount in mounts:
+        wrapped += ["--bind", str(mount.path), str(mount.path)]
+    wrapped += cmd
+    return wrapped, mounts
 
 
 def _opencode_runtime_config(
@@ -947,14 +1057,6 @@ NODE_SUMMARY:
         stdin_prompt = prompt
         print(f"  ⚠️  Prompt grande ({len(prompt) // 1024} KiB) — enviando via stdin.")
 
-    if log_path and llm_engine != "codex":
-        _write_log_preamble(log_path, llm_engine, cmd, prompt)
-    elif log_path:
-        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # Chamar executor em modo nao-interativo, com streaming para arquivo.
-    # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
-    # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
     _env = _executor_env(
         llm_engine,
         opencode_deny_read_paths=deny_reads,
@@ -964,6 +1066,34 @@ NODE_SUMMARY:
         opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
         opencode_deny_edit_tools=opencode_deny_edit_tools,
     )
+    sandbox_tmp: tempfile.TemporaryDirectory | None = None
+    sandbox_mounts: list[_SandboxMount] = []
+    if llm_engine.lower().strip() == "opencode" and not _env_falsey("FT_OPENCODE_SANDBOX"):
+        sandbox_tmp = tempfile.TemporaryDirectory(prefix="ft-opencode-")
+        runtime = Path(sandbox_tmp.name)
+        for dirname in ("data", "cache", "state", "tmp", "npm-cache"):
+            (runtime / dirname).mkdir(parents=True, exist_ok=True)
+        _env = dict(_env)
+        _env.setdefault("XDG_DATA_HOME", str(runtime / "data"))
+        _env.setdefault("XDG_CACHE_HOME", str(runtime / "cache"))
+        _env.setdefault("XDG_STATE_HOME", str(runtime / "state"))
+        _env.setdefault("TMPDIR", str(runtime / "tmp"))
+        _env.setdefault("npm_config_cache", str(runtime / "npm-cache"))
+        cmd, sandbox_mounts = _wrap_opencode_sandbox_command(
+            cmd,
+            project_root=project_root,
+            allowed_paths=allowed_paths,
+            runtime_dir=sandbox_tmp.name,
+        )
+
+    if log_path and llm_engine != "codex":
+        _write_log_preamble(log_path, llm_engine, cmd, prompt)
+    elif log_path:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+
+    # Chamar executor em modo nao-interativo, com streaming para arquivo.
+    # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
+    # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
 
     proc = subprocess.Popen(
         cmd,
@@ -1005,6 +1135,9 @@ NODE_SUMMARY:
         if log_path:
             with Path(log_path).open("a", encoding="utf-8") as f:
                 f.write(timeout_msg)
+        _cleanup_empty_placeholders(sandbox_mounts)
+        if sandbox_tmp is not None:
+            sandbox_tmp.cleanup()
         return DelegateResult(
             success=False,
             output=output,
@@ -1075,6 +1208,9 @@ NODE_SUMMARY:
     token = _final_protocol_token(output)
     success = returncode == 0 and token != "BLOCKED"
     rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
+    _cleanup_empty_placeholders(sandbox_mounts)
+    if sandbox_tmp is not None:
+        sandbox_tmp.cleanup()
 
     # Extrair arquivos criados/modificados do git status
     git_result = subprocess.run(

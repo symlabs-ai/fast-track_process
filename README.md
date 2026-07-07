@@ -63,6 +63,9 @@ para escolher o executor LLM. O default de `--opencode` é
 Para esse modelo default, o `ft` anuncia ao OpenCode uma janela de contexto de
 200k tokens e saída de 32k tokens; sobrescreva com `FT_OPENCODE_CONTEXT_LIMIT`
 e `FT_OPENCODE_OUTPUT_LIMIT` se o servidor expuser limites diferentes.
+Por padrão, execuções OpenCode rodam em sandbox de filesystem via `bwrap`: o
+worktree fica read-only e apenas outputs/write_scope do node são writable
+(`FT_OPENCODE_SANDBOX=0` desabilita).
 
 ## Templates
 

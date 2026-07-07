@@ -290,6 +290,7 @@ nodes:
     executor: claude
     outputs:
       - project/frontend/
+      - .build_ok
     next: ft.plan.01.doc
   - id: ft.plan.01.doc
     type: document
@@ -315,6 +316,8 @@ nodes:
         doc_node = runner.graph.get_node("ft.plan.01.doc")
         assert runner._opencode_options_for_node(build_node, "opencode").deny_edit_tools is True
         assert runner._opencode_options_for_node(doc_node, "opencode").deny_edit_tools is False
+        assert runner._resolve_allowed_paths(build_node) == ["project/frontend", ".build_ok"]
+        assert runner._resolve_allowed_paths(doc_node) == ["docs/out.md"]
 
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
         project_root = tmp_path / "project"

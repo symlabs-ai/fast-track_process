@@ -166,6 +166,7 @@ Depois do close:
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`) |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Janela de contexto anunciada ao OpenCode; default 200000 para `pgx/zai-org_glm-4.7-flash` |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Limite de saída anunciado ao OpenCode; default 32768 para `pgx/zai-org_glm-4.7-flash` |
+| `FT_OPENCODE_SANDBOX` | Sandbox de filesystem via `bwrap` para OpenCode; default ligado, monta apenas outputs/write_scope como writable |
 | `FT_OPENCODE_DEBUG` | Ativa logs detalhados do OpenCode (`--print-logs --log-level DEBUG`) |
 | `FT_OPENCODE_THINKING` | Exibe reasoning do OpenCode (`--thinking`); use só para diagnóstico, pois pode aumentar latência |
 | `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `process/scripts/register_gateway.sh` |

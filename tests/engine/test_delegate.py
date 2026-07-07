@@ -9,6 +9,8 @@ from ft.engine.delegate import (
     _build_executor_command,
     _executor_env,
     _extract_codex_output,
+    _prepare_opencode_sandbox_mounts,
+    _wrap_opencode_sandbox_command,
     DEFAULT_OPENCODE_CONTEXT_LIMIT,
     DEFAULT_OPENCODE_MODEL,
     DEFAULT_OPENCODE_OUTPUT_LIMIT,
@@ -195,6 +197,47 @@ class TestBuildExecutorCommand:
     def test_non_opencode_env_is_unchanged(self):
         env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})
         assert env["OPENCODE_CONFIG_CONTENT"] == "{}"
+
+    def test_opencode_sandbox_prepares_exact_file_and_dir_mounts(self, tmp_path):
+        mounts = _prepare_opencode_sandbox_mounts(
+            str(tmp_path),
+            ["docs/api_contract.md", "project/frontend/"],
+        )
+
+        by_path = {mount.path.relative_to(tmp_path).as_posix(): mount for mount in mounts}
+        assert set(by_path) == {"docs/api_contract.md", "project/frontend"}
+        assert by_path["docs/api_contract.md"].is_file is True
+        assert by_path["docs/api_contract.md"].placeholder is True
+        assert by_path["project/frontend"].is_file is False
+        assert (tmp_path / "docs/api_contract.md").exists()
+        assert (tmp_path / "project/frontend").is_dir()
+
+    def test_opencode_sandbox_ignores_paths_outside_project(self, tmp_path):
+        outside = tmp_path.parent / "outside.md"
+        mounts = _prepare_opencode_sandbox_mounts(str(tmp_path), [str(outside)])
+        assert mounts == []
+        assert not outside.exists()
+
+    def test_opencode_sandbox_wraps_command_with_bwrap(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("ft.engine.delegate.shutil.which", lambda name: "/usr/bin/bwrap")
+
+        cmd, mounts = _wrap_opencode_sandbox_command(
+            ["opencode", "run", "prompt"],
+            project_root=str(tmp_path),
+            allowed_paths=["docs/out.md"],
+            runtime_dir=str(tmp_path / "runtime"),
+        )
+
+        assert cmd[:7] == [
+            "/usr/bin/bwrap",
+            "--ro-bind", "/", "/",
+            "--dev-bind", "/dev", "/dev",
+        ]
+        assert ["--bind", str(tmp_path / "docs/out.md"), str(tmp_path / "docs/out.md")] in [
+            cmd[i:i + 3] for i in range(len(cmd) - 2)
+        ]
+        assert cmd[-3:] == ["opencode", "run", "prompt"]
+        assert [mount.path for mount in mounts] == [tmp_path / "docs/out.md"]
 
     def test_extracts_final_codex_message_from_json_stream(self):
         raw = "\n".join([

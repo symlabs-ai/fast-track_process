@@ -2231,6 +2231,22 @@ def _cleanup_pristine_runs(project_root: Path) -> int:
     return removed
 
 
+def _copy_plain_run_seed(source_root: Path, run_dir: Path) -> None:
+    """Seed para modo isolated sem git/worktree: copia contexto mínimo para o run dir."""
+    import shutil
+
+    for dirname in ("docs", "process", "seed", ".opencode"):
+        src = source_root / dirname
+        if src.is_dir():
+            dst_name = "docs" if dirname == "seed" and not (source_root / "docs").is_dir() else dirname
+            shutil.copytree(src, run_dir / dst_name, dirs_exist_ok=True)
+
+    for filename in ("AGENTS.md", "opencode.json", "opencode.jsonc"):
+        src = source_root / filename
+        if src.is_file():
+            shutil.copy2(src, run_dir / filename)
+
+
 def _check_active_run(project_root: Path) -> str | None:
     """Verifica se há um ciclo ativo (em andamento, pausado ou bloqueado). Retorna descrição ou None."""
     import yaml as _yaml
@@ -2402,9 +2418,11 @@ def cmd_run(args):
             engine_name = _effective_engine or "run"
             run_dir = wt_home / f"cycle-{next_num:02d}-{engine_name}"
             run_dir.mkdir(parents=True, exist_ok=True)
+            _copy_plain_run_seed(project_root, run_dir)
 
         (run_dir / "state").mkdir(parents=True, exist_ok=True)
         state_path = run_dir / "state" / "engine_state.yml"
+        project_root = run_dir
         print(f"  RunMode: isolated → {run_dir}")
 
     # Resolver YAML do processo

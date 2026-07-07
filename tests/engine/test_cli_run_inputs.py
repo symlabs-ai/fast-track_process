@@ -96,8 +96,9 @@ class TestRunInputs:
         assert classify.call_args.kwargs["llm_engine"] == "codex"
         assert FakeRunner.instances[-1].llm_engine == "codex"
         assert FakeRunner.instances[-1].run_mode == "mvp"
-        assert (project / "docs" / "demanda.md").exists()
-        assert (project / "docs" / "hipotese.md").exists()
+        run_root = FakeRunner.instances[-1].project_root
+        assert (run_root / "docs" / "demanda.md").exists()
+        assert (run_root / "docs" / "hipotese.md").exists()
 
     def test_run_hipotese_uses_default_engine_without_name_error(self, tmp_path):
         FakeRunner.instances = []
@@ -110,7 +111,8 @@ class TestRunInputs:
 
         assert FakeRunner.instances[-1].llm_engine == "claude"
         assert FakeRunner.instances[-1].run_mode == "mvp"
-        assert (project / "docs" / "hipotese.md").exists()
+        run_root = FakeRunner.instances[-1].project_root
+        assert (run_root / "docs" / "hipotese.md").exists()
 
     def test_run_input_uses_opencode_engine_and_model(self, tmp_path):
         FakeRunner.instances = []
@@ -136,6 +138,36 @@ class TestRunInputs:
         assert classify.call_args.kwargs["llm_engine"] == "opencode"
         assert FakeRunner.instances[-1].llm_engine == "opencode"
         assert FakeRunner.instances[-1].llm_model == "pgx/zai-org_glm-4.7-flash"
+
+    def test_run_without_git_executes_inside_plain_isolated_run_dir(self, tmp_path, monkeypatch):
+        FakeRunner.instances = []
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        process = project / "process" / "process.yml"
+        process.parent.mkdir(parents=True)
+        process.write_text(
+            """
+id: plain_project
+version: "1.0.0"
+nodes:
+  - id: start
+    type: build
+    title: Start
+    executor: python
+    next: end
+  - id: end
+    type: end
+    title: End
+"""
+        )
+
+        with patch("ft.cli.main.StepRunner", FakeRunner):
+            cli_main.cmd_run(_args(project, opencode=True))
+
+        run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01-opencode"
+        assert FakeRunner.instances[-1].project_root == run_dir
+        assert FakeRunner.instances[-1].process_path == run_dir / "process" / "process.yml"
+        assert (run_dir / "process" / "process.yml").exists()
 
 
 class TestExplore:

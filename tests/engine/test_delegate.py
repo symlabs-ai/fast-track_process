@@ -38,6 +38,7 @@ class TestBuildExecutorCommand:
         assert cmd == [
             "opencode",
             "run",
+            "--dir", "/tmp/proj",
             "-m", DEFAULT_OPENCODE_MODEL,
             "faça algo",
         ]
@@ -53,6 +54,7 @@ class TestBuildExecutorCommand:
         assert cmd == [
             "opencode",
             "run",
+            "--dir", "/tmp/proj",
             "-m", "anthropic/claude-sonnet-4-5",
             "faça algo",
         ]

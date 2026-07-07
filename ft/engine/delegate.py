@@ -117,6 +117,7 @@ def _build_executor_command(
         return [
             "opencode",
             "run",
+            "--dir", project_root,
             "-m", model or DEFAULT_OPENCODE_MODEL,
             prompt,
         ]

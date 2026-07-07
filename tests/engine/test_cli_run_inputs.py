@@ -255,6 +255,16 @@ class TestActiveRunDetection:
         assert cli_main._cleanup_pristine_runs(project) == 1
         assert not cycle.exists()
 
+    def test_empty_cycle_without_state_is_cleaned(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "service_mate_15"
+        project.mkdir()
+        cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01-opencode"
+        (cycle / "state").mkdir(parents=True)
+
+        assert cli_main._cleanup_pristine_runs(project) == 1
+        assert not cycle.exists()
+
     def test_state_with_completed_nodes_still_counts_as_active(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
@@ -267,3 +277,13 @@ class TestActiveRunDetection:
         assert active == "cycle-01 (ft.start.route — ready)"
         assert cli_main._cleanup_pristine_runs(project) == 0
         assert cycle.exists()
+
+
+class TestApiHealthCheck:
+    def test_opencode_skips_anthropic_health_check(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("FT_SKIP_HEALTH_CHECK", raising=False)
+
+        with patch("urllib.request.urlopen") as urlopen:
+            cli_main._api_health_check(tmp_path, "opencode")
+
+        urlopen.assert_not_called()

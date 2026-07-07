@@ -391,7 +391,7 @@ def _find_latest_state(root: Path) -> Path:
     return _worktrees_home(root) / "cycle-01" / "state" / "engine_state.yml"
 
 
-def _api_health_check(project_root: Path) -> None:
+def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
     """Testa conectividade com a API antes de iniciar a run.
 
     Faz POST mínimo ao endpoint de messages. Aceita 200/429/529
@@ -401,6 +401,9 @@ def _api_health_check(project_root: Path) -> None:
     import urllib.error
     import urllib.request
     from ft.engine import ui as _ui
+
+    if llm_engine.lower().strip() != "claude":
+        return
 
     if os.environ.get("FT_SKIP_HEALTH_CHECK"):
         return
@@ -2192,6 +2195,14 @@ def _is_pristine_cycle_dir(cycle_dir: Path, data: dict) -> bool:
     return True
 
 
+def _is_empty_cycle_dir(cycle_dir: Path) -> bool:
+    """True para ciclo criado antes do state, sem qualquer arquivo de trabalho."""
+    for path in cycle_dir.rglob("*"):
+        if path.is_file():
+            return False
+    return True
+
+
 def _cleanup_pristine_runs(project_root: Path) -> int:
     """Remove ciclos externos/legados que foram apenas inicializados e abandonados."""
     import shutil
@@ -2206,6 +2217,9 @@ def _cleanup_pristine_runs(project_root: Path) -> int:
                 continue
             state = cycle_dir / "state" / "engine_state.yml"
             if not state.exists():
+                if _is_empty_cycle_dir(cycle_dir):
+                    shutil.rmtree(cycle_dir)
+                    removed += 1
                 continue
             try:
                 data = _yaml.safe_load(state.read_text()) or {}
@@ -2589,7 +2603,7 @@ def cmd_run(args):
         _normalize_hipotese(dst, project_root, llm_engine=_effective_engine)
 
     # Health check da API antes de começar
-    _api_health_check(project_root)
+    _api_health_check(project_root, _effective_engine)
 
     # Init + run MVP
     if run_mode == "continuous" and state_path.exists():

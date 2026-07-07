@@ -272,6 +272,141 @@ nodes:
         assert "Delegando ao LLM (opencode)" in out
         assert "Delegando ao LLM (llm_claude)" not in out
 
+    def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.review.screenshot
+    type: review
+    title: Screenshot Review
+    description: Tirar screenshots e comparar com docs/ui_criteria.md.
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/screenshots/
+      - docs/screenshot-review.md
+    validators:
+      - file_exists: docs/screenshot-review.md
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.review.screenshot")
+
+        first_result = DelegateResult(
+            success=True,
+            output="DONE",
+            files_created=[],
+            files_modified=[],
+        )
+
+        def retry_side_effect(**kwargs):
+            assert kwargs["llm_engine"] == "opencode"
+            assert kwargs["opencode_restrict_tools"] is True
+            assert kwargs["opencode_steps"] == 10
+            assert kwargs["max_turns"] == 60
+            (docs / "screenshot-review.md").write_text("APPROVED\n")
+            return DelegateResult(
+                success=True,
+                output="DONE",
+                files_created=["docs/screenshot-review.md"],
+                files_modified=[],
+            )
+
+        with (
+            patch("ft.engine.runner.delegate_to_llm", return_value=first_result) as delegate_mock,
+            patch("ft.engine.runner.delegate_with_feedback", side_effect=retry_side_effect) as retry_mock,
+        ):
+            runner._run_review(node)
+
+        first_kwargs = delegate_mock.call_args.kwargs
+        assert first_kwargs["llm_engine"] == "opencode"
+        assert first_kwargs["opencode_restrict_tools"] is True
+        assert first_kwargs["opencode_steps"] == 10
+        assert first_kwargs["max_turns"] == 60
+        assert "Descricao especifica do node" in first_kwargs["task"]
+        assert "Arquivo: docs/screenshot-review.md" in first_kwargs["task"]
+        assert "use APPROVED WITH NOTES, nao BLOCKED" in first_kwargs["task"]
+        assert retry_mock.called
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "ft.end"
+
+    def test_review_report_with_blocked_status_does_not_approve(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.review.visual
+    type: review
+    title: Visual Review
+    executor: claude
+    outputs:
+      - docs/visual-review.md
+    validators:
+      - file_exists: docs/visual-review.md
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.review.visual")
+
+        def delegate_side_effect(**kwargs):
+            (docs / "visual-review.md").write_text("**STATUS:** BLOCKED\nNao consegui revisar.\n")
+            return DelegateResult(
+                success=True,
+                output="DONE",
+                files_created=["docs/visual-review.md"],
+                files_modified=[],
+            )
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect):
+            runner._run_review(node)
+
+        state = runner.state_mgr.load()
+        assert state.node_status == "blocked"
+        assert state.current_node == "ft.review.visual"
+        assert "BLOCKED" in state.blocked_reason
+
 
 class TestRewriteGuard:
     def test_no_pre_seed_output_is_removed_before_document_delegation(self, tmp_path):
@@ -697,6 +832,26 @@ class TestRunValidators:
 # ---------------------------------------------------------------------------
 
 class TestBuildTaskPrompt:
+    def test_review_prompt_includes_description_outputs_and_validators(self):
+        from ft.engine.graph import Node
+
+        node = Node(
+            id="ft.review.screenshot",
+            type="review",
+            title="Screenshot Review",
+            description="Comparar telas com os critérios visuais.",
+            outputs=["docs/screenshots/", "docs/screenshot-review.md"],
+            validators=[{"file_exists": "docs/screenshot-review.md"}],
+        )
+
+        prompt = build_task_prompt(node, {})
+
+        assert "Comparar telas com os critérios visuais" in prompt
+        assert "Diretorio: docs/screenshots/" in prompt
+        assert "Arquivo: docs/screenshot-review.md" in prompt
+        assert "file_exists: docs/screenshot-review.md" in prompt
+        assert "nao crie variacoes de nome" in prompt
+
     def test_retro_prompt_reads_project_log_without_self(self, tmp_path):
         project_root = tmp_path / "pokemon"
         project_root.mkdir()

@@ -109,6 +109,7 @@ def _opencode_runtime_config(
         if not isinstance(build_agent, dict):
             build_agent = {}
         build_agent["steps"] = steps
+        build_agent["maxSteps"] = steps
         agent["build"] = build_agent
         config["agent"] = agent
 

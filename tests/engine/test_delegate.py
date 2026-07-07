@@ -110,6 +110,7 @@ class TestBuildExecutorCommand:
         assert config["permission"]["grep"] == "deny"
         assert config["permission"]["list"] == "deny"
         assert config["agent"]["build"]["steps"] == 8
+        assert config["agent"]["build"]["maxSteps"] == 8
 
     def test_non_opencode_env_is_unchanged(self):
         env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})

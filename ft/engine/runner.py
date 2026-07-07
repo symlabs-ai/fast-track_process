@@ -285,39 +285,91 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None, 
 # Task prompt builders
 # ---------------------------------------------------------------------------
 
+
+def _format_outputs_contract(outputs: list[str]) -> str:
+    """Formata outputs com tipo explícito para reduzir variações de path."""
+    if not outputs:
+        return "- conforme necessario"
+    lines: list[str] = []
+    for output in outputs:
+        kind = "Diretorio" if output.endswith("/") else "Arquivo"
+        lines.append(f"- {kind}: {output}")
+    return "\n".join(lines)
+
+
+def _format_validators_contract(validators: list[dict[str, Any]]) -> str:
+    """Formata validadores em texto curto para o executor."""
+    if not validators:
+        return "- nenhum validador explicito"
+    lines: list[str] = []
+    for spec in validators:
+        for name, args in spec.items():
+            if args is True:
+                lines.append(f"- {name}")
+            else:
+                lines.append(f"- {name}: {args}")
+    return "\n".join(lines)
+
+
+def _description_block(node: Node) -> str:
+    if not node.description:
+        return ""
+    return f"\nDescricao especifica do node:\n{node.description}\n"
+
+
 def build_task_prompt(node: Node, state_dict: dict[str, Any]) -> str:
     """Constroi o prompt de construcao para o LLM baseado no node."""
     outputs_str = ", ".join(node.outputs) if node.outputs else "conforme necessario"
+    outputs_contract = _format_outputs_contract(node.outputs)
+    validators_contract = _format_validators_contract(node.validators)
+    desc = _description_block(node)
 
     # Custom prompt override
     if node.prompt:
         return f"""{node.prompt}
 
-Arquivos de saida esperados: {outputs_str}
+{desc}
+Contrato de saida esperado:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
 """
 
     if node.type == "discovery":
         return f"""Conduza a etapa de discovery: {node.title}
+{desc}
 
-Produza o artefato: {outputs_str}
+Contrato de saida esperado:
+{outputs_contract}
 
 O artefato deve ser um documento markdown completo e acionavel.
 Interaja com o stakeholder se necessario (faca perguntas diretas).
 """
     elif node.type == "document":
         return f"""Produza o documento: {node.title}
+{desc}
 
-Arquivo de saida: {outputs_str}
+Contrato de saida esperado:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
 
 O documento deve ser completo, estruturado em markdown, e pronto para revisao.
 """
     elif node.type == "test_red":
         return f"""TDD RED PHASE: {node.title}
+{desc}
 
 Escreva APENAS os testes. NAO implemente o codigo de producao ainda.
 Os testes DEVEM FALHAR (red phase do TDD).
 
-Arquivos de teste esperados: {outputs_str}
+Contrato de saida esperado:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
 
 Escreva testes que:
 - Cobrem os cenarios principais (happy path)
@@ -327,11 +379,16 @@ Escreva testes que:
 """
     elif node.type == "test_green":
         return f"""TDD GREEN PHASE: {node.title}
+{desc}
 
 Implemente o codigo MINIMO necessario para fazer os testes passarem.
 NAO refatore, NAO adicione funcionalidades extras.
 
-Arquivos de producao esperados: {outputs_str}
+Contrato de saida esperado:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
 
 O codigo deve:
 - Fazer todos os testes passarem
@@ -340,11 +397,16 @@ O codigo deve:
 """
     elif node.type == "refactor":
         return f"""TDD REFACTOR PHASE: {node.title}
+{desc}
 
 Refatore o codigo mantendo todos os testes passando.
 Melhore a qualidade sem mudar o comportamento.
 
-Arquivos: {outputs_str}
+Contrato de saida esperado:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
 
 Checklist:
 - Extrair duplicacoes
@@ -354,10 +416,21 @@ Checklist:
 """
     elif node.type == "review":
         return f"""EXPERT REVIEW: {node.title}
+{desc}
 
 Revise os artefatos produzidos e emita um parecer de qualidade.
 
-Artefatos para revisao: {outputs_str}
+Contrato de saida obrigatorio:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
+
+Regras de output:
+- Use exatamente os paths acima; nao crie variacoes de nome, pluralizacao ou subpastas alternativas.
+- Se houver um arquivo .md nos outputs, ele e o relatorio canonico do review.
+- Diretorios listados nao substituem arquivos obrigatorios.
+- Antes de declarar DONE, crie ou atualize os arquivos obrigatorios do contrato.
 
 Checklist de revisao:
 - Cobertura funcional: os artefatos cobrem todos os requisitos do PRD?
@@ -371,7 +444,7 @@ Responda com:
 - APPROVED WITH NOTES se aprovado mas com observacoes menores (liste-as)
 - REJECTED se houver problemas que precisam ser corrigidos (liste-os)
 
-Produza o relatorio em: {outputs_str}
+Produza o relatorio no arquivo .md canonico listado no contrato de saida.
 """
     elif node.type == "retro":
         # Injeta o activity log e state para análise real
@@ -439,14 +512,27 @@ FORMATO OBRIGATÓRIO do {outputs_str}:
 """
     elif node.type == "build":
         return f"""Implemente: {node.title}
+{desc}
 
-Arquivos de saida esperados: {outputs_str}
+Contrato de saida esperado:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
 
 Siga TDD: escreva testes primeiro, depois implemente.
 Garanta que os testes passam ao final.
 """
     else:
-        return f"""Execute: {node.title}\nSaida esperada: {outputs_str}"""
+        return f"""Execute: {node.title}
+{desc}
+
+Contrato de saida esperado:
+{outputs_contract}
+
+Validadores que precisam passar:
+{validators_contract}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +540,13 @@ Garanta que os testes passam ao final.
 # ---------------------------------------------------------------------------
 
 MAX_RETRIES = 3
+
+
+@dataclass
+class OpenCodeOptions:
+    deny_read_paths: list[str] = field(default_factory=list)
+    restrict_tools: bool = False
+    steps: int | None = None
 
 
 class StepRunner:
@@ -501,6 +594,83 @@ class StepRunner:
             return None
         label = engine or self._resolve_llm_engine()
         return f"{label}>"
+
+    def _node_needs_shell_tools(self, node: Node) -> bool:
+        """Detecta nodes que precisam de shell/list/grep para validar ou executar."""
+        shell_validators = {
+            "bash_passes",
+            "command_succeeds",
+            "tests_pass",
+            "tests_fail",
+            "coverage_min",
+            "coverage_per_file",
+            "lint_clean",
+            "format_check",
+            "gate_frontend",
+            "gate_delivery",
+            "gate_smoke",
+            "gate_mvp",
+            "gate_tdd_sequence",
+            "gate_coverage_80",
+            "gate_e2e_all_pass",
+            "gate_server_starts",
+        }
+        for spec in node.validators:
+            if any(name in shell_validators for name in spec):
+                return True
+        return node.type in {"build", "test_red", "test_green", "refactor"}
+
+    def _opencode_options_for_node(
+        self,
+        node: Node,
+        effective_engine: str,
+        deny_read_paths: list[str] | None = None,
+        restrict_tools: bool | None = None,
+        steps: int | None = None,
+    ) -> OpenCodeOptions:
+        """Define limites e permissões OpenCode de forma consistente por node."""
+        if effective_engine != "opencode":
+            return OpenCodeOptions()
+
+        default_steps_by_type = {
+            "discovery": 12,
+            "document": 8,
+            "review": 10,
+            "retro": 12,
+            "build": 40,
+            "test_red": 30,
+            "test_green": 50,
+            "refactor": 30,
+            "gate": 20,
+        }
+        default_steps = default_steps_by_type.get(node.type, 30)
+        if steps is not None:
+            resolved_steps = steps
+        elif node.max_turns is not None:
+            resolved_steps = min(node.max_turns, default_steps)
+        else:
+            resolved_steps = default_steps
+
+        if restrict_tools is None:
+            restrict_tools = node.type in {"document", "retro"} or (
+                node.type == "review" and not self._node_needs_shell_tools(node)
+            )
+
+        return OpenCodeOptions(
+            deny_read_paths=list(dict.fromkeys(deny_read_paths or [])),
+            restrict_tools=bool(restrict_tools),
+            steps=resolved_steps,
+        )
+
+    @staticmethod
+    def _apply_opencode_options(delegate_kwargs: dict, options: OpenCodeOptions) -> None:
+        """Anexa opções OpenCode ao kwargs de delegação."""
+        if options.deny_read_paths:
+            delegate_kwargs["opencode_deny_read_paths"] = options.deny_read_paths
+        if options.restrict_tools:
+            delegate_kwargs["opencode_restrict_tools"] = True
+        if options.steps is not None:
+            delegate_kwargs["opencode_steps"] = options.steps
 
     def _resolve_work_dir(self) -> str:
         """Resolve o diretório de trabalho (CWD) para delegação ao LLM.
@@ -1433,8 +1603,6 @@ class StepRunner:
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
         opencode_deny_read_paths: list[str] = []
-        opencode_restrict_tools = False
-        opencode_steps: int | None = None
 
         # Injetar mensagem do último ft approve como contexto para o LLM
         approval_msg = self.state_mgr.state.last_approval_message
@@ -1459,9 +1627,6 @@ class StepRunner:
                 is_opencode = effective_engine == "opencode"
                 if is_opencode:
                     opencode_deny_read_paths = [f"docs/{name}" for name in existing]
-                    if node.type == "document":
-                        opencode_restrict_tools = True
-                        opencode_steps = 8
                 task_prompt = hyper_mode_prompt(
                     existing,
                     task_prompt,
@@ -1490,6 +1655,12 @@ class StepRunner:
                 self.state_mgr.block(f"env_setup falhou no node {node.id}")
                 return
 
+        opencode_options = self._opencode_options_for_node(
+            node,
+            effective_engine,
+            deny_read_paths=opencode_deny_read_paths,
+        )
+
         print(ui.info(f"Delegando ao LLM ({effective_engine})..."))
         state.node_status = "delegated"
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
@@ -1505,12 +1676,7 @@ class StepRunner:
             log_path=log_path,
             stream_prefix=self._stream_prefix(effective_engine),
         )
-        if opencode_deny_read_paths:
-            delegate_kwargs["opencode_deny_read_paths"] = opencode_deny_read_paths
-        if opencode_restrict_tools:
-            delegate_kwargs["opencode_restrict_tools"] = True
-        if opencode_steps is not None:
-            delegate_kwargs["opencode_steps"] = opencode_steps
+        self._apply_opencode_options(delegate_kwargs, opencode_options)
         if node.max_turns is not None:
             delegate_kwargs["max_turns"] = node.max_turns
 
@@ -1579,11 +1745,12 @@ class StepRunner:
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=self._resolve_llm_engine(state, node=node),
                         llm_model=self._resolve_llm_model(state, node=node),
+                        max_turns=node.max_turns or 50,
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
-                        opencode_deny_read_paths=opencode_deny_read_paths,
-                        opencode_restrict_tools=opencode_restrict_tools,
-                        opencode_steps=opencode_steps,
+                        opencode_deny_read_paths=opencode_options.deny_read_paths,
+                        opencode_restrict_tools=opencode_options.restrict_tools,
+                        opencode_steps=opencode_options.steps,
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -1706,6 +1873,8 @@ class StepRunner:
         )
 
         allowed = self._resolve_allowed_paths(node)
+        effective_engine = self._resolve_llm_engine(state, node=node)
+        opencode_options = self._opencode_options_for_node(node, effective_engine)
         log_path = self._start_llm_log(state, node.id, f"auto-fix-{self._auto_fix_counts.get(node.id, 0) + 1}")
         # Desbloquear antes de chamar o LLM
         state.node_status = "ready"
@@ -1713,15 +1882,18 @@ class StepRunner:
         self.state_mgr.save()
 
         try:
-            result = delegate_to_llm(
+            fix_kwargs: dict = dict(
                 task=prompt,
                 project_root=self._work_dir,
                 allowed_paths=allowed,
-                llm_engine=self._resolve_llm_engine(state, node=node),
+                llm_engine=effective_engine,
                 llm_model=self._resolve_llm_model(state, node=node),
+                max_turns=node.max_turns or 50,
                 log_path=log_path,
-                stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
+                stream_prefix=self._stream_prefix(effective_engine),
             )
+            self._apply_opencode_options(fix_kwargs, opencode_options)
+            result = delegate_to_llm(**fix_kwargs)
         finally:
             self._clear_active_llm_log(state)
 
@@ -2087,6 +2259,56 @@ class StepRunner:
         task_prompt = build_task_prompt(node, {})
 
         allowed = self._resolve_allowed_paths(node)
+        effective_engine = self._resolve_llm_engine(state, node=node)
+        opencode_deny_read_paths: list[str] = []
+        if effective_engine == "opencode":
+            output_doc_names = {
+                Path(output).name
+                for output in node.outputs
+                if Path(output).parts and Path(output).parts[0] == "docs"
+            }
+            existing = {
+                name: content
+                for name, content in scan_existing_docs(self.project_root).items()
+                if name not in output_doc_names
+            }
+            if existing:
+                task_prompt = hyper_mode_prompt(
+                    existing,
+                    task_prompt,
+                    preview_lines=25,
+                    allow_followup_reads=False,
+                )
+                opencode_deny_read_paths.extend(f"docs/{name}" for name in existing)
+                print(f"  Hyper-mode review: {len(existing)} docs existentes carregados")
+
+            missing_output_dirs = [
+                output
+                for output in node.outputs
+                if output.endswith("/") and not (Path(self.project_root) / output).exists()
+            ]
+            for output in missing_output_dirs:
+                opencode_deny_read_paths.append(output.rstrip("/"))
+                opencode_deny_read_paths.append(output)
+            if missing_output_dirs:
+                dirs = ", ".join(missing_output_dirs)
+                task_prompt = (
+                    f"{task_prompt}\n\n"
+                    "INSTRUCAO OPENCODE REVIEW:\n"
+                    f"- Estes diretorios de output ainda nao existem: {dirs}.\n"
+                    "- NAO tente le-los em loop. Crie o diretorio se precisar dele, "
+                    "ou registre no relatorio que a captura nao foi possivel.\n"
+                    "- Se os validadores nao exigem arquivos de screenshot, ausencia de "
+                    "screenshot fisico e nota menor: use APPROVED WITH NOTES, nao BLOCKED.\n"
+                    "- Use REJECTED/BLOCKED apenas para problema que exige parar o processo "
+                    "ou que impede um validador obrigatorio de passar.\n"
+                    "- A primeira escrita deve criar/atualizar o relatorio .md canonico.\n"
+                )
+        opencode_options = self._opencode_options_for_node(
+            node,
+            effective_engine,
+            deny_read_paths=opencode_deny_read_paths,
+        )
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
         early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
@@ -2107,11 +2329,12 @@ class StepRunner:
             task=task_prompt,
             project_root=self._work_dir,
             allowed_paths=self._delegate_allowed_paths(allowed),
-            llm_engine=self._resolve_llm_engine(state, node=node),
+            llm_engine=effective_engine,
             llm_model=self._resolve_llm_model(state, node=node),
             log_path=review_log_path,
-            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
+            stream_prefix=self._stream_prefix(effective_engine),
         )
+        self._apply_opencode_options(review_kwargs, opencode_options)
         if node.max_turns is not None:
             review_kwargs["max_turns"] = node.max_turns
 
@@ -2158,10 +2381,14 @@ class StepRunner:
                         feedback=validation.feedback or "",
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(allowed),
-                        llm_engine=self._resolve_llm_engine(state, node=node),
+                        llm_engine=effective_engine,
                         llm_model=self._resolve_llm_model(state, node=node),
+                        max_turns=node.max_turns or 50,
                         log_path=retry_log_path,
-                        stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
+                        stream_prefix=self._stream_prefix(effective_engine),
+                        opencode_deny_read_paths=opencode_options.deny_read_paths,
+                        opencode_restrict_tools=opencode_options.restrict_tools,
+                        opencode_steps=opencode_options.steps,
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -2185,15 +2412,18 @@ class StepRunner:
                 review_output = full.read_text()
                 break
 
-        # Veredicto deterministico via parse do relatorio
+        # Veredicto deterministico via parse do relatorio.
+        # O LLM nem sempre usa a palavra REJECTED: quando ele escreve BLOCKED,
+        # INCOMPLETE/INCOMPLETO ou ITERATE, o review tambem deve falhar.
         output_upper = review_output.upper()
-        if "REJECTED" in output_upper:
+        reject_markers = ("REJECTED", "BLOCKED", "INCOMPLETE", "INCOMPLETO", "ITERATE")
+        if any(marker in output_upper for marker in reject_markers):
             # Extrair motivos da rejeição para contexto
             lines = [l.strip() for l in review_output.splitlines() if l.strip()]
             reason_lines = []
             capture = False
             for line in lines:
-                if "REJECTED" in line.upper():
+                if any(marker in line.upper() for marker in reject_markers):
                     capture = True
                 if capture:
                     reason_lines.append(line)
@@ -2222,19 +2452,24 @@ class StepRunner:
                     )
 
                     allowed = self._resolve_allowed_paths(goto_node)
+                    fix_engine = self._resolve_llm_engine(state, node=goto_node)
+                    fix_opencode_options = self._opencode_options_for_node(goto_node, fix_engine)
                     fix_log = self._start_llm_log(state, goto_id, "review-fix")
                     self.state_mgr.save()
 
                     try:
-                        fix_result = delegate_to_llm(
+                        fix_kwargs: dict = dict(
                             task=fix_prompt,
                             project_root=self._work_dir,
                             allowed_paths=self._delegate_allowed_paths(allowed),
-                            llm_engine=self._resolve_llm_engine(state, node=goto_node),
+                            llm_engine=fix_engine,
                             llm_model=self._resolve_llm_model(state, node=goto_node),
+                            max_turns=goto_node.max_turns or 50,
                             log_path=fix_log,
-                            stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=goto_node)),
+                            stream_prefix=self._stream_prefix(fix_engine),
                         )
+                        self._apply_opencode_options(fix_kwargs, fix_opencode_options)
+                        fix_result = delegate_to_llm(**fix_kwargs)
                     finally:
                         self._clear_active_llm_log(state)
                     state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
@@ -2600,6 +2835,8 @@ class StepRunner:
             state.blocked_reason = None
             retry_log_path = self._start_llm_log(state, retry_node.id, "stakeholder-retry")
             self.state_mgr.save()
+            retry_engine = self._resolve_llm_engine(state, node=retry_node)
+            opencode_options = self._opencode_options_for_node(retry_node, retry_engine)
 
             try:
                 result = delegate_with_feedback(
@@ -2607,10 +2844,14 @@ class StepRunner:
                     feedback=f"REJEITADO PELO STAKEHOLDER: {reason}",
                     project_root=self._work_dir,
                     allowed_paths=self._delegate_allowed_paths(allowed),
-                    llm_engine=self._resolve_llm_engine(state),
-                    llm_model=self._resolve_llm_model(state),
+                    llm_engine=retry_engine,
+                    llm_model=self._resolve_llm_model(state, node=retry_node),
+                    max_turns=retry_node.max_turns or 50,
                     log_path=retry_log_path,
-                    stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
+                    stream_prefix=self._stream_prefix(retry_engine),
+                    opencode_deny_read_paths=opencode_options.deny_read_paths,
+                    opencode_restrict_tools=opencode_options.restrict_tools,
+                    opencode_steps=opencode_options.steps,
                 )
             finally:
                 self._clear_active_llm_log(state)

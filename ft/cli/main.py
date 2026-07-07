@@ -2142,6 +2142,81 @@ def _resolve_run_mode(project_root: Path) -> str:
     return env.get("run_mode", "isolated")
 
 
+def _is_pristine_state(data: dict) -> bool:
+    """True para state recém-inicializado, sem execução real de node."""
+    if data.get("node_status") != "ready":
+        return False
+
+    progress_keys = (
+        "completed_nodes",
+        "gate_log",
+        "artifacts",
+        "pending_approval",
+        "last_approval_message",
+        "pending_fix",
+        "exploration_log",
+        "active_llm_log",
+        "last_llm_log",
+        "blocked_reason",
+    )
+    if any(data.get(key) for key in progress_keys):
+        return False
+
+    metrics = data.get("metrics") or {}
+    for key, value in metrics.items():
+        if key == "steps_total":
+            continue
+        if value not in (0, 0.0, None, "", [], {}):
+            return False
+
+    return True
+
+
+def _is_pristine_cycle_dir(cycle_dir: Path, data: dict) -> bool:
+    """Só remove ciclo vazio: state pristine + nenhum artefato além de log INIT."""
+    if not _is_pristine_state(data):
+        return False
+
+    allowed_files = {
+        Path("state") / "engine_state.yml",
+    }
+    for path in cycle_dir.rglob("*"):
+        if path.is_dir():
+            continue
+        rel = path.relative_to(cycle_dir)
+        if rel in allowed_files:
+            continue
+        if len(rel.parts) == 1 and path.name.endswith("_log.md"):
+            continue
+        return False
+    return True
+
+
+def _cleanup_pristine_runs(project_root: Path) -> int:
+    """Remove ciclos externos/legados que foram apenas inicializados e abandonados."""
+    import shutil
+    import yaml as _yaml
+
+    removed = 0
+    for cycles_root in (paths.worktrees_home(project_root), project_root / "runs"):
+        if not cycles_root.is_dir():
+            continue
+        for cycle_dir in list(cycles_root.iterdir()):
+            if not cycle_dir.is_dir() or not _is_cycle_dir(cycle_dir):
+                continue
+            state = cycle_dir / "state" / "engine_state.yml"
+            if not state.exists():
+                continue
+            try:
+                data = _yaml.safe_load(state.read_text()) or {}
+            except Exception:
+                continue
+            if _is_pristine_cycle_dir(cycle_dir, data):
+                shutil.rmtree(cycle_dir)
+                removed += 1
+    return removed
+
+
 def _check_active_run(project_root: Path) -> str | None:
     """Verifica se há um ciclo ativo (em andamento, pausado ou bloqueado). Retorna descrição ou None."""
     import yaml as _yaml
@@ -2154,6 +2229,8 @@ def _check_active_run(project_root: Path) -> str | None:
         current_node = data.get("current_node", "")
         # Se o node_status é terminal ou não há node atual, não é ativo
         if node_status in _TERMINAL_STATUSES or not current_node:
+            return False
+        if _is_pristine_state(data):
             return False
         return True
 
@@ -2224,6 +2301,7 @@ def cmd_run(args):
 
     project_root = Path(args.project).resolve()
     _guard_engine_repo(project_root)
+    _cleanup_pristine_runs(project_root)
 
     # Verificar se já tem um ciclo ativo (em andamento, pausado ou bloqueado)
     # Deve rodar ANTES de criar worktree para não poluir em caso de erro.

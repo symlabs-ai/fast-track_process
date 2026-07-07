@@ -205,3 +205,65 @@ class TestSetupEnv:
         cli_main.cmd_setup_env(Namespace(project="project"))
 
         assert (project / "configured-from-cwd.txt").exists()
+
+
+class TestActiveRunDetection:
+    def _write_state(self, state_file: Path, *, completed: bool = False) -> None:
+        state_file.parent.mkdir(parents=True)
+        completed_nodes = "- ft.start.route\n" if completed else ""
+        steps_completed = 1 if completed else 0
+        state_file.write_text(
+            "process_id: fast_track_v3\n"
+            "version: 1.0.0\n"
+            "llm_engine: claude\n"
+            "llm_model: null\n"
+            "active_llm_log: null\n"
+            "last_llm_log: null\n"
+            "current_node: ft.start.route\n"
+            "node_status: ready\n"
+            "completed_nodes:\n"
+            f"{completed_nodes}"
+            "current_cycle: cycle-01\n"
+            "current_sprint: null\n"
+            "sprint_status: null\n"
+            "gate_log: {}\n"
+            "artifacts: {}\n"
+            "blocked_reason: null\n"
+            "pending_approval: null\n"
+            "last_approval_message: null\n"
+            "pending_fix: null\n"
+            "exploration_log: []\n"
+            "metrics:\n"
+            f"  steps_completed: {steps_completed}\n"
+            "  steps_total: 44\n"
+            "  tests_passing: 0\n"
+            "  coverage: 0\n"
+            "  llm_calls: 0\n"
+            "  tokens_used: 0\n"
+        )
+
+    def test_pristine_init_state_is_not_active_and_is_cleaned(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "service_mate_15"
+        project.mkdir()
+        cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01"
+        self._write_state(cycle / "state" / "engine_state.yml")
+        (cycle / "cycle-01_log.md").write_text("| INIT | PASS |\n")
+
+        assert cli_main._check_active_run(project) is None
+
+        assert cli_main._cleanup_pristine_runs(project) == 1
+        assert not cycle.exists()
+
+    def test_state_with_completed_nodes_still_counts_as_active(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        cycle = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01"
+        self._write_state(cycle / "state" / "engine_state.yml", completed=True)
+
+        active = cli_main._check_active_run(project)
+
+        assert active == "cycle-01 (ft.start.route — ready)"
+        assert cli_main._cleanup_pristine_runs(project) == 0
+        assert cycle.exists()

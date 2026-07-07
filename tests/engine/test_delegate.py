@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import time
 
 import pytest
 from unittest.mock import patch
@@ -17,6 +18,7 @@ from ft.engine.delegate import (
     DEFAULT_OPENCODE_MODEL,
     DEFAULT_OPENCODE_OUTPUT_LIMIT,
     DelegateResult,
+    ExecutorIdleTimeout,
     delegate_with_feedback,
 )
 
@@ -259,6 +261,20 @@ class TestBuildExecutorCommand:
 
         assert returncode == 0
         assert early is True
+
+    def test_wait_for_process_raises_when_executor_is_idle(self):
+        proc = subprocess.Popen(["sleep", "10"])
+        try:
+            with pytest.raises(ExecutorIdleTimeout):
+                _wait_for_process(
+                    proc,
+                    timeout=10,
+                    activity={"last": time.time() - 2},
+                    idle_timeout=1,
+                )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
 
     def test_extracts_final_codex_message_from_json_stream(self):
         raw = "\n".join([

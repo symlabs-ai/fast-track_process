@@ -48,6 +48,10 @@ class _SandboxMount:
     placeholder: bool = False
 
 
+class ExecutorIdleTimeout(subprocess.TimeoutExpired):
+    """Executor ficou vivo, mas sem emitir nova saída por tempo demais."""
+
+
 def _env_positive_int(*names: str) -> int | None:
     """Lê o primeiro inteiro positivo definido em env entre os nomes dados."""
     for name in names:
@@ -183,6 +187,8 @@ def _wait_for_process(
     timeout: int,
     early_success_paths: list[Path] | None = None,
     early_success_grace: int = 20,
+    activity: dict[str, float] | None = None,
+    idle_timeout: int | None = None,
 ) -> tuple[int, bool]:
     """Espera o processo, podendo encerrar cedo quando outputs já existem."""
     if not hasattr(proc, "poll"):
@@ -197,6 +203,10 @@ def _wait_for_process(
         now = time.time()
         if now - started > timeout:
             raise subprocess.TimeoutExpired(proc.args, timeout)
+        if idle_timeout and activity:
+            last_activity = activity.get("last", started)
+            if now - last_activity > idle_timeout:
+                raise ExecutorIdleTimeout(proc.args, idle_timeout)
         if early_success_paths and _paths_have_content(early_success_paths):
             if satisfied_since is None:
                 satisfied_since = now
@@ -796,6 +806,7 @@ def _stream_process_output(
     llm_engine: str,
     log_path: str | None = None,
     stream_prefix: str | None = None,
+    activity: dict[str, float] | None = None,
 ) -> str:
     """Consome stdout/stderr combinado do subprocesso, gravando em arquivo e espelhando no terminal."""
     import shutil as _shutil
@@ -922,6 +933,8 @@ def _stream_process_output(
                     chunks.append(synth)
                 break
             last_data = time.time()
+            if activity is not None:
+                activity["last"] = last_data
             _stripped_probe = line.strip()
             if _stripped_probe.startswith("{"):
                 try:
@@ -1156,75 +1169,111 @@ NODE_SUMMARY:
     elif log_path:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Chamar executor em modo nao-interativo, com streaming para arquivo.
-    # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
-    # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
+    idle_timeout = None
+    idle_retries = 0
+    if llm_engine.lower().strip() == "opencode":
+        idle_timeout = _env_positive_int("FT_OPENCODE_IDLE_TIMEOUT") or 480
+        idle_retries = _env_positive_int("FT_OPENCODE_IDLE_RETRIES") or 2
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=project_root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.PIPE if stdin_prompt is not None else None,
-        text=True,
-        bufsize=1,
-        env=_env,
-    )
-    output_holder: dict[str, str] = {"output": ""}
-    reader = threading.Thread(
-        target=lambda: output_holder.__setitem__(
-            "output",
-            _stream_process_output(
-                proc,
-                llm_engine=llm_engine,
-                log_path=log_path,
-                stream_prefix=stream_prefix,
-            ),
-        ),
-        daemon=True,
-    )
-    reader.start()
+    cleaned_runtime = False
 
-    # Alimentar stdin só depois do reader ativo: o reader drena o stdout do
-    # filho enquanto escrevemos, evitando deadlock de pipes cheios.
-    if stdin_prompt is not None:
-        _feed_stdin(proc, stdin_prompt)
-
-    try:
-        returncode, early_success = _wait_for_process(
-            proc,
-            timeout=1800,
-            early_success_paths=early_success_paths,
-            early_success_grace=early_success_grace,
-        )
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        reader.join(timeout=5)
-        timeout_msg = "\n[TIMEOUT] Executor excedeu 1800 segundos.\n"
-        output = output_holder["output"] + timeout_msg
-        if log_path:
-            with Path(log_path).open("a", encoding="utf-8") as f:
-                f.write(timeout_msg)
+    def _cleanup_delegate_runtime() -> None:
+        nonlocal cleaned_runtime, sandbox_tmp
+        if cleaned_runtime:
+            return
         _cleanup_empty_placeholders(sandbox_mounts)
         if sandbox_tmp is not None:
             sandbox_tmp.cleanup()
-        return DelegateResult(
-            success=False,
-            output=output,
-            files_created=[],
-            files_modified=[],
-        )
+            sandbox_tmp = None
+        cleaned_runtime = True
 
-    reader.join(timeout=5)
-    early_success_msg = ""
-    if early_success:
-        early_success_msg = (
-            "\n[EARLY_SUCCESS] Outputs esperados existem; encerrando OpenCode "
-            "para validação determinística.\n"
-        )
+    def _append_log(message: str) -> None:
         if log_path:
             with Path(log_path).open("a", encoding="utf-8") as f:
-                f.write(early_success_msg)
+                f.write(message)
+
+    def _stop_process(proc: subprocess.Popen) -> None:
+        if proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def _run_executor_attempt() -> tuple[int, bool, str, str | None]:
+        """Executa uma tentativa do executor. failure_kind: idle | timeout | None."""
+        # Chamar executor em modo nao-interativo, com streaming para arquivo.
+        # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
+        # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
+        proc = subprocess.Popen(
+            cmd,
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE if stdin_prompt is not None else None,
+            text=True,
+            bufsize=1,
+            env=_env,
+        )
+        output_holder: dict[str, str] = {"output": ""}
+        activity = {"last": time.time()}
+        reader = threading.Thread(
+            target=lambda: output_holder.__setitem__(
+                "output",
+                _stream_process_output(
+                    proc,
+                    llm_engine=llm_engine,
+                    log_path=log_path,
+                    stream_prefix=stream_prefix,
+                    activity=activity,
+                ),
+            ),
+            daemon=True,
+        )
+        reader.start()
+
+        # Alimentar stdin só depois do reader ativo: o reader drena o stdout do
+        # filho enquanto escrevemos, evitando deadlock de pipes cheios.
+        if stdin_prompt is not None:
+            _feed_stdin(proc, stdin_prompt)
+
+        try:
+            returncode, early_success = _wait_for_process(
+                proc,
+                timeout=1800,
+                early_success_paths=early_success_paths,
+                early_success_grace=early_success_grace,
+                activity=activity,
+                idle_timeout=idle_timeout,
+            )
+        except ExecutorIdleTimeout:
+            _stop_process(proc)
+            reader.join(timeout=5)
+            msg = f"\n[IDLE_TIMEOUT] Executor sem nova saída por {idle_timeout} segundos.\n"
+            _append_log(msg)
+            return 124, False, output_holder["output"] + msg, "idle"
+        except subprocess.TimeoutExpired:
+            _stop_process(proc)
+            reader.join(timeout=5)
+            msg = "\n[TIMEOUT] Executor excedeu 1800 segundos.\n"
+            _append_log(msg)
+            return 124, False, output_holder["output"] + msg, "timeout"
+        except BaseException:
+            _stop_process(proc)
+            reader.join(timeout=5)
+            raise
+
+        reader.join(timeout=5)
+        early_success_msg = ""
+        if early_success:
+            early_success_msg = (
+                "\n[EARLY_SUCCESS] Outputs esperados existem; encerrando OpenCode "
+                "para validação determinística.\n"
+            )
+            _append_log(early_success_msg)
+        return returncode, early_success, output_holder["output"] + early_success_msg, None
 
     def _extract_output(raw: str, engine: str) -> str:
         if engine == "codex":
@@ -1233,77 +1282,57 @@ NODE_SUMMARY:
             return _extract_claude_json_output(raw)
         return raw
 
-    raw_output = output_holder["output"] + early_success_msg
-    output = _extract_output(raw_output, llm_engine)
-
-    # Detectar rate limit e fazer retry com backoff exponencial
-    if _RATE_LIMIT_PATTERNS.search(output):
-        _backoff_schedule = _rate_limit_backoff_schedule()
-        for attempt, wait in enumerate(_backoff_schedule, start=1):
-            print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
-                  f"Aguardando {wait}s antes da tentativa {attempt}/{len(_backoff_schedule)}…")
-            time.sleep(wait)
-            proc2 = subprocess.Popen(
-                cmd,
-                cwd=project_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.PIPE if stdin_prompt is not None else None,
-                text=True,
-                bufsize=1,
-                env=_env,
-            )
-            holder2: dict[str, str] = {"output": ""}
-            t2 = threading.Thread(
-                target=lambda: holder2.__setitem__(
-                    "output",
-                    _stream_process_output(
-                        proc2,
-                        llm_engine=llm_engine,
-                        log_path=log_path,
-                        stream_prefix=stream_prefix,
-                    ),
-                ),
-                daemon=True,
-            )
-            t2.start()
-            if stdin_prompt is not None:
-                _feed_stdin(proc2, stdin_prompt)
-            try:
-                rc2, early_success2 = _wait_for_process(
-                    proc2,
-                    timeout=1800,
-                    early_success_paths=early_success_paths,
-                    early_success_grace=early_success_grace,
+    try:
+        idle_attempt = 0
+        while True:
+            returncode, _early_success, raw_output, failure_kind = _run_executor_attempt()
+            if failure_kind == "idle" and idle_attempt < idle_retries:
+                idle_attempt += 1
+                retry_msg = (
+                    f"\n[IDLE_RETRY] Retentando OpenCode apos inatividade "
+                    f"({idle_attempt}/{idle_retries}).\n"
                 )
-            except subprocess.TimeoutExpired:
-                proc2.kill()
-                t2.join(timeout=5)
-                break
-            t2.join(timeout=5)
-            early_success_msg2 = ""
-            if early_success2:
-                early_success_msg2 = (
-                    "\n[EARLY_SUCCESS] Outputs esperados existem; encerrando OpenCode "
-                    "para validação determinística.\n"
+                print(f"  ! OpenCode sem saída nova; retry {idle_attempt}/{idle_retries}")
+                _append_log(retry_msg)
+                continue
+            if failure_kind:
+                _cleanup_delegate_runtime()
+                return DelegateResult(
+                    success=False,
+                    output=_extract_output(raw_output, llm_engine),
+                    files_created=[],
+                    files_modified=[],
                 )
-                if log_path:
-                    with Path(log_path).open("a", encoding="utf-8") as f:
-                        f.write(early_success_msg2)
-            raw2 = holder2["output"] + early_success_msg2
-            out2 = _extract_output(raw2, llm_engine)
-            if not _RATE_LIMIT_PATTERNS.search(out2):
-                output = out2
-                returncode = rc2
-                break
-            output = out2  # última tentativa falhou também
+            break
 
-    token = _final_protocol_token(output)
-    success = returncode == 0 and token != "BLOCKED"
-    rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
-    _cleanup_empty_placeholders(sandbox_mounts)
-    if sandbox_tmp is not None:
-        sandbox_tmp.cleanup()
+        output = _extract_output(raw_output, llm_engine)
+
+        # Detectar rate limit e fazer retry com backoff exponencial
+        if _RATE_LIMIT_PATTERNS.search(output):
+            _backoff_schedule = _rate_limit_backoff_schedule()
+            for attempt, wait in enumerate(_backoff_schedule, start=1):
+                print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
+                      f"Aguardando {wait}s antes da tentativa {attempt}/{len(_backoff_schedule)}…")
+                time.sleep(wait)
+                rc2, _early_success2, raw2, failure2 = _run_executor_attempt()
+                out2 = _extract_output(raw2, llm_engine)
+                if failure2:
+                    output = out2
+                    returncode = rc2
+                    break
+                if not _RATE_LIMIT_PATTERNS.search(out2):
+                    output = out2
+                    returncode = rc2
+                    break
+                output = out2  # última tentativa falhou também
+
+        token = _final_protocol_token(output)
+        success = returncode == 0 and token != "BLOCKED"
+        rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
+        _cleanup_delegate_runtime()
+    except BaseException:
+        _cleanup_delegate_runtime()
+        raise
 
     # Extrair arquivos criados/modificados do git status
     git_result = subprocess.run(

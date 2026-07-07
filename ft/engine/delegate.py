@@ -80,6 +80,7 @@ def _opencode_runtime_config(
     restrict_tools: bool = False,
     steps: int | None = None,
     model: str | None = None,
+    deny_edit_tools: bool = False,
 ) -> str:
     """Config inline para isolar OpenCode no workdir e poupar contexto."""
     config: dict = {}
@@ -119,6 +120,8 @@ def _opencode_runtime_config(
         permission["glob"] = "deny"
         permission["grep"] = "deny"
         permission["list"] = "deny"
+    if deny_edit_tools:
+        permission["edit"] = "deny"
 
     config["permission"] = permission
 
@@ -188,6 +191,7 @@ def _executor_env(
     opencode_restrict_tools: bool = False,
     opencode_steps: int | None = None,
     opencode_model: str | None = None,
+    opencode_deny_edit_tools: bool = False,
 ) -> dict[str, str]:
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
@@ -199,6 +203,7 @@ def _executor_env(
             restrict_tools=opencode_restrict_tools,
             steps=opencode_steps,
             model=opencode_model,
+            deny_edit_tools=opencode_deny_edit_tools,
         )
     return env
 
@@ -850,6 +855,7 @@ def delegate_to_llm(
     opencode_deny_read_paths: list[str] | None = None,
     opencode_restrict_tools: bool = False,
     opencode_steps: int | None = None,
+    opencode_deny_edit_tools: bool = False,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -876,6 +882,24 @@ def delegate_to_llm(
             "conciso com o contexto injetado."
         )
 
+    if opencode_deny_edit_tools:
+        write_tool_rule = (
+            "- OBRIGATORIO: antes de dizer DONE, use Bash para criar ou modificar "
+            "cada arquivo de saida esperado. NAO use Write/Edit/Patch neste node; "
+            "o OpenCode pode corromper nomes de arquivos quando escreve codigo/JSON por edit.\n"
+            "- Para criar arquivos, use comandos independentes com paths explicitos, por exemplo: "
+            "`mkdir -p project/frontend && cat > project/frontend/package.json <<'EOF' ... EOF`. "
+            "Nao dependa de `cd` persistente entre comandos.\n"
+            "- Se o contrato pedir `project/...`, crie somente paths abaixo de `project/`; "
+            "nao crie `frontend/`, `backend/`, `src/` ou outros diretorios de produto na raiz."
+        )
+    else:
+        write_tool_rule = (
+            "- OBRIGATORIO: antes de dizer DONE, use uma ferramenta de escrita\n"
+            "  (Write/Edit/Patch) para criar ou modificar cada arquivo de saida esperado.\n"
+            "  Nao declare que um arquivo foi criado sem antes executar a escrita real."
+        )
+
     prompt = f"""Voce e um executor de construcao. Sua unica tarefa:
 
 {task}
@@ -894,9 +918,7 @@ REGRAS:
 {restricted_tools_rule}
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)
-- OBRIGATORIO: antes de dizer DONE, use uma ferramenta de escrita
-  (Write/Edit/Patch) para criar ou modificar cada arquivo de saida esperado.
-  Nao declare que um arquivo foi criado sem antes executar a escrita real.
+{write_tool_rule}
 - Quando terminar, diga DONE e liste os arquivos criados/modificados
 - Se encontrar um problema que nao consegue resolver, diga BLOCKED e explique o motivo
 - ANTES do DONE, emita um bloco NODE_SUMMARY (max 10 linhas) neste formato:
@@ -940,6 +962,7 @@ NODE_SUMMARY:
         opencode_restrict_tools=opencode_restrict_tools,
         opencode_steps=opencode_steps,
         opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
+        opencode_deny_edit_tools=opencode_deny_edit_tools,
     )
 
     proc = subprocess.Popen(
@@ -1092,6 +1115,7 @@ def delegate_with_feedback(
     opencode_deny_read_paths: list[str] | None = None,
     opencode_restrict_tools: bool = False,
     opencode_steps: int | None = None,
+    opencode_deny_edit_tools: bool = False,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -1115,4 +1139,5 @@ Nao modifique o que ja esta funcionando."""
         opencode_deny_read_paths=opencode_deny_read_paths,
         opencode_restrict_tools=opencode_restrict_tools,
         opencode_steps=opencode_steps,
+        opencode_deny_edit_tools=opencode_deny_edit_tools,
     )

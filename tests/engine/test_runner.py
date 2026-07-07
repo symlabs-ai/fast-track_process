@@ -272,6 +272,50 @@ nodes:
         assert "Delegando ao LLM (opencode)" in out
         assert "Delegando ao LLM (llm_claude)" not in out
 
+    def test_opencode_code_nodes_deny_edit_tools(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.frontend.01.scaffold
+    type: build
+    title: Scaffold
+    executor: claude
+    outputs:
+      - project/frontend/
+    next: ft.plan.01.doc
+  - id: ft.plan.01.doc
+    type: document
+    title: Doc
+    executor: claude
+    outputs:
+      - docs/out.md
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+
+        build_node = runner.graph.get_node("ft.frontend.01.scaffold")
+        doc_node = runner.graph.get_node("ft.plan.01.doc")
+        assert runner._opencode_options_for_node(build_node, "opencode").deny_edit_tools is True
+        assert runner._opencode_options_for_node(doc_node, "opencode").deny_edit_tools is False
+
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"

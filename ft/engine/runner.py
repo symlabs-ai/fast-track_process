@@ -547,6 +547,7 @@ class OpenCodeOptions:
     deny_read_paths: list[str] = field(default_factory=list)
     restrict_tools: bool = False
     steps: int | None = None
+    deny_edit_tools: bool = False
 
 
 class StepRunner:
@@ -660,6 +661,7 @@ class StepRunner:
             deny_read_paths=list(dict.fromkeys(deny_read_paths or [])),
             restrict_tools=bool(restrict_tools),
             steps=resolved_steps,
+            deny_edit_tools=node.type in {"build", "test_red", "test_green", "refactor"},
         )
 
     @staticmethod
@@ -671,6 +673,8 @@ class StepRunner:
             delegate_kwargs["opencode_restrict_tools"] = True
         if options.steps is not None:
             delegate_kwargs["opencode_steps"] = options.steps
+        if options.deny_edit_tools:
+            delegate_kwargs["opencode_deny_edit_tools"] = True
 
     def _resolve_work_dir(self) -> str:
         """Resolve o diretório de trabalho (CWD) para delegação ao LLM.

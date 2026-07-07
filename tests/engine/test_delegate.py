@@ -135,6 +135,17 @@ class TestBuildExecutorCommand:
         assert config["agent"]["build"]["steps"] == 8
         assert config["agent"]["build"]["maxSteps"] == 8
 
+    def test_opencode_env_can_deny_edit_tools_for_code_nodes(self):
+        env = _executor_env(
+            "opencode",
+            {},
+            opencode_deny_edit_tools=True,
+        )
+
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        assert config["permission"]["edit"] == "deny"
+        assert "bash" not in config["permission"]
+
     def test_opencode_env_announces_default_model_context_limit(self):
         env = _executor_env("opencode", {}, opencode_model=DEFAULT_OPENCODE_MODEL)
 
@@ -236,9 +247,11 @@ class TestDelegateWithFeedback:
                 opencode_deny_read_paths=["docs/PRD.md"],
                 opencode_restrict_tools=True,
                 opencode_steps=8,
+                opencode_deny_edit_tools=True,
             )
 
         kwargs = delegate_mock.call_args.kwargs
         assert kwargs["opencode_deny_read_paths"] == ["docs/PRD.md"]
         assert kwargs["opencode_restrict_tools"] is True
         assert kwargs["opencode_steps"] == 8
+        assert kwargs["opencode_deny_edit_tools"] is True

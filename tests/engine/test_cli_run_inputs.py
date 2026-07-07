@@ -322,6 +322,21 @@ class TestActiveRunDetection:
 
         assert cli_main._check_active_run(project) is None
 
+    def test_find_latest_state_prefers_active_over_newer_cancelled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        active = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01"
+        cancelled = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-02"
+        self._write_state(active / "state" / "engine_state.yml", completed=True)
+        self._write_state(cancelled / "state" / "engine_state.yml", completed=True)
+        cancelled_state = cancelled / "state" / "engine_state.yml"
+        cancelled_state.write_text(
+            cancelled_state.read_text().replace("node_status: ready", "node_status: cancelled")
+        )
+
+        assert cli_main._find_latest_state(project) == active / "state" / "engine_state.yml"
+
 
 class TestApiHealthCheck:
     def test_opencode_skips_anthropic_health_check(self, tmp_path, monkeypatch):

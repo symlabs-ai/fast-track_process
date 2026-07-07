@@ -336,6 +336,40 @@ def _cycle_num(d: Path) -> int:
         return 0
 
 
+_TERMINAL_STATUSES = {"done", "completed", "failed", "aborted", "cancelled", "canceled"}
+
+
+def _is_active_state_data(data: dict) -> bool:
+    """True se o state representa um ciclo ainda acionável pelo usuário."""
+    if not isinstance(data, dict):
+        return False
+    node_status = data.get("node_status", "")
+    current_node = data.get("current_node", "")
+    if node_status in _TERMINAL_STATUSES or not current_node:
+        return False
+    if _is_pristine_state(data):
+        return False
+    return True
+
+
+def _state_data(path: Path) -> dict:
+    import yaml as _yaml
+
+    try:
+        data = _yaml.safe_load(path.read_text()) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _prefer_active_state(candidates: list[Path]) -> Path | None:
+    """Retorna o primeiro state ativo; se não houver, o candidato mais recente."""
+    for state in candidates:
+        if _is_active_state_data(_state_data(state)):
+            return state
+    return candidates[0] if candidates else None
+
+
 def _find_latest_state(root: Path) -> Path:
     """Encontra o state mais recente.
 
@@ -353,15 +387,19 @@ def _find_latest_state(root: Path) -> Path:
             [d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d)],
             key=_cycle_num, reverse=True,
         )
-        for wd in wt_dirs:
-            # Worktree com state direto
-            state = wd / "state" / "engine_state.yml"
-            if state.exists():
-                return state
+        wt_states = [
+            wd / "state" / "engine_state.yml"
+            for wd in wt_dirs
+            if (wd / "state" / "engine_state.yml").exists()
+        ]
+        picked = _prefer_active_state(wt_states)
+        if picked:
+            return picked
 
     # 3. Fallback legado: runs/ dentro do projeto
     runs_dir = root / "runs"
     if runs_dir.is_dir():
+        run_states: list[Path] = []
         run_dirs = sorted(
             [d for d in runs_dir.iterdir() if d.is_dir() and _is_cycle_dir(d)],
             key=_cycle_num, reverse=True,
@@ -377,10 +415,13 @@ def _find_latest_state(root: Path) -> Path:
                 for sd in sub_dirs:
                     state = sd / "state" / "engine_state.yml"
                     if state.exists():
-                        return state
+                        run_states.append(state)
             state = rd / "state" / "engine_state.yml"
             if state.exists():
-                return state
+                run_states.append(state)
+        picked = _prefer_active_state(run_states)
+        if picked:
+            return picked
 
     # 4. Fallback legado antigo
     legacy = root / "project" / "state" / "engine_state.yml"
@@ -2286,18 +2327,9 @@ def _check_active_run(project_root: Path) -> str | None:
     """Verifica se há um ciclo ativo (em andamento, pausado ou bloqueado). Retorna descrição ou None."""
     import yaml as _yaml
 
-    _TERMINAL_STATUSES = {"done", "completed", "failed", "aborted", "cancelled", "canceled"}
-
     def _is_active_state(data: dict) -> bool:
         """Retorna True se o state indica ciclo em andamento (não finalizado)."""
-        node_status = data.get("node_status", "")
-        current_node = data.get("current_node", "")
-        # Se o node_status é terminal ou não há node atual, não é ativo
-        if node_status in _TERMINAL_STATUSES or not current_node:
-            return False
-        if _is_pristine_state(data):
-            return False
-        return True
+        return _is_active_state_data(data)
 
     def _describe_state(data: dict, cycle_name: str) -> str:
         node = data.get("current_node", "?")

@@ -227,13 +227,25 @@ def _build_executor_command(
         return cmd
 
     if engine == "opencode":
-        return [
+        cmd = [
             "opencode",
             "run",
             "--dir", project_root,
             "-m", model or DEFAULT_OPENCODE_MODEL,
-            prompt,
         ]
+        debug_enabled = os.environ.get("FT_OPENCODE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+        print_logs = debug_enabled or os.environ.get("FT_OPENCODE_PRINT_LOGS", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        log_level = (os.environ.get("FT_OPENCODE_LOG_LEVEL") or ("DEBUG" if debug_enabled else "")).strip().upper()
+        if print_logs:
+            cmd.append("--print-logs")
+        if log_level:
+            cmd += ["--log-level", log_level]
+        if debug_enabled or os.environ.get("FT_OPENCODE_THINKING", "").strip().lower() in {"1", "true", "yes", "on"}:
+            cmd.append("--thinking")
+        cmd.append(prompt)
+        return cmd
 
     raise ValueError(f"Executor LLM desconhecido: {llm_engine}")
 

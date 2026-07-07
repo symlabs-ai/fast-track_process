@@ -549,6 +549,7 @@ class OpenCodeOptions:
     steps: int | None = None
     deny_edit_tools: bool = False
     early_success_paths: list[str] = field(default_factory=list)
+    capture_output_path: str | None = None
 
 
 class StepRunner:
@@ -663,6 +664,9 @@ class StepRunner:
                 for output in node.outputs
                 if not str(output).endswith("/")
             ]
+        capture_output_path = None
+        if node.type in {"discovery", "document", "retro"} and len(early_success_paths) == 1:
+            capture_output_path = early_success_paths[0]
 
         return OpenCodeOptions(
             deny_read_paths=list(dict.fromkeys(deny_read_paths or [])),
@@ -670,6 +674,7 @@ class StepRunner:
             steps=resolved_steps,
             deny_edit_tools=node.type in {"build", "test_red", "test_green", "refactor"},
             early_success_paths=early_success_paths,
+            capture_output_path=capture_output_path,
         )
 
     @staticmethod
@@ -685,6 +690,8 @@ class StepRunner:
             delegate_kwargs["opencode_deny_edit_tools"] = True
         if options.early_success_paths:
             delegate_kwargs["opencode_early_success_paths"] = options.early_success_paths
+        if options.capture_output_path:
+            delegate_kwargs["opencode_capture_output_path"] = options.capture_output_path
 
     def _resolve_work_dir(self) -> str:
         """Resolve o diretório de trabalho (CWD) para delegação ao LLM.

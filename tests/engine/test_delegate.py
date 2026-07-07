@@ -9,8 +9,11 @@ from unittest.mock import patch
 
 from ft.engine.delegate import (
     _build_executor_command,
+    _clean_opencode_capture_text,
     _executor_env,
     _extract_codex_output,
+    _extract_opencode_json_text,
+    _opencode_capture_command,
     _prepare_opencode_sandbox_mounts,
     _wait_for_process,
     _wrap_opencode_sandbox_command,
@@ -148,6 +151,35 @@ class TestBuildExecutorCommand:
         assert config["permission"]["list"] == "deny"
         assert config["agent"]["build"]["steps"] == 8
         assert config["agent"]["build"]["maxSteps"] == 8
+
+    def test_opencode_env_text_only_denies_tools(self):
+        env = _executor_env("opencode", {}, opencode_text_only=True)
+
+        permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
+        for tool in ("bash", "glob", "grep", "list", "read", "edit"):
+            assert permission[tool] == "deny"
+
+    def test_opencode_capture_command_uses_json_without_debug_logs(self):
+        cmd = [
+            "opencode", "run", "--dir", "/tmp/project", "-m", DEFAULT_OPENCODE_MODEL,
+            "--print-logs", "--log-level", "DEBUG", "prompt",
+        ]
+
+        captured = _opencode_capture_command(cmd)
+
+        assert "--print-logs" not in captured
+        assert "--log-level" not in captured
+        assert captured[-3:] == ["--format", "json", "prompt"]
+
+    def test_extracts_opencode_json_text_for_capture(self):
+        raw = "\n".join([
+            '{"type":"step_start","part":{"type":"step-start"}}',
+            '{"type":"text","part":{"type":"text","text":"# Doc\\nbody\\n[tool_calls] (None)"}}',
+        ])
+
+        extracted = _extract_opencode_json_text(raw)
+
+        assert _clean_opencode_capture_text(extracted) == "# Doc\nbody"
 
     def test_opencode_env_can_deny_edit_tools_for_code_nodes(self):
         env = _executor_env(
@@ -337,6 +369,7 @@ class TestDelegateWithFeedback:
                 opencode_steps=8,
                 opencode_deny_edit_tools=True,
                 opencode_early_success_paths=["docs/out.md"],
+                opencode_capture_output_path="docs/out.md",
             )
 
         kwargs = delegate_mock.call_args.kwargs
@@ -345,3 +378,4 @@ class TestDelegateWithFeedback:
         assert kwargs["opencode_steps"] == 8
         assert kwargs["opencode_deny_edit_tools"] is True
         assert kwargs["opencode_early_success_paths"] == ["docs/out.md"]
+        assert kwargs["opencode_capture_output_path"] == "docs/out.md"

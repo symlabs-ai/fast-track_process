@@ -263,6 +263,7 @@ def _opencode_runtime_config(
     steps: int | None = None,
     model: str | None = None,
     deny_edit_tools: bool = False,
+    text_only: bool = False,
 ) -> str:
     """Config inline para isolar OpenCode no workdir e poupar contexto."""
     config: dict = {}
@@ -303,6 +304,13 @@ def _opencode_runtime_config(
         permission["grep"] = "deny"
         permission["list"] = "deny"
     if deny_edit_tools:
+        permission["edit"] = "deny"
+    if text_only:
+        permission["bash"] = "deny"
+        permission["glob"] = "deny"
+        permission["grep"] = "deny"
+        permission["list"] = "deny"
+        permission["read"] = "deny"
         permission["edit"] = "deny"
 
     config["permission"] = permission
@@ -374,6 +382,7 @@ def _executor_env(
     opencode_steps: int | None = None,
     opencode_model: str | None = None,
     opencode_deny_edit_tools: bool = False,
+    opencode_text_only: bool = False,
 ) -> dict[str, str]:
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
@@ -386,6 +395,7 @@ def _executor_env(
             steps=opencode_steps,
             model=opencode_model,
             deny_edit_tools=opencode_deny_edit_tools,
+            text_only=opencode_text_only,
         )
     return env
 
@@ -618,6 +628,58 @@ def _extract_codex_output(raw_output: str) -> str:
     if errors:
         return "\n".join(errors)
     return raw_output
+
+
+def _extract_opencode_json_text(raw_output: str) -> str:
+    """Extrai texto de `opencode run --format json`."""
+    messages: list[str] = []
+    for line in raw_output.splitlines():
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict) or part.get("type") != "text":
+            continue
+        value = part.get("text")
+        if isinstance(value, str) and value.strip():
+            messages.append(value)
+    return "\n".join(messages).strip() or raw_output.strip()
+
+
+def _clean_opencode_capture_text(text: str) -> str:
+    """Remove ruído do OpenCode antes de gravar artifact capturado."""
+    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text).strip()
+    text = re.sub(r"\n?\[tool_calls\]\s*\(None\)\s*$", "", text).strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2 and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _opencode_capture_command(cmd: list[str]) -> list[str]:
+    """Força JSON limpo e desliga logs verbosos no modo capture."""
+    if not cmd or cmd[0] != "opencode":
+        return cmd
+    prompt = cmd[-1]
+    cleaned: list[str] = []
+    skip_next = False
+    for arg in cmd[:-1]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in {"--print-logs", "--thinking"}:
+            continue
+        if arg in {"--log-level", "--format"}:
+            skip_next = True
+            continue
+        cleaned.append(arg)
+    cleaned += ["--format", "json", prompt]
+    return cleaned
 
 
 def _extract_claude_json_output(raw_output: str) -> str:
@@ -1042,6 +1104,7 @@ def delegate_to_llm(
     opencode_steps: int | None = None,
     opencode_deny_edit_tools: bool = False,
     opencode_early_success_paths: list[str] | None = None,
+    opencode_capture_output_path: str | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -1050,6 +1113,9 @@ def delegate_to_llm(
     nao pode editar ft_state.yml, nao pode tomar decisoes de processo.
     """
     paths_str = ", ".join(allowed_paths) if allowed_paths else "src/, tests/, docs/"
+    opencode_capture_mode = bool(
+        llm_engine.lower().strip() == "opencode" and opencode_capture_output_path
+    )
     deny_reads = list(dict.fromkeys(opencode_deny_read_paths or []))
     deny_reads_rule = ""
     if deny_reads:
@@ -1068,7 +1134,31 @@ def delegate_to_llm(
             "conciso com o contexto injetado."
         )
 
-    if opencode_deny_edit_tools:
+    completion_rule = (
+        "- Quando terminar, diga DONE e liste os arquivos criados/modificados\n"
+        "- Se encontrar um problema que nao consegue resolver, diga BLOCKED e explique o motivo\n"
+        "- ANTES do DONE, emita um bloco NODE_SUMMARY (max 10 linhas) neste formato:\n"
+        "NODE_SUMMARY:\n"
+        "- fiz: <o que foi feito, 1-2 linhas>\n"
+        "- decisoes: <decisoes tomadas e porque, se houver>\n"
+        "- verificado: <o que voce RODOU e confirmou funcionando>\n"
+        "- assumido: <o que voce assumiu SEM testar, se houver>\n"
+        "- armadilhas: <pegadinhas que o proximo node precisa saber, se houver>"
+    )
+    if opencode_capture_mode:
+        write_tool_rule = (
+            f"- NAO use ferramentas. NAO use Read, Glob, Grep, List, Bash, Write, Edit ou Patch.\n"
+            f"- Responda SOMENTE com o conteudo completo que deve ser gravado em "
+            f"{opencode_capture_output_path}.\n"
+            "- Nao inclua cercas de codigo markdown envolvendo o documento.\n"
+            "- O engine gravara o arquivo no path permitido depois da sua resposta."
+        )
+        completion_rule = (
+            "- Se nao conseguir produzir o documento, responda apenas: BLOCKED: <motivo>.\n"
+            "- Caso contrario, nao inclua DONE, NODE_SUMMARY ou lista de arquivos; "
+            "retorne apenas o conteudo final do documento."
+        )
+    elif opencode_deny_edit_tools:
         write_tool_rule = (
             "- OBRIGATORIO: antes de dizer DONE, use Bash para criar ou modificar "
             "cada arquivo de saida esperado. NAO use Write/Edit/Patch neste node; "
@@ -1114,18 +1204,12 @@ REGRAS:
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)
 {write_tool_rule}
-- Quando terminar, diga DONE e liste os arquivos criados/modificados
-- Se encontrar um problema que nao consegue resolver, diga BLOCKED e explique o motivo
-- ANTES do DONE, emita um bloco NODE_SUMMARY (max 10 linhas) neste formato:
-NODE_SUMMARY:
-- fiz: <o que foi feito, 1-2 linhas>
-- decisoes: <decisoes tomadas e porque, se houver>
-- verificado: <o que voce RODOU e confirmou funcionando>
-- assumido: <o que voce assumiu SEM testar, se houver>
-- armadilhas: <pegadinhas que o proximo node precisa saber, se houver>
+{completion_rule}
 """
 
     cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns, model=llm_model)
+    if opencode_capture_mode:
+        cmd = _opencode_capture_command(cmd)
 
     # Linux limita cada argumento de execve a ~128 KiB (MAX_ARG_STRLEN).
     # Prompts hyper-mode estouram isso ([Errno 7] Argument list too long) —
@@ -1150,6 +1234,7 @@ NODE_SUMMARY:
         opencode_steps=opencode_steps,
         opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
         opencode_deny_edit_tools=opencode_deny_edit_tools,
+        opencode_text_only=opencode_capture_mode,
     )
     sandbox_tmp: tempfile.TemporaryDirectory | None = None
     sandbox_mounts: list[_SandboxMount] = []
@@ -1167,7 +1252,7 @@ NODE_SUMMARY:
         cmd, sandbox_mounts = _wrap_opencode_sandbox_command(
             cmd,
             project_root=project_root,
-            allowed_paths=allowed_paths,
+            allowed_paths=[] if opencode_capture_mode else allowed_paths,
             runtime_dir=sandbox_tmp.name,
         )
     early_success_paths = _resolve_existing_file_paths(project_root, opencode_early_success_paths)
@@ -1285,6 +1370,8 @@ NODE_SUMMARY:
         return returncode, early_success, output_holder["output"] + early_success_msg, None
 
     def _extract_output(raw: str, engine: str) -> str:
+        if opencode_capture_mode:
+            return _extract_opencode_json_text(raw)
         if engine == "codex":
             return _extract_codex_output(raw)
         if engine == "claude":
@@ -1338,6 +1425,21 @@ NODE_SUMMARY:
         token = _final_protocol_token(output)
         success = returncode == 0 and token != "BLOCKED"
         rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
+        if success and opencode_capture_mode and opencode_capture_output_path:
+            captured = _clean_opencode_capture_text(output)
+            if not captured:
+                success = False
+                output = f"{output}\n[CAPTURE_EMPTY] OpenCode nao retornou conteudo gravavel."
+            else:
+                root = Path(project_root).resolve()
+                target = (root / opencode_capture_output_path).resolve()
+                if not _path_relative_to(target, root):
+                    success = False
+                    output = f"{output}\n[CAPTURE_PATH_INVALID] Path fora do projeto: {opencode_capture_output_path}"
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(captured.rstrip() + "\n", encoding="utf-8")
+                    output = f"DONE\nArquivo gravado pelo engine: {opencode_capture_output_path}\n"
         _cleanup_delegate_runtime()
     except BaseException:
         _cleanup_delegate_runtime()
@@ -1384,6 +1486,7 @@ def delegate_with_feedback(
     opencode_steps: int | None = None,
     opencode_deny_edit_tools: bool = False,
     opencode_early_success_paths: list[str] | None = None,
+    opencode_capture_output_path: str | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -1409,4 +1512,5 @@ Nao modifique o que ja esta funcionando."""
         opencode_steps=opencode_steps,
         opencode_deny_edit_tools=opencode_deny_edit_tools,
         opencode_early_success_paths=opencode_early_success_paths,
+        opencode_capture_output_path=opencode_capture_output_path,
     )

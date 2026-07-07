@@ -254,6 +254,7 @@ nodes:
             assert "opencode_deny_read_paths" not in kwargs
             assert "opencode_restrict_tools" not in kwargs
             assert kwargs["opencode_steps"] == 8
+            assert kwargs["opencode_capture_output_path"] == "docs/out.md"
             (docs / "out.md").write_text("# Out\n")
             return DelegateResult(
                 success=True,
@@ -321,6 +322,7 @@ nodes:
         assert doc_options.deny_edit_tools is False
         assert doc_options.restrict_tools is False
         assert doc_options.early_success_paths == ["docs/out.md"]
+        assert doc_options.capture_output_path == "docs/out.md"
         assert runner._resolve_allowed_paths(build_node) == ["project/frontend", ".build_ok"]
         assert runner._resolve_allowed_paths(doc_node) == ["docs/out.md"]
 

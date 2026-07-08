@@ -114,6 +114,21 @@ class TestCopyTemplate:
         graph = load_graph(result)
         assert len(graph.nodes) > 0
 
+    def test_base_template_copies_generic_ui_criteria(self, tmp_path):
+        from ft.cli.main import copy_template
+        copy_template("base", tmp_path)
+        ui_criteria = tmp_path / "docs" / "ui_criteria.md"
+        assert ui_criteria.exists()
+        content = ui_criteria.read_text(encoding="utf-8")
+        assert "C01:" in content
+        assert "data-ui-criteria" in content
+        assert "ServiceMate" not in content
+
+    def test_fast_track_v3_template_does_not_preseed_ui_criteria(self, tmp_path):
+        from ft.cli.main import copy_template
+        copy_template("fast-track-v3", tmp_path)
+        assert not (tmp_path / "docs" / "ui_criteria.md").exists()
+
     def test_nonexistent_template_exits(self, tmp_path):
         from ft.cli.main import copy_template
         with pytest.raises(SystemExit):

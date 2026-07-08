@@ -664,6 +664,80 @@ def _worktrees_home(project_root: Path) -> Path:
     return home
 
 
+def _validate_cycle_name(name: str | None) -> str | None:
+    """Valida nome explícito de ciclo informado pelo usuário."""
+    if name is None:
+        return None
+    name = str(name).strip()
+    if not name:
+        raise ValueError("nome de ciclo vazio")
+    if name in {".", ".."} or "/" in name or "\\" in name:
+        raise ValueError("nome de ciclo deve ser relativo e não pode conter barras")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", name):
+        raise ValueError("nome de ciclo deve usar apenas letras, números, '.', '_' ou '-'")
+    return name
+
+
+def _record_cycle_ledger(project_root: Path, cycle_name: str) -> None:
+    """Registra o número do ciclo no ledger quando o nome segue cycle-NN."""
+    num = _cycle_num_strict(Path(cycle_name))
+    if num is None:
+        return
+    try:
+        ledger = _worktrees_home(project_root) / ".cycles"
+        nums = set(ledger.read_text().split()) if ledger.exists() else set()
+        nums.add(f"{num:02d}")
+        ledger.write_text("\n".join(sorted(nums)) + "\n")
+    except OSError:
+        pass
+
+
+def _single_fix_target_path(instruction: str, root: Path) -> str | None:
+    """Extrai um path relativo unico citado numa instrucao de `ft fix`.
+
+    Usado para OpenCode operar em modo capture/file-content quando o fix mira
+    um arquivo especifico, evitando chamadas nativas de Edit/Write instaveis.
+    """
+    candidates: list[str] = []
+    pattern = r"\b((?:project|src|tests|docs|process)/(?:[A-Za-z0-9_.@%+=-]+/)*[A-Za-z0-9_.@%+=-]+)"
+    for match in re.finditer(pattern, instruction):
+        rel = match.group(1).strip().strip("'\"`.,;:)")
+        path = Path(rel)
+        if path.is_absolute() or ".." in path.parts:
+            continue
+        target = (root / path).resolve()
+        try:
+            target.relative_to(root.resolve())
+        except ValueError:
+            continue
+        if target.exists() and target.is_file():
+            candidates.append(path.as_posix())
+    unique = sorted(set(candidates))
+    return unique[0] if len(unique) == 1 else None
+
+
+def _postprocess_opencode_fix_capture(runner, capture_path: str | None) -> str | None:
+    """Valida artefato capturado por OpenCode e aplica reparos determinísticos conhecidos."""
+    if not capture_path:
+        return None
+    root = Path(getattr(runner, "_work_dir", runner.project_root))
+    target = root / capture_path
+    if not target.exists() or target.suffix != ".py":
+        return None
+
+    import py_compile
+
+    try:
+        py_compile.compile(str(target), doraise=True)
+        return None
+    except py_compile.PyCompileError as exc:
+        if capture_path == "project/tests/e2e/test_navigation.py" and hasattr(runner, "_write_opencode_e2e_test"):
+            runner._write_opencode_e2e_test(root)
+            py_compile.compile(str(target), doraise=True)
+            return f"arquivo Python inválido gerado pelo OpenCode; E2E determinístico regravado ({exc.msg})"
+        raise
+
+
 def _engine_from_last_cycle(project_root: Path) -> str | None:
     """Lê o llm_engine do ciclo mais recente (worktree externo ou runs/ legado)."""
     import yaml as _yaml
@@ -896,7 +970,13 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(
+        args.process,
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     if getattr(args, "report", False):
         runner.status_report()
     else:
@@ -1098,6 +1178,98 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"há {s // 60} min {s % 60:02d}s"
 
 
+def _fmt_duration(seconds: float | int | None) -> str:
+    """Formata duração total de ciclo em português curto."""
+    if seconds is None:
+        return "desconhecida"
+    s = max(0, int(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}min {sec:02d}s"
+    if m:
+        return f"{m}min {sec:02d}s"
+    return f"{sec}s"
+
+
+def _run_log_path_for(root: Path) -> Path | None:
+    candidates = sorted(root.glob("*_log.md"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
+    return candidates[-1] if candidates else None
+
+
+def _run_log_duration_seconds(root: Path) -> int | None:
+    """Duração aproximada do ciclo pelo primeiro e último timestamp do run log."""
+    from datetime import datetime as _dt
+    import re as _re
+
+    log_path = _run_log_path_for(root)
+    if not log_path or not log_path.exists():
+        return None
+    timestamps: list[_dt] = []
+    for line in log_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = _re.match(r"\|\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|", line)
+        if not match:
+            continue
+        try:
+            timestamps.append(_dt.strptime(match.group(1), "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            continue
+    if len(timestamps) < 2:
+        return None
+    return int((timestamps[-1] - timestamps[0]).total_seconds())
+
+
+def _file_exists_mark(root: Path, relative_path: str) -> str:
+    return "✓" if (root / relative_path).exists() else "✗"
+
+
+def _cycle_completion_report(runner) -> list[str]:
+    """Resumo útil para `ft log` quando o ciclo selecionado já terminou."""
+    state = runner.state_mgr.load()
+    root = Path(runner._work_dir)
+    metrics = state.metrics or {}
+    done = metrics.get("steps_completed", len(state.completed_nodes))
+    total = metrics.get("steps_total", "?")
+    cycle_name = root.name
+    url = "—"
+    serve_file = root / ".serve_url"
+    if serve_file.exists():
+        url = serve_file.read_text(encoding="utf-8", errors="ignore").strip() or "—"
+    duration = _fmt_duration(_run_log_duration_seconds(root))
+    engine = state.llm_engine or "?"
+    model = state.llm_model or ("pgx/zai-org_glm-4.7-flash" if engine == "opencode" else "default")
+    llm_calls = metrics.get("llm_calls", "?")
+    tests = [
+        ("Acceptance", "docs/acceptance-result.json"),
+        ("E2E report", "docs/e2e-report.md"),
+        ("Visual check", "docs/visual-check-report.md"),
+        ("Handoff", "docs/handoff.md"),
+    ]
+    artifacts = ", ".join(f"{_file_exists_mark(root, path)} {label}" for label, path in tests)
+
+    return [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "  CICLO COMPLETO",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"  Ciclo:      {cycle_name}",
+        f"  Progresso:  {done}/{total} steps",
+        f"  Duração:    {duration}",
+        f"  LLM:        {engine} ({model})",
+        f"  LLM calls:  {llm_calls}",
+        f"  Testar em:  {url}",
+        f"  Worktree:   {root}",
+        f"  Artefatos:  {artifacts}",
+        "",
+        "  Comandos úteis:",
+        f"    ft status --cycle {cycle_name} --full",
+        f"    ft runs",
+        f"    cd {root} && make -C project build && make -C project test",
+        f"    cd {root} && python -m pytest project/tests/e2e -q",
+        "",
+    ]
+
+
 def _node_from_log_name(name: str) -> str | None:
     """Extrai o id do node do nome do log (``TIMESTAMP__<node>__sufixo.log``)."""
     parts = name.split("__")
@@ -1115,7 +1287,7 @@ def _log_mtime(path) -> float:
 
 
 def cmd_log(args):
-    """Mostra/acompanha o log LLM do ciclo ativo, formatado para leitura humana."""
+    """Mostra/acompanha o log LLM do ciclo selecionado, formatado para leitura humana."""
     import time as _time
     from ft.engine.delegate import _format_stream_line
     from ft.engine import ui as _ui
@@ -1127,7 +1299,12 @@ def cmd_log(args):
         return
     lines = args.lines if args.lines is not None else 30
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args))
+    runner = get_runner(
+        args.process,
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        cycle=getattr(args, "cycle", None),
+    )
 
     def _current_log() -> Path | None:
         state = runner.state_mgr.load()
@@ -1200,7 +1377,7 @@ def cmd_log(args):
 
     log_path = _current_log()
     if log_path is None:
-        print(_ui.warn("Nenhum log LLM encontrado para o ciclo ativo"), flush=True)
+        print(_ui.warn("Nenhum log LLM encontrado para o ciclo selecionado"), flush=True)
         return
 
     if args.path:
@@ -1216,6 +1393,16 @@ def cmd_log(args):
             print(out, flush=True)
         else:
             _emit(out)
+
+    try:
+        selected_state = runner.state_mgr.load()
+    except Exception:
+        selected_state = None
+    if selected_state and selected_state.node_status in ("done", "completed") and not args.raw:
+        for line in _cycle_completion_report(runner):
+            print(line, flush=True)
+        if args.follow:
+            return
 
     if not args.follow:
         return
@@ -1472,6 +1659,7 @@ def cmd_explore(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         verbose=getattr(args, "verbose", False))
+    runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     if getattr(args, "finish", False):
         runner.explore_finish()
@@ -1825,6 +2013,7 @@ def cmd_retry(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         verbose=getattr(args, "verbose", False))
+    runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     state = runner.state_mgr.load()
     if state.node_status != "blocked":
@@ -1892,25 +2081,134 @@ def cmd_fix(args):
         f"e diga DONE quando terminar."
     )
 
+    state = runner.state_mgr.load() if state_path.exists() else None
+    fix_engine = runner._resolve_llm_engine(state)
+    fix_model = runner._resolve_llm_model(state)
+    fix_node = None
+    if state and state.current_node and state.current_node in runner.graph.nodes:
+        fix_node = runner.graph.get_node(state.current_node)
+    fix_allowed_paths = ["project/", "src/", "tests/", "docs/", "main.py", "app.py", "server.py",
+                         "frontend/", "process/"]
+    opencode_capture_output_path = None
+    if fix_engine == "opencode" and fix_node is not None:
+        outputs = [str(output) for output in getattr(fix_node, "outputs", []) if not str(output).endswith("/")]
+        if getattr(fix_node, "type", None) in {"discovery", "document", "retro"} and len(outputs) == 1:
+            opencode_capture_output_path = outputs[0]
+            fix_allowed_paths = [opencode_capture_output_path]
+    elif fix_engine == "opencode":
+        inferred_path = _single_fix_target_path(instruction, Path(root))
+        if inferred_path:
+            opencode_capture_output_path = inferred_path
+            fix_allowed_paths = [inferred_path]
+
+    if opencode_capture_output_path:
+        target = Path(root) / opencode_capture_output_path
+        if target.exists() and target.is_file():
+            current = target.read_text(encoding="utf-8", errors="ignore")
+            prompt += (
+                f"\n\nARQUIVO ALVO: {opencode_capture_output_path}\n"
+                "CONTEUDO ATUAL ENTRE MARCADORES:\n"
+                "<<<FT_CURRENT_FILE>>>\n"
+                f"{current.rstrip()}\n"
+                "<<<FT_END_CURRENT_FILE>>>\n\n"
+                "Retorne o conteudo completo atualizado desse unico arquivo. "
+                "Nao retorne diff, explicacao, markdown fence ou DONE."
+            )
+        if opencode_capture_output_path.startswith("project/tests/e2e/"):
+            frontend_source = Path(root) / "project" / "frontend" / "src" / "main.js"
+            if frontend_source.exists() and frontend_source.is_file():
+                prompt += (
+                    "\n\nCONTEXTO DA UI ATUAL (somente leitura): project/frontend/src/main.js\n"
+                    "<<<FT_UI_SOURCE>>>\n"
+                    f"{frontend_source.read_text(encoding='utf-8', errors='ignore').rstrip()}\n"
+                    "<<<FT_END_UI_SOURCE>>>"
+                )
+
+    if fix_engine == "opencode" and opencode_capture_output_path == "project/tests/e2e/test_navigation.py":
+        try:
+            pre_note = _postprocess_opencode_fix_capture(runner, opencode_capture_output_path)
+        except Exception:
+            pre_note = None
+        if pre_note and state and state.node_status != "blocked":
+            print(_ui.success("Correção aplicada"))
+            print(_ui.warn(pre_note))
+            print(_ui.info("Para continuar o processo: ft continue --auto"))
+            return
+
     print(_ui.info(f"Aplicando correção: {instruction}"))
-    result = delegate_to_llm(
+    fix_kwargs = dict(
         task=prompt,
         project_root=str(root),
-        allowed_paths=["src/", "tests/", "docs/", "main.py", "app.py", "server.py",
-                        "frontend/", "process/"],
-        llm_engine=resolve_llm_engine(args) or "claude",
+        allowed_paths=fix_allowed_paths,
+        llm_engine=fix_engine,
+        llm_model=fix_model,
     )
+    if opencode_capture_output_path:
+        fix_kwargs["opencode_capture_output_path"] = opencode_capture_output_path
+    result = delegate_to_llm(**fix_kwargs)
 
     if result.success:
+        postprocess_note = None
+        if fix_engine == "opencode" and opencode_capture_output_path:
+            try:
+                postprocess_note = _postprocess_opencode_fix_capture(runner, opencode_capture_output_path)
+            except Exception as exc:
+                print(_ui.fail(f"Correção aplicada, mas artefato capturado é inválido: {exc}"))
+                return
         print(_ui.success("Correção aplicada"))
+        if postprocess_note:
+            print(_ui.warn(postprocess_note))
         state = runner.state_mgr.load()
         if state.node_status == "blocked":
+            mode = "mvp" if getattr(args, "auto", False) else "step"
+            node_id = state.current_node
+            node = runner.graph.get_node(node_id) if node_id and node_id in runner.graph.nodes else None
+            if node is not None:
+                from ft.engine.runner import run_validators
+
+                print(_ui.info("Validando correção..."))
+                validation = run_validators(
+                    node,
+                    runner.project_root,
+                    state_dir=str(runner.state_mgr.path.parent),
+                    work_dir=runner._run_dir,
+                )
+                runner._print_validation(validation)
+                if validation.passed:
+                    for output_path in node.outputs:
+                        runner.state_mgr.record_artifact(Path(output_path).stem, output_path)
+                    runner._maybe_auto_commit(node)
+                    runner._record_node_summary(
+                        node,
+                        "NODE_SUMMARY:\n"
+                        "- fiz: correção via ft fix\n"
+                        "- verificado: validators do node passaram\n"
+                        f"- instrução: {instruction}",
+                    )
+                    if node.requires_approval and not runner._auto_approve:
+                        fixed_state = runner.state_mgr.load()
+                        fixed_state.node_status = "ready"
+                        fixed_state.blocked_reason = None
+                        runner.state_mgr.save()
+                        print(_ui.awaiting_approval(auto=runner._auto_approve))
+                        runner.state_mgr.set_pending_approval(node.id)
+                        return
+
+                    next_id = runner.graph.resolve_next(node.id)
+                    runner._advance_state(node.id, next_id)
+                    print(_ui.step_pass(next_id))
+                    if getattr(args, "auto", False):
+                        runner.run(mode="mvp")
+                    return
+
+                print(_ui.warn("Correção aplicada, mas validators ainda falham — reexecutando node."))
+
+            state = runner.state_mgr.load()
             state.node_status = "running"
             state.blocked_reason = None
             state.last_approval_message = instruction
             runner.state_mgr.save()
             print(_ui.info("Estado desbloqueado — continuando..."))
-            mode = "mvp" if getattr(args, "auto", False) else "step"
             runner.run(mode=mode)
         else:
             print(_ui.info("Para continuar o processo: ft continue --auto"))
@@ -2398,6 +2696,22 @@ def cmd_run(args):
 
     project_root = Path(args.project).resolve()
     _guard_engine_repo(project_root)
+
+    try:
+        explicit_cycle_name = _validate_cycle_name(getattr(args, "cycle_name", None))
+    except ValueError as e:
+        from ft.engine import ui as _ui
+        print(_ui.fail(f"--cycle-name inválido: {e}"))
+        sys.exit(1)
+
+    if explicit_cycle_name and (paths.worktrees_home(project_root) / explicit_cycle_name).exists():
+        from ft.engine import ui as _ui
+        print(_ui.fail(f"Ciclo já existe: {paths.worktrees_home(project_root) / explicit_cycle_name}"))
+        print(_ui.dim("Escolha outro --cycle-name ou remova o ciclo existente."))
+        sys.exit(1)
+
+    inherited_engine = _engine_from_last_cycle(project_root)
+
     _cleanup_pristine_runs(project_root)
 
     # Verificar se já tem um ciclo ativo (em andamento, pausado ou bloqueado)
@@ -2411,13 +2725,20 @@ def cmd_run(args):
             print(_ui.dim("Para forçar novo ciclo mesmo assim: ft run . --force"))
             sys.exit(1)
 
+    if explicit_cycle_name and getattr(args, "worktree", None):
+        from ft.engine import ui as _ui
+        print(_ui.fail("Use --cycle-name ou --worktree, não ambos."))
+        sys.exit(1)
+
     # --worktree: criar worktree git e redirecionar project_root para ele
     # Quando --worktree é usado, o worktree externo já É o ambiente isolado —
     # o engine não deve criar outro worktree interno (flag para suprimir).
-    # Engine efetivo: CLI flag > último ciclo > env > "claude"
+    # Engine efetivo: CLI flag > estado/ciclo anterior > env > "claude".
+    # Capturar o state antes de limpar ciclos pristine preserva a escolha feita
+    # em `ft init --opencode` para o primeiro `ft run .`.
     _effective_engine = (
         resolve_llm_engine(args)
-        or _engine_from_last_cycle(project_root)
+        or inherited_engine
         or os.environ.get("FT_LLM_ENGINE", "").strip().lower()
         or "claude"
     )
@@ -2469,23 +2790,24 @@ def cmd_run(args):
             # nome de ciclo quebrava parsing e não identifica nada). O ledger
             # .cycles preserva a numeração mesmo depois que o close remove o dir.
             next_num = _next_cycle_num(project_root)
-            wt_name = f"cycle-{next_num:02d}"
+            wt_name = explicit_cycle_name or f"cycle-{next_num:02d}"
             run_dir = _setup_worktree(project_root, wt_name)
-            try:
-                _ledger = _worktrees_home(project_root) / ".cycles"
-                _nums = set(_ledger.read_text().split()) if _ledger.exists() else set()
-                _nums.add(f"{next_num:02d}")
-                _ledger.write_text("\n".join(sorted(_nums)) + "\n")
-            except OSError:
-                pass
+            _record_cycle_ledger(project_root, wt_name)
         else:
             # Fallback sem git: diretório simples em ~/.ft/worktrees/
             wt_home = _worktrees_home(project_root)
             next_num = _next_cycle_num(project_root)
             engine_name = _effective_engine or "run"
-            run_dir = wt_home / f"cycle-{next_num:02d}-{engine_name}"
+            cycle_name = explicit_cycle_name or f"cycle-{next_num:02d}-{engine_name}"
+            run_dir = wt_home / cycle_name
+            if run_dir.exists():
+                from ft.engine import ui as _ui
+                print(_ui.fail(f"Ciclo já existe: {run_dir}"))
+                print(_ui.dim("Escolha outro --cycle-name ou remova o ciclo existente."))
+                sys.exit(1)
             run_dir.mkdir(parents=True, exist_ok=True)
             _copy_plain_run_seed(project_root, run_dir)
+            _record_cycle_ledger(project_root, cycle_name)
 
         (run_dir / "state").mkdir(parents=True, exist_ok=True)
         state_path = run_dir / "state" / "engine_state.yml"
@@ -2735,6 +3057,7 @@ def main():
     add_llm_engine_flags(st)
     st.add_argument("--full", "-f", action="store_true", help="Mostrar grafo e artefatos")
     st.add_argument("--report", "-r", action="store_true", help="Relatório de tempo e tokens por node")
+    st.add_argument("--cycle", help="Ciclo específico a consultar (ex: cycle-10-opencode)")
 
     # log — acompanhar o log LLM do ciclo ativo
     lg = sub.add_parser("log", help="Mostrar/acompanhar o log LLM do ciclo ativo")
@@ -2745,6 +3068,7 @@ def main():
     lg.add_argument("--raw", action="store_true", help="NDJSON cru, sem formatação")
     lg.add_argument("--markdown", "-m", action="store_true", help="Realça a saída por cor/ênfase: comandos bash, ferramentas, resposta e raciocínio")
     lg.add_argument("--path", action="store_true", help="Só imprimir o caminho do log ativo")
+    lg.add_argument("--cycle", help="Ciclo específico a acompanhar (ex: cycle-10-opencode)")
 
     # runs — tabela comparativa de todos os ciclos
     ru2 = sub.add_parser("runs", help="Tabela comparativa de todos os ciclos em runs/")
@@ -2788,6 +3112,8 @@ def main():
     rt = sub.add_parser("retry", help="Retenta o node atual bloqueado sem aplicar correção")
     add_llm_engine_flags(rt)
     rt.add_argument("--auto", action="store_true", help="Continuar em modo MVP após retry")
+    rt.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
+                    help="Pular human_gates automaticamente após retry (LLM decide)")
 
     # fix
     fx = sub.add_parser("fix", help="Corrigir problema e desbloquear o ciclo")
@@ -2836,6 +3162,9 @@ def main():
                     help="Pular human_gates automaticamente (LLM decide)")
     ru.add_argument("--force", action="store_true",
                     help="Forçar novo run mesmo se já houver um ativo")
+    ru.add_argument("--cycle-name", metavar="NAME",
+                    help="Nome explícito do ciclo isolado (ex: cycle-11-opencode). "
+                         "Falha se o diretório já existir.")
     ru.add_argument("--template", "-t",
                     help="Template de processo a copiar (ex: fast-track-v2)")
     ru.add_argument("--worktree", metavar="NAME", nargs="?", const=True,

@@ -2,11 +2,12 @@
 
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ft.cli import main as cli_main
 from ft.engine.delegate import DelegateResult
-from ft.engine.runner import StepRunner
+from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import EngineState
 
 
@@ -49,6 +50,7 @@ def _args(project: Path, **overrides) -> Namespace:
         "demand_input": None,
         "bypass_human_gates": False,
         "force": True,
+        "cycle_name": None,
         "template": "base",
         "worktree": None,
         "auto": True,
@@ -140,6 +142,45 @@ class TestRunInputs:
         assert FakeRunner.instances[-1].llm_engine == "opencode"
         assert FakeRunner.instances[-1].llm_model == "pgx/zai-org_glm-4.7-flash"
 
+    def test_run_inherits_engine_from_init_state_before_cleanup(self, tmp_path, monkeypatch):
+        FakeRunner.instances = []
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        process = project / "process" / "process.yml"
+        process.parent.mkdir(parents=True)
+        process.write_text(
+            """
+id: plain_project
+version: "1.0.0"
+nodes:
+  - id: start
+    type: end
+    title: End
+"""
+        )
+        init_state = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01" / "state" / "engine_state.yml"
+        init_state.parent.mkdir(parents=True)
+        init_state.write_text(
+            """
+process_id: plain_project
+version: 1.0.0
+llm_engine: opencode
+llm_model: null
+current_node: start
+node_status: ready
+completed_nodes: []
+metrics:
+  steps_completed: 0
+  steps_total: 1
+"""
+        )
+
+        with patch("ft.cli.main.StepRunner", FakeRunner):
+            cli_main.cmd_run(_args(project, template=None))
+
+        assert FakeRunner.instances[-1].llm_engine == "opencode"
+        assert FakeRunner.instances[-1].project_root.name == "cycle-01-opencode"
+
     def test_run_without_git_executes_inside_plain_isolated_run_dir(self, tmp_path, monkeypatch):
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
@@ -169,6 +210,80 @@ nodes:
         assert FakeRunner.instances[-1].project_root == run_dir
         assert FakeRunner.instances[-1].process_path == run_dir / "process" / "process.yml"
         assert (run_dir / "process" / "process.yml").exists()
+
+    def test_run_without_git_accepts_explicit_cycle_name(self, tmp_path, monkeypatch):
+        FakeRunner.instances = []
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        process = project / "process" / "process.yml"
+        process.parent.mkdir(parents=True)
+        process.write_text(
+            """
+id: plain_project
+version: "1.0.0"
+nodes:
+  - id: start
+    type: build
+    title: Start
+    executor: python
+    next: end
+  - id: end
+    type: end
+    title: End
+"""
+        )
+
+        with patch("ft.cli.main.StepRunner", FakeRunner):
+            cli_main.cmd_run(_args(project, opencode=True, cycle_name="cycle-11-opencode"))
+
+        run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
+        assert FakeRunner.instances[-1].project_root == run_dir
+        assert (run_dir / "process" / "process.yml").exists()
+        assert (tmp_path / "ft-home" / "worktrees" / "project" / ".cycles").read_text() == "11\n"
+
+    def test_run_rejects_existing_explicit_cycle_name(self, tmp_path, monkeypatch):
+        FakeRunner.instances = []
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        process = project / "process" / "process.yml"
+        process.parent.mkdir(parents=True)
+        process.write_text(
+            """
+id: plain_project
+version: "1.0.0"
+nodes:
+  - id: start
+    type: end
+    title: End
+"""
+        )
+        existing = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
+        existing.mkdir(parents=True)
+
+        with patch("ft.cli.main.StepRunner", FakeRunner):
+            try:
+                cli_main.cmd_run(_args(project, opencode=True, cycle_name="cycle-11-opencode"))
+            except SystemExit as exc:
+                assert exc.code == 1
+            else:
+                raise AssertionError("cmd_run should reject existing explicit cycle name")
+
+        assert FakeRunner.instances == []
+
+    def test_run_rejects_invalid_explicit_cycle_name(self, tmp_path, monkeypatch):
+        FakeRunner.instances = []
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+
+        with patch("ft.cli.main.StepRunner", FakeRunner):
+            try:
+                cli_main.cmd_run(_args(project, opencode=True, cycle_name="../bad"))
+            except SystemExit as exc:
+                assert exc.code == 1
+            else:
+                raise AssertionError("cmd_run should reject unsafe cycle name")
+
+        assert FakeRunner.instances == []
 
 
 class TestExplore:
@@ -452,6 +567,7 @@ class TestRetry:
                 self.state_mgr = StateMgr()
                 self._auto_fix_counts = {"ft.plan.03.api_contract": 1}
                 self.run_mode = None
+                self._bypass_human_gates = None
 
             def run(self, mode="step"):
                 self.run_mode = mode
@@ -465,6 +581,7 @@ class TestRetry:
             gemini=None,
             opencode=None,
             verbose=False,
+            bypass_human_gates=True,
         )
 
         with patch("ft.cli.main.get_runner", return_value=runner):
@@ -474,3 +591,246 @@ class TestRetry:
         assert state.active_llm_log is None
         assert runner._auto_fix_counts == {}
         assert runner.run_mode == "step"
+        assert runner._bypass_human_gates is True
+
+
+class TestFix:
+    def test_single_fix_target_path_detects_unique_project_file(self, tmp_path):
+        target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("def test_old():\n    pass\n", encoding="utf-8")
+
+        detected = cli_main._single_fix_target_path(
+            "Corrija somente project/tests/e2e/test_navigation.py.",
+            tmp_path,
+        )
+
+        assert detected == "project/tests/e2e/test_navigation.py"
+
+    def test_fix_done_opencode_uses_capture_for_single_target_file(self, tmp_path):
+        state_path = tmp_path / "state" / "engine_state.yml"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text("node_status: done\n")
+        target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("def test_old():\n    pass\n", encoding="utf-8")
+        frontend = tmp_path / "project" / "frontend" / "src" / "main.js"
+        frontend.parent.mkdir(parents=True)
+        frontend.write_text("const routes = {'/clientes': 'Clientes'};\n", encoding="utf-8")
+        state = EngineState(
+            current_node=None,
+            node_status="done",
+            llm_engine="opencode",
+            llm_model="pgx/zai-org_glm-4.7-flash",
+        )
+
+        class StateMgr:
+            path = state_path
+
+            def load(self):
+                return state
+
+        class Runner:
+            def __init__(self):
+                self.state_mgr = StateMgr()
+                self.project_root = tmp_path
+                self.graph = SimpleNamespace(nodes={})
+
+            def apply_fix(self, instruction):
+                return False
+
+            def _resolve_llm_engine(self, loaded_state=None, node=None):
+                return loaded_state.llm_engine if loaded_state else "claude"
+
+            def _resolve_llm_model(self, loaded_state=None, node=None):
+                return loaded_state.llm_model if loaded_state else None
+
+        args = Namespace(
+            instruction="Corrija somente project/tests/e2e/test_navigation.py.",
+            process=None,
+            auto=False,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+
+        with (
+            patch("ft.cli.main.get_runner", return_value=Runner()),
+            patch("ft.engine.delegate.delegate_to_llm") as delegate,
+        ):
+            delegate.return_value = DelegateResult(True, "DONE", [], ["project/tests/e2e/test_navigation.py"])
+            cli_main.cmd_fix(args)
+
+        kwargs = delegate.call_args.kwargs
+        assert kwargs["allowed_paths"] == ["project/tests/e2e/test_navigation.py"]
+        assert kwargs["opencode_capture_output_path"] == "project/tests/e2e/test_navigation.py"
+        assert "CONTEUDO ATUAL" in kwargs["task"]
+        assert "def test_old" in kwargs["task"]
+        assert "CONTEXTO DA UI ATUAL" in kwargs["task"]
+        assert "const routes" in kwargs["task"]
+
+    def test_postprocess_opencode_fix_rewrites_invalid_e2e_python(self, tmp_path):
+        target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("def broken(:\n", encoding="utf-8")
+
+        class Runner:
+            project_root = tmp_path
+            _work_dir = str(tmp_path)
+
+            def _write_opencode_e2e_test(self, root):
+                target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+        note = cli_main._postprocess_opencode_fix_capture(
+            Runner(),
+            "project/tests/e2e/test_navigation.py",
+        )
+
+        assert note is not None
+        assert "determinístico" in note
+        assert "def test_ok" in target.read_text(encoding="utf-8")
+
+    def _blocked_runner(self, tmp_path):
+        state_path = tmp_path / "state" / "engine_state.yml"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text("node_status: blocked\n")
+        state = EngineState(
+            current_node="ft.plan.03.api_contract",
+            node_status="blocked",
+            blocked_reason="api_contract_complete FAIL",
+            llm_engine="opencode",
+            llm_model="pgx/zai-org_glm-4.7-flash",
+        )
+        node = SimpleNamespace(
+            id="ft.plan.03.api_contract",
+            type="document",
+            outputs=["docs/api_contract.md"],
+            requires_approval=False,
+        )
+
+        class Graph:
+            nodes = {node.id: node}
+
+            def get_node(self, node_id):
+                return self.nodes[node_id]
+
+            def resolve_next(self, node_id):
+                return "ft.plan.04.ui_criteria"
+
+        class StateMgr:
+            path = state_path
+
+            def __init__(self):
+                self.artifacts = {}
+                self.saved = False
+
+            def load(self):
+                return state
+
+            def save(self):
+                self.saved = True
+
+            def record_artifact(self, name, path):
+                self.artifacts[name] = path
+
+        class Runner:
+            def __init__(self):
+                self.state_mgr = StateMgr()
+                self.project_root = tmp_path
+                self._run_dir = tmp_path
+                self.graph = Graph()
+                self._auto_approve = False
+                self.run_mode = None
+                self.advanced = []
+                self.validation_seen = None
+
+            def apply_fix(self, instruction):
+                return False
+
+            def _resolve_llm_engine(self, loaded_state=None, node=None):
+                return loaded_state.llm_engine if loaded_state else "claude"
+
+            def _resolve_llm_model(self, loaded_state=None, node=None):
+                return loaded_state.llm_model if loaded_state else None
+
+            def _print_validation(self, validation):
+                self.validation_seen = validation
+
+            def _maybe_auto_commit(self, node):
+                return None
+
+            def _record_node_summary(self, node, summary):
+                self.summary = summary
+
+            def _advance_state(self, completed_node, next_node, gate_result="PASS"):
+                self.advanced.append((completed_node, next_node, gate_result))
+                state.current_node = next_node
+                state.node_status = "ready"
+                state.blocked_reason = None
+
+            def run(self, mode="step"):
+                self.run_mode = mode
+
+        return Runner(), state
+
+    def test_fix_uses_state_engine_and_advances_when_validators_pass(self, tmp_path):
+        runner, state = self._blocked_runner(tmp_path)
+        args = Namespace(
+            instruction="corrigir contrato",
+            process=None,
+            auto=False,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+
+        with (
+            patch("ft.cli.main.get_runner", return_value=runner),
+            patch("ft.engine.delegate.delegate_to_llm") as delegate,
+            patch("ft.engine.runner.run_validators") as validate,
+        ):
+            delegate.return_value = DelegateResult(True, "DONE", [], ["docs/api_contract.md"])
+            validate.return_value = ValidationResult(True, False, None, [])
+            cli_main.cmd_fix(args)
+
+        kwargs = delegate.call_args.kwargs
+        assert kwargs["llm_engine"] == "opencode"
+        assert kwargs["llm_model"] == "pgx/zai-org_glm-4.7-flash"
+        assert kwargs["allowed_paths"] == ["docs/api_contract.md"]
+        assert kwargs["opencode_capture_output_path"] == "docs/api_contract.md"
+        assert runner.advanced == [("ft.plan.03.api_contract", "ft.plan.04.ui_criteria", "PASS")]
+        assert runner.run_mode is None
+        assert runner.state_mgr.artifacts == {"api_contract": "docs/api_contract.md"}
+        assert state.current_node == "ft.plan.04.ui_criteria"
+
+    def test_fix_reexecutes_node_only_when_validation_still_fails(self, tmp_path):
+        runner, state = self._blocked_runner(tmp_path)
+        args = Namespace(
+            instruction="corrigir contrato",
+            process=None,
+            auto=False,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+
+        with (
+            patch("ft.cli.main.get_runner", return_value=runner),
+            patch("ft.engine.delegate.delegate_to_llm") as delegate,
+            patch("ft.engine.runner.run_validators") as validate,
+        ):
+            delegate.return_value = DelegateResult(True, "DONE", [], ["docs/api_contract.md"])
+            validate.return_value = ValidationResult(False, True, "ainda falha", [])
+            cli_main.cmd_fix(args)
+
+        assert runner.advanced == []
+        assert runner.run_mode == "step"
+        assert state.node_status == "running"
+        assert state.blocked_reason is None
+        assert state.last_approval_message == "corrigir contrato"

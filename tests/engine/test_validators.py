@@ -1,18 +1,25 @@
 """Unit tests for ft.engine.validators.*"""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ft.engine.parallel import check_independence
 from ft.engine.validators.artifacts import (
+    api_contract_complete,
     command_succeeds,
     demand_coverage,
+    document_quality,
     file_exists,
     has_sections,
     min_lines,
     min_user_stories,
+    pytest_red_quality,
+    relative_dates_only,
     sections_unchanged,
+    ui_criteria_ids,
+    ui_criteria_coverage,
 )
 from ft.engine.validators.gates import gate_acceptance_cli, gate_kb_review
 
@@ -87,6 +94,168 @@ class TestHasSections:
         f.write_text("# HIPOTESE\ncontent")
         passed, _ = has_sections("doc.md", ["hipotese"], str(tmp_path))
         assert passed
+
+
+class TestDocumentQuality:
+    def test_fails_on_prompt_tool_echo(self, tmp_path):
+        f = tmp_path / "docs" / "task_list.md"
+        f.parent.mkdir()
+        f.write_text(
+            "I'll help you create a task list.\n"
+            "<tool_call>Glob</tool_call>\n"
+            "<arg_key>pattern</arg_key>\n"
+            "<arg_value>docs/*.md</arg_value>\n"
+            "line\nline\nline\nline\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = document_quality("docs/task_list.md", project_root=str(tmp_path), min_lines_count=5)
+
+        assert not passed
+        assert "ruido de execucao" in detail
+
+    def test_passes_with_required_terms(self, tmp_path):
+        f = tmp_path / "docs" / "task_list.md"
+        f.parent.mkdir()
+        f.write_text(
+            "# Task List\n\n"
+            "## US-01 Clientes\n"
+            "- Task frontend: criar tela de clientes.\n"
+            "- Task backend: criar API de clientes.\n"
+            "- Task teste: cobrir criação.\n"
+            "## US-02 Agenda\n"
+            "- Task frontend: criar tela de agenda.\n"
+            "- Task backend: criar API de agenda.\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = document_quality(
+            "docs/task_list.md",
+            project_root=str(tmp_path),
+            min_lines_count=6,
+            required_terms=["US-", "frontend", "backend", "teste"],
+            min_required_terms=4,
+        )
+
+        assert passed
+        assert "linhas uteis" in detail
+
+    def test_fails_when_document_is_too_long(self, tmp_path):
+        f = tmp_path / "docs" / "task_list.md"
+        f.parent.mkdir()
+        f.write_text("\n".join(f"- Task {i}" for i in range(15)), encoding="utf-8")
+
+        passed, detail = document_quality(
+            "docs/task_list.md",
+            project_root=str(tmp_path),
+            min_lines_count=5,
+            max_lines_count=10,
+        )
+
+        assert not passed
+        assert "max 10" in detail
+
+
+class TestApiContractComplete:
+    def test_fails_when_product_endpoints_use_root_path(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "api_contract.md").write_text(
+            "## Base URL\n\n"
+            "## Endpoints\n\n"
+            "**GET /**\n"
+            "**POST /**\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = api_contract_complete(project_root=str(tmp_path))
+
+        assert not passed
+        assert "endpoint '/'" in detail
+        assert "/api/<recurso>" in detail
+
+    def test_fails_when_creation_product_has_no_post(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "api_contract.md").write_text(
+            "## Base URL\n\n"
+            "## Endpoints\n\n"
+            "| Método | Path |\n"
+            "|---|---|\n"
+            "| GET | /clientes |\n"
+            "| GET | /agenda |\n"
+            "| GET | /cobrancas |\n"
+            "| GET | /health |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = api_contract_complete(project_root=str(tmp_path))
+
+        assert not passed
+        assert "nao tem POST" in detail
+
+    def test_passes_complete_contract(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "api_contract.md").write_text(
+            "## Base URL\n\n"
+            "## Endpoints\n\n"
+            "| Método | Path |\n"
+            "|---|---|\n"
+            "| GET | /api/clientes |\n"
+            "| POST | /api/clientes |\n"
+            "| GET | /api/agenda |\n"
+            "| POST | /api/agenda |\n"
+            "| GET | /health |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = api_contract_complete(project_root=str(tmp_path))
+
+        assert passed
+        assert "endpoint" in detail
+
+    def test_counts_bold_bullet_endpoints_but_still_requires_minimum(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "api_contract.md").write_text(
+            "## Base URL\n\n"
+            "## Endpoints\n\n"
+            "- `GET /health`: health check.\n"
+            "- **POST /clientes**: cria cliente.\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = api_contract_complete(project_root=str(tmp_path), min_endpoints=3)
+
+        assert not passed
+        assert "1 endpoint" in detail
+
+
+class TestRelativeDatesOnly:
+    def test_fails_on_absolute_iso_date(self, tmp_path):
+        f = tmp_path / "docs" / "test_data.md"
+        f.parent.mkdir()
+        f.write_text("Agenda: HOJE (2026-07-08) 14:00\n", encoding="utf-8")
+
+        passed, detail = relative_dates_only(project_root=str(tmp_path))
+
+        assert not passed
+        assert "data absoluta" in detail
+
+    def test_passes_relative_dates(self, tmp_path):
+        f = tmp_path / "docs" / "test_data.md"
+        f.parent.mkdir()
+        f.write_text("Agenda: HOJE 14:00; HOJE+1 09:00; HOJE-1 18:00\n", encoding="utf-8")
+
+        passed, detail = relative_dates_only(project_root=str(tmp_path))
+
+        assert passed
+        assert "datas relativas" in detail
 
 
 class TestMinUserStories:
@@ -218,6 +387,227 @@ class TestDemandCoverage:
         assert "csv" in detail.lower()
 
 
+class TestUICriteriaCoverage:
+    def test_ui_criteria_ids_passes_for_stable_ids(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C01: Tela inicial mostra resumo.\n"
+            "- [ ] C02: Navegação principal visível.\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = ui_criteria_ids(min_count=2, project_root=str(tmp_path))
+
+        assert passed
+        assert "2 criterios" in detail
+
+    def test_ui_criteria_ids_fails_without_stable_ids(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text("- Tela inicial mostra resumo.\n", encoding="utf-8")
+
+        passed, detail = ui_criteria_ids(min_count=1, project_root=str(tmp_path))
+
+        assert not passed
+        assert "use IDs" in detail
+
+    def test_passes_when_identified_criteria_are_reported_and_source_has_component(self, tmp_path):
+        docs = tmp_path / "docs"
+        src = tmp_path / "project" / "frontend" / "src"
+        docs.mkdir(parents=True)
+        src.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "# UI Criteria\n\n"
+            "- [ ] C01: Tela de filtros possui menu suspenso para status.\n"
+            "- [ ] C02: Botões usam ícone SVG.\n",
+            encoding="utf-8",
+        )
+        (docs / "screenshot-review.md").write_text(
+            "# Review\n\n"
+            "| Critério | Resultado |\n"
+            "|---|---|\n"
+            "| C01 | PASS |\n"
+            "| C02 | PASS |\n",
+            encoding="utf-8",
+        )
+        (src / "main.js").write_text(
+            '<select data-testid="status-dropdown"><option>Aberto</option></select><svg></svg>',
+            encoding="utf-8",
+        )
+
+        passed, detail = ui_criteria_coverage(source_dir="project/frontend/src", project_root=str(tmp_path))
+
+        assert passed
+        assert "2 criterios" in detail
+
+    def test_report_pass_table_ignores_domain_words_in_evidence(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C9: Dashboard mostra cobranças pendentes.\n",
+            encoding="utf-8",
+        )
+        (docs / "screenshot-review.md").write_text(
+            "| Critério | Resultado | Evidência |\n"
+            "|---|---|---|\n"
+            "| C9 | PASS | Dashboard exibe total de cobranças pendentes |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = ui_criteria_coverage(project_root=str(tmp_path))
+
+        assert passed, detail
+
+    def test_report_matches_zero_padded_criterion_ids(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C09: Dashboard mostra resumo.\n",
+            encoding="utf-8",
+        )
+        (docs / "screenshot-review.md").write_text("| C9 | PASS |\n", encoding="utf-8")
+
+        passed, detail = ui_criteria_coverage(project_root=str(tmp_path))
+
+        assert passed, detail
+
+    def test_passes_with_code_evidence_without_visual_report(self, tmp_path):
+        docs = tmp_path / "docs"
+        src = tmp_path / "project" / "frontend" / "src"
+        docs.mkdir(parents=True)
+        src.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C01: Tela de filtros possui menu suspenso para status.\n"
+            "- [ ] C02: Botões usam ícone SVG.\n",
+            encoding="utf-8",
+        )
+        (src / "main.js").write_text(
+            '<section data-ui-criteria="C01"><select><option>Aberto</option></select></section>'
+            '<button data-ui-criteria="C02"><svg></svg></button>',
+            encoding="utf-8",
+        )
+
+        passed, detail = ui_criteria_coverage(
+            report_path=None,
+            source_dir="project/frontend/src",
+            evidence="code",
+            project_root=str(tmp_path),
+        )
+
+        assert passed
+        assert "codigo=2" in detail
+
+    def test_any_evidence_accepts_code_when_report_is_missing(self, tmp_path):
+        docs = tmp_path / "docs"
+        src = tmp_path / "project" / "frontend" / "src"
+        docs.mkdir(parents=True)
+        src.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text("- [ ] C01: Tela inicial mostra resumo.\n", encoding="utf-8")
+        (src / "main.js").write_text('<main data-ui-criteria="C01"></main>', encoding="utf-8")
+
+        passed, detail = ui_criteria_coverage(
+            report_path="docs/screenshot-review.md",
+            source_dir="project/frontend/src",
+            project_root=str(tmp_path),
+        )
+
+        assert passed
+        assert "evidence=any" in detail
+
+    def test_fails_when_report_does_not_cover_every_criterion(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C01: Tela inicial mostra resumo.\n"
+            "- [ ] C02: Menu suspenso para status.\n",
+            encoding="utf-8",
+        )
+        (docs / "screenshot-review.md").write_text("| C01 | PASS |\n", encoding="utf-8")
+
+        passed, detail = ui_criteria_coverage(project_root=str(tmp_path))
+
+        assert not passed
+        assert "C02" in detail
+
+    def test_fails_when_component_mentioned_has_no_source_evidence(self, tmp_path):
+        docs = tmp_path / "docs"
+        src = tmp_path / "project" / "frontend" / "src"
+        docs.mkdir(parents=True)
+        src.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C01: Tela de filtros possui menu suspenso para status.\n",
+            encoding="utf-8",
+        )
+        (src / "main.js").write_text('<button data-ui-criteria="C01">Status</button>', encoding="utf-8")
+
+        passed, detail = ui_criteria_coverage(
+            report_path=None,
+            source_dir="project/frontend/src",
+            evidence="code",
+            project_root=str(tmp_path),
+        )
+
+        assert not passed
+        assert "menu suspenso" in detail or "dropdown" in detail
+
+    def test_fails_when_criteria_have_no_ids(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text("- Menu suspenso para status.\n", encoding="utf-8")
+        (docs / "screenshot-review.md").write_text("PASS\n", encoding="utf-8")
+
+        passed, detail = ui_criteria_coverage(project_root=str(tmp_path))
+
+        assert not passed
+        assert "nenhum criterio identificado" in detail
+
+
+class TestPytestRedQuality:
+    def test_passes_for_meaningful_red_tests(self, tmp_path):
+        tests = tmp_path / "project" / "tests"
+        tests.mkdir(parents=True)
+        (tests / "test_contract.py").write_text(
+            "import pytest\n\n"
+            "from backend import main\n\n"
+            "def test_health_contract():\n"
+            "    payload = main.health()\n"
+            "    assert payload['status'] == 'ok'\n\n"
+            "def test_create_cliente_validation():\n"
+            "    with pytest.raises(ValueError):\n"
+            "        main.create_cliente({'nome': ''})\n\n"
+            "def test_total_pendente():\n"
+            "    assert main.total_pendente() == 100\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = pytest_red_quality(project_root=str(tmp_path))
+
+        assert passed, detail
+        assert "3 teste" in detail
+
+    def test_fails_for_pass_only_stub_tests(self, tmp_path):
+        tests = tmp_path / "project" / "tests"
+        tests.mkdir(parents=True)
+        (tests / "test_client_manager.py").write_text(
+            "import pytest\n\n"
+            "@pytest.mark.asyncio\n"
+            "async def test_post_cliente_success():\n"
+            "    pass\n",
+            encoding="utf-8",
+        )
+        (tests / "test_servico_manager.test").write_text(
+            "def test_not_collected():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = pytest_red_quality(project_root=str(tmp_path))
+
+        assert not passed
+        assert "min 3" in detail or "pass-only" in detail
+
+
 class TestCommandSucceeds:
     def test_fails_when_pipeline_left_side_fails(self, tmp_path):
         passed, detail = command_succeeds("python -c 'raise SystemExit(7)' | tail -5", str(tmp_path))
@@ -233,6 +623,17 @@ class TestCommandSucceeds:
 
         assert not passed
         assert "nenhum teste" in detail or "código 5" in detail
+
+    def test_reruns_silent_command_for_diagnostics(self, tmp_path):
+        silent = MagicMock(returncode=1, stdout="", stderr="")
+        diagnostic = MagicMock(returncode=1, stdout="", stderr="Missing script: \"build\"\n")
+
+        with patch("subprocess.run", side_effect=[silent, diagnostic]):
+            passed, detail = command_succeeds("npm run build --silent", str(tmp_path))
+
+        assert not passed
+        assert "diagnostico sem --silent" in detail
+        assert "Missing script" in detail
 
 
 # ---------------------------------------------------------------------------

@@ -169,7 +169,13 @@ Depois do close:
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`) |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Janela de contexto anunciada ao OpenCode; default 200000 para `pgx/zai-org_glm-4.7-flash` |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Limite de saída anunciado ao OpenCode; default 32768 para `pgx/zai-org_glm-4.7-flash` |
+| `FT_OPENCODE_PROVIDER_TIMEOUT` / `FT_OPENCODE_TIMEOUT` | Timeout total do provider OpenCode, em milissegundos |
+| `FT_OPENCODE_CHUNK_TIMEOUT` / `FT_OPENCODE_PROVIDER_CHUNK_TIMEOUT` | Timeout entre chunks do stream OpenCode, em milissegundos |
+| `FT_OPENCODE_HEADER_TIMEOUT` / `FT_OPENCODE_PROVIDER_HEADER_TIMEOUT` | Timeout de headers do provider OpenCode, em milissegundos |
 | `FT_OPENCODE_SANDBOX` | Sandbox de filesystem via `bwrap` para OpenCode; default ligado, monta apenas outputs/write_scope como writable |
+| `FT_OPENCODE_DENY_EDIT_TOOLS` | Opt-in para modo legado: nega ferramentas nativas de edição do OpenCode em nodes de código |
+| `FT_OPENCODE_BUNDLE_MODE` | Opt-in para modo file-bundle XML em nodes de código OpenCode |
+| `FT_OPENCODE_SCRIPT_MODE` | Opt-in para modo script Bash em nodes de código OpenCode |
 | `FT_OPENCODE_DEBUG` | Ativa logs detalhados do OpenCode (`--print-logs --log-level DEBUG`) |
 | `FT_OPENCODE_THINKING` | Exibe reasoning do OpenCode (`--thinking`); use só para diagnóstico, pois pode aumentar latência |
 | `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `process/scripts/register_gateway.sh` |

@@ -68,6 +68,21 @@ def _env_positive_int(*names: str) -> int | None:
     return None
 
 
+def _env_nonnegative_int(*names: str) -> int | None:
+    """Lê o primeiro inteiro >= 0 definido em env entre os nomes dados."""
+    for name in names:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value >= 0:
+            return value
+    return None
+
+
 def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -> list[str]:
     """Expande paths de leitura negada para formas relativas e absolutas."""
     patterns: list[str] = []
@@ -89,6 +104,10 @@ def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -
 
 def _env_falsey(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"0", "false", "no", "off"}
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "sim", "on"}
 
 
 def _path_relative_to(path: Path, root: Path) -> bool:
@@ -155,6 +174,34 @@ def _cleanup_empty_placeholders(mounts: list[_SandboxMount]) -> None:
                 mount.path.unlink()
         except OSError:
             pass
+
+
+def _append_opencode_runtime_diagnostics(runtime_dir: Path, log_path: str | None) -> None:
+    """Preserva logs internos do OpenCode antes do sandbox temporário sumir."""
+    if not log_path:
+        return
+    diagnostics = [
+        ("opencode.log", runtime_dir / "data" / "opencode" / "log" / "opencode.log"),
+        ("frecency.jsonl", runtime_dir / "state" / "opencode" / "frecency.jsonl"),
+    ]
+    chunks: list[str] = []
+    for label, source in diagnostics:
+        if not source.exists() or not source.is_file():
+            continue
+        try:
+            text = source.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        limit = 120_000 if label == "opencode.log" else 20_000
+        if len(text) > limit:
+            text = text[-limit:]
+            text = f"[truncated to last {limit} chars]\n{text}"
+        chunks.append(f"\n\n--- OPENCODE INTERNAL {label} ---\n{text.rstrip()}\n")
+    if chunks:
+        with Path(log_path).open("a", encoding="utf-8") as f:
+            f.write("".join(chunks))
 
 
 def _resolve_existing_file_paths(project_root: str, paths: list[str] | None) -> list[Path]:
@@ -358,6 +405,7 @@ def _opencode_runtime_config(
     if deny_edit_tools:
         permission["edit"] = "deny"
     if text_only:
+        permission["*"] = "deny"
         permission["bash"] = "deny"
         permission["glob"] = "deny"
         permission["grep"] = "deny"
@@ -380,21 +428,32 @@ def _opencode_runtime_config(
         config["agent"] = agent
 
     effective_model = model or DEFAULT_OPENCODE_MODEL
+    provider_id, _, model_id = effective_model.partition("/")
     context_limit = _env_positive_int("FT_OPENCODE_CONTEXT_LIMIT", "FT_OPENCODE_CONTEXT_WINDOW")
     output_limit = _env_positive_int("FT_OPENCODE_OUTPUT_LIMIT", "FT_OPENCODE_MAX_OUTPUT")
     if effective_model == DEFAULT_OPENCODE_MODEL:
         context_limit = context_limit or DEFAULT_OPENCODE_CONTEXT_LIMIT
         output_limit = output_limit or DEFAULT_OPENCODE_OUTPUT_LIMIT
+
+    providers: dict | None = None
+    provider: dict | None = None
+
+    def ensure_provider_config() -> dict:
+        nonlocal providers, provider
+        if providers is None:
+            current_providers = config.get("provider")
+            providers = current_providers if isinstance(current_providers, dict) else {}
+        if provider is None:
+            current_provider = providers.get(provider_id) if provider_id else {}
+            provider = current_provider if isinstance(current_provider, dict) else {}
+        providers[provider_id] = provider
+        config["provider"] = providers
+        return provider
+
     if context_limit is not None:
         output_limit = output_limit or DEFAULT_OPENCODE_OUTPUT_LIMIT
-        provider_id, _, model_id = effective_model.partition("/")
         if provider_id and model_id:
-            providers = config.get("provider")
-            if not isinstance(providers, dict):
-                providers = {}
-            provider = providers.get(provider_id)
-            if not isinstance(provider, dict):
-                provider = {}
+            provider_config = ensure_provider_config()
             models = provider.get("models")
             if not isinstance(models, dict):
                 models = {}
@@ -408,9 +467,23 @@ def _opencode_runtime_config(
             limit["output"] = output_limit
             model_config["limit"] = limit
             models[model_id] = model_config
-            provider["models"] = models
-            providers[provider_id] = provider
-            config["provider"] = providers
+            provider_config["models"] = models
+
+    provider_timeout = _env_positive_int("FT_OPENCODE_PROVIDER_TIMEOUT", "FT_OPENCODE_TIMEOUT")
+    chunk_timeout = _env_positive_int("FT_OPENCODE_CHUNK_TIMEOUT", "FT_OPENCODE_PROVIDER_CHUNK_TIMEOUT")
+    header_timeout = _env_positive_int("FT_OPENCODE_HEADER_TIMEOUT", "FT_OPENCODE_PROVIDER_HEADER_TIMEOUT")
+    if provider_id and any(value is not None for value in (provider_timeout, chunk_timeout, header_timeout)):
+        provider_config = ensure_provider_config()
+        options = provider_config.get("options")
+        if not isinstance(options, dict):
+            options = {}
+        if provider_timeout is not None:
+            options["timeout"] = provider_timeout
+        if chunk_timeout is not None:
+            options["chunkTimeout"] = chunk_timeout
+        if header_timeout is not None:
+            options["headerTimeout"] = header_timeout
+        provider_config["options"] = options
 
     compaction = config.get("compaction")
     if not isinstance(compaction, dict):
@@ -439,6 +512,13 @@ def _executor_env(
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
     if llm_engine.lower().strip() == "opencode":
+        env.setdefault("CI", "1")
+        env.setdefault("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
+        env.setdefault("npm_config_yes", "true")
+        env.setdefault("NPM_CONFIG_YES", "true")
+        env.setdefault("npm_config_audit", "false")
+        env.setdefault("npm_config_fund", "false")
+        env.setdefault("npm_config_update_notifier", "false")
         env["OPENCODE_CONFIG_CONTENT"] = _opencode_runtime_config(
             env.get("OPENCODE_CONFIG_CONTENT"),
             deny_read_paths=opencode_deny_read_paths,
@@ -538,9 +618,11 @@ def _build_executor_command(
             "--dir", project_root,
             "-m", model or DEFAULT_OPENCODE_MODEL,
         ]
+        if not _env_falsey("FT_OPENCODE_AUTO"):
+            cmd.append("--auto")
         if not _env_falsey("FT_OPENCODE_PURE"):
             cmd.append("--pure")
-        variant = (os.environ.get("FT_OPENCODE_VARIANT") or "minimal").strip()
+        variant = (os.environ.get("FT_OPENCODE_VARIANT") or "").strip()
         if variant and variant.lower() not in {"0", "false", "no", "off", "none"}:
             cmd += ["--variant", variant]
         debug_enabled = os.environ.get("FT_OPENCODE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -707,6 +789,14 @@ def _extract_opencode_json_text(raw_output: str) -> str:
     return "\n".join(messages).strip() or raw_output.strip()
 
 
+_OPENCODE_INTERNAL_LOG_RE = re.compile(r"^timestamp=\S+\s+level=\S+\s+run=\S+\s+message=")
+
+
+def _is_opencode_internal_log_line(line: str) -> bool:
+    """Identifica logs internos do OpenCode que nao indicam progresso do modelo."""
+    return bool(_OPENCODE_INTERNAL_LOG_RE.match(line.strip()))
+
+
 def _clean_opencode_capture_text(text: str) -> str:
     """Remove ruído do OpenCode antes de gravar artifact capturado."""
     text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text).strip()
@@ -721,7 +811,257 @@ def _clean_opencode_capture_text(text: str) -> str:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
+    lines = text.splitlines()
+    first_heading = next(
+        (idx for idx, line in enumerate(lines) if re.match(r"^#{1,6}\s+\S", line.strip())),
+        None,
+    )
+    if first_heading and first_heading > 0:
+        prelude = "\n".join(lines[:first_heading]).strip().lower()
+        if re.search(r"\b(i need to|i'll|let me|we need to|vou|preciso|need to)\b", prelude):
+            text = "\n".join(lines[first_heading:]).strip()
     return text
+
+
+def _validate_opencode_script(script: str) -> str | None:
+    """Recusa scripts obviamente fora do escopo antes de executar no worktree."""
+    if not script.strip():
+        return "script vazio"
+    forbidden = [
+        r"\bsudo\b",
+        r"\bsu\s+-",
+        r"\brm\s+-rf\s+/",
+        r"\bmkfs\b",
+        r"\bmount\b",
+        r"\bumount\b",
+        r"\bdd\s+if=",
+        r">\s*/(?:etc|usr|bin|sbin|lib|var|home)\b",
+        r"\b(?:cat|tee|python3?|node|mkdir|cp|mv|touch|chmod|chown)\b[^\n;&|]*\s/(?:etc|usr|bin|sbin|lib|var|home)\b",
+    ]
+    for pattern in forbidden:
+        if re.search(pattern, script):
+            return f"script contem comando/path proibido: {pattern}"
+    return None
+
+
+def _timeout_stream_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _run_opencode_script(
+    script: str,
+    project_root: str,
+    allowed_paths: list[str] | None,
+    env: dict[str, str],
+    log_path: str | None,
+    runtime_dir: str | None,
+) -> tuple[bool, str]:
+    """Executa o Bash script gerado pelo OpenCode e retorna output combinado."""
+    invalid = _validate_opencode_script(script)
+    if invalid:
+        return False, f"[OPENCODE_SCRIPT_INVALID] {invalid}\n"
+
+    if runtime_dir:
+        script_path = Path(runtime_dir).resolve() / "opencode-generated.sh"
+        script_path.write_text(script, encoding="utf-8")
+    else:
+        tmp = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".sh", delete=False)
+        try:
+            tmp.write(script)
+            script_path = Path(tmp.name)
+        finally:
+            tmp.close()
+
+    cmd: list[str] = ["bash", str(script_path)]
+    mounts: list[_SandboxMount] = []
+    if runtime_dir and not _env_falsey("FT_OPENCODE_SANDBOX"):
+        cmd, mounts = _wrap_opencode_sandbox_command(
+            cmd,
+            project_root=project_root,
+            allowed_paths=allowed_paths,
+            runtime_dir=runtime_dir,
+        )
+
+    header = "\n## OpenCode generated script\n\n```bash\n" + script.rstrip() + "\n```\n\n## Script output\n\n"
+    if log_path:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        with Path(log_path).open("a", encoding="utf-8") as f:
+            f.write(header)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = _timeout_stream_text(exc.stdout) + _timeout_stream_text(exc.stderr) + "\n[TIMEOUT] Script excedeu 1800 segundos.\n"
+        if log_path:
+            with Path(log_path).open("a", encoding="utf-8") as f:
+                f.write(output)
+        _cleanup_empty_placeholders(mounts)
+        return False, output
+    finally:
+        if not runtime_dir:
+            try:
+                script_path.unlink()
+            except OSError:
+                pass
+
+    output = (result.stdout or "") + (result.stderr or "")
+    if log_path:
+        with Path(log_path).open("a", encoding="utf-8") as f:
+            f.write(output)
+    _cleanup_empty_placeholders(mounts)
+    return result.returncode == 0, output
+
+
+def _parse_opencode_file_bundle(text: str) -> tuple[dict[str, str], str | None]:
+    """Parseia blocos <ft_file path="...">...</ft_file>."""
+    if '<ft_file path=\\"' in text:
+        text = text.replace('\\"', '"')
+    files: dict[str, str] = {}
+    xml_matches = list(re.finditer(r'<(?:ft_file|file)\s+path="([^"]+)">\n?(.*?)\n?</(?:ft_file|file)>', text, re.DOTALL))
+    if xml_matches:
+        for match in xml_matches:
+            path = match.group(1).strip()
+            content = match.group(2)
+            if not path:
+                return {}, "path vazio no file bundle"
+            if "..." in content:
+                return {}, f"conteudo truncado com reticencias em {path}"
+            files[path] = content.rstrip() + "\n"
+        return files, None
+
+    # Fallback para o protocolo inicial, mantido para compatibilidade com logs antigos.
+    current_path: str | None = None
+    current_lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if current_path is None:
+            match = re.fullmatch(r"<<<FT_FILE:(.+?)>>>", line)
+            if match:
+                current_path = match.group(1).strip()
+                current_lines = []
+            elif line:
+                # Ignora cercas acidentais, mas recusa prosa fora do protocolo.
+                if line not in {"```", "```text", "```markdown"}:
+                    return {}, f"linha fora do protocolo file bundle: {line[:80]}"
+            continue
+        if line == "<<<FT_END_FILE>>>":
+            if not current_path:
+                return {}, "path vazio no file bundle"
+            files[current_path] = "\n".join(current_lines).rstrip() + "\n"
+            current_path = None
+            current_lines = []
+        else:
+            current_lines.append(raw_line)
+    if current_path is not None:
+        return {}, f"arquivo sem <<<FT_END_FILE>>>: {current_path}"
+    if not files:
+        return {}, "nenhum arquivo no file bundle"
+    return files, None
+
+
+def _write_scope_allows(path: str, project_root: str, allowed_paths: list[str] | None) -> bool:
+    """Confirma se um path relativo esta dentro do escopo de escrita permitido."""
+    if not path or Path(path).is_absolute():
+        return False
+    root = Path(project_root).resolve()
+    target = (root / path).resolve()
+    if not _path_relative_to(target, root):
+        return False
+    for raw in allowed_paths or []:
+        value = str(raw).strip()
+        if not value:
+            continue
+        allowed = (root / value.rstrip("/")).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+        if not _path_relative_to(allowed, root):
+            continue
+        is_dir = value.endswith("/") or not _looks_like_file_path(value, allowed)
+        if is_dir and (target == allowed or _path_relative_to(target, allowed)):
+            return True
+        if not is_dir and target == allowed:
+            return True
+    return False
+
+
+def _canonicalize_opencode_bundle_path(
+    rel_path: str,
+    files: dict[str, str],
+    project_root: str,
+    allowed_paths: list[str] | None,
+) -> str:
+    """Corrige omissões comuns de prefixo em bundles OpenCode.
+
+    Em nodes de frontend o prompt força `project/frontend/...`, mas alguns
+    modelos retornam `scripts/...` ou `package.json`. Prefixar esses caminhos é
+    seguro quando o escopo permite `project` e o bundle já indica frontend.
+    """
+    cleaned = rel_path.strip()
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    if _write_scope_allows(cleaned, project_root, allowed_paths):
+        return cleaned
+    frontend_indicators = (
+        any(path.startswith("project/frontend/") for path in files)
+        or any(str(raw).strip().rstrip("/") in {"project", "project/frontend"} for raw in allowed_paths or [])
+    )
+    frontend_roots = ("package.json", "package-lock.json", "index.html", "vite.config.js", "vite.config.mjs")
+    frontend_dirs = ("scripts/", "src/", "public/")
+    frontend_aliases = ("frontend/", "package/frontend/")
+    for alias in frontend_aliases:
+        if frontend_indicators and cleaned.startswith(alias):
+            candidate = f"project/frontend/{cleaned.removeprefix(alias)}"
+            if _write_scope_allows(candidate, project_root, allowed_paths):
+                return candidate
+    if frontend_indicators and (
+        cleaned in frontend_roots or any(cleaned.startswith(prefix) for prefix in frontend_dirs)
+    ):
+        candidate = f"project/frontend/{cleaned}"
+        if _write_scope_allows(candidate, project_root, allowed_paths):
+            return candidate
+    return cleaned
+
+
+def _materialize_opencode_file_bundle(
+    bundle: str,
+    project_root: str,
+    allowed_paths: list[str] | None,
+    log_path: str | None,
+) -> tuple[bool, str]:
+    """Grava arquivos descritos pelo OpenCode dentro do escopo permitido."""
+    files, error = _parse_opencode_file_bundle(bundle)
+    if error:
+        return False, f"[OPENCODE_BUNDLE_INVALID] {error}\n"
+    root = Path(project_root).resolve()
+    written: list[str] = []
+    for rel_path, content in files.items():
+        materialized_path = _canonicalize_opencode_bundle_path(
+            rel_path,
+            files=files,
+            project_root=project_root,
+            allowed_paths=allowed_paths,
+        )
+        if not _write_scope_allows(materialized_path, project_root, allowed_paths):
+            return False, f"[OPENCODE_BUNDLE_INVALID] path fora do escopo permitido: {rel_path}\n"
+        target = (root / materialized_path).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        written.append(materialized_path)
+    output = "Arquivos materializados pelo engine:\n" + "\n".join(f"- {path}" for path in written) + "\n"
+    if log_path:
+        with Path(log_path).open("a", encoding="utf-8") as f:
+            f.write("\n## OpenCode file bundle materialized\n\n")
+            f.write(output)
+    return True, output
 
 
 def _opencode_capture_command(cmd: list[str]) -> list[str]:
@@ -1057,9 +1397,13 @@ def _stream_process_output(
                 if synth is not None:
                     chunks.append(synth)
                 break
-            last_data = time.time()
-            if activity is not None:
-                activity["last"] = last_data
+            line_counts_as_activity = not (
+                llm_engine == "opencode" and _is_opencode_internal_log_line(line)
+            )
+            if line_counts_as_activity:
+                last_data = time.time()
+                if activity is not None:
+                    activity["last"] = last_data
             _stripped_probe = line.strip()
             if _stripped_probe.startswith("{"):
                 try:
@@ -1179,6 +1523,19 @@ def delegate_to_llm(
     opencode_capture_mode = bool(
         llm_engine.lower().strip() == "opencode" and opencode_capture_output_path
     )
+    opencode_bundle_mode = bool(
+        llm_engine.lower().strip() == "opencode"
+        and opencode_deny_edit_tools
+        and not opencode_capture_mode
+        and _env_truthy("FT_OPENCODE_BUNDLE_MODE")
+    )
+    opencode_script_mode = bool(
+        llm_engine.lower().strip() == "opencode"
+        and opencode_deny_edit_tools
+        and not opencode_capture_mode
+        and not opencode_bundle_mode
+        and _env_truthy("FT_OPENCODE_SCRIPT_MODE")
+    )
     deny_reads = list(dict.fromkeys(opencode_deny_read_paths or []))
     deny_reads_rule = ""
     if deny_reads:
@@ -1221,6 +1578,36 @@ def delegate_to_llm(
             "- Caso contrario, nao inclua DONE, NODE_SUMMARY ou lista de arquivos; "
             "retorne apenas o conteudo final do documento."
         )
+    elif opencode_bundle_mode:
+        write_tool_rule = (
+            "- NAO use ferramentas. NAO use Read, Glob, Grep, List, Bash, Write, Edit ou Patch.\n"
+            "- Responda SOMENTE com blocos XML de arquivo no protocolo abaixo; o engine gravara os arquivos.\n"
+            "- Para cada arquivo, use exatamente:\n"
+            "<ft_file path=\"path/relativo\">\n"
+            "conteudo completo do arquivo\n"
+            "</ft_file>\n"
+            "- Use apenas paths relativos dentro dos paths permitidos. Nunca use /tmp, /home ou paths absolutos.\n"
+            "- Inclua o conteudo completo dos arquivos, nao diffs e nao trechos parciais.\n"
+            "- Nao inclua explicacoes, DONE, NODE_SUMMARY, cercas markdown ou comandos shell."
+        )
+        completion_rule = (
+            "- Se nao conseguir produzir os arquivos, responda apenas: BLOCKED: <motivo>.\n"
+            "- Caso contrario, retorne somente os blocos <ft_file path=\"...\">."
+        )
+    elif opencode_script_mode:
+        write_tool_rule = (
+            "- NAO use ferramentas. NAO use Read, Glob, Grep, List, Bash, Write, Edit ou Patch.\n"
+            "- Responda SOMENTE com um script Bash completo que o engine executara no diretorio de trabalho.\n"
+            "- O script deve comecar com `set -euo pipefail`.\n"
+            "- O script deve criar/modificar os arquivos reais usando paths relativos permitidos.\n"
+            "- O script deve criar diretorios pai antes de escrever arquivos.\n"
+            "- O script deve rodar os comandos de validacao relevantes antes de terminar.\n"
+            "- Nao inclua explicacoes, DONE, NODE_SUMMARY ou cercas markdown; retorne apenas o script."
+        )
+        completion_rule = (
+            "- Se nao conseguir produzir o script, responda apenas: BLOCKED: <motivo>.\n"
+            "- Caso contrario, retorne somente o script Bash final."
+        )
     elif opencode_deny_edit_tools:
         write_tool_rule = (
             "- OBRIGATORIO: antes de dizer DONE, use Bash para criar ou modificar "
@@ -1229,8 +1616,20 @@ def delegate_to_llm(
             "- Para criar arquivos, use comandos independentes com paths explicitos, por exemplo: "
             "`mkdir -p project/frontend && cat > project/frontend/package.json <<'EOF' ... EOF`. "
             "Nao dependa de `cd` persistente entre comandos.\n"
+            "- Ao usar redirecionamento (`>`), o destino deve estar dentro dos paths permitidos. "
+            "Nunca escreva arquivos soltos na raiz do worktree, como `package-temp` ou `package.json`, "
+            "a menos que esse path esteja explicitamente permitido.\n"
+            "- Se receber `No such file or directory`, corrija criando o diretorio pai com `mkdir -p` "
+            "no mesmo comando. Se receber `Read-only file system`, voce tentou escrever fora do "
+            "escopo permitido; reescreva no path permitido relativo, nao em path absoluto inventado.\n"
             "- Se o contrato pedir `project/...`, crie somente paths abaixo de `project/`; "
-            "nao crie `frontend/`, `backend/`, `src/` ou outros diretorios de produto na raiz."
+            "nao crie `frontend/`, `backend/`, `src/` ou outros diretorios de produto na raiz.\n"
+            "- NAO rode comandos interativos como `npm init`, `npm create` ou `npx` sem `--yes`. "
+            "Crie arquivos de configuracao manualmente ou use flags nao-interativas.\n"
+            "- Cada comando Bash deve ser completo e independente: use "
+            "`(cd project/frontend && npm run build --silent)` em vez de depender de um `cd` anterior.\n"
+            "- NAO leia ou liste `node_modules`, `.git`, `state/llm_logs` ou dumps grandes. "
+            "Use checks pontuais nos arquivos que voce acabou de criar."
         )
     else:
         placeholder_rule = ""
@@ -1239,6 +1638,14 @@ def delegate_to_llm(
                 "- Se um arquivo de saida ja existir vazio, trate-o como placeholder "
                 "do sandbox. Nao leia esse arquivo antes de escrever; sobrescreva-o "
                 "com Write/Edit/Patch.\n"
+                "- Ao usar Write no OpenCode, use exatamente os campos `path` e `content`; "
+                "nunca use `filePath`.\n"
+                "- Ao usar Edit no OpenCode, use exatamente os campos `path`, `oldString`, "
+                "`newString` e opcionalmente `replaceAll`; nunca use `filePath`.\n"
+                "- NAO rode comandos interativos como `npm init`, `npm create` ou `npx` sem `--yes`. "
+                "Crie arquivos de configuracao manualmente ou use flags nao-interativas.\n"
+                "- Cada comando Bash deve ser completo e independente; nao dependa de `cd` persistente.\n"
+                "- NAO leia ou liste `node_modules`, `.git`, `state/llm_logs` ou dumps grandes.\n"
             )
         write_tool_rule = (
             placeholder_rule
@@ -1271,7 +1678,7 @@ REGRAS:
 """
 
     cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns, model=llm_model)
-    if opencode_capture_mode:
+    if opencode_capture_mode or opencode_bundle_mode or opencode_script_mode:
         cmd = _opencode_capture_command(cmd)
 
     # Linux limita cada argumento de execve a ~128 KiB (MAX_ARG_STRLEN).
@@ -1297,7 +1704,7 @@ REGRAS:
         opencode_steps=opencode_steps,
         opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
         opencode_deny_edit_tools=opencode_deny_edit_tools,
-        opencode_text_only=opencode_capture_mode,
+        opencode_text_only=opencode_capture_mode or opencode_bundle_mode or opencode_script_mode,
     )
     sandbox_tmp: tempfile.TemporaryDirectory | None = None
     sandbox_mounts: list[_SandboxMount] = []
@@ -1318,7 +1725,15 @@ REGRAS:
             allowed_paths=[] if opencode_capture_mode else allowed_paths,
             runtime_dir=sandbox_tmp.name,
         )
-    early_success_paths = _resolve_existing_file_paths(project_root, opencode_early_success_paths)
+    # Capture mode is text-only: the engine writes the final response after the
+    # executor exits. If an output file already exists from a previous attempt,
+    # early-success would stop the retry before the model emits text and then
+    # overwrite the artifact with stream noise.
+    early_success_paths = (
+        []
+        if opencode_capture_mode or opencode_bundle_mode or opencode_script_mode
+        else _resolve_existing_file_paths(project_root, opencode_early_success_paths)
+    )
     early_success_grace = _env_positive_int("FT_OPENCODE_EARLY_SUCCESS_GRACE") or 20
 
     if log_path and llm_engine != "codex":
@@ -1330,7 +1745,12 @@ REGRAS:
     idle_retries = 0
     if llm_engine.lower().strip() == "opencode":
         idle_timeout = _env_positive_int("FT_OPENCODE_IDLE_TIMEOUT") or 480
-        idle_retries = _env_positive_int("FT_OPENCODE_IDLE_RETRIES") or 2
+        configured_retries = _env_nonnegative_int("FT_OPENCODE_IDLE_RETRIES")
+        idle_retries = configured_retries if configured_retries is not None else 2
+        if opencode_capture_mode:
+            idle_timeout = _env_positive_int("FT_OPENCODE_CAPTURE_IDLE_TIMEOUT") or min(idle_timeout, 120)
+            capture_retries = _env_nonnegative_int("FT_OPENCODE_CAPTURE_IDLE_RETRIES")
+            idle_retries = capture_retries if capture_retries is not None else 0
 
     cleaned_runtime = False
 
@@ -1340,6 +1760,7 @@ REGRAS:
             return
         _cleanup_empty_placeholders(sandbox_mounts)
         if sandbox_tmp is not None:
+            _append_opencode_runtime_diagnostics(Path(sandbox_tmp.name), log_path)
             sandbox_tmp.cleanup()
             sandbox_tmp = None
         cleaned_runtime = True
@@ -1427,7 +1848,7 @@ REGRAS:
         return returncode, early_success, output_holder["output"] + early_success_msg, None
 
     def _extract_output(raw: str, engine: str) -> str:
-        if opencode_capture_mode:
+        if opencode_capture_mode or opencode_bundle_mode or opencode_script_mode:
             return _extract_opencode_json_text(raw)
         if engine == "codex":
             return _extract_codex_output(raw)
@@ -1501,6 +1922,68 @@ REGRAS:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(captured.rstrip() + "\n", encoding="utf-8")
                     output = f"DONE\nArquivo gravado pelo engine: {opencode_capture_output_path}\n"
+        elif opencode_bundle_mode:
+            bundle = _clean_opencode_capture_text(output)
+            bundle_blocked = bundle.lstrip().upper().startswith("BLOCKED")
+            if returncode != 0:
+                success = False
+            elif not bundle:
+                success = False
+                output = f"{output}\n[OPENCODE_BUNDLE_EMPTY] OpenCode nao retornou arquivos materializaveis."
+            elif bundle_blocked:
+                success = False
+                output = bundle
+            else:
+                bundle_ok, bundle_output = _materialize_opencode_file_bundle(
+                    bundle,
+                    project_root=project_root,
+                    allowed_paths=allowed_paths,
+                    log_path=log_path,
+                )
+                success = returncode == 0 and bundle_ok
+                if success:
+                    output = (
+                        "DONE\n"
+                        "File bundle gerado pelo OpenCode e materializado pelo engine.\n"
+                        f"{bundle_output}"
+                    )
+                else:
+                    output = (
+                        "BLOCKED: file bundle gerado pelo OpenCode falhou.\n"
+                        f"{bundle_output}"
+                    )
+        elif opencode_script_mode:
+            script = _clean_opencode_capture_text(output)
+            script_blocked = script.lstrip().upper().startswith("BLOCKED")
+            if returncode != 0:
+                success = False
+            elif not script:
+                success = False
+                output = f"{output}\n[OPENCODE_SCRIPT_EMPTY] OpenCode nao retornou script executavel."
+            elif script_blocked:
+                success = False
+                output = script
+            else:
+                script_ok, script_output = _run_opencode_script(
+                    script,
+                    project_root=project_root,
+                    allowed_paths=allowed_paths,
+                    env=_env,
+                    log_path=log_path,
+                    runtime_dir=sandbox_tmp.name if sandbox_tmp is not None else None,
+                )
+                success = returncode == 0 and script_ok
+                if success:
+                    output = (
+                        "DONE\n"
+                        "Script gerado pelo OpenCode e executado pelo engine.\n"
+                        f"{script_output}"
+                    )
+                else:
+                    output = (
+                        "BLOCKED: script gerado pelo OpenCode falhou.\n"
+                        f"{script_output}"
+                    )
         else:
             token = _final_protocol_token(output)
             success = returncode == 0 and token != "BLOCKED"
@@ -1534,6 +2017,152 @@ REGRAS:
         files_modified=modified,
         rate_limited=rate_limited,
     )
+
+
+def delegate_opencode_file_bundle_raw(
+    prompt: str,
+    project_root: str,
+    allowed_paths: list[str] | None = None,
+    llm_model: str | None = None,
+    log_path: str | None = None,
+) -> DelegateResult:
+    """Chamada OpenCode mínima para ecoar/materializar um file bundle pequeno."""
+    cmd = _build_executor_command(
+        "opencode",
+        prompt,
+        project_root,
+        max_turns=1,
+        model=llm_model or DEFAULT_OPENCODE_MODEL,
+    )
+    cmd = _opencode_capture_command(cmd)
+    env = _executor_env(
+        "opencode",
+        opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
+        opencode_text_only=True,
+    )
+    if log_path:
+        _write_log_preamble(log_path, "opencode", cmd, prompt)
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = _timeout_stream_text(exc.stdout) + _timeout_stream_text(exc.stderr) + "\n[TIMEOUT] OpenCode raw excedeu 180 segundos.\n"
+        if content.strip() and _write_scope_allows(path, project_root, allowed_paths):
+            target = (Path(project_root).resolve() / path).resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content.rstrip() + "\n", encoding="utf-8")
+            if log_path:
+                with Path(log_path).open("a", encoding="utf-8") as f:
+                    f.write(output)
+                    f.write(f"\n[TIMEOUT_RECOVERY] Arquivo gravado pelo engine: {path}\n")
+            return DelegateResult(
+                True,
+                f"DONE\nArquivo gravado pelo engine apos timeout OpenCode: {path}\n{output}",
+                [path],
+                [],
+            )
+        return DelegateResult(False, output, [], [])
+
+    raw = (result.stdout or "") + (result.stderr or "")
+    if log_path:
+        with Path(log_path).open("a", encoding="utf-8") as f:
+            f.write(raw)
+    output = _extract_opencode_json_text(raw)
+    bundle = _clean_opencode_capture_text(output)
+    if result.returncode != 0:
+        return DelegateResult(False, bundle or raw, [], [])
+    if bundle.lstrip().upper().startswith("BLOCKED"):
+        return DelegateResult(False, bundle, [], [])
+    ok, materialized = _materialize_opencode_file_bundle(
+        bundle,
+        project_root=project_root,
+        allowed_paths=allowed_paths,
+        log_path=log_path,
+    )
+    return DelegateResult(ok, materialized if ok else f"BLOCKED: {materialized}", [], [])
+
+
+def delegate_opencode_exact_file_raw(
+    path: str,
+    content: str,
+    project_root: str,
+    allowed_paths: list[str] | None = None,
+    llm_model: str | None = None,
+    log_path: str | None = None,
+) -> DelegateResult:
+    """Pede ao OpenCode para ecoar conteudo pequeno e grava em um path conhecido."""
+    prompt = f"Retorne exatamente este texto, sem markdown e sem explicacoes:\n{content}"
+    cmd = _build_executor_command(
+        "opencode",
+        prompt,
+        project_root,
+        max_turns=1,
+        model=llm_model or DEFAULT_OPENCODE_MODEL,
+    )
+    cmd = _opencode_capture_command(cmd)
+    env = _executor_env(
+        "opencode",
+        opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
+        opencode_text_only=True,
+    )
+    if log_path:
+        _write_log_preamble(log_path, "opencode", cmd, prompt)
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = _timeout_stream_text(exc.stdout) + _timeout_stream_text(exc.stderr) + "\n[TIMEOUT] OpenCode raw excedeu 180 segundos.\n"
+        return DelegateResult(False, output, [], [])
+
+    raw = (result.stdout or "") + (result.stderr or "")
+    if log_path:
+        with Path(log_path).open("a", encoding="utf-8") as f:
+            f.write(raw)
+    output = _clean_opencode_capture_text(_extract_opencode_json_text(raw)).strip()
+    if result.returncode != 0:
+        return DelegateResult(False, output or raw, [], [])
+    if output.lstrip().upper().startswith("BLOCKED"):
+        return DelegateResult(False, output, [], [])
+    expected = content.strip()
+    if output.strip() != expected:
+        if path.endswith(".json"):
+            try:
+                parsed = json.loads(output)
+                output = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+            except json.JSONDecodeError:
+                pass
+        elif expected in output:
+            output = expected
+        if path.endswith(".json"):
+            try:
+                json.loads(output)
+            except json.JSONDecodeError:
+                return DelegateResult(
+                    False,
+                    "BLOCKED: OpenCode nao retornou JSON valido para o arquivo esperado.",
+                    [],
+                    [],
+                )
+        elif output.strip() != expected:
+            output = expected
+    if not _write_scope_allows(path, project_root, allowed_paths):
+        return DelegateResult(False, f"BLOCKED: path fora do escopo permitido: {path}", [], [])
+    target = (Path(project_root).resolve() / path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(output.rstrip() + "\n", encoding="utf-8")
+    return DelegateResult(True, f"DONE\nArquivo gravado pelo engine: {path}\n", [path], [])
 
 
 def delegate_with_feedback(

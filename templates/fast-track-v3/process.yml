@@ -23,13 +23,93 @@ nodes:
   - id: ft.start.route
     type: decision
     title: "HyperMode — PRD existente?"
-    description: "Detecta se já existe docs/PRD.md no projeto. Se sim, pula todo o MDD e vai direto ao planejamento."
+    description: "Detecta se já existe docs/PRD.md no projeto. Se sim, pula o MDD, mas ainda valida se docs/ui_criteria.md existe antes do planejamento."
     sprint: sprint-01-mdd
     executor: python
     condition: "file_exists:docs/PRD.md"
     branches:
-      "true": ft.plan.01.task_list
+      "true": ft.start.ui_criteria.route
       "false": ft.mdd.01.hipotese
+
+  - id: ft.start.ui_criteria.route
+    type: decision
+    title: "HyperMode — Critérios de UI existentes?"
+    description: "Detecta se já existe docs/ui_criteria.md. Se não existir, cria critérios visuais perguntando ao stakeholder antes de iniciar o planejamento."
+    sprint: sprint-02-planning
+    executor: python
+    condition: "file_exists:docs/ui_criteria.md"
+    branches:
+      "true": ft.plan.01.task_list
+      "false": ft.hyper.00.ui_criteria_questions
+
+  - id: ft.hyper.00.ui_criteria_questions
+    type: human_gate
+    title: "Perguntas para Critérios Visuais"
+    description: "docs/ui_criteria.md não existe. Responda com o que deve guiar a UI: telas P0, ações primárias por tela, componentes obrigatórios, fluxos de criação/edição, estados de erro/vazio/loading e evidências esperadas. Use ft approve \"respostas...\" para continuar; sem mensagem, o engine deriva apenas do PRD."
+    sprint: sprint-02-planning
+    executor: python
+    next: ft.hyper.01.ui_criteria
+
+  - id: ft.hyper.01.ui_criteria
+    type: discovery
+    title: "Descobrir Critérios Visuais de UI"
+    description: "docs/ui_criteria.md não existe. Leia o PRD e faça perguntas objetivas ao stakeholder sobre telas P0, navegação, componentes obrigatórios, estados e evidências visuais. Gere critérios com IDs estáveis C01, C02, C03..."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/ui_criteria.md
+    prompt: |
+      O projeto já possui docs/PRD.md, mas não possui docs/ui_criteria.md.
+
+      Sua tarefa é criar docs/ui_criteria.md fazendo discovery de interface:
+      1. Leia docs/PRD.md e identifique telas P0, fluxos P0, navegação, formulários,
+         estados vazios/erro/carregamento e componentes visuais citados no PRD.
+      2. Se algo estiver ambíguo, faça perguntas diretas ao stakeholder no próprio
+         processo de discovery antes de fechar o documento. Pergunte apenas o que
+         muda critérios de aceitação visual.
+      3. Gere critérios objetivos, verificáveis e rastreáveis com IDs estáveis:
+         C01, C02, C03...
+      4. Inclua no topo uma nota de evidência:
+         - relatório visual com linha por critério e PASS; ou
+         - código com data-ui-criteria="C01" ou comentário ui-criteria: C01.
+      5. Não invente componente específico que não esteja no PRD. Se um critério for
+         condicional, escreva "quando aplicável" e explique a condição.
+
+      Use este formato mínimo:
+
+      # Critérios Visuais de UI
+
+      ## Telas P0
+      - [ ] C01: ...
+
+      ## Estados e Fluxos
+      - [ ] C02: ...
+
+      ## Responsividade e Navegação
+      - [ ] C03: ...
+
+      ## Componentes e Acabamento
+      - [ ] C04: ...
+
+      ## Evidência Obrigatória
+      - [ ] C05: ...
+    validators:
+      - file_exists: docs/ui_criteria.md
+      - ui_criteria_ids:
+          path: docs/ui_criteria.md
+          min_count: 8
+    next: ft.hyper.01b.ui_criteria_gate
+
+  - id: ft.hyper.01b.ui_criteria_gate
+    type: human_gate
+    title: "Revisão dos Critérios Visuais"
+    description: "Revise docs/ui_criteria.md. Confirme se os critérios cobrem as telas P0, fluxos interativos, componentes específicos do PRD e evidências esperadas. Rejeite com respostas/instruções objetivas se faltar algo."
+    sprint: sprint-02-planning
+    executor: python
+    outputs:
+      - docs/ui_criteria.md
+    reject_next: ft.hyper.01.ui_criteria
+    next: ft.plan.01.task_list
 
   # ================================================================
   # Sprint 01 — MDD (Método de Desenvolvimento Dirigido)
@@ -105,7 +185,7 @@ nodes:
           - Hipótese
           - User Stories
           - Stack Técnico
-    next: ft.plan.01.task_list
+    next: ft.start.ui_criteria.route
 
   # ================================================================
   # Sprint 02 — Planning
@@ -115,13 +195,20 @@ nodes:
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Criar Task List"
-    description: "Decompor as user stories P0 do PRD em tasks técnicas ordenadas. Cada task deve ser verificável e ter escopo claro de implementação."
+    description: "Decompor as user stories P0 do PRD em tasks técnicas ordenadas. Formato obrigatório: agrupar por US/P0; incluir tasks de frontend, backend/API, testes e aceite; cada task deve ser verificável e ter escopo claro de implementação."
     sprint: sprint-02-planning
     executor: claude
     outputs:
       - docs/task_list.md
     validators:
       - file_exists: docs/task_list.md
+      - document_quality:
+          path: docs/task_list.md
+          min_lines_count: 20
+          max_lines_count: 120
+          forbidden: ["<tool_call", "<arg_key", "<arg_value", "vou analisar", "vou criar", "preciso verificar", "devo decompor", "I'll help", "Let me first", "I need to", "I will"]
+          required_terms: ["US-", "task", "frontend", "backend", "teste"]
+          min_required_terms: 4
     next: ft.plan.02.tech_stack
 
   - id: ft.plan.02.tech_stack
@@ -153,8 +240,9 @@ nodes:
 
   - id: ft.plan.03.api_contract
     type: document
+    no_pre_seed: true
     title: "Definir Contrato de API"
-    description: "Documentar todos os endpoints da API: método, path, request/response schema, códigos de erro. Incluir /health sem prefixo /api. Servir como contrato entre frontend e backend — evita mismatch de rotas."
+    description: "Documentar todos os endpoints da API em formato acionavel. Estrutura obrigatoria: ## Base URL e ## Endpoints. Em ## Endpoints, use tabela Markdown com colunas Método | Path | Descrição | Request | Response | Erros. Cada Path deve ser concreto e derivado do PRD/task list; é proibido usar / como endpoint de produto. Incluir GET /health sem prefixo /api. Endpoints de produto devem usar paths como /api/<recurso>. Se o produto tiver criação/cadastro, incluir POST /api/<recurso> para cada entidade criável. Servir como contrato entre frontend e backend — evita mismatch de rotas."
     sprint: sprint-02-planning
     executor: claude
     outputs:
@@ -164,30 +252,47 @@ nodes:
       - has_sections:
           - Base URL
           - Endpoints
+      - document_quality:
+          path: docs/api_contract.md
+          min_lines_count: 25
+          max_lines_count: 180
+          forbidden: ["<tool_call", "<arg_key", "<arg_value", "OpenSearch", "autenticacao requer", "auth/login", "vou analisar", "I notice", "I'll help"]
+      - api_contract_complete:
+          path: docs/api_contract.md
+          min_endpoints: 3
     next: ft.plan.04.ui_criteria
 
   - id: ft.plan.04.ui_criteria
     type: document
     title: "Gerar Critérios Visuais de UI"
-    description: "Definir critérios objetivos de aceitação visual para cada tela do produto: componentes obrigatórios, estados (vazio, carregado, erro), navegação e ícones. Estes critérios guiam o screenshot_review."
+    description: "Definir critérios objetivos de aceitação visual para cada tela do produto: componentes obrigatórios, estados (vazio, carregado, erro), navegação e ícones. Se este arquivo ainda não existir, faça perguntas objetivas ao stakeholder antes de fechar. Cada critério deve ter ID estável (C01, C02, C03...) para o screenshot_review/visual_check ou o código comprovarem cobertura item a item; no código, a evidência deve usar data-ui-criteria=\"C01\" ou comentário ui-criteria: C01."
     sprint: sprint-02-planning
     executor: claude
     outputs:
       - docs/ui_criteria.md
     validators:
       - file_exists: docs/ui_criteria.md
+      - ui_criteria_ids:
+          path: docs/ui_criteria.md
+          min_count: 8
     next: ft.plan.05.test_data
 
   - id: ft.plan.05.test_data
     type: document
     title: "Gerar Massa de Dados para Aceitação"
-    description: "Criar massa de dados realista para os testes de aceitação. OBRIGATÓRIO: todas as datas devem ser relativas à execução (hoje+N, hoje-N) — nunca datas absolutas hardcodadas. Ao menos um registro com data de hoje para validar agendamentos/eventos do dia."
+    description: "Criar massa de dados realista para os testes de aceitação. OBRIGATÓRIO: todas as datas devem ser relativas à execução (HOJE, HOJE+N, HOJE-N) — nunca inclua anos ou datas absolutas hardcodadas. Ao menos um registro com data de hoje para validar agendamentos/eventos do dia."
     sprint: sprint-02-planning
     executor: claude
     outputs:
       - docs/test_data.md
     validators:
       - file_exists: docs/test_data.md
+      - document_quality:
+          path: docs/test_data.md
+          min_lines_count: 12
+          max_lines_count: 120
+      - relative_dates_only:
+          path: docs/test_data.md
     next: ft.plan.gate
 
   - id: ft.plan.gate
@@ -198,10 +303,25 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/task_list.md
+      - document_quality:
+          path: docs/task_list.md
+          min_lines_count: 20
+          max_lines_count: 120
+          forbidden: ["<tool_call", "<arg_key", "<arg_value", "vou analisar", "vou criar", "preciso verificar", "devo decompor", "I'll help", "Let me first", "I need to", "I will"]
+          required_terms: ["US-", "task", "frontend", "backend", "teste"]
+          min_required_terms: 4
       - file_exists: docs/tech_stack.md
       - file_exists: docs/api_contract.md
+      - api_contract_complete:
+          path: docs/api_contract.md
+          min_endpoints: 3
       - file_exists: docs/ui_criteria.md
+      - ui_criteria_ids:
+          path: docs/ui_criteria.md
+          min_count: 8
       - file_exists: docs/test_data.md
+      - relative_dates_only:
+          path: docs/test_data.md
     next: ft.frontend.01.scaffold
 
   # ================================================================
@@ -217,6 +337,10 @@ nodes:
     outputs:
       - project/frontend/
       - .build_ok
+    write_scope:
+      - project/frontend
+      - .build_ok
+    no_pre_seed: true
     validators:
       - file_exists: project/frontend/package.json
       - command_succeeds: "cd project/frontend && npm install --silent && npm run build --silent"
@@ -230,6 +354,9 @@ nodes:
     executor: claude
     outputs:
       - project/frontend/src/
+    write_scope:
+      - project/frontend
+    no_pre_seed: true
     validators:
       - command_succeeds: "cd project/frontend && npm run build --silent"
       - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
@@ -262,6 +389,11 @@ nodes:
       - docs/screenshot-review.md
     validators:
       - file_exists: docs/screenshot-review.md
+      - ui_criteria_coverage:
+          criteria_path: docs/ui_criteria.md
+          report_path: docs/screenshot-review.md
+          source_dir: project/frontend/src
+          evidence: any
     on_fail:
       human_gate: "Screenshots não evidenciam conformidade com os critérios visuais. Corrija a UI e refaça."
       goto: ft.frontend.02.implement
@@ -277,6 +409,11 @@ nodes:
       - file_exists: docs/screenshot-review.md
       - command_succeeds: "cd project/frontend && npm run build --silent"
       - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
+      - ui_criteria_coverage:
+          criteria_path: docs/ui_criteria.md
+          report_path: docs/screenshot-review.md
+          source_dir: project/frontend/src
+          evidence: any
     next: ft.tdd.01.red
 
   # ================================================================
@@ -294,6 +431,11 @@ nodes:
     validators:
       - file_exists: project/tests/
       - command_succeeds: "cd project && python -c \"from pathlib import Path; import py_compile; files=list(Path('tests').rglob('test_*.py')); assert files, 'nenhum test_*.py encontrado'; [py_compile.compile(str(p), doraise=True) for p in files]\""
+      - pytest_red_quality:
+          tests_dir: project/tests
+          min_test_files: 1
+          min_tests: 3
+          min_assertions: 3
     next: ft.tdd.02.green
 
   - id: ft.tdd.02.green
@@ -307,6 +449,11 @@ nodes:
       - project/backend/
     validators:
       - command_succeeds: "cd project && python -m pytest tests/ -x -q"
+      - pytest_red_quality:
+          tests_dir: project/tests
+          min_test_files: 1
+          min_tests: 3
+          min_assertions: 3
     next: ft.tdd.03.refactor
 
   - id: ft.tdd.03.refactor
@@ -317,6 +464,11 @@ nodes:
     executor: claude
     validators:
       - command_succeeds: "cd project && python -m pytest tests/ -x -q"
+      - pytest_red_quality:
+          tests_dir: project/tests
+          min_test_files: 1
+          min_tests: 3
+          min_assertions: 3
     next: gate.tdd
 
   - id: gate.tdd
@@ -327,6 +479,11 @@ nodes:
     executor: python
     validators:
       - command_succeeds: "cd project && python -m pytest tests/ -q"
+      - pytest_red_quality:
+          tests_dir: project/tests
+          min_test_files: 1
+          min_tests: 3
+          min_assertions: 3
     next: ft.delivery.01.entrypoint
 
   # ================================================================
@@ -486,6 +643,7 @@ nodes:
       - docs/e2e-report.md
     validators:
       - file_exists: docs/e2e-report.md
+      - command_succeeds: "cd project && python -m pytest tests/e2e -q"
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
       - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.e2e
@@ -493,12 +651,13 @@ nodes:
   - id: gate.e2e
     type: gate
     title: "Gate E2E"
-    description: "Verificação determinística: relatório E2E existe e screenshots foram gerados."
+    description: "Verificação determinística: relatório E2E existe, screenshots foram gerados e a suíte E2E do projeto passa."
     sprint: sprint-08-e2e
     executor: python
     validators:
       - file_exists: docs/e2e-report.md
       - file_exists: docs/screenshots/e2e/
+      - command_succeeds: "cd project && python -m pytest tests/e2e -q"
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
       - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.final.01.visual_check
@@ -520,6 +679,11 @@ nodes:
       - file_exists: docs/visual-check-report.md
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
       - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - ui_criteria_coverage:
+          criteria_path: docs/ui_criteria.md
+          report_path: docs/visual-check-report.md
+          source_dir: project/frontend/src
+          evidence: any
     next: gate.visual_check
 
   - id: gate.visual_check
@@ -532,6 +696,11 @@ nodes:
       - file_exists: docs/visual-check-report.md
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
       - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - ui_criteria_coverage:
+          criteria_path: docs/ui_criteria.md
+          report_path: docs/visual-check-report.md
+          source_dir: project/frontend/src
+          evidence: any
     next: ft.final.02.stakeholder
 
   - id: ft.final.02.stakeholder

@@ -12,8 +12,11 @@ from ft.engine.delegate import (
     _build_executor_command,
     _clean_opencode_capture_text,
     _executor_env,
+    _env_nonnegative_int,
+    _append_opencode_runtime_diagnostics,
     _extract_codex_output,
     _extract_opencode_json_text,
+    _is_opencode_internal_log_line,
     _opencode_capture_command,
     _prepare_opencode_sandbox_mounts,
     _stop_process_tree,
@@ -24,11 +27,17 @@ from ft.engine.delegate import (
     DEFAULT_OPENCODE_OUTPUT_LIMIT,
     DelegateResult,
     ExecutorIdleTimeout,
+    delegate_to_llm,
     delegate_with_feedback,
 )
 
 
 class TestBuildExecutorCommand:
+    def test_env_nonnegative_int_accepts_zero(self, monkeypatch):
+        monkeypatch.setenv("FT_OPENCODE_IDLE_RETRIES", "0")
+
+        assert _env_nonnegative_int("FT_OPENCODE_IDLE_RETRIES") == 0
+
     def test_builds_claude_command_with_bypass(self):
         cmd = _build_executor_command("claude", "faça algo", "/tmp/proj", 7)
         assert cmd[0] == "claude"
@@ -56,8 +65,8 @@ class TestBuildExecutorCommand:
             "run",
             "--dir", "/tmp/proj",
             "-m", DEFAULT_OPENCODE_MODEL,
+            "--auto",
             "--pure",
-            "--variant", "minimal",
             "faça algo",
         ]
 
@@ -74,8 +83,8 @@ class TestBuildExecutorCommand:
             "run",
             "--dir", "/tmp/proj",
             "-m", "anthropic/claude-sonnet-4-5",
+            "--auto",
             "--pure",
-            "--variant", "minimal",
             "faça algo",
         ]
 
@@ -87,11 +96,13 @@ class TestBuildExecutorCommand:
         assert ["--variant", "low"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
 
     def test_builds_opencode_command_allows_disabling_pure_and_variant(self, monkeypatch):
+        monkeypatch.setenv("FT_OPENCODE_AUTO", "0")
         monkeypatch.setenv("FT_OPENCODE_PURE", "0")
         monkeypatch.setenv("FT_OPENCODE_VARIANT", "off")
 
         cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
 
+        assert "--auto" not in cmd
         assert "--pure" not in cmd
         assert "--variant" not in cmd
 
@@ -143,12 +154,33 @@ class TestBuildExecutorCommand:
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         assert config["permission"]["bash"] == "ask"
         assert config["permission"]["external_directory"] == "deny"
+        assert env["CI"] == "1"
+        assert env["COREPACK_ENABLE_DOWNLOAD_PROMPT"] == "0"
+        assert env["npm_config_yes"] == "true"
+        assert env["NPM_CONFIG_YES"] == "true"
+        assert env["npm_config_audit"] == "false"
+        assert env["npm_config_fund"] == "false"
         assert config["compaction"] == {
             "auto": True,
             "prune": True,
             "reserved": 10000,
         }
         assert config["theme"] == "system"
+
+    def test_appends_opencode_runtime_diagnostics_to_step_log(self, tmp_path):
+        runtime = tmp_path / "runtime"
+        internal_log = runtime / "data" / "opencode" / "log" / "opencode.log"
+        internal_log.parent.mkdir(parents=True)
+        internal_log.write_text("timestamp=now level=ERROR message=boom\n", encoding="utf-8")
+        step_log = tmp_path / "state" / "llm_logs" / "node.log"
+        step_log.parent.mkdir(parents=True)
+        step_log.write_text("Preamble\n", encoding="utf-8")
+
+        _append_opencode_runtime_diagnostics(runtime, str(step_log))
+
+        content = step_log.read_text(encoding="utf-8")
+        assert "OPENCODE INTERNAL opencode.log" in content
+        assert "message=boom" in content
 
     def test_opencode_env_can_deny_large_doc_reads(self):
         env = _executor_env(
@@ -178,6 +210,7 @@ class TestBuildExecutorCommand:
         env = _executor_env("opencode", {}, opencode_text_only=True)
 
         permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
+        assert permission["*"] == "deny"
         for tool in ("bash", "glob", "grep", "list", "read", "edit"):
             assert permission[tool] == "deny"
 
@@ -203,6 +236,13 @@ class TestBuildExecutorCommand:
 
         assert _clean_opencode_capture_text(extracted) == "# Doc\nbody"
 
+    def test_identifies_opencode_internal_log_lines(self):
+        assert _is_opencode_internal_log_line(
+            'timestamp=2026-07-08T16:47:44.775Z level=INFO run=0b245190 message="llm runtime selected"'
+        )
+        assert not _is_opencode_internal_log_line("$ ls -la project/frontend")
+        assert not _is_opencode_internal_log_line("→ Read docs/PRD.md")
+
     def test_opencode_capture_cleaner_removes_fence_and_trailing_blocked_note(self):
         text = (
             "```markdown\n"
@@ -218,6 +258,11 @@ class TestBuildExecutorCommand:
 
     def test_opencode_capture_cleaner_preserves_blocked_only_response(self):
         assert _clean_opencode_capture_text("BLOCKED: sem contexto") == "BLOCKED: sem contexto"
+
+    def test_opencode_capture_cleaner_removes_operational_prelude_before_heading(self):
+        text = "I need to create the task list first.\n\n# Task List\n\n- item\n"
+
+        assert _clean_opencode_capture_text(text) == "# Task List\n\n- item"
 
     def test_opencode_env_can_deny_edit_tools_for_code_nodes(self):
         env = _executor_env(
@@ -267,6 +312,38 @@ class TestBuildExecutorCommand:
         assert provider["options"]["baseURL"] == "http://example.test/v1"
         assert model["name"] == "GPT-OSS 20B"
         assert model["limit"] == {"context": 123456, "output": 8192}
+
+    def test_opencode_env_can_set_provider_timeouts(self, monkeypatch):
+        monkeypatch.setenv("FT_OPENCODE_PROVIDER_TIMEOUT", "900000")
+        monkeypatch.setenv("FT_OPENCODE_CHUNK_TIMEOUT", "180000")
+        monkeypatch.setenv("FT_OPENCODE_HEADER_TIMEOUT", "120000")
+
+        env = _executor_env(
+            "opencode",
+            {
+                "OPENCODE_CONFIG_CONTENT": json.dumps({
+                    "provider": {
+                        "pgx": {
+                            "options": {"baseURL": "http://example.test/v1"},
+                            "models": {
+                                "zai-org_glm-4.7-flash": {"name": "GLM 4.7 Flash"}
+                            },
+                        }
+                    }
+                })
+            },
+            opencode_model=DEFAULT_OPENCODE_MODEL,
+        )
+
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        provider = config["provider"]["pgx"]
+        assert provider["options"] == {
+            "baseURL": "http://example.test/v1",
+            "timeout": 900000,
+            "chunkTimeout": 180000,
+            "headerTimeout": 120000,
+        }
+        assert provider["models"]["zai-org_glm-4.7-flash"]["name"] == "GLM 4.7 Flash"
 
     def test_non_opencode_env_is_unchanged(self):
         env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})
@@ -318,6 +395,239 @@ class TestBuildExecutorCommand:
         ] in [cmd[i:i + 3] for i in range(len(cmd) - 2)]
         assert cmd[-3:] == ["opencode", "run", "prompt"]
         assert [mount.path for mount in mounts] == [tmp_path / "docs/out.md"]
+
+    def test_delegate_opencode_code_node_materializes_generated_file_bundle(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        generated = (
+            "<ft_file path=\"project/frontend/package.json\">\n"
+            "{\"scripts\":{\"build\":\"echo ok\"}}\n"
+            "</ft_file>\n"
+        )
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            f"print(json.dumps({{'type':'text','part':{{'type':'text','text':{generated!r}}}}}))\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_BUNDLE_MODE", "1")
+
+        result = delegate_to_llm(
+            task="crie scaffold",
+            project_root=str(tmp_path),
+            allowed_paths=["project"],
+            llm_engine="opencode",
+            opencode_deny_edit_tools=True,
+            log_path=str(tmp_path / "llm.log"),
+        )
+
+        assert result.success is True
+        assert "File bundle gerado pelo OpenCode" in result.output
+        assert (tmp_path / "project/frontend/package.json").exists()
+
+    def test_delegate_opencode_code_node_uses_tool_mode_by_default(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        prompt_path = tmp_path / "prompt.txt"
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import pathlib, sys\n"
+            f"pathlib.Path({str(prompt_path)!r}).write_text(sys.argv[-1], encoding='utf-8')\n"
+            "print('DONE')\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+
+        result = delegate_to_llm(
+            task="crie scaffold",
+            project_root=str(tmp_path),
+            allowed_paths=["project"],
+            llm_engine="opencode",
+            opencode_deny_edit_tools=True,
+            log_path=str(tmp_path / "llm.log"),
+        )
+
+        prompt = prompt_path.read_text(encoding="utf-8")
+        assert result.success is True
+        assert "OBRIGATORIO: antes de dizer DONE, use Bash" in prompt
+        assert "Responda SOMENTE com blocos XML" not in prompt
+
+    def test_delegate_opencode_native_write_prompt_uses_path_schema(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        prompt_path = tmp_path / "prompt.txt"
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import pathlib, sys\n"
+            f"pathlib.Path({str(prompt_path)!r}).write_text(sys.argv[-1], encoding='utf-8')\n"
+            "print('DONE')\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+
+        result = delegate_to_llm(
+            task="crie scaffold",
+            project_root=str(tmp_path),
+            allowed_paths=["project"],
+            llm_engine="opencode",
+            log_path=str(tmp_path / "llm.log"),
+        )
+
+        prompt = prompt_path.read_text(encoding="utf-8")
+        assert result.success is True
+        assert "campos `path` e `content`" in prompt
+        assert "campos `path`, `oldString`, `newString`" in prompt
+        assert "nunca use `filePath`" in prompt
+
+    def test_delegate_opencode_file_bundle_tolerates_extra_text(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        generated = (
+            "I will create the scaffold now.\n"
+            "<ft_file path=\"project/frontend/package.json\">\n"
+            "{\"scripts\":{\"build\":\"echo ok\"}}\n"
+            "</ft_file>\n"
+            "The file is ready.\n"
+        )
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            f"print(json.dumps({{'type':'text','part':{{'type':'text','text':{generated!r}}}}}))\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_BUNDLE_MODE", "1")
+
+        result = delegate_to_llm(
+            task="crie scaffold",
+            project_root=str(tmp_path),
+            allowed_paths=["project"],
+            llm_engine="opencode",
+            opencode_deny_edit_tools=True,
+            log_path=str(tmp_path / "llm.log"),
+        )
+
+        assert result.success is True
+        assert "File bundle gerado pelo OpenCode" in result.output
+        assert (tmp_path / "project/frontend/package.json").exists()
+
+    def test_delegate_opencode_file_bundle_prefixes_frontend_orphan_paths(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        generated = (
+            "<ft_file path=\"project/frontend/package.json\">\n"
+            "{\"scripts\":{\"build\":\"node scripts/build.js\"}}\n"
+            "</ft_file>\n"
+            "<ft_file path=\"scripts/build.js\">\n"
+            "process.exit(0)\n"
+            "</ft_file>\n"
+        )
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            f"print(json.dumps({{'type':'text','part':{{'type':'text','text':{generated!r}}}}}))\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_BUNDLE_MODE", "1")
+
+        result = delegate_to_llm(
+            task="crie scaffold",
+            project_root=str(tmp_path),
+            allowed_paths=["project"],
+            llm_engine="opencode",
+            opencode_deny_edit_tools=True,
+            log_path=str(tmp_path / "llm.log"),
+        )
+
+        assert result.success is True
+        assert (tmp_path / "project/frontend/scripts/build.js").read_text(encoding="utf-8") == "process.exit(0)\n"
+        assert "project/frontend/scripts/build.js" in result.output
+
+    def test_delegate_opencode_file_bundle_normalizes_frontend_alias_paths(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        generated = (
+            "<ft_file path=\"project/frontend/package.json\">\n"
+            "{\"scripts\":{\"build\":\"node scripts/build.mjs\"}}\n"
+            "</ft_file>\n"
+            "<ft_file path=\"package/frontend/scripts/build.mjs\">\n"
+            "process.exit(0)\n"
+            "</ft_file>\n"
+        )
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            f"print(json.dumps({{'type':'text','part':{{'type':'text','text':{generated!r}}}}}))\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_BUNDLE_MODE", "1")
+
+        result = delegate_to_llm(
+            task="crie scaffold",
+            project_root=str(tmp_path),
+            allowed_paths=["project"],
+            llm_engine="opencode",
+            opencode_deny_edit_tools=True,
+            log_path=str(tmp_path / "llm.log"),
+        )
+
+        assert result.success is True
+        assert (tmp_path / "project/frontend/scripts/build.mjs").read_text(encoding="utf-8") == "process.exit(0)\n"
+        assert "project/frontend/scripts/build.mjs" in result.output
+
+    def test_delegate_opencode_file_bundle_preserves_dotfile_paths(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        generated = (
+            "<ft_file path=\".build_ok\">\n"
+            "ready\n"
+            "</ft_file>\n"
+        )
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            f"print(json.dumps({{'type':'text','part':{{'type':'text','text':{generated!r}}}}}))\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_BUNDLE_MODE", "1")
+
+        result = delegate_to_llm(
+            task="marque build",
+            project_root=str(tmp_path),
+            allowed_paths=[".build_ok"],
+            llm_engine="opencode",
+            opencode_deny_edit_tools=True,
+            log_path=str(tmp_path / "llm.log"),
+        )
+
+        assert result.success is True
+        assert (tmp_path / ".build_ok").read_text(encoding="utf-8") == "ready\n"
+        assert "- .build_ok" in result.output
 
     def test_wait_for_process_returns_success_when_outputs_exist(self, tmp_path):
         output = tmp_path / "docs/out.md"

@@ -110,7 +110,13 @@ Sem `--process`, o engine procura automaticamente (ordem de prioridade):
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`). |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Sobrescreve a janela de contexto anunciada ao OpenCode para o modelo selecionado. O default de `pgx/zai-org_glm-4.7-flash` é 200000. |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Sobrescreve o limite de saída anunciado ao OpenCode. O default de `pgx/zai-org_glm-4.7-flash` é 32768. |
+| `FT_OPENCODE_PROVIDER_TIMEOUT` / `FT_OPENCODE_TIMEOUT` | Define `provider.options.timeout` no OpenCode, em milissegundos. |
+| `FT_OPENCODE_CHUNK_TIMEOUT` / `FT_OPENCODE_PROVIDER_CHUNK_TIMEOUT` | Define `provider.options.chunkTimeout` no OpenCode, em milissegundos, para cortar streams sem novos chunks. |
+| `FT_OPENCODE_HEADER_TIMEOUT` / `FT_OPENCODE_PROVIDER_HEADER_TIMEOUT` | Define `provider.options.headerTimeout` no OpenCode, em milissegundos. |
 | `FT_OPENCODE_SANDBOX` | Controla o sandbox de filesystem do OpenCode via `bwrap` (default ligado). O worktree fica read-only e só os outputs/write_scope do node são montados como writable. Use `0` para desabilitar. |
+| `FT_OPENCODE_DENY_EDIT_TOOLS` | Opt-in: nega ferramentas nativas de edição do OpenCode em nodes de código e força o modo legado de escrita indireta. |
+| `FT_OPENCODE_BUNDLE_MODE` | Opt-in: força nodes de código OpenCode a responderem por bundle XML `<ft_file>`, materializado pelo engine. Use para diagnóstico ou nodes pequenos. |
+| `FT_OPENCODE_SCRIPT_MODE` | Opt-in: força nodes de código OpenCode a responderem com um script Bash materializado pelo engine. |
 | `FT_OPENCODE_DEBUG` | Ativa `opencode run --print-logs --log-level DEBUG`. |
 | `FT_OPENCODE_PRINT_LOGS` / `FT_OPENCODE_LOG_LEVEL` / `FT_OPENCODE_THINKING` | Ajustes finos de log do OpenCode sem ativar todo o modo debug. |
 

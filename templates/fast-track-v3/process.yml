@@ -398,6 +398,7 @@ nodes:
       - 'p=$(cd project && make -s url | grep -oE "[0-9]+$"); [ -n "$p" ] && fuser -k -TERM "$p/tcp" 2>/dev/null; true'
     validators:
       - command_succeeds: "cd project && curl -sf \"$(make -s url)/health\" | python -c \"import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)\""
+      - command_succeeds: "cd project && curl -sf \"$(make -s url)/\" | python -c \"import sys; body=sys.stdin.read().lower(); sys.exit(0 if '<html' in body or '<!doctype html' in body else 1)\""
       - file_exists: docs/smoke-report.md
     next: gate.smoke
 
@@ -462,6 +463,7 @@ nodes:
       - project/tests/e2e/
     validators:
       - file_exists: project/tests/e2e/
+      - file_exists: project/tests/e2e/test_navigation.py
     next: ft.e2e.02.screenshots
 
   - id: ft.e2e.02.screenshots
@@ -476,6 +478,7 @@ nodes:
       - docs/e2e-report.md
     validators:
       - file_exists: docs/e2e-report.md
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 5 and all(p.stat().st_size > 1000 for p in shots)\""
     next: gate.e2e
 
   - id: gate.e2e
@@ -487,6 +490,7 @@ nodes:
     validators:
       - file_exists: docs/e2e-report.md
       - file_exists: docs/screenshots/e2e/
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 5 and all(p.stat().st_size > 1000 for p in shots)\""
     next: ft.final.01.visual_check
 
   # ================================================================
@@ -504,6 +508,7 @@ nodes:
       - docs/visual-check-report.md
     validators:
       - file_exists: docs/visual-check-report.md
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.visual_check
 
   - id: gate.visual_check
@@ -514,6 +519,7 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/visual-check-report.md
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.final.02.stakeholder
 
   - id: ft.final.02.stakeholder

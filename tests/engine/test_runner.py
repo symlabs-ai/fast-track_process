@@ -1,5 +1,7 @@
 """Unit tests for ft.engine.runner (LLM mocked)."""
 
+import importlib.util
+
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -487,6 +489,9 @@ nodes:
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
         state_dir.mkdir(parents=True)
+        frontend = project_root / "project" / "frontend"
+        frontend.mkdir(parents=True)
+        (frontend / "index.html").write_text("<!doctype html><html><body>app</body></html>", encoding="utf-8")
 
         process_path = tmp_path / "process.yml"
         process_path.write_text(
@@ -538,6 +543,16 @@ nodes:
             runner._run_llm_step(runner.graph.get_node("ft.delivery.03.makefile"))
             assert (project_root / "project/Makefile").exists()
             assert (project_root / "process/scripts/serve.sh").exists()
+
+            spec = importlib.util.spec_from_file_location(
+                "generated_backend_main",
+                project_root / "project/backend/main.py",
+            )
+            assert spec and spec.loader
+            backend_main = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(backend_main)
+            assert backend_main._safe_static_path("/").name == "index.html"
+            assert backend_main._content_type(backend_main._safe_static_path("/")).startswith("text/html")
             assert runner.state_mgr.load().current_node == "ft.end"
 
     def test_opencode_process_evolve_restores_process_yml_in_worktree(self, tmp_path):
@@ -590,6 +605,98 @@ nodes:
         assert restored.exists()
         assert restored.stat().st_size > 0
         assert runner.state_mgr.load().current_node == "ft.end"
+
+    def test_opencode_e2e_fallback_requires_browser_screenshots(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.e2e.01.browser
+    type: build
+    title: E2E Setup
+    executor: claude
+    outputs:
+      - project/tests/e2e/
+    validators:
+      - file_exists: project/tests/e2e/
+      - file_exists: project/tests/e2e/test_navigation.py
+    next: ft.e2e.02.screenshots
+  - id: ft.e2e.02.screenshots
+    type: build
+    title: E2E Run
+    executor: claude
+    outputs:
+      - docs/screenshots/e2e/
+      - docs/e2e-report.md
+    validators:
+      - file_exists: docs/e2e-report.md
+      - command_succeeds: "python -c \\"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 5 and all(p.stat().st_size > 1000 for p in shots)\\""
+    next: ft.final.01.visual_check
+  - id: ft.final.01.visual_check
+    type: build
+    title: Visual
+    executor: claude
+    outputs:
+      - docs/visual-check-report.md
+    validators:
+      - file_exists: docs/visual-check-report.md
+      - command_succeeds: "python -c \\"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\\""
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+
+        def fake_browser_e2e(root: Path) -> None:
+            shots = root / "docs" / "screenshots" / "e2e"
+            shots.mkdir(parents=True, exist_ok=True)
+            rows = []
+            for name in ("inicio", "clientes", "catalogo", "agenda", "cobrancas"):
+                path = shots / f"{name}.png"
+                path.write_bytes(b"\\x89PNG\\r\\n" + (b"x" * 1500))
+                rows.append(f"| {name} | `/{name}` | `{path.relative_to(root)}` | PASS |")
+            (root / "docs" / "e2e-report.md").write_text(
+                "# E2E Report\n\nResultado: PASS\n\n"
+                "Browser: Playwright Chromium headless\n\n"
+                "| Tela | Path | Screenshot | Resultado |\n|---|---|---|---|\n"
+                + "\n".join(rows)
+                + "\n",
+                encoding="utf-8",
+            )
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            runner._run_llm_step(runner.graph.get_node("ft.e2e.01.browser"))
+            assert (project_root / "project/tests/e2e/test_navigation.py").exists()
+            assert "placeholder" not in (project_root / "project/tests/e2e/test_navigation.py").read_text(encoding="utf-8").lower()
+
+            with patch.object(runner, "_run_opencode_browser_e2e", side_effect=fake_browser_e2e):
+                runner._run_llm_step(runner.graph.get_node("ft.e2e.02.screenshots"))
+
+            runner._run_llm_step(runner.graph.get_node("ft.final.01.visual_check"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "ft.end"
+        visual = (project_root / "docs/visual-check-report.md").read_text(encoding="utf-8").lower()
+        assert "screenshots e2e reais" in visual
+        assert "placeholder" not in visual
+        assert "não executad" not in visual
 
     def test_decision_skipped_branch_counts_as_progress(self, tmp_path):
         project_root = tmp_path / "project"

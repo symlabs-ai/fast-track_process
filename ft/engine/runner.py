@@ -1071,9 +1071,16 @@ from datetime import UTC, datetime
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from time import perf_counter
+from urllib.parse import unquote
 from uuid import uuid4
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_ROOT = PROJECT_ROOT / "frontend" / "dist"
+if not FRONTEND_ROOT.exists():
+    FRONTEND_ROOT = PROJECT_ROOT / "frontend"
 
 CLIENTES = [
     {
@@ -1149,7 +1156,7 @@ def total_pendente() -> float:
     return sum(item["valor"] for item in COBRANCAS if item["status"] == "pendente")
 
 
-def route_payload(path: str) -> tuple[int, dict]:
+def api_payload(path: str) -> tuple[int, dict]:
     if path == "/health":
         return 200, health()
     if path == "/api/clientes":
@@ -1163,11 +1170,63 @@ def route_payload(path: str) -> tuple[int, dict]:
     return 404, {"error": "not_found", "path": path}
 
 
+def _safe_static_path(path: str) -> Path | None:
+    if path in ("", "/"):
+        requested = "index.html"
+    else:
+        requested = unquote(path).lstrip("/")
+    candidate = (FRONTEND_ROOT / requested).resolve()
+    root = FRONTEND_ROOT.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if candidate.is_dir():
+        candidate = candidate / "index.html"
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    if "." not in Path(requested).name:
+        index = root / "index.html"
+        if index.exists():
+            return index
+    return None
+
+
+def _content_type(path: Path) -> str:
+    return {
+        ".html": "text/html; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
+        ".json": "application/json; charset=utf-8",
+        ".svg": "image/svg+xml; charset=utf-8",
+        ".webmanifest": "application/manifest+json; charset=utf-8",
+    }.get(path.suffix, "application/octet-stream")
+
+
 class ServiceMateHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         started = perf_counter()
         path = self.path.split("?", 1)[0]
-        status, payload = route_payload(path)
+        if path == "/health" or path.startswith("/api/"):
+            status, payload = api_payload(path)
+            self._send_json(status, payload, started)
+            return
+
+        static_path = _safe_static_path(path)
+        if static_path is None:
+            self._send_json(404, {"error": "not_found", "path": path}, started)
+            return
+
+        body = static_path.read_bytes()
+        self.send_response(200)
+        self.send_header("content-type", _content_type(static_path))
+        self.send_header("access-control-allow-origin", "*")
+        self.send_header("x-process-time-ms", f"{(perf_counter() - started) * 1000:.2f}")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json(self, status: int, payload: dict, started: float) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
@@ -1292,6 +1351,149 @@ exit 1
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
+    def _write_opencode_e2e_test(self, root: Path) -> None:
+        e2e = root / "project" / "tests" / "e2e"
+        e2e.mkdir(parents=True, exist_ok=True)
+        (e2e / "test_navigation.py").write_text(
+            '''from pathlib import Path
+
+from playwright.sync_api import sync_playwright
+
+
+ROUTES = [
+    ("Início", "/", "inicio.png", "ServiceMate"),
+    ("Clientes", "/clientes", "clientes.png", "Ana Ribeiro"),
+    ("Catálogo", "/catalogo", "catalogo.png", "Setup inicial"),
+    ("Agenda", "/agenda", "agenda.png", "Check-in Studio Lima"),
+    ("Cobranças", "/cobrancas", "cobrancas.png", "R$ 1.280,00"),
+]
+
+
+def test_primary_navigation_and_screenshots():
+    cycle_root = Path(__file__).resolve().parents[3]
+    base_url = (cycle_root / ".serve_url").read_text(encoding="utf-8").strip()
+    screenshots = cycle_root / "docs" / "screenshots" / "e2e"
+    screenshots.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto(base_url, wait_until="networkidle")
+
+        for label, path, filename, expected_text in ROUTES:
+            if path == "/":
+                page.goto(base_url, wait_until="networkidle")
+            else:
+                page.get_by_label(label).click()
+                page.wait_for_timeout(250)
+            assert page.locator("#app").inner_text().strip()
+            assert expected_text in page.locator("body").inner_text()
+            assert page.evaluate("location.pathname") == path
+            page.screenshot(path=str(screenshots / filename), full_page=True)
+
+        browser.close()
+''',
+            encoding="utf-8",
+        )
+
+    def _ensure_cycle_server(self, root: Path) -> str:
+        serve_script = root / "process" / "scripts" / "serve.sh"
+        if not serve_script.exists():
+            self._write_opencode_delivery_stack(root)
+        result = subprocess.run(
+            ["bash", "process/scripts/serve.sh"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stdout + result.stderr).strip() or "serve.sh falhou")
+        url_file = root / ".serve_url"
+        if not url_file.exists():
+            raise RuntimeError("serve.sh nao gerou .serve_url")
+        return url_file.read_text(encoding="utf-8").strip()
+
+    def _run_opencode_browser_e2e(self, root: Path) -> None:
+        base_url = self._ensure_cycle_server(root)
+        screenshots_dir = root / "docs" / "screenshots" / "e2e"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            raise RuntimeError(f"Playwright indisponivel: {exc}") from exc
+
+        routes = [
+            ("Início", "/", "inicio.png", "ServiceMate"),
+            ("Clientes", "/clientes", "clientes.png", "Ana Ribeiro"),
+            ("Catálogo", "/catalogo", "catalogo.png", "Setup inicial"),
+            ("Agenda", "/agenda", "agenda.png", "Check-in Studio Lima"),
+            ("Cobranças", "/cobrancas", "cobrancas.png", "R$ 1.280,00"),
+        ]
+        rows: list[str] = []
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.goto(base_url, wait_until="networkidle", timeout=15000)
+
+            for label, path, filename, expected in routes:
+                if path == "/":
+                    page.goto(base_url, wait_until="networkidle", timeout=15000)
+                else:
+                    page.get_by_label(label).click(timeout=5000)
+                    page.wait_for_timeout(250)
+                body_text = page.locator("body").inner_text(timeout=5000)
+                app_text = page.locator("#app").inner_text(timeout=5000).strip()
+                actual_path = page.evaluate("location.pathname")
+                if not app_text:
+                    raise RuntimeError(f"{label}: #app vazio")
+                if expected not in body_text:
+                    raise RuntimeError(f"{label}: texto esperado ausente: {expected}")
+                if actual_path != path:
+                    raise RuntimeError(f"{label}: path esperado {path}, atual {actual_path}")
+                screenshot = screenshots_dir / filename
+                page.screenshot(path=str(screenshot), full_page=True)
+                rows.append(f"| {label} | `{path}` | `{screenshot.relative_to(root)}` | PASS |")
+
+            browser.close()
+
+        self._write_doc(
+            "docs/e2e-report.md",
+            "# E2E Report\n\n"
+            "Resultado: PASS\n\n"
+            f"Servidor: `{base_url}`\n\n"
+            "Browser: Playwright Chromium headless\n\n"
+            "| Tela | Path | Screenshot | Resultado |\n"
+            "|---|---|---|---|\n"
+            + "\n".join(rows)
+            + "\n",
+        )
+
+    def _write_opencode_visual_report(self, root: Path) -> None:
+        screenshots_dir = root / "docs" / "screenshots" / "e2e"
+        screenshots = sorted(screenshots_dir.glob("*.png"))
+        if len(screenshots) < 5:
+            raise RuntimeError("visual check exige pelo menos 5 screenshots E2E reais")
+        tiny = [p.name for p in screenshots if p.stat().st_size < 1000]
+        if tiny:
+            raise RuntimeError(f"screenshots invalidos ou vazios: {', '.join(tiny)}")
+        rows = [
+            f"| `{p.relative_to(root)}` | {p.stat().st_size} bytes | PASS |"
+            for p in screenshots
+        ]
+        self._write_doc(
+            "docs/visual-check-report.md",
+            "# Visual Check\n\n"
+            "Resultado: PASS\n\n"
+            "Evidência: screenshots E2E reais capturados via Playwright e verificados por tamanho.\n\n"
+            "| Screenshot | Tamanho | Resultado |\n"
+            "|---|---:|---|\n"
+            + "\n".join(rows)
+            + "\n",
+        )
+
     def _is_valid_yaml_file(self, path: Path) -> bool:
         if not path.exists() or path.stat().st_size == 0:
             return False
@@ -1404,40 +1606,35 @@ exit 1
             )
 
         if node.id == "ft.e2e.01.browser":
-            print(ui.info("OpenCode fallback: configurando E2E determinístico"))
-            e2e = root / "project" / "tests" / "e2e"
-            e2e.mkdir(parents=True, exist_ok=True)
-            (e2e / "README.md").write_text("# E2E\n\nSuite placeholder determinística para o ciclo.\n", encoding="utf-8")
+            print(ui.info("OpenCode fallback: configurando E2E Playwright"))
+            self._write_opencode_e2e_test(root)
             return self._finish_opencode_fallback_node(
                 node,
-                "NODE_SUMMARY:\n- fiz: diretório E2E determinístico\n- verificado: validators do node passaram",
+                "NODE_SUMMARY:\n- fiz: teste Playwright de navegação\n- verificado: validators do node passaram",
             )
 
         if node.id == "ft.e2e.02.screenshots":
-            print(ui.info("OpenCode fallback: gerando relatório E2E determinístico"))
-            (root / "docs" / "screenshots" / "e2e").mkdir(parents=True, exist_ok=True)
-            self._write_doc(
-                "docs/screenshots/e2e/README.md",
-                "# E2E Screenshots\n\nCapturas físicas não executadas neste ambiente.\n",
-            )
-            self._write_doc(
-                "docs/e2e-report.md",
-                "# E2E Report\n\nResultado: PASS WITH NOTES\n\nFluxos principais registrados de forma determinística.\n",
-            )
+            print(ui.info("OpenCode fallback: executando E2E real com Playwright"))
+            try:
+                self._run_opencode_browser_e2e(root)
+            except Exception as exc:
+                self.state_mgr.block(f"OpenCode E2E real falhou: {exc}")
+                return True
             return self._finish_opencode_fallback_node(
                 node,
-                "NODE_SUMMARY:\n- fiz: relatório E2E determinístico\n- verificado: validators do node passaram",
+                "NODE_SUMMARY:\n- fiz: navegação real e screenshots via Playwright\n- verificado: validators do node passaram",
             )
 
         if node.id == "ft.final.01.visual_check":
-            print(ui.info("OpenCode fallback: gerando visual check determinístico"))
-            self._write_doc(
-                "docs/visual-check-report.md",
-                "# Visual Check\n\nResultado: PASS WITH NOTES\n\nCritérios visuais principais cobertos pelo frontend estático determinístico.\n",
-            )
+            print(ui.info("OpenCode fallback: validando screenshots E2E reais"))
+            try:
+                self._write_opencode_visual_report(root)
+            except Exception as exc:
+                self.state_mgr.block(f"OpenCode visual check falhou: {exc}")
+                return True
             return self._finish_opencode_fallback_node(
                 node,
-                "NODE_SUMMARY:\n- fiz: visual-check determinístico\n- verificado: validators do node passaram",
+                "NODE_SUMMARY:\n- fiz: visual-check baseado em screenshots reais\n- verificado: validators do node passaram",
             )
 
         if node.id == "ft.handoff.01.retro":

@@ -587,6 +587,114 @@ nodes:
         assert restored.stat().st_size > 0
         assert runner.state_mgr.load().current_node == "ft.end"
 
+    def test_decision_skipped_branch_counts_as_progress(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        (project_root / "docs").mkdir(parents=True)
+        state_dir.mkdir(parents=True)
+        (project_root / "docs" / "PRD.md").write_text("# PRD\n", encoding="utf-8")
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: start
+    type: decision
+    title: Start
+    condition: "file_exists:docs/PRD.md"
+    branches:
+      "true": after
+      "false": skipped.one
+  - id: skipped.one
+    type: gate
+    title: Skipped One
+    executor: python
+    next: skipped.two
+  - id: skipped.two
+    type: gate
+    title: Skipped Two
+    executor: python
+    next: after
+  - id: after
+    type: gate
+    title: After
+    executor: python
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        runner.run(mode="mvp")
+
+        state = runner.state_mgr.load()
+        assert state.node_status == "done"
+        assert state.metrics["steps_completed"] == 4
+        assert state.metrics["steps_total"] == 4
+        assert state.gate_log["skipped.one"] == "SKIPPED"
+        assert state.gate_log["skipped.two"] == "SKIPPED"
+
+    def test_approved_human_gate_skips_reject_branch_progress(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: review
+    type: human_gate
+    title: Review
+    executor: python
+    reject_next: fix
+    next: after
+  - id: fix
+    type: gate
+    title: Fix
+    executor: python
+    next: review
+  - id: after
+    type: gate
+    title: After
+    executor: python
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        runner._bypass_human_gates = True
+        runner.run(mode="mvp")
+
+        state = runner.state_mgr.load()
+        assert state.node_status == "done"
+        assert state.metrics["steps_completed"] == 3
+        assert state.metrics["steps_total"] == 3
+        assert state.gate_log["fix"] == "SKIPPED"
+
     def test_delegate_allowed_paths_keep_local_docs_in_external_workdir(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"

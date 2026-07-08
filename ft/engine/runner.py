@@ -1782,6 +1782,67 @@ server.listen(port, '127.0.0.1', () => console.log(`frontend http://127.0.0.1:${
             changed = True
         return changed
 
+    def _decision_next_for_state(self, node: Node, state: Any) -> str | None:
+        decision_state = self._decision_state_dict(state)
+        if node.condition and node.condition.startswith("file_exists:"):
+            check_path = node.condition.split(":", 1)[1]
+            full_path = Path(self._work_dir) / check_path
+            decision_state[node.condition] = "true" if full_path.exists() else "false"
+        return self.graph.resolve_next(node.id, decision_state)
+
+    def _collect_unselected_path(self, start_id: str | None, stop_ids: set[str], completed: set[str]) -> list[str]:
+        skipped: list[str] = []
+        seen: set[str] = set()
+        current = start_id
+        while current and current not in stop_ids and current not in completed and current not in seen:
+            node = self.graph.nodes.get(current)
+            if node is None:
+                break
+            seen.add(current)
+            if node.type != "end":
+                skipped.append(current)
+            current = node.next
+        return skipped
+
+    def _mark_unselected_paths_skipped(
+        self,
+        state: Any,
+        completed_node: str | None = None,
+        next_node: str | None = None,
+    ) -> bool:
+        """Marca branches não escolhidos como SKIPPED para progresso refletir o caminho fechado."""
+        changed = False
+        completed = set(state.completed_nodes)
+        completed_nodes = [completed_node] if completed_node else list(state.completed_nodes)
+
+        for node_id in completed_nodes:
+            node = self.graph.nodes.get(node_id)
+            if node is None:
+                continue
+
+            selected_next = next_node if node_id == completed_node else None
+            if selected_next is None:
+                selected_next = self._decision_next_for_state(node, state) if node.type == "decision" else node.next
+
+            candidates: list[str] = []
+            if node.type == "decision" and node.branches:
+                candidates.extend(target for target in node.branches.values() if target != selected_next)
+
+            gate_result = state.gate_log.get(node.id, "")
+            rejected = gate_result.upper().startswith("REJECT")
+            if node.type == "human_gate" and node.reject_next and not rejected and node.reject_next != selected_next:
+                candidates.append(node.reject_next)
+
+            stop_ids = {item for item in (selected_next, node.id) if item}
+            for candidate in dict.fromkeys(candidates):
+                for skipped_id in self._collect_unselected_path(candidate, stop_ids, completed):
+                    state.completed_nodes.append(skipped_id)
+                    state.gate_log.setdefault(skipped_id, "SKIPPED")
+                    completed.add(skipped_id)
+                    changed = True
+
+        return changed
+
     def _reconcile_state_with_graph(self, state: Any) -> bool:
         """
         Alinha estado persistido ao grafo atual.
@@ -1824,6 +1885,9 @@ server.listen(port, '127.0.0.1', () => console.log(`frontend http://127.0.0.1:${
             state.gate_log.setdefault(node.id, "PASS")
             completed.add(node.id)
             progress_frontier.add(node.id)
+            changed = True
+
+        if self._mark_unselected_paths_skipped(state):
             changed = True
 
         if self._refresh_progress_metrics(state):
@@ -2220,6 +2284,7 @@ server.listen(port, '127.0.0.1', () => console.log(`frontend http://127.0.0.1:${
             self.state_mgr.unblock()
         self.state_mgr.advance(completed_node, next_node, gate_result)
         state = self.state_mgr.state
+        self._mark_unselected_paths_skipped(state, completed_node, next_node)
         if self._refresh_progress_metrics(state):
             self.state_mgr.save()
         self._clear_validator_snapshots(completed_node)

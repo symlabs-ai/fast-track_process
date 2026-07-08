@@ -536,6 +536,57 @@ nodes:
             assert (project_root / "project/Makefile").exists()
             assert runner.state_mgr.load().current_node == "ft.end"
 
+    def test_opencode_process_evolve_restores_process_yml_in_worktree(self, tmp_path):
+        project_root = tmp_path / "project"
+        work_dir = tmp_path / "worktrees" / "sample" / "cycle-01-opencode"
+        state_dir = project_root / "state"
+        (project_root / "process").mkdir(parents=True)
+        (work_dir / "docs").mkdir(parents=True)
+        (work_dir / "process").mkdir(parents=True)
+        state_dir.mkdir(parents=True)
+
+        process_path = project_root / "process" / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.handoff.05.process_evolve
+    type: document
+    title: Process Evolve
+    executor: claude
+    outputs:
+      - docs/process-improvements.md
+      - process/process.yml
+    validators:
+      - file_exists: docs/process-improvements.md
+      - command_succeeds: "python3 -c \\"import yaml; yaml.safe_load(open('process/process.yml'))\\""
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner._work_dir = str(work_dir)
+        runner.init_state()
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            runner._run_llm_step(runner.graph.get_node("ft.handoff.05.process_evolve"))
+
+        restored = work_dir / "process" / "process.yml"
+        assert restored.exists()
+        assert restored.stat().st_size > 0
+        assert runner.state_mgr.load().current_node == "ft.end"
+
     def test_delegate_allowed_paths_keep_local_docs_in_external_workdir(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"

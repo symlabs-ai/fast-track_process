@@ -14,6 +14,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ft.engine import paths
 from ft.engine.graph import Node, ProcessGraph, load_graph
 from ft.engine.state import StateManager
@@ -1246,6 +1248,40 @@ dev run test build url:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
+    def _is_valid_yaml_file(self, path: Path) -> bool:
+        if not path.exists() or path.stat().st_size == 0:
+            return False
+        try:
+            yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return True
+
+    def _ensure_worktree_process_yml(self, root: Path) -> None:
+        target = root / "process" / "process.yml"
+        if self._is_valid_yaml_file(target):
+            return
+
+        repo_root = Path(__file__).resolve().parents[2]
+        candidates = [
+            Path(self.process_path),
+            Path(self.project_root) / "process" / "process.yml",
+            repo_root / "templates" / "fast-track-v3" / "process.yml",
+        ]
+        for source in candidates:
+            source = source.resolve()
+            if source == target.resolve() or not self._is_valid_yaml_file(source):
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            return
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            'id: fast_track_v3_local\nversion: "1.0.0"\ntitle: Local Process\nnodes: []\n',
+            encoding="utf-8",
+        )
+
     def _finish_opencode_fallback_node(self, node: Node, summary: str, result: str = "PASS") -> bool:
         validation = run_validators(
             node,
@@ -1392,6 +1428,7 @@ dev run test build url:
 
         if node.id == "ft.handoff.05.process_evolve":
             print(ui.info("OpenCode fallback: gerando melhorias de processo determinísticas"))
+            self._ensure_worktree_process_yml(root)
             self._write_doc(
                 "docs/process-improvements.md",
                 "# Process Improvements\n\n- Mantido `process/process.yml` válido.\n- Registrado uso de fallbacks determinísticos para OpenCode em nodes estruturais.\n",

@@ -705,10 +705,16 @@ def _clean_opencode_capture_text(text: str) -> str:
     """Remove ruído do OpenCode antes de gravar artifact capturado."""
     text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text).strip()
     text = re.sub(r"\n?\[tool_calls\]\s*\(None\)\s*$", "", text).strip()
+    blocked_tail = re.search(r"\n+BLOCKED:\s+.*\Z", text, re.DOTALL)
+    if blocked_tail and len([line for line in text[:blocked_tail.start()].splitlines() if line.strip()]) >= 3:
+        text = text[:blocked_tail.start()].rstrip()
     if text.startswith("```"):
         lines = text.splitlines()
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            text = "\n".join(lines[1:-1]).strip()
+        if len(lines) >= 2:
+            lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
     return text
 
 
@@ -1467,14 +1473,18 @@ REGRAS:
                     break
                 output = out2  # última tentativa falhou também
 
-        token = _final_protocol_token(output)
-        success = returncode == 0 and token != "BLOCKED"
-        rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
-        if success and opencode_capture_mode and opencode_capture_output_path:
+        success = returncode == 0
+        if opencode_capture_mode and opencode_capture_output_path:
             captured = _clean_opencode_capture_text(output)
-            if not captured:
+            capture_blocked = captured.lstrip().upper().startswith("BLOCKED")
+            if returncode != 0:
+                success = False
+            elif not captured:
                 success = False
                 output = f"{output}\n[CAPTURE_EMPTY] OpenCode nao retornou conteudo gravavel."
+            elif capture_blocked:
+                success = False
+                output = captured
             else:
                 root = Path(project_root).resolve()
                 target = (root / opencode_capture_output_path).resolve()
@@ -1485,6 +1495,10 @@ REGRAS:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(captured.rstrip() + "\n", encoding="utf-8")
                     output = f"DONE\nArquivo gravado pelo engine: {opencode_capture_output_path}\n"
+        else:
+            token = _final_protocol_token(output)
+            success = returncode == 0 and token != "BLOCKED"
+        rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
         _cleanup_delegate_runtime()
     except BaseException:
         _cleanup_delegate_runtime()

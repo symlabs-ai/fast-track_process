@@ -203,6 +203,22 @@ class TestBuildExecutorCommand:
 
         assert _clean_opencode_capture_text(extracted) == "# Doc\nbody"
 
+    def test_opencode_capture_cleaner_removes_fence_and_trailing_blocked_note(self):
+        text = (
+            "```markdown\n"
+            "# Doc\n"
+            "\n"
+            "body\n"
+            "```\n"
+            "\n"
+            "BLOCKED: nao posso usar ferramenta de escrita"
+        )
+
+        assert _clean_opencode_capture_text(text) == "# Doc\n\nbody"
+
+    def test_opencode_capture_cleaner_preserves_blocked_only_response(self):
+        assert _clean_opencode_capture_text("BLOCKED: sem contexto") == "BLOCKED: sem contexto"
+
     def test_opencode_env_can_deny_edit_tools_for_code_nodes(self):
         env = _executor_env(
             "opencode",

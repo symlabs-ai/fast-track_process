@@ -56,6 +56,8 @@ class TestBuildExecutorCommand:
             "run",
             "--dir", "/tmp/proj",
             "-m", DEFAULT_OPENCODE_MODEL,
+            "--pure",
+            "--variant", "minimal",
             "faça algo",
         ]
 
@@ -72,8 +74,26 @@ class TestBuildExecutorCommand:
             "run",
             "--dir", "/tmp/proj",
             "-m", "anthropic/claude-sonnet-4-5",
+            "--pure",
+            "--variant", "minimal",
             "faça algo",
         ]
+
+    def test_builds_opencode_command_with_variant_override(self, monkeypatch):
+        monkeypatch.setenv("FT_OPENCODE_VARIANT", "low")
+
+        cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
+
+        assert ["--variant", "low"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
+
+    def test_builds_opencode_command_allows_disabling_pure_and_variant(self, monkeypatch):
+        monkeypatch.setenv("FT_OPENCODE_PURE", "0")
+        monkeypatch.setenv("FT_OPENCODE_VARIANT", "off")
+
+        cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
+
+        assert "--pure" not in cmd
+        assert "--variant" not in cmd
 
     def test_builds_opencode_command_with_debug_flags(self, monkeypatch):
         monkeypatch.setenv("FT_OPENCODE_DEBUG", "1")

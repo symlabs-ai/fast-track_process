@@ -532,6 +532,11 @@ def _build_executor_command(
             "--dir", project_root,
             "-m", model or DEFAULT_OPENCODE_MODEL,
         ]
+        if not _env_falsey("FT_OPENCODE_PURE"):
+            cmd.append("--pure")
+        variant = (os.environ.get("FT_OPENCODE_VARIANT") or "minimal").strip()
+        if variant and variant.lower() not in {"0", "false", "no", "off", "none"}:
+            cmd += ["--variant", variant]
         debug_enabled = os.environ.get("FT_OPENCODE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
         print_logs = debug_enabled or os.environ.get("FT_OPENCODE_PRINT_LOGS", "").strip().lower() in {
             "1", "true", "yes", "on"

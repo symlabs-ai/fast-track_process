@@ -326,6 +326,68 @@ nodes:
         assert runner._resolve_allowed_paths(build_node) == ["project", ".build_ok"]
         assert runner._resolve_allowed_paths(doc_node) == ["docs/out.md"]
 
+    def test_opencode_document_retry_preserves_capture_mode(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.plan.01.doc
+    type: document
+    title: Doc
+    executor: claude
+    outputs:
+      - docs/out.md
+    validators:
+      - file_exists: docs/out.md
+      - has_sections:
+          path: docs/out.md
+          sections:
+            - Required
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.plan.01.doc")
+
+        def first_delegate(**kwargs):
+            assert kwargs["opencode_capture_output_path"] == "docs/out.md"
+            (docs / "out.md").write_text("# Missing\n")
+            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+
+        def retry_delegate(**kwargs):
+            assert kwargs["opencode_capture_output_path"] == "docs/out.md"
+            assert kwargs["opencode_early_success_paths"] == ["docs/out.md"]
+            (docs / "out.md").write_text("# Required\n")
+            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+
+        with (
+            patch("ft.engine.runner.delegate_to_llm", side_effect=first_delegate),
+            patch("ft.engine.runner.delegate_with_feedback", side_effect=retry_delegate) as retry_mock,
+        ):
+            runner._run_llm_step(node)
+
+        assert retry_mock.called
+        assert runner.state_mgr.load().current_node == "ft.end"
+
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"

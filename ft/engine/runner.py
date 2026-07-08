@@ -1781,6 +1781,9 @@ class StepRunner:
                         opencode_deny_read_paths=opencode_options.deny_read_paths,
                         opencode_restrict_tools=opencode_options.restrict_tools,
                         opencode_steps=opencode_options.steps,
+                        opencode_deny_edit_tools=opencode_options.deny_edit_tools,
+                        opencode_early_success_paths=opencode_options.early_success_paths,
+                        opencode_capture_output_path=opencode_options.capture_output_path,
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -2419,6 +2422,9 @@ class StepRunner:
                         opencode_deny_read_paths=opencode_options.deny_read_paths,
                         opencode_restrict_tools=opencode_options.restrict_tools,
                         opencode_steps=opencode_options.steps,
+                        opencode_deny_edit_tools=opencode_options.deny_edit_tools,
+                        opencode_early_success_paths=opencode_options.early_success_paths,
+                        opencode_capture_output_path=opencode_options.capture_output_path,
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -2882,6 +2888,9 @@ class StepRunner:
                     opencode_deny_read_paths=opencode_options.deny_read_paths,
                     opencode_restrict_tools=opencode_options.restrict_tools,
                     opencode_steps=opencode_options.steps,
+                    opencode_deny_edit_tools=opencode_options.deny_edit_tools,
+                    opencode_early_success_paths=opencode_options.early_success_paths,
+                    opencode_capture_output_path=opencode_options.capture_output_path,
                 )
             finally:
                 self._clear_active_llm_log(state)

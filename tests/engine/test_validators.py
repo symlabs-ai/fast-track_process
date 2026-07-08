@@ -6,6 +6,7 @@ import pytest
 
 from ft.engine.parallel import check_independence
 from ft.engine.validators.artifacts import (
+    command_succeeds,
     demand_coverage,
     file_exists,
     has_sections,
@@ -215,6 +216,23 @@ class TestDemandCoverage:
 
         assert not passed
         assert "csv" in detail.lower()
+
+
+class TestCommandSucceeds:
+    def test_fails_when_pipeline_left_side_fails(self, tmp_path):
+        passed, detail = command_succeeds("python -c 'raise SystemExit(7)' | tail -5", str(tmp_path))
+
+        assert not passed
+        assert "código 7" in detail
+
+    def test_fails_when_pytest_runs_zero_tests(self, tmp_path):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+
+        passed, detail = command_succeeds("python -m pytest tests/ -q 2>&1 | tail -5", str(tmp_path))
+
+        assert not passed
+        assert "nenhum teste" in detail or "código 5" in detail
 
 
 # ---------------------------------------------------------------------------

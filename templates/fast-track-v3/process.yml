@@ -290,6 +290,7 @@ nodes:
       - project/tests/
     validators:
       - file_exists: project/tests/
+      - command_succeeds: "cd project && python -c \"from pathlib import Path; import py_compile; files=list(Path('tests').rglob('test_*.py')); assert files, 'nenhum test_*.py encontrado'; [py_compile.compile(str(p), doraise=True) for p in files]\""
     next: ft.tdd.02.green
 
   - id: ft.tdd.02.green
@@ -302,7 +303,7 @@ nodes:
     outputs:
       - project/backend/
     validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -x -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -x -q"
     next: ft.tdd.03.refactor
 
   - id: ft.tdd.03.refactor
@@ -312,7 +313,7 @@ nodes:
     sprint: sprint-04-tdd
     executor: claude
     validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -x -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -x -q"
     next: gate.tdd
 
   - id: gate.tdd
@@ -322,7 +323,7 @@ nodes:
     sprint: sprint-04-tdd
     executor: python
     validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -q"
     next: ft.delivery.01.entrypoint
 
   # ================================================================
@@ -370,7 +371,7 @@ nodes:
     validators:
       - file_exists: project/Makefile
       - file_exists: project/backend/main.py
-      - command_succeeds: "cd project && python -m pytest tests/ -q 2>&1 | tail -5"
+      - command_succeeds: "cd project && python -m pytest tests/ -q"
     next: ft.smoke.01.run
 
   # ================================================================

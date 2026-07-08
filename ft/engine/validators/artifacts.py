@@ -552,12 +552,12 @@ def command_succeeds(command: str, project_root: str = ".") -> tuple[bool, str]:
     """Executa um comando shell e verifica se sai com código 0.
 
     Diferente de bash_passes, recebe um comando direto (string) em vez de um
-    path para script. O comando é executado com shell=True no project_root.
+    path para script. O comando é executado via bash com pipefail para que
+    pipelines como `pytest | tail` nao mascarem falhas do comando principal.
     """
     try:
         result = subprocess.run(
-            command,
-            shell=True,
+            ["bash", "-o", "pipefail", "-c", command],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -568,11 +568,19 @@ def command_succeeds(command: str, project_root: str = ".") -> tuple[bool, str]:
     except Exception as e:
         return False, f"command_succeeds FAIL: erro ao executar: {e}"
 
+    output = (result.stdout + result.stderr).strip()
+    if (
+        result.returncode == 0
+        and "pytest" in command
+        and "no tests ran" in output.lower()
+    ):
+        preview = "\n".join(output.splitlines()[-5:]) if output else "(sem saída)"
+        return False, f"command_succeeds FAIL: pytest nao executou nenhum teste\n{preview}"
+
     if result.returncode == 0:
         last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
         return True, f"command_succeeds: {command[:60]} → {last_line}"
 
-    output = (result.stdout + result.stderr).strip()
     preview = "\n".join(output.splitlines()[-5:]) if output else "(sem saída)"
     return False, f"command_succeeds FAIL: saiu com código {result.returncode}\n{preview}"
 

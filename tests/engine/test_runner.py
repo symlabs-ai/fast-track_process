@@ -418,6 +418,60 @@ nodes:
         assert not (frontend / "package.json.newbuildmjsjunk").exists()
         assert runner.state_mgr.load().current_node == "ft.end"
 
+    def test_opencode_tdd_red_and_green_use_deterministic_fallbacks(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.tdd.01.red
+    type: test_red
+    title: Red
+    executor: claude
+    outputs:
+      - project/tests/
+    validators:
+      - file_exists: project/tests/
+      - command_succeeds: "cd project && python -c \\"from pathlib import Path; import py_compile; files=list(Path('tests').rglob('test_*.py')); assert files; [py_compile.compile(str(p), doraise=True) for p in files]\\""
+    next: ft.tdd.02.green
+  - id: ft.tdd.02.green
+    type: test_green
+    title: Green
+    executor: claude
+    outputs:
+      - project/backend/
+    validators:
+      - command_succeeds: "cd project && python -m pytest tests/ -q"
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            runner._run_llm_step(runner.graph.get_node("ft.tdd.01.red"))
+            assert (project_root / "project/tests/test_backend_contract.py").exists()
+            assert runner.state_mgr.load().current_node == "ft.tdd.02.green"
+
+            runner._run_llm_step(runner.graph.get_node("ft.tdd.02.green"))
+            assert (project_root / "project/backend/main.py").exists()
+            assert runner.state_mgr.load().current_node == "ft.end"
+
     def test_delegate_allowed_paths_keep_local_docs_in_external_workdir(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"

@@ -508,8 +508,11 @@ nodes:
     executor: claude
     outputs:
       - project/Makefile
+      - process/scripts/serve.sh
     validators:
       - file_exists: project/Makefile
+      - file_exists: process/scripts/serve.sh
+      - command_succeeds: "bash -n process/scripts/serve.sh"
       - command_succeeds: "make --dry-run dev 2>&1 | head -3"
       - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \\"$(make -s url)\\""
     next: ft.end
@@ -534,6 +537,7 @@ nodes:
 
             runner._run_llm_step(runner.graph.get_node("ft.delivery.03.makefile"))
             assert (project_root / "project/Makefile").exists()
+            assert (project_root / "process/scripts/serve.sh").exists()
             assert runner.state_mgr.load().current_node == "ft.end"
 
     def test_opencode_process_evolve_restores_process_yml_in_worktree(self, tmp_path):

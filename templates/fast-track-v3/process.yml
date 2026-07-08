@@ -350,14 +350,17 @@ nodes:
 
   - id: ft.delivery.03.makefile
     type: build
-    title: "Criar Makefile"
-    description: "Criar Makefile com targets obrigatórios: make dev (sobe backend + frontend simultaneamente), make test (roda pytest), make build (build do frontend), make run (sobe o servidor completo pronto para smoke, com a configuração local do projeto) e make url (imprime só a base URL do servidor, ex.: http://localhost:8021). Sem dependências externas além do que já está instalado."
+    title: "Criar Makefile e Serve Script"
+    description: "Criar Makefile com targets obrigatórios: make dev (sobe backend + frontend simultaneamente), make test (roda pytest), make build (build do frontend), make run (sobe o servidor completo pronto para smoke, com a configuração local do projeto) e make url (imprime só a base URL do servidor, ex.: http://localhost:8021). Garantir também process/scripts/serve.sh para subir o servidor, gravar .serve_url e manter o processo vivo durante gates humanos. Sem dependências externas além do que já está instalado."
     sprint: sprint-05-delivery
     executor: claude
     outputs:
       - project/Makefile
+      - process/scripts/serve.sh
     validators:
       - file_exists: project/Makefile
+      - file_exists: process/scripts/serve.sh
+      - command_succeeds: "bash -n process/scripts/serve.sh"
       - command_succeeds: "cd project && make --dry-run dev 2>&1 | head -3"
       - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \"$(make -s url)\""
     next: gate.delivery
@@ -371,6 +374,8 @@ nodes:
     validators:
       - file_exists: project/Makefile
       - file_exists: project/backend/main.py
+      - file_exists: process/scripts/serve.sh
+      - command_succeeds: "bash -n process/scripts/serve.sh"
       - command_succeeds: "cd project && python -m pytest tests/ -q"
     next: ft.smoke.01.run
 

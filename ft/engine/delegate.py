@@ -285,8 +285,11 @@ def _wrap_opencode_sandbox_command(
         return cmd, []
 
     mounts = _prepare_opencode_sandbox_mounts(project_root, allowed_paths)
+    root = Path(project_root).resolve()
     runtime_path = Path(runtime_dir).resolve()
     runtime_path.mkdir(parents=True, exist_ok=True)
+    hidden_state = runtime_path / "hidden-state"
+    hidden_state.mkdir(parents=True, exist_ok=True)
 
     wrapped = [
         bwrap,
@@ -295,6 +298,9 @@ def _wrap_opencode_sandbox_command(
         "--proc", "/proc",
         "--bind", str(runtime_path), str(runtime_path),
     ]
+    state_path = (root / "state").resolve()
+    if _path_relative_to(state_path, root) and state_path.is_dir():
+        wrapped += ["--ro-bind", str(hidden_state), str(state_path)]
     for mount in mounts:
         wrapped += ["--bind", str(mount.path), str(mount.path)]
     wrapped += cmd

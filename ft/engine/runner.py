@@ -672,7 +672,7 @@ class StepRunner:
             deny_read_paths=list(dict.fromkeys(deny_read_paths or [])),
             restrict_tools=bool(restrict_tools),
             steps=resolved_steps,
-            deny_edit_tools=node.type in {"build", "test_red", "test_green", "refactor"},
+            deny_edit_tools=False,
             early_success_paths=early_success_paths,
             capture_output_path=capture_output_path,
         )

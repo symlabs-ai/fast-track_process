@@ -273,7 +273,7 @@ nodes:
         assert "Delegando ao LLM (opencode)" in out
         assert "Delegando ao LLM (llm_claude)" not in out
 
-    def test_opencode_code_nodes_deny_edit_tools(self, tmp_path):
+    def test_opencode_code_nodes_allow_edit_tools(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
         state_dir.mkdir(parents=True)
@@ -317,7 +317,7 @@ nodes:
         doc_node = runner.graph.get_node("ft.plan.01.doc")
         build_options = runner._opencode_options_for_node(build_node, "opencode")
         doc_options = runner._opencode_options_for_node(doc_node, "opencode")
-        assert build_options.deny_edit_tools is True
+        assert build_options.deny_edit_tools is False
         assert build_options.early_success_paths == []
         assert doc_options.deny_edit_tools is False
         assert doc_options.restrict_tools is False

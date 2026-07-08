@@ -294,6 +294,7 @@ class TestBuildExecutorCommand:
 
     def test_opencode_sandbox_wraps_command_with_bwrap(self, tmp_path, monkeypatch):
         monkeypatch.setattr("ft.engine.delegate.shutil.which", lambda name: "/usr/bin/bwrap")
+        (tmp_path / "state").mkdir()
 
         cmd, mounts = _wrap_opencode_sandbox_command(
             ["opencode", "run", "prompt"],
@@ -310,6 +311,11 @@ class TestBuildExecutorCommand:
         assert ["--bind", str(tmp_path / "docs/out.md"), str(tmp_path / "docs/out.md")] in [
             cmd[i:i + 3] for i in range(len(cmd) - 2)
         ]
+        assert [
+            "--ro-bind",
+            str(tmp_path / "runtime" / "hidden-state"),
+            str(tmp_path / "state"),
+        ] in [cmd[i:i + 3] for i in range(len(cmd) - 2)]
         assert cmd[-3:] == ["opencode", "run", "prompt"]
         assert [mount.path for mount in mounts] == [tmp_path / "docs/out.md"]
 

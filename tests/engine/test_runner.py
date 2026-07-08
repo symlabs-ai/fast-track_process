@@ -644,6 +644,55 @@ nodes:
         state = runner.state_mgr.load()
         assert state.current_node == "ft.end"
 
+    def test_opencode_screenshot_review_uses_deterministic_fallback(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.frontend.04.screenshot_review
+    type: review
+    title: Screenshot Review
+    description: Tirar screenshots e comparar com docs/ui_criteria.md.
+    executor: claude
+    outputs:
+      - docs/screenshots/
+      - docs/screenshot-review.md
+    validators:
+      - file_exists: docs/screenshot-review.md
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.frontend.04.screenshot_review")
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            runner._run_review(node)
+
+        report = docs / "screenshot-review.md"
+        assert report.exists()
+        assert "APPROVED WITH NOTES" in report.read_text()
+        assert (docs / "screenshots" / "README.md").exists()
+        assert runner.state_mgr.load().current_node == "ft.end"
+
     def test_review_report_with_blocked_status_does_not_approve(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"

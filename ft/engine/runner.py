@@ -1896,18 +1896,30 @@ class StepRunner:
                 f"\nNÃO repita a mesma abordagem. Tente algo diferente.\n"
             )
 
+        allowed = self._resolve_allowed_paths(node)
+        effective_engine = self._resolve_llm_engine(state, node=node)
+        opencode_options = self._opencode_options_for_node(node, effective_engine)
+        if opencode_options.capture_output_path:
+            fix_instruction = (
+                f"Produza novamente o conteudo completo de "
+                f"{opencode_options.capture_output_path}, corrigindo especificamente o erro. "
+                f"Nao altere arquivos de estado ou de processo. "
+                f"Nao responda DONE; retorne apenas o conteudo final do documento."
+            )
+        else:
+            fix_instruction = (
+                "Analise o erro, identifique a causa raiz e corrija os arquivos necessários. "
+                "Não altere arquivos de estado ou de processo. "
+                "Quando terminar, diga DONE."
+            )
+
         prompt = (
             f"O processo travou no node '{node.id}' ({node.title}).\n\n"
             f"ERRO:\n{blocked_reason}\n\n"
             f"{history_block}"
-            f"Analise o erro, identifique a causa raiz e corrija os arquivos necessários. "
-            f"Não altere arquivos de estado ou de processo. "
-            f"Quando terminar, diga DONE."
+            f"{fix_instruction}"
         )
 
-        allowed = self._resolve_allowed_paths(node)
-        effective_engine = self._resolve_llm_engine(state, node=node)
-        opencode_options = self._opencode_options_for_node(node, effective_engine)
         log_path = self._start_llm_log(state, node.id, f"auto-fix-{self._auto_fix_counts.get(node.id, 0) + 1}")
         # Desbloquear antes de chamar o LLM
         state.node_status = "ready"

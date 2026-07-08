@@ -1222,16 +1222,23 @@ server.listen(port, '127.0.0.1', () => console.log(`frontend http://127.0.0.1:${
     def _delegate_allowed_paths(self, paths: list[str]) -> list[str]:
         """Ajusta allowed_paths para o modo isolated.
 
-        No modo isolated, paths de docs/ são absolutos (vivem na raiz).
-        Paths de código ficam relativos ao CWD (run dir).
+        No modo isolated antigo, docs/ podia viver na raiz do projeto enquanto
+        codigo vivia no run dir. Em worktrees externos, docs/ vive no proprio
+        workdir e deve continuar relativo para o sandbox permitir escrita.
         """
         if self._work_dir == self.project_root:
             return paths
+        work_root = Path(self._work_dir)
         result = []
         for p in paths:
             if p.startswith("docs/") or p.startswith("process/") or p == "CHANGELOG.md":
-                # docs/ e process/ vivem na raiz — path absoluto
-                result.append(str(Path(self.project_root) / p))
+                # Em worktrees externos, docs/ e process/ tambem vivem no workdir.
+                # Em runs/ isolados antigos, eles vivem na raiz do projeto.
+                top = p.split("/", 1)[0]
+                if (work_root / top).exists():
+                    result.append(p)
+                else:
+                    result.append(str(Path(self.project_root) / p))
             else:
                 result.append(p)
         return result

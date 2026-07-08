@@ -418,6 +418,38 @@ nodes:
         assert not (frontend / "package.json.newbuildmjsjunk").exists()
         assert runner.state_mgr.load().current_node == "ft.end"
 
+    def test_delegate_allowed_paths_keep_local_docs_in_external_workdir(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        work_dir = tmp_path / "worktrees" / "sample" / "cycle-01-opencode"
+        (work_dir / "docs").mkdir(parents=True)
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner._work_dir = str(work_dir)
+
+        assert runner._delegate_allowed_paths(["docs/screenshots/", "docs/screenshot-review.md"]) == [
+            "docs/screenshots/",
+            "docs/screenshot-review.md",
+        ]
+
     def test_opencode_document_retry_preserves_capture_mode(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"

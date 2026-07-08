@@ -232,6 +232,7 @@ nodes:
       - project/frontend/src/
     validators:
       - command_succeeds: "cd project/frontend && npm run build --silent"
+      - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
     next: ft.frontend.03.prd_review
 
   - id: ft.frontend.03.prd_review
@@ -243,6 +244,7 @@ nodes:
     max_turns: 40
     validators:
       - command_succeeds: "cd project/frontend && npm run build --silent"
+      - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
     on_fail:
       human_gate: "Revisão PRD encontrou não-conformidades no frontend. Corrija antes de continuar."
       goto: ft.frontend.02.implement
@@ -274,6 +276,7 @@ nodes:
     validators:
       - file_exists: docs/screenshot-review.md
       - command_succeeds: "cd project/frontend && npm run build --silent"
+      - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
     next: ft.tdd.01.red
 
   # ================================================================
@@ -434,7 +437,8 @@ nodes:
       - docs/acceptance-result.json
     validators:
       - file_exists: docs/acceptance-result.json
-      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/acceptance-result.json')); sys.exit(0 if d.get('fail',1)==0 else 1)\""
+      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/acceptance-result.json')); sys.exit(0 if d.get('fail',1)==0 and d.get('skip',1)==0 and d.get('pass',0)>=5 else 1)\""
+      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.acceptance
 
   - id: gate.acceptance
@@ -445,6 +449,9 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/acceptance-report.md
+      - file_exists: docs/acceptance-result.json
+      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/acceptance-result.json')); sys.exit(0 if d.get('fail',1)==0 and d.get('skip',1)==0 and d.get('pass',0)>=5 else 1)\""
+      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.e2e.01.browser
 
   # ================================================================
@@ -464,6 +471,7 @@ nodes:
     validators:
       - file_exists: project/tests/e2e/
       - file_exists: project/tests/e2e/test_navigation.py
+      - command_succeeds: "python -c \"from pathlib import Path; text=Path('project/tests/e2e/test_navigation.py').read_text(encoding='utf-8', errors='ignore').lower(); assert 'placeholder' not in text and any(x in text for x in ['fill(', 'type(']) and any(x in text for x in ['create', 'criar', 'cadastrar', 'registrar']), 'e2e sem fluxo de criacao via ui'\""
     next: ft.e2e.02.screenshots
 
   - id: ft.e2e.02.screenshots
@@ -478,7 +486,8 @@ nodes:
       - docs/e2e-report.md
     validators:
       - file_exists: docs/e2e-report.md
-      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 5 and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.e2e
 
   - id: gate.e2e
@@ -490,7 +499,8 @@ nodes:
     validators:
       - file_exists: docs/e2e-report.md
       - file_exists: docs/screenshots/e2e/
-      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 5 and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.final.01.visual_check
 
   # ================================================================
@@ -508,7 +518,8 @@ nodes:
       - docs/visual-check-report.md
     validators:
       - file_exists: docs/visual-check-report.md
-      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.visual_check
 
   - id: gate.visual_check
@@ -519,7 +530,8 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/visual-check-report.md
-      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.final.02.stakeholder
 
   - id: ft.final.02.stakeholder

@@ -417,8 +417,98 @@ nodes:
             runner._run_llm_step(node)
 
         assert (frontend / "src/main.js").exists()
+        main_js = (frontend / "src/main.js").read_text(encoding="utf-8")
+        assert 'data-testid="cliente-form"' in main_js
+        assert 'data-testid="servico-form"' in main_js
+        assert 'data-testid="agenda-form"' in main_js
+        assert 'data-testid="cobranca-form"' in main_js
+        assert "Cadastrar cliente" in main_js
+        assert "Criar agendamento" in main_js
         assert not (frontend / "package.json.newbuildmjsjunk").exists()
         assert runner.state_mgr.load().current_node == "ft.end"
+
+    def test_opencode_planning_docs_use_deterministic_fallbacks(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.plan.01.task_list
+    type: document
+    title: Task List
+    executor: claude
+    outputs:
+      - docs/task_list.md
+    validators:
+      - file_exists: docs/task_list.md
+    next: ft.plan.03.api_contract
+  - id: ft.plan.03.api_contract
+    type: document
+    title: API
+    executor: claude
+    outputs:
+      - docs/api_contract.md
+    validators:
+      - file_exists: docs/api_contract.md
+      - has_sections:
+          - Base URL
+          - Endpoints
+    next: ft.plan.04.ui_criteria
+  - id: ft.plan.04.ui_criteria
+    type: document
+    title: UI
+    executor: claude
+    outputs:
+      - docs/ui_criteria.md
+    validators:
+      - file_exists: docs/ui_criteria.md
+    next: ft.plan.05.test_data
+  - id: ft.plan.05.test_data
+    type: document
+    title: Data
+    executor: claude
+    outputs:
+      - docs/test_data.md
+    validators:
+      - file_exists: docs/test_data.md
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            for node_id in (
+                "ft.plan.01.task_list",
+                "ft.plan.03.api_contract",
+                "ft.plan.04.ui_criteria",
+                "ft.plan.05.test_data",
+            ):
+                runner._run_llm_step(runner.graph.get_node(node_id))
+
+        assert runner.state_mgr.load().current_node == "ft.end"
+        api_contract = (project_root / "docs/api_contract.md").read_text(encoding="utf-8")
+        assert "## Base URL" in api_contract
+        assert "## Endpoints" in api_contract
+        assert "POST /api/clientes" in api_contract
+        assert "POST /api/cobrancas" in api_contract
+        assert "formulário visível" in (project_root / "docs/ui_criteria.md").read_text(encoding="utf-8")
+        assert "Hoje+1" in (project_root / "docs/test_data.md").read_text(encoding="utf-8")
 
     def test_opencode_tdd_red_and_green_use_deterministic_fallbacks(self, tmp_path):
         project_root = tmp_path / "project"
@@ -553,6 +643,28 @@ nodes:
             spec.loader.exec_module(backend_main)
             assert backend_main._safe_static_path("/").name == "index.html"
             assert backend_main._content_type(backend_main._safe_static_path("/")).startswith("text/html")
+            status, cliente = backend_main.api_create_payload(
+                "/api/clientes",
+                {"nome_completo": "Cliente HTTP", "telefone_principal": "+55 11 95555-0001"},
+            )
+            assert status == 201
+            assert cliente["nome_completo"] == "Cliente HTTP"
+            assert any(item["nome_completo"] == "Cliente HTTP" for item in backend_main.api_payload("/api/clientes")[1]["items"])
+            status, servico = backend_main.api_create_payload("/api/catalogo", {"nome": "Servico HTTP", "preco": 99})
+            assert status == 201
+            assert servico["nome"] == "Servico HTTP"
+            status, agendamento = backend_main.api_create_payload(
+                "/api/agendamentos",
+                {"titulo": "Agenda HTTP", "cliente": "Cliente HTTP"},
+            )
+            assert status == 201
+            assert agendamento["titulo"] == "Agenda HTTP"
+            status, cobranca = backend_main.api_create_payload(
+                "/api/cobrancas",
+                {"cliente": "Cliente HTTP", "descricao": "Servico HTTP", "valor": 99},
+            )
+            assert status == 201
+            assert cobranca["status"] == "pendente"
             assert runner.state_mgr.load().current_node == "ft.end"
 
     def test_opencode_process_evolve_restores_process_yml_in_worktree(self, tmp_path):
@@ -668,14 +780,25 @@ nodes:
             shots = root / "docs" / "screenshots" / "e2e"
             shots.mkdir(parents=True, exist_ok=True)
             rows = []
-            for name in ("inicio", "clientes", "catalogo", "agenda", "cobrancas"):
+            for name in (
+                "inicio",
+                "clientes",
+                "catalogo",
+                "agenda",
+                "cobrancas",
+                "clientes-create",
+                "catalogo-create",
+                "agenda-create",
+                "cobrancas-create",
+            ):
                 path = shots / f"{name}.png"
                 path.write_bytes(b"\\x89PNG\\r\\n" + (b"x" * 1500))
-                rows.append(f"| {name} | `/{name}` | `{path.relative_to(root)}` | PASS |")
+                action = "CREATE" if "create" in name else "NAVIGATE"
+                rows.append(f"| {name} | {action} | `/{name}` | `{path.relative_to(root)}` | PASS |")
             (root / "docs" / "e2e-report.md").write_text(
                 "# E2E Report\n\nResultado: PASS\n\n"
                 "Browser: Playwright Chromium headless\n\n"
-                "| Tela | Path | Screenshot | Resultado |\n|---|---|---|---|\n"
+                "| Tela | Ação | Path | Screenshot | Resultado |\n|---|---|---|---|---|\n"
                 + "\n".join(rows)
                 + "\n",
                 encoding="utf-8",
@@ -684,7 +807,11 @@ nodes:
         with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
             runner._run_llm_step(runner.graph.get_node("ft.e2e.01.browser"))
             assert (project_root / "project/tests/e2e/test_navigation.py").exists()
-            assert "placeholder" not in (project_root / "project/tests/e2e/test_navigation.py").read_text(encoding="utf-8").lower()
+            e2e_test = (project_root / "project/tests/e2e/test_navigation.py").read_text(encoding="utf-8").lower()
+            assert "placeholder" not in e2e_test
+            assert "create_flows" in e2e_test
+            assert "fill(" in e2e_test
+            assert "cliente-form" in e2e_test
 
             with patch.object(runner, "_run_opencode_browser_e2e", side_effect=fake_browser_e2e):
                 runner._run_llm_step(runner.graph.get_node("ft.e2e.02.screenshots"))
@@ -695,6 +822,7 @@ nodes:
         assert state.current_node == "ft.end"
         visual = (project_root / "docs/visual-check-report.md").read_text(encoding="utf-8").lower()
         assert "screenshots e2e reais" in visual
+        assert "create" in visual
         assert "placeholder" not in visual
         assert "não executad" not in visual
 

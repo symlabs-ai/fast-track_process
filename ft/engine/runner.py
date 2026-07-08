@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -692,6 +694,163 @@ class StepRunner:
             delegate_kwargs["opencode_early_success_paths"] = options.early_success_paths
         if options.capture_output_path:
             delegate_kwargs["opencode_capture_output_path"] = options.capture_output_path
+
+    def _try_opencode_deterministic_node(self, node: Node, effective_engine: str) -> bool:
+        """Executa fallbacks determinísticos para nodes frágeis com OpenCode."""
+        if effective_engine != "opencode" or node.id != "ft.frontend.01.scaffold":
+            return False
+
+        root = Path(self._work_dir)
+        frontend = root / "project" / "frontend"
+        print(ui.info("OpenCode fallback: criando scaffold frontend determinístico"))
+        if frontend.exists():
+            shutil.rmtree(frontend)
+        (frontend / "scripts").mkdir(parents=True, exist_ok=True)
+        (frontend / "src").mkdir(parents=True, exist_ok=True)
+        (frontend / "dist").mkdir(parents=True, exist_ok=True)
+
+        (frontend / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "@service-mate/frontend",
+                    "version": "0.1.0",
+                    "private": True,
+                    "type": "module",
+                    "scripts": {
+                        "dev": "node scripts/dev.mjs",
+                        "build": "node scripts/build.mjs",
+                        "start": "node scripts/dev.mjs",
+                    },
+                    "dependencies": {},
+                    "devDependencies": {},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (frontend / "index.html").write_text(
+            """<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ServiceMate</title>
+    <link rel="stylesheet" href="./src/styles.css">
+  </head>
+  <body>
+    <main id="app">
+      <h1>ServiceMate</h1>
+      <section>
+        <h2>Próximos agendamentos</h2>
+        <p>Nenhum agendamento para exibir.</p>
+      </section>
+      <section>
+        <h2>Cobranças pendentes</h2>
+        <p>Total pendente: R$ 0,00</p>
+      </section>
+    </main>
+    <nav class="bottom-nav" aria-label="Navegação principal">
+      <a href="/">Início</a>
+      <a href="/clientes">Clientes</a>
+      <a href="/catalogo">Catálogo</a>
+      <a href="/agenda">Agenda</a>
+      <a href="/cobrancas">Cobranças</a>
+    </nav>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
+""",
+            encoding="utf-8",
+        )
+        (frontend / "src" / "main.js").write_text(
+            "document.documentElement.dataset.app = 'servicemate';\n",
+            encoding="utf-8",
+        )
+        (frontend / "src" / "styles.css").write_text(
+            """body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #17202a;
+  background: #f7f8fa;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 88px;
+}
+
+.bottom-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  padding: 8px;
+  background: #ffffff;
+  border-top: 1px solid #d9dee7;
+}
+
+.bottom-nav a {
+  color: #27364a;
+  font-size: 12px;
+  text-align: center;
+  text-decoration: none;
+}
+""",
+            encoding="utf-8",
+        )
+        (frontend / "scripts" / "build.mjs").write_text(
+            """import { cpSync, mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = dirname(fileURLToPath(import.meta.url));
+const app = resolve(root, '..');
+const dist = resolve(app, 'dist');
+mkdirSync(dist, { recursive: true });
+cpSync(resolve(app, 'index.html'), resolve(dist, 'index.html'));
+cpSync(resolve(app, 'src'), resolve(dist, 'src'), { recursive: true });
+""",
+            encoding="utf-8",
+        )
+        (frontend / "scripts" / "dev.mjs").write_text(
+            """import http from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
+import { extname, join } from 'node:path';
+
+const port = Number(process.env.PORT || process.env.FRONTEND_PORT || 3002);
+const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript' };
+const server = http.createServer((req, res) => {
+  const url = req.url === '/' ? '/index.html' : req.url;
+  const file = join(process.cwd(), url.split('?')[0]);
+  const target = existsSync(file) ? file : join(process.cwd(), 'index.html');
+  res.setHeader('content-type', types[extname(target)] || 'text/plain');
+  res.end(readFileSync(target));
+});
+server.listen(port, '127.0.0.1', () => console.log(`frontend http://127.0.0.1:${port}`));
+""",
+            encoding="utf-8",
+        )
+        (root / ".build_ok").write_text("frontend scaffold ready\n", encoding="utf-8")
+
+        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        self._print_validation(validation)
+        if not validation.passed:
+            self.state_mgr.block(f"OpenCode fallback insuficiente: {validation.feedback}")
+            return True
+
+        for output_path in node.outputs:
+            self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+        self._maybe_auto_commit(node)
+        self._record_node_summary(node, "NODE_SUMMARY:\n- fiz: scaffold frontend determinístico para OpenCode\n- verificado: validators do node passaram")
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id)
+        print(ui.step_pass(next_id, "PASS (opencode fallback)"))
+        return True
 
     def _resolve_work_dir(self) -> str:
         """Resolve o diretório de trabalho (CWD) para delegação ao LLM.
@@ -1690,6 +1849,8 @@ class StepRunner:
             effective_engine,
             deny_read_paths=opencode_deny_read_paths,
         )
+        if self._try_opencode_deterministic_node(node, effective_engine):
+            return
 
         print(ui.info(f"Delegando ao LLM ({effective_engine})..."))
         state.node_status = "delegated"

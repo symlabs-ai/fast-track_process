@@ -326,6 +326,51 @@ nodes:
         assert runner._resolve_allowed_paths(build_node) == ["project", ".build_ok"]
         assert runner._resolve_allowed_paths(doc_node) == ["docs/out.md"]
 
+    def test_opencode_scaffold_uses_deterministic_fallback(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.frontend.01.scaffold
+    type: build
+    title: Scaffold
+    executor: claude
+    outputs:
+      - project/frontend/
+      - .build_ok
+    validators:
+      - file_exists: project/frontend/package.json
+      - file_exists: .build_ok
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.frontend.01.scaffold")
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            runner._run_llm_step(node)
+
+        assert (project_root / "project/frontend/package.json").exists()
+        assert (project_root / ".build_ok").exists()
+        assert runner.state_mgr.load().current_node == "ft.end"
+
     def test_opencode_document_retry_preserves_capture_mode(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"

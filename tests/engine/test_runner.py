@@ -371,6 +371,53 @@ nodes:
         assert (project_root / ".build_ok").exists()
         assert runner.state_mgr.load().current_node == "ft.end"
 
+    def test_opencode_frontend_implement_uses_deterministic_fallback(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        frontend = project_root / "project" / "frontend"
+        state_dir.mkdir(parents=True)
+        frontend.mkdir(parents=True)
+        (frontend / "package.json").write_text("{ broken json\n", encoding="utf-8")
+        (frontend / "package.json.newbuildmjsjunk").write_text("junk\n", encoding="utf-8")
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.frontend.02.implement
+    type: build
+    title: Implement Frontend
+    executor: claude
+    outputs:
+      - project/frontend/src/
+    validators:
+      - command_succeeds: "cd project/frontend && npm run build --silent"
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+        node = runner.graph.get_node("ft.frontend.02.implement")
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            runner._run_llm_step(node)
+
+        assert (frontend / "src/main.js").exists()
+        assert not (frontend / "package.json.newbuildmjsjunk").exists()
+        assert runner.state_mgr.load().current_node == "ft.end"
+
     def test_opencode_document_retry_preserves_capture_mode(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"

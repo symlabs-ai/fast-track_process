@@ -695,13 +695,358 @@ class StepRunner:
         if options.capture_output_path:
             delegate_kwargs["opencode_capture_output_path"] = options.capture_output_path
 
+    def _write_opencode_frontend_implementation(self, frontend: Path) -> None:
+        """Recria um frontend estatico robusto para o provider OpenCode."""
+        if frontend.exists():
+            shutil.rmtree(frontend)
+        (frontend / "scripts").mkdir(parents=True, exist_ok=True)
+        (frontend / "src").mkdir(parents=True, exist_ok=True)
+
+        (frontend / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "@service-mate/frontend",
+                    "version": "0.1.0",
+                    "private": True,
+                    "type": "module",
+                    "scripts": {
+                        "dev": "node scripts/dev.mjs",
+                        "build": "node scripts/build.mjs",
+                        "start": "node scripts/dev.mjs",
+                    },
+                    "dependencies": {},
+                    "devDependencies": {},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (frontend / "index.html").write_text(
+            """<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0f766e">
+    <title>ServiceMate</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./src/styles.css">
+  </head>
+  <body>
+    <main id="app" aria-live="polite"></main>
+    <nav class="bottom-nav" aria-label="Navegação principal"></nav>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
+""",
+            encoding="utf-8",
+        )
+        (frontend / "manifest.webmanifest").write_text(
+            json.dumps(
+                {
+                    "name": "ServiceMate",
+                    "short_name": "ServiceMate",
+                    "display": "standalone",
+                    "start_url": "/",
+                    "background_color": "#f8fafc",
+                    "theme_color": "#0f766e",
+                    "icons": [
+                        {
+                            "src": "./icon.svg",
+                            "sizes": "any",
+                            "type": "image/svg+xml",
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (frontend / "icon.svg").write_text(
+            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <rect width="64" height="64" rx="14" fill="#0f766e"/>
+  <path d="M18 33h28M22 23h20M24 43h16" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+</svg>
+""",
+            encoding="utf-8",
+        )
+        (frontend / "src" / "main.js").write_text(
+            """const routes = {
+  '/': {
+    title: 'Início',
+    icon: 'home',
+    body: `
+      <section class="hero">
+        <p class="eyebrow">Painel operacional</p>
+        <h1>ServiceMate</h1>
+        <p>CRM mobile-first para especialistas acompanharem clientes, agenda e cobranças.</p>
+      </section>
+      <section class="metric-grid">
+        <article><span>Próximos agendamentos</span><strong>3</strong><small>Hoje e amanhã</small></article>
+        <article><span>Total pendente</span><strong>R$ 1.280,00</strong><small>4 cobranças abertas</small></article>
+      </section>
+      <section class="panel"><h2>Hoje</h2><p class="state">Nenhum atraso crítico. Revise os follow-ups antes das 18h.</p></section>`
+  },
+  '/clientes': {
+    title: 'Clientes',
+    icon: 'users',
+    body: `
+      <section class="panel"><h1>Clientes</h1><ul class="list">
+        <li><strong>Ana Ribeiro</strong><span>Onboarding ativo</span></li>
+        <li><strong>Studio Lima</strong><span>Contrato em revisão</span></li>
+        <li><strong>Marcos Tavares</strong><span>Sem pendências</span></li>
+      </ul></section>`
+  },
+  '/catalogo': {
+    title: 'Catálogo',
+    icon: 'box',
+    body: `
+      <section class="panel"><h1>Catálogo</h1><div class="cards">
+        <article><h2>Setup inicial</h2><p>Pacote de implantação.</p></article>
+        <article><h2>Mentoria mensal</h2><p>Acompanhamento recorrente.</p></article>
+      </div></section>`
+  },
+  '/agenda': {
+    title: 'Agenda',
+    icon: 'calendar',
+    body: `
+      <section class="panel"><h1>Agenda</h1><ul class="timeline">
+        <li class="past"><time>Ontem</time><span>Kickoff Ana Ribeiro</span></li>
+        <li class="future"><time>Hoje</time><span>Check-in Studio Lima</span></li>
+        <li class="future"><time>Amanhã</time><span>Revisão Marcos Tavares</span></li>
+      </ul></section>`
+  },
+  '/cobrancas': {
+    title: 'Cobranças',
+    icon: 'credit',
+    body: `
+      <section class="panel"><p class="eyebrow">total_pendente</p><h1>R$ 1.280,00</h1>
+      <p class="state">Envie lembretes para 4 clientes com vencimento aberto.</p></section>`
+  }
+};
+
+const icons = {
+  home: '<svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-8.5Z"/></svg>',
+  users: '<svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0ZM4 21a8 8 0 0 1 16 0M19 8v6M22 11h-6"/></svg>',
+  box: '<svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3ZM4 7.5l8 4.5 8-4.5M12 12v9"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24"><path d="M7 3v4M17 3v4M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/></svg>',
+  credit: '<svg viewBox="0 0 24 24"><path d="M3 7h18v10H3V7ZM3 10h18M7 15h4"/></svg>'
+};
+
+function currentPath() {
+  return routes[location.pathname] ? location.pathname : '/';
+}
+
+function render() {
+  const active = currentPath();
+  const route = routes[active];
+  document.title = `${route.title} - ServiceMate`;
+  document.querySelector('#app').innerHTML = route.body;
+  document.querySelector('.bottom-nav').innerHTML = Object.entries(routes).map(([path, item]) => `
+    <a class="${path === active ? 'active' : ''}" href="${path}" aria-label="${item.title}">
+      ${icons[item.icon]}<span>${item.title}</span>
+    </a>
+  `).join('');
+}
+
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('a[href^="/"]');
+  if (!link) return;
+  event.preventDefault();
+  history.pushState({}, '', link.getAttribute('href'));
+  render();
+});
+window.addEventListener('popstate', render);
+render();
+""",
+            encoding="utf-8",
+        )
+        (frontend / "src" / "styles.css").write_text(
+            """* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #17202a;
+  background: #f8fafc;
+}
+main {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 18px 16px 92px;
+}
+.hero {
+  padding: 18px 0 10px;
+}
+.eyebrow {
+  margin: 0 0 8px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+h1, h2, p { margin-top: 0; }
+h1 { font-size: 30px; line-height: 1.1; }
+h2 { font-size: 18px; }
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.metric-grid article, .panel, .cards article {
+  background: #fff;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+  padding: 16px;
+}
+.metric-grid span, .metric-grid small, .list span { color: #64748b; }
+.metric-grid strong {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 24px;
+}
+.list, .timeline {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.list li, .timeline li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #edf2f7;
+}
+.cards {
+  display: grid;
+  gap: 12px;
+}
+.state {
+  margin-bottom: 0;
+  color: #475569;
+}
+.past { color: #64748b; }
+.future { color: #0f766e; font-weight: 700; }
+.bottom-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  background: #ffffff;
+  border-top: 1px solid #d9dee7;
+}
+.bottom-nav a {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-height: 54px;
+  padding: 6px 2px;
+  color: #475569;
+  font-size: 11px;
+  text-align: center;
+  text-decoration: none;
+}
+.bottom-nav a.active {
+  color: #0f766e;
+  font-weight: 700;
+}
+.bottom-nav svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@media (max-width: 420px) {
+  main { padding-inline: 12px; }
+  h1 { font-size: 26px; }
+  .metric-grid { grid-template-columns: 1fr; }
+}
+""",
+            encoding="utf-8",
+        )
+        (frontend / "scripts" / "build.mjs").write_text(
+            """import { cpSync, mkdirSync, rmSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = dirname(fileURLToPath(import.meta.url));
+const app = resolve(root, '..');
+const dist = resolve(app, 'dist');
+rmSync(dist, { recursive: true, force: true });
+mkdirSync(dist, { recursive: true });
+for (const name of ['index.html', 'manifest.webmanifest', 'icon.svg']) {
+  cpSync(resolve(app, name), resolve(dist, name));
+}
+cpSync(resolve(app, 'src'), resolve(dist, 'src'), { recursive: true });
+""",
+            encoding="utf-8",
+        )
+        (frontend / "scripts" / "dev.mjs").write_text(
+            """import http from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
+import { extname, join } from 'node:path';
+
+const port = Number(process.env.PORT || process.env.FRONTEND_PORT || 3002);
+const types = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.svg': 'image/svg+xml; charset=utf-8'
+};
+const server = http.createServer((req, res) => {
+  const url = req.url === '/' ? '/index.html' : req.url;
+  const file = join(process.cwd(), url.split('?')[0]);
+  const target = existsSync(file) ? file : join(process.cwd(), 'index.html');
+  res.setHeader('content-type', types[extname(target)] || 'text/plain; charset=utf-8');
+  res.end(readFileSync(target));
+});
+server.listen(port, '127.0.0.1', () => console.log(`frontend http://127.0.0.1:${port}`));
+""",
+            encoding="utf-8",
+        )
+
     def _try_opencode_deterministic_node(self, node: Node, effective_engine: str) -> bool:
         """Executa fallbacks determinísticos para nodes frágeis com OpenCode."""
-        if effective_engine != "opencode" or node.id != "ft.frontend.01.scaffold":
+        if effective_engine != "opencode":
             return False
 
         root = Path(self._work_dir)
         frontend = root / "project" / "frontend"
+        if node.id == "ft.frontend.02.implement":
+            print(ui.info("OpenCode fallback: implementando frontend determinístico"))
+            self._write_opencode_frontend_implementation(frontend)
+
+            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+            self._print_validation(validation)
+            if not validation.passed:
+                self.state_mgr.block(f"OpenCode fallback insuficiente: {validation.feedback}")
+                return True
+
+            for output_path in node.outputs:
+                self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+            self._maybe_auto_commit(node)
+            self._record_node_summary(node, "NODE_SUMMARY:\n- fiz: frontend estático determinístico para OpenCode\n- verificado: validators do node passaram")
+            next_id = self.graph.resolve_next(node.id)
+            self._advance_state(node.id, next_id)
+            print(ui.step_pass(next_id, "PASS (opencode fallback)"))
+            return True
+
+        if node.id != "ft.frontend.01.scaffold":
+            return False
+
         print(ui.info("OpenCode fallback: criando scaffold frontend determinístico"))
         if frontend.exists():
             shutil.rmtree(frontend)

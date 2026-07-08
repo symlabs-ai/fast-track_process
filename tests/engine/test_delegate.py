@@ -1,6 +1,7 @@
 """Unit tests for ft.engine.delegate command selection."""
 
 import json
+import os
 import subprocess
 import time
 
@@ -15,6 +16,7 @@ from ft.engine.delegate import (
     _extract_opencode_json_text,
     _opencode_capture_command,
     _prepare_opencode_sandbox_mounts,
+    _stop_process_tree,
     _wait_for_process,
     _wrap_opencode_sandbox_command,
     DEFAULT_OPENCODE_CONTEXT_LIMIT,
@@ -307,6 +309,22 @@ class TestBuildExecutorCommand:
         finally:
             if proc.poll() is None:
                 proc.kill()
+
+    def test_stop_process_tree_kills_child_process_group(self):
+        proc = subprocess.Popen(
+            ["bash", "-c", "sleep 30 & wait"],
+            start_new_session=True,
+        )
+        pgid = os.getpgid(proc.pid)
+        try:
+            time.sleep(0.2)
+            _stop_process_tree(proc)
+
+            with pytest.raises(ProcessLookupError):
+                os.killpg(pgid, 0)
+        finally:
+            if proc.poll() is None:
+                os.killpg(pgid, 9)
 
     def test_extracts_final_codex_message_from_json_stream(self):
         raw = "\n".join([

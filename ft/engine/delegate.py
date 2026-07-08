@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -182,6 +183,57 @@ def _paths_have_content(paths: list[Path]) -> bool:
     return True
 
 
+def _stop_process_tree(proc: subprocess.Popen, terminate_timeout: int = 5, kill_timeout: int = 5) -> None:
+    """Encerra o processo e, quando possível, todo o process group dele."""
+    if proc.poll() is not None:
+        return
+
+    use_group = False
+    pgid: int | None = None
+    try:
+        pgid = os.getpgid(proc.pid)
+        use_group = pgid != os.getpgrp()
+    except OSError:
+        pass
+
+    try:
+        if use_group and pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except ProcessLookupError:
+        return
+
+    try:
+        proc.wait(timeout=terminate_timeout)
+    except subprocess.TimeoutExpired:
+        pass
+
+    should_kill = proc.poll() is None
+    if use_group and pgid is not None:
+        try:
+            os.killpg(pgid, 0)
+            should_kill = True
+        except OSError:
+            should_kill = proc.poll() is None
+
+    if not should_kill:
+        return
+
+    try:
+        if use_group and pgid is not None:
+            os.killpg(pgid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        return
+
+    try:
+        proc.wait(timeout=kill_timeout)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _wait_for_process(
     proc: subprocess.Popen,
     timeout: int,
@@ -211,14 +263,8 @@ def _wait_for_process(
             if satisfied_since is None:
                 satisfied_since = now
             elif now - satisfied_since >= early_success_grace:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                    return 0, True
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=5)
-                    return 0, True
+                _stop_process_tree(proc)
+                return 0, True
         else:
             satisfied_since = None
         time.sleep(1)
@@ -1287,14 +1333,7 @@ REGRAS:
                 f.write(message)
 
     def _stop_process(proc: subprocess.Popen) -> None:
-        if proc.poll() is not None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+        _stop_process_tree(proc)
 
     def _run_executor_attempt() -> tuple[int, bool, str, str | None]:
         """Executa uma tentativa do executor. failure_kind: idle | timeout | None."""
@@ -1310,6 +1349,7 @@ REGRAS:
             text=True,
             bufsize=1,
             env=_env,
+            start_new_session=True,
         )
         output_holder: dict[str, str] = {"output": ""}
         activity = {"last": time.time()}

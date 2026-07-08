@@ -483,6 +483,59 @@ nodes:
             runner._run_llm_step(runner.graph.get_node("ft.tdd.03.refactor"))
             assert runner.state_mgr.load().current_node == "ft.end"
 
+    def test_opencode_delivery_fallbacks_create_entrypoint_and_makefile(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: ft.delivery.01.entrypoint
+    type: build
+    title: Entry
+    executor: claude
+    validators:
+      - file_exists: project/backend/main.py
+    next: ft.delivery.03.makefile
+  - id: ft.delivery.03.makefile
+    type: build
+    title: Makefile
+    executor: claude
+    outputs:
+      - project/Makefile
+    validators:
+      - file_exists: project/Makefile
+      - command_succeeds: "make --dry-run dev 2>&1 | head -3"
+      - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \\"$(make -s url)\\""
+    next: ft.end
+  - id: ft.end
+    type: end
+    title: End
+"""
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+            llm_engine="opencode",
+        )
+        runner.init_state()
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")):
+            runner._run_llm_step(runner.graph.get_node("ft.delivery.01.entrypoint"))
+            assert (project_root / "project/backend/main.py").exists()
+            assert runner.state_mgr.load().current_node == "ft.delivery.03.makefile"
+
+            runner._run_llm_step(runner.graph.get_node("ft.delivery.03.makefile"))
+            assert (project_root / "project/Makefile").exists()
+            assert runner.state_mgr.load().current_node == "ft.end"
+
     def test_delegate_allowed_paths_keep_local_docs_in_external_workdir(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"

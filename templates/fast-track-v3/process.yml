@@ -358,7 +358,7 @@ nodes:
       - project/Makefile
     validators:
       - file_exists: project/Makefile
-      - command_succeeds: "make --dry-run dev 2>&1 | head -3"
+      - command_succeeds: "cd project && make --dry-run dev 2>&1 | head -3"
       - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \"$(make -s url)\""
     next: gate.delivery
 

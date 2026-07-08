@@ -1190,6 +1190,23 @@ def total_pendente() -> float:
             print(ui.step_pass(next_id, "PASS (opencode fallback)"))
             return True
 
+        if node.id == "ft.tdd.03.refactor":
+            print(ui.info("OpenCode fallback: refactor determinístico sem alteração comportamental"))
+            self._write_opencode_backend_green(root)
+
+            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+            self._print_validation(validation)
+            if not validation.passed:
+                self.state_mgr.block(f"OpenCode REFACTOR fallback insuficiente: {validation.feedback}")
+                return True
+
+            self._maybe_auto_commit(node)
+            self._record_node_summary(node, "NODE_SUMMARY:\n- fiz: refactor determinístico sem mudança de comportamento\n- verificado: pytest passou")
+            next_id = self.graph.resolve_next(node.id)
+            self._advance_state(node.id, next_id)
+            print(ui.step_pass(next_id, "PASS (opencode fallback)"))
+            return True
+
         if node.id == "ft.frontend.02.implement":
             print(ui.info("OpenCode fallback: implementando frontend determinístico"))
             self._write_opencode_frontend_implementation(frontend)

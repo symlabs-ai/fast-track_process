@@ -448,6 +448,13 @@ nodes:
       - project/backend/
     validators:
       - command_succeeds: "cd project && python -m pytest tests/ -q"
+    next: ft.tdd.03.refactor
+  - id: ft.tdd.03.refactor
+    type: refactor
+    title: Refactor
+    executor: claude
+    validators:
+      - command_succeeds: "cd project && python -m pytest tests/ -q"
     next: ft.end
   - id: ft.end
     type: end
@@ -470,6 +477,10 @@ nodes:
 
             runner._run_llm_step(runner.graph.get_node("ft.tdd.02.green"))
             assert (project_root / "project/backend/main.py").exists()
+            assert runner.state_mgr.load().current_node == "ft.tdd.03.refactor"
+
+            (project_root / "project/backend/main.py").write_text("broken\n", encoding="utf-8")
+            runner._run_llm_step(runner.graph.get_node("ft.tdd.03.refactor"))
             assert runner.state_mgr.load().current_node == "ft.end"
 
     def test_delegate_allowed_paths_keep_local_docs_in_external_workdir(self, tmp_path):

@@ -14,6 +14,33 @@ id: fast_track_v2
 version: "0.8.20"
 title: "ForgeProcess — Fast Track V2"
 
+artifact_policy:
+  canonical:
+    - docs/PRD.md
+    - docs/tech_stack.md
+    - docs/hipotese.md
+    - docs/test_data.md
+    - docs/api_contract.md
+    - docs/ui_criteria.md
+    - docs/diagrams/
+  cycle:
+    - .build_ok
+    - docs/TASK_LIST.md
+    - docs/frontend-prd-review.md
+    - docs/screenshot-review.md
+    - docs/screenshot-review-result.json
+    - docs/screenshots/
+    - docs/acceptance-cli-report.md
+    - docs/smoke-report.md
+    - docs/e2e-browser-report.md
+    - docs/retro.md
+    - docs/forgebase-audit.md
+    - docs/SPEC.md
+    - docs/plano_de_voo.md
+    - docs/visual-check-report.md
+    - docs/stakeholder-feedback.md
+    - docs/critical-analysis.md
+
 nodes:
   # ================================================================
   # Fase 1: MDD — Market Driven Development

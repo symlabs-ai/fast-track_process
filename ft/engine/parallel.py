@@ -88,7 +88,7 @@ def merge_branch(
         return True, f"merge OK: {branch}"
 
     # Conflito — tentar resolver automaticamente
-    conflict_result = subprocess.run(
+    subprocess.run(
         ["git", "merge", "--abort"],
         cwd=project_root, capture_output=True,
     )

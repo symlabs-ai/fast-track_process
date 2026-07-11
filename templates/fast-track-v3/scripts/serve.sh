@@ -1,62 +1,84 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PROJECT_ROOT="$ROOT/project"
 cd "$ROOT"
 
-BASE_PORT="${PORT:-${SERVICE_MATE_PORT:-8021}}"
+BASE_PORT="${PORT:-8021}"
 case "$BASE_PORT" in
   ''|*[!0-9]*) BASE_PORT=8021 ;;
 esac
-EXPECTED_PROJECT_ROOT="$(cd project && pwd)"
 
-is_current_server() {
-  local url="$1"
-  curl -sf "$url/health" 2>/dev/null | python -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if data.get("project_root")==sys.argv[1] else 1)' "$EXPECTED_PROJECT_ROOT" >/dev/null 2>&1
+process_pid() {
+  local token
+  token="$(cat .serve.pid 2>/dev/null || true)"
+  printf '%s\n' "${token#*:}"
 }
 
-PORT="$BASE_PORT"
+owned_server_is_ready() {
+  test -s .serve.pid && test -s .serve_url || return 1
+  local pid url cwd
+  pid="$(process_pid)"
+  url="$(cat .serve_url)"
+  test -n "$pid" && kill -0 "$pid" 2>/dev/null || return 1
+  cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+  test "$cwd" = "$(cd "$PROJECT_ROOT" && pwd -P)" || return 1
+  curl -sf "$url/health" >/dev/null 2>&1
+}
+
+port_is_free() {
+  python3 - "$1" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.socket() as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        raise SystemExit(1)
+PY
+}
+
+if owned_server_is_ready; then
+  exit 0
+fi
+
+PORT=""
 for candidate in $(seq "$BASE_PORT" "$((BASE_PORT + 50))"); do
-  candidate_url="http://127.0.0.1:$candidate"
-  if is_current_server "$candidate_url"; then
-    PORT="$candidate"
-    export PORT
-    export SERVICE_MATE_PORT="$PORT"
-    printf '%s\n' "$candidate_url" > .serve_url
-    exit 0
-  fi
-  if ! fuser "$candidate/tcp" >/dev/null 2>&1; then
+  if port_is_free "$candidate"; then
     PORT="$candidate"
     break
   fi
 done
-
+if test -z "$PORT"; then
+  PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+fi
 export PORT
-export SERVICE_MATE_PORT="$PORT"
 
 URL="$(cd project && make -s url)"
 printf '%s\n' "$URL" > .serve_url
+rm -f .serve.pid .serve.log
 
-if is_current_server "$URL"; then
-  exit 0
+if command -v setsid >/dev/null 2>&1; then
+  (cd project && exec setsid env PORT="$PORT" make run) > .serve.log 2>&1 < /dev/null &
+  printf 'group:%s\n' "$!" > .serve.pid
+else
+  (cd project && exec env PORT="$PORT" make run) > .serve.log 2>&1 < /dev/null &
+  printf 'pid:%s\n' "$!" > .serve.pid
 fi
 
-rm -f .serve.pid .serve.log
-(
-  cd project
-  if command -v setsid >/dev/null 2>&1; then
-    setsid env PORT="$PORT" SERVICE_MATE_PORT="$PORT" make run > ../.serve.log 2>&1 < /dev/null &
-  else
-    nohup env PORT="$PORT" SERVICE_MATE_PORT="$PORT" make run > ../.serve.log 2>&1 < /dev/null &
-  fi
-  printf '%s\n' "$!" > ../.serve.pid
-)
-
-for _ in $(seq 1 50); do
-  if is_current_server "$URL"; then
+for _ in $(seq 1 80); do
+  if owned_server_is_ready; then
     exit 0
   fi
-  sleep 0.2
+  pid="$(process_pid)"
+  if test -z "$pid" || ! kill -0 "$pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.25
 done
 
 cat .serve.log >&2 2>/dev/null || true

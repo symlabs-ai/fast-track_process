@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -55,39 +54,21 @@ def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProc
 # ---------------------------------------------------------------------------
 
 class TestFindProcessYaml:
-    def test_finds_canonical_in_process_dir(self, tmp_path):
-        """YAML at process/FAST_TRACK_PROCESS.yml is found."""
+    def test_finds_canonical_project_process(self, tmp_path):
+        from ft.cli.main import find_process_yaml
+        expected = _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        result = find_process_yaml(tmp_path)
+        assert result == expected
+
+    def test_does_not_scan_noncanonical_yaml(self, tmp_path):
+        from ft.cli.main import find_process_yaml
+        _create_process_yaml(tmp_path / ".ft" / "process" / "custom.yml")
+        assert find_process_yaml(tmp_path) is None
+
+    def test_does_not_fallback_to_old_process_directory(self, tmp_path):
         from ft.cli.main import find_process_yaml
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        result = find_process_yaml(tmp_path)
-        assert result is not None
-        assert result.name == "FAST_TRACK_PROCESS.yml"
-
-    def test_finds_any_yaml_in_process_dir(self, tmp_path):
-        """Single YAML in process/ is found even with non-standard name."""
-        from ft.cli.main import find_process_yaml
-        _create_process_yaml(tmp_path / "process" / "my_custom_process.yml")
-        result = find_process_yaml(tmp_path)
-        assert result is not None
-        assert result.name == "my_custom_process.yml"
-
-    def test_prefers_fast_track_when_multiple(self, tmp_path):
-        """When multiple YAMLs exist, prefers one with FAST_TRACK in name."""
-        from ft.cli.main import find_process_yaml
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        _create_process_yaml(tmp_path / "process" / "other.yml")
-        result = find_process_yaml(tmp_path)
-        assert result.name == "FAST_TRACK_PROCESS.yml"
-
-    def test_legacy_path_emits_warning(self, tmp_path):
-        """YAML in process/fast_track/ emits DeprecationWarning."""
-        from ft.cli.main import find_process_yaml
-        _create_process_yaml(tmp_path / "process" / "fast_track" / "FAST_TRACK_PROCESS_V2.yml")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = find_process_yaml(tmp_path)
-            assert result is not None
-            assert any(issubclass(x.category, DeprecationWarning) for x in w)
+        assert find_process_yaml(tmp_path) is None
 
     def test_returns_none_when_no_process(self, tmp_path):
         """Returns None when no YAML found anywhere."""
@@ -101,12 +82,13 @@ class TestFindProcessYaml:
 # ---------------------------------------------------------------------------
 
 class TestCopyTemplate:
-    def test_copies_template_to_process_dir(self, tmp_path):
+    def test_copies_template_to_hidden_process_dir(self, tmp_path):
         from ft.cli.main import copy_template
         result = copy_template("fast-track-v2", tmp_path)
         assert result.exists()
         assert result.name == "process.yml"
-        assert (tmp_path / "process" / "process.yml").exists()
+        assert (tmp_path / ".ft" / "process" / "process.yml").exists()
+        assert (tmp_path / ".ft" / "manifest.yml").exists()
 
     def test_template_is_valid_yaml(self, tmp_path):
         from ft.cli.main import copy_template
@@ -141,16 +123,17 @@ class TestCopyTemplate:
 
 class TestInitTemplate:
     def test_init_with_template_creates_process(self, tmp_path):
-        (tmp_path / "project" / "state").mkdir(parents=True)
-        result = run_ft(["--process", "/dev/null", "init"], cwd=tmp_path)
-        # Just verify the flag is accepted without error
-        # Full E2E of --template requires the template to exist relative to engine
+        result = run_ft(["init", "--template", "base"], cwd=tmp_path)
+        assert result.returncode == 0
+        assert (tmp_path / ".ft" / "process" / "process.yml").exists()
+        assert not (tmp_path / "state").exists()
+        assert not (tmp_path / ".ft" / "runtime").exists()
 
     def test_init_without_process_gives_guidance(self, tmp_path):
-        (tmp_path / "project" / "state").mkdir(parents=True)
         result = run_ft(["init"], cwd=tmp_path)
-        assert result.returncode == 1
+        assert result.returncode == 0
         assert "ft init --template" in result.stdout
+        assert (tmp_path / ".ft" / "manifest.yml").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -159,22 +142,22 @@ class TestInitTemplate:
 
 class TestValidateCLI:
     def _base_project(self, tmp_path):
-        """Create base project structure (docs/, process/, src/)."""
-        (tmp_path / "project" / "state").mkdir(parents=True)
+        """Create base project structure (docs/, .ft/process/, src/)."""
+        from ft.engine.layout import ensure_project_layout
         (tmp_path / "docs").mkdir(exist_ok=True)
         (tmp_path / "src").mkdir(exist_ok=True)
-        (tmp_path / "process").mkdir(exist_ok=True)
+        ensure_project_layout(tmp_path)
 
     def test_validate_valid_process(self, tmp_path):
         self._base_project(tmp_path)
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
         result = run_ft(["validate"], cwd=tmp_path)
         assert result.returncode == 0
         assert "PASS" in result.stdout
 
     def test_validate_with_explicit_process(self, tmp_path):
         self._base_project(tmp_path)
-        yaml_path = _create_process_yaml(tmp_path / "process" / "my_process.yml")
+        yaml_path = _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
         result = run_ft(["-p", str(yaml_path), "validate"], cwd=tmp_path)
         assert result.returncode == 0
 
@@ -184,15 +167,13 @@ class TestValidateCLI:
         assert result.returncode == 1
 
     def test_validate_real_process(self, monkeypatch):
-        """Validate the actual FAST_TRACK_PROCESS_V2.yml."""
-        process = Path(__file__).parent.parent.parent / "process" / "fast_track" / "FAST_TRACK_PROCESS_V2.yml"
-        if not process.exists():
-            pytest.skip("V2 process not found")
+        """Validate the actual V3 template with an explicit path."""
+        process = Path(__file__).parent.parent.parent / "templates" / "fast-track-v3" / "process.yml"
         # Roda dentro do repo do template (dev do engine) — precisa do override do guard
         monkeypatch.setenv("FT_ALLOW_ENGINE_REPO", "1")
-        # Need project/state for find_project_root
         result = run_ft(["-p", str(process), "validate"], cwd=process.parent.parent.parent)
-        assert result.returncode == 0
+        # O YAML passa, mas o engine repo não é um projeto no layout .ft.
+        assert result.returncode == 1
         assert "PASS" in result.stdout
 
 

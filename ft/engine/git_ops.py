@@ -5,7 +5,38 @@ Git operations — commit automatico apos green+review.
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
+
+
+_RUNTIME_STATE_PATHS = [
+    "state/",
+    "runs/",
+    ".ft/runtime/",
+    ".ft/cache/",
+    ".ft/tmp/",
+    ".ft/logs/",
+    ".serve_url",
+    ".serve_backend.pid",
+    ".serve_frontend.pid",
+    ".serve.pid",
+    "src/.serve.log",
+    "src/.serve.pid",
+    ":(glob)**/.serve_url",
+    ":(glob)**/.serve*.pid",
+    ":(glob)**/.serve*.log",
+    ":(glob)*_log.md",
+    ":(glob)**/*_log.md",
+]
+
+
+def _unstage_runtime_state(cwd: str) -> None:
+    """Remove generated engine/serve state from the index after broad git add."""
+    for pathspec in _RUNTIME_STATE_PATHS:
+        subprocess.run(
+            ["git", "reset", "HEAD", "--", pathspec],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
 
 
 def auto_commit(
@@ -24,18 +55,9 @@ def auto_commit(
         for p in paths:
             subprocess.run(["git", "add", p], cwd=cwd, capture_output=True)
     else:
-        # Stage tudo exceto state/ e runs/ (legado)
+        # Stage tudo e depois remova artefatos descartáveis do índice.
         subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
-        # Unstage state/ (engine state não é versionado)
-        subprocess.run(
-            ["git", "reset", "HEAD", "state/"],
-            cwd=cwd, capture_output=True, text=True,
-        )
-        # Unstage runs/ (legado — artefatos descartáveis)
-        subprocess.run(
-            ["git", "reset", "HEAD", "runs/"],
-            cwd=cwd, capture_output=True, text=True,
-        )
+        _unstage_runtime_state(cwd)
 
     # Verificar se ha algo staged
     status = subprocess.run(
@@ -64,7 +86,7 @@ def auto_commit(
 
 
 def commit_knowledge(project_root: str = ".", label: str = "snapshot") -> tuple[bool, str]:
-    """Commita docs/ e process/ se houver mudanças.
+    """Commita docs/ e metadados versionados do processo se houver mudanças.
 
     Chamado nativamente pelo engine antes de iniciar um run e ao final.
     Garante que o conhecimento do projeto tem histórico no Git.
@@ -79,18 +101,28 @@ def commit_knowledge(project_root: str = ".", label: str = "snapshot") -> tuple[
     if check.returncode != 0:
         return True, "commit_knowledge: não é um repo git — pulando"
 
-    # Verificar mudanças em docs/ e process/
+    # Verificar mudanças nas fontes humanas e no processo local.
     status = subprocess.run(
-        ["git", "status", "--porcelain", "docs/", "process/"],
+        [
+            "git", "status", "--porcelain", "--",
+            "docs/", ".ft/process/", ".ft/manifest.yml", ".ft/.gitignore",
+        ],
         cwd=cwd, capture_output=True, text=True,
     )
     if not status.stdout.strip():
-        return True, "commit_knowledge: docs/ e process/ sem mudanças"
+        return True, "commit_knowledge: docs/ e .ft/process/ sem mudanças"
 
     # Stage e commit
-    subprocess.run(["git", "add", "docs/", "process/"], cwd=cwd, capture_output=True)
+    subprocess.run(
+        [
+            "git", "add", "--",
+            "docs/", ".ft/process/", ".ft/manifest.yml", ".ft/.gitignore",
+        ],
+        cwd=cwd,
+        capture_output=True,
+    )
     result = subprocess.run(
-        ["git", "commit", "-m", f"chore: {label} — docs/ e process/"],
+        ["git", "commit", "-m", f"chore: {label} — docs/ e .ft/process/"],
         cwd=cwd, capture_output=True, text=True,
     )
 

@@ -13,6 +13,7 @@ from ft.engine.delegate import (
     _clean_opencode_capture_text,
     _executor_env,
     _env_nonnegative_int,
+    _executor_timeout_seconds,
     _append_opencode_runtime_diagnostics,
     _extract_codex_output,
     _extract_opencode_json_text,
@@ -27,6 +28,7 @@ from ft.engine.delegate import (
     DEFAULT_OPENCODE_OUTPUT_LIMIT,
     DelegateResult,
     ExecutorIdleTimeout,
+    delegate_opencode_file_bundle_raw,
     delegate_to_llm,
     delegate_with_feedback,
 )
@@ -37,6 +39,20 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("FT_OPENCODE_IDLE_RETRIES", "0")
 
         assert _env_nonnegative_int("FT_OPENCODE_IDLE_RETRIES") == 0
+
+    def test_codex_ultra_uses_extended_executor_timeout(self, monkeypatch):
+        monkeypatch.delenv("FT_CODEX_EXECUTOR_TIMEOUT", raising=False)
+        monkeypatch.delenv("FT_LLM_EXECUTOR_TIMEOUT", raising=False)
+        monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", "ultra")
+
+        assert _executor_timeout_seconds("codex") == 3600
+
+    def test_provider_executor_timeout_overrides_ultra_default(self, monkeypatch):
+        monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", "ultra")
+        monkeypatch.setenv("FT_LLM_EXECUTOR_TIMEOUT", "4200")
+        monkeypatch.setenv("FT_CODEX_EXECUTOR_TIMEOUT", "5400")
+
+        assert _executor_timeout_seconds("codex") == 5400
 
     def test_builds_claude_command_with_bypass(self):
         cmd = _build_executor_command("claude", "faça algo", "/tmp/proj", 7)
@@ -51,12 +67,33 @@ class TestBuildExecutorCommand:
     def test_builds_codex_command_with_bypass(self):
         cmd = _build_executor_command("codex", "faça algo", "/tmp/proj", 7)
         assert cmd[:2] == ["codex", "exec"]
+        assert not any("model_reasoning_effort" in item for item in cmd)
         assert "--dangerously-bypass-approvals-and-sandbox" in cmd
         assert "--skip-git-repo-check" in cmd
         assert "--json" in cmd
         assert "-C" in cmd
         assert "/tmp/proj" in cmd
         assert "faça algo" == cmd[-1]
+
+    def test_builds_codex_command_with_explicit_reasoning_effort(self, monkeypatch):
+        monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", "ultra")
+
+        cmd = _build_executor_command(
+            "codex",
+            "faça algo",
+            "/tmp/proj",
+            7,
+            model="gpt-5.6-sol",
+        )
+
+        assert ["-c", 'model_reasoning_effort="ultra"'] == cmd[2:4]
+        assert ["-m", "gpt-5.6-sol"] == cmd[-3:-1]
+
+    def test_rejects_invalid_codex_reasoning_effort(self, monkeypatch):
+        monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", 'ultra" --sandbox read-only')
+
+        with pytest.raises(ValueError, match="FT_CODEX_REASONING_EFFORT"):
+            _build_executor_command("codex", "faça algo", "/tmp/proj", 7)
 
     def test_builds_opencode_command_with_default_model(self):
         cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
@@ -138,6 +175,27 @@ class TestBuildExecutorCommand:
     def test_invalid_engine_raises(self):
         with pytest.raises(ValueError, match="Executor LLM desconhecido"):
             _build_executor_command("unknown_engine_xyz", "x", "/tmp/proj", 3)
+
+    def test_file_bundle_raw_timeout_returns_delegate_result(self, tmp_path):
+        exc = subprocess.TimeoutExpired(
+            cmd=["opencode", "run"],
+            timeout=180,
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+        with patch("ft.engine.delegate.subprocess.run", side_effect=exc):
+            result = delegate_opencode_file_bundle_raw(
+                "<ft_file path=\"docs/out.md\">hello</ft_file>",
+                str(tmp_path),
+                allowed_paths=["docs/out.md"],
+            )
+
+        assert result.success is False
+        assert "partial stdout" in result.output
+        assert "partial stderr" in result.output
+        assert "[TIMEOUT] OpenCode raw excedeu 180 segundos." in result.output
+        assert result.files_created == []
 
     def test_opencode_env_enforces_runtime_config(self):
         env = _executor_env(
@@ -458,6 +516,8 @@ class TestBuildExecutorCommand:
         assert result.success is True
         assert "OBRIGATORIO: antes de dizer DONE, use Bash" in prompt
         assert "Responda SOMENTE com blocos XML" not in prompt
+        assert "NAO use `git checkout`, `git reset`, `git restore`, `git clean` ou `git revert`" in prompt
+        assert "NUNCA encerre, mate ou reinicie processos" in prompt
 
     def test_delegate_opencode_native_write_prompt_uses_path_schema(self, tmp_path, monkeypatch):
         bin_dir = tmp_path / "bin"

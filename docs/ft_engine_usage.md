@@ -33,7 +33,8 @@ ft --help
 ## Comandos
 
 ```bash
-ft init                    # Inicializar/resetar estado do processo
+ft init --template base    # Criar layout versionado, sem estado de execução
+ft migrate-layout . --cycle-id cycle-08  # Migrar process/ e atribuir artefatos soltos
 ft continue                # Avançar 1 step
 ft continue --sprint       # Avançar até fim da sprint atual
 ft continue --auto         # Modo autônomo até human gate, MVP ou BLOCK
@@ -52,7 +53,7 @@ referências a projeto específico (nomes de produto, tech stack hardcoded, spec
 
 ```bash
 ft lint-process                                    # YAML auto-detectado
-ft lint-process --process process/MEU_PROCESSO.yml  # YAML explícito
+ft lint-process --process .ft/process/process.yml    # YAML explícito
 ft lint-process --gemini                            # usar Gemini como engine
 ```
 
@@ -80,8 +81,9 @@ export FT_LLM_ENGINE=opencode
 Quando `--opencode` é usado sem modelo explícito, o comando chama
 `opencode run -m pgx/zai-org_glm-4.7-flash "<prompt>"`.
 
-O executor selecionado é persistido em `state/engine_state.yml` no modo continuous
-ou em `~/.ft/worktrees/<projeto>/cycle-NN/state/engine_state.yml` no modo isolated.
+O default escolhido no `ft init` é persistido em `.ft/manifest.yml`. Durante uma
+execução, o executor fica no runtime em `~/.ft/runtime/<projeto>/continuous/` no modo
+continuous ou em `~/.ft/worktrees/<projeto>/cycle-NN/state/` no modo isolated.
 Assim, `status`, `approve` e `reject` continuam usando o mesmo engine nas execuções
 seguintes.
 
@@ -90,15 +92,15 @@ seguintes.
 Especificar YAML de processo manualmente:
 
 ```bash
-ft --process process/process.yml continue --sprint
+ft --process .ft/process/process.yml continue --sprint
 ```
 
-Sem `--process`, o engine procura automaticamente (ordem de prioridade):
-1. YAML cujo `id` bate com o `process_id` do estado ativo
-2. `process/process.yml`
-3. `process/FAST_TRACK_PROCESS.yml`
-4. Qualquer `process/*.yml` local
-5. `process/fast_track/FAST_TRACK_PROCESS_V2.yml` ou `FAST_TRACK_PROCESS.yml` legado
+Sem `--process`, o engine usa exclusivamente `.ft/process/process.yml`. Não existe
+fallback automático para nomes ou diretórios antigos; use `ft migrate-layout .`.
+O migrador importa históricos de `docs/archive/` e preserva runtime legado fora do
+repositório, em `$FT_HOME/migrations/`, sem torná-lo um ciclo ativo.
+Também atualiza referências inequívocas nos arquivos atuais. Artefatos já movidos para
+`.ft/cycles/` não são reescritos.
 
 ### Variáveis de ambiente
 
@@ -108,6 +110,9 @@ Sem `--process`, o engine procura automaticamente (ordem de prioridade):
 | `FT_ALLOW_ENGINE_REPO` | O `ft` opera sempre num repo de projeto — **todos** os comandos são bloqueados dentro do repositório do engine/template. Esta variável libera o bloqueio, só para desenvolvimento do engine. |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no início do `ft run`. |
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`). |
+| `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de cada turno delegado, em segundos; default 1800. |
+| `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex; reasoning `ultra` usa 3600 por default. |
+| `FT_CODEX_REASONING_EFFORT` | Override explícito do nível de raciocínio do Codex (por exemplo `ultra`). Sem a variável, o Codex usa seu `config.toml`. |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Sobrescreve a janela de contexto anunciada ao OpenCode para o modelo selecionado. O default de `pgx/zai-org_glm-4.7-flash` é 200000. |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Sobrescreve o limite de saída anunciado ao OpenCode. O default de `pgx/zai-org_glm-4.7-flash` é 32768. |
 | `FT_OPENCODE_PROVIDER_TIMEOUT` / `FT_OPENCODE_TIMEOUT` | Define `provider.options.timeout` no OpenCode, em milissegundos. |
@@ -120,6 +125,40 @@ Sem `--process`, o engine procura automaticamente (ordem de prioridade):
 | `FT_OPENCODE_DEBUG` | Ativa `opencode run --print-logs --log-level DEBUG`. |
 | `FT_OPENCODE_PRINT_LOGS` / `FT_OPENCODE_LOG_LEVEL` / `FT_OPENCODE_THINKING` | Ajustes finos de log do OpenCode sem ativar todo o modo debug. |
 
+### Governança de melhorias do processo
+
+No template `fast-track-v3`, `ft.handoff.05.process_evolve` gera o relatório
+humano `docs/process-improvements.md` e o contrato estruturado
+`docs/process-improvements.yml`. Todo achado recebe ID `PI-NNN` e uma das
+classificações:
+
+- `local`: pertence ao fork `.ft/process/process.yml` daquele projeto;
+- `global_candidate`: deve ser revisado para promoção no engine/template;
+- `rejected`: foi analisado e não deve ser aplicado.
+
+Uma melhoria só pode ser `global_candidate` quando for independente de domínio,
+não contiver identificadores do produto, for configurável, tiver evidência
+verificada no ciclo e for retrocompatível. O validator
+`process_improvements_classified` bloqueia classificações inconsistentes.
+
+O ciclo nunca escreve no checkout do engine. Após atualizar e testar o global,
+o mantenedor registra a disposição no artefato do ciclo:
+
+```bash
+ft process-candidates
+ft process-candidates PI-001 \
+  --status promoted \
+  --reason "Aplicado e validado pela suíte do engine" \
+  --reference "commit abc123 templates/fast-track-v3/process.yml"
+
+ft process-candidates PI-002 --status deferred --reason "Precisa de outro ciclo real"
+ft process-candidates PI-003 --status rejected --reason "Regra específica do produto"
+```
+
+`ft close` recusa candidatos `pending`. `--force` permite ignorar a governança
+somente de forma explícita. Ao fechar, os dois relatórios são arquivados em
+`.ft/cycles/<cycle>/` com a decisão e a referência preservadas.
+
 ---
 
 ## Formato do YAML de processo
@@ -129,6 +168,10 @@ id: meu_processo
 version: "1.0.0"
 title: "Meu Processo"
 
+artifact_policy:
+  canonical: [docs/PRD.md, docs/PROJECT_BACKLOG.md, docs/FEATURES.md]
+  cycle: [docs/task_list.md, docs/acceptance-report.md, docs/handoff.md]
+
 nodes:
   - id: step.01.discovery
     type: discovery          # discovery | document | build | test_red | test_green
@@ -137,10 +180,10 @@ nodes:
     executor: llm_coach      # llm_coach | llm_coder | python
     sprint: sprint-01        # opcional — agrupa nodes por sprint
     outputs:
-      - project/docs/requisitos.md
+      - docs/requisitos.md
     requires_approval: true  # opcional — pausa para ft approve
     validators:
-      - file_exists: project/docs/requisitos.md
+      - file_exists: docs/requisitos.md
       - min_lines: 20
       - has_sections:
           - Problema
@@ -153,9 +196,9 @@ nodes:
     executor: llm_coach
     sprint: sprint-01
     outputs:
-      - project/docs/PRD.md
+      - docs/PRD.md
     validators:
-      - file_exists: project/docs/PRD.md
+      - file_exists: docs/PRD.md
       - min_user_stories: 3
     next: gate.01
 
@@ -165,7 +208,7 @@ nodes:
     executor: python
     sprint: sprint-01
     validators:
-      - file_exists: project/docs/PRD.md
+      - file_exists: docs/PRD.md
       - tests_pass: true
     next: step.end
 
@@ -186,6 +229,7 @@ cada um (LLM coach, LLM coder, python), e quais validators rodam. Nada mais.
 - **Sequência**: quais nodes existem e em que ordem executam
 - **Executor**: quem roda cada node (llm_coach, llm_coder, python)
 - **Validators**: quais verificações determinísticas rodam após cada node
+- **Artifact policy**: quais outputs permanecem canônicos e quais são arquivados por ciclo
 - **Hotspots de customização**: referências a arquivos que o LLM deve ler e seguir
 
 ### O que o YAML NÃO define
@@ -197,13 +241,17 @@ cada um (LLM coach, LLM coder, python), e quais validators rodam. Nada mais.
 
 ### Onde vive a especificidade do projeto
 
-Toda informação específica do projeto vive nos **artefatos seed** (`seed/`):
+Toda informação específica do projeto vive nos documentos visíveis em `docs/`. Relatórios
+de execução passam por `docs/` durante o run e são arquivados pelo `ft close`:
 
 | Artefato | Conteúdo |
 |----------|----------|
-| `seed/PRD.md` | O que construir — user stories, requisitos |
-| `seed/ui_guidelines.md` | Como deve parecer — layout, cores, dimensões, animações |
-| `seed/tech_stack.md` | Com que tecnologia — framework, linguagens, dependências |
+| `docs/PRD.md` | O que construir — visão, user stories, requisitos |
+| `docs/PROJECT_BACKLOG.md` | Backlog canônico derivado do PRD; ciclos consomem itens daqui |
+| `docs/FEATURES.md` | Capacidades entregues; cada `FEAT-*` referencia `PB-*` concluído e evidência |
+| `.ft/cycles/<cycle>/task_list.md` | Quebra técnica arquivada ao fechar o ciclo |
+| `docs/ui_criteria.md` | Como deve parecer — telas, componentes, estados e evidências |
+| `docs/tech_stack.md` | Com que tecnologia — framework, linguagens, dependências |
 
 ### Como o YAML referencia especificidades
 
@@ -269,6 +317,11 @@ a especificidade vazou para o processo.
 | `has_sections` | `has_sections: [A, B, C]` | Seções presentes |
 | `min_user_stories` | `min_user_stories: 3` | Mínimo de US no formato `### US-` |
 | `demand_coverage` | `demand_coverage: {prd_path: docs/PRD.md, demand_path: docs/demanda.md}` | Cobertura determinística da demanda por keywords normalizadas |
+| `project_backlog_valid` | `project_backlog_valid: {path: docs/PROJECT_BACKLOG.md}` | Backlog tem IDs, prioridade e status válidos |
+| `task_list_references_backlog` | `task_list_references_backlog: {task_path: docs/task_list.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Task list do ciclo referencia itens do backlog |
+| `backlog_pending_decisions` | `backlog_pending_decisions: {path: docs/PROJECT_BACKLOG.md}` | P0/P1 não ficam abertos sem decisão explícita |
+| `features_catalog_valid` | `features_catalog_valid: {path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Catálogo tem schema, IDs, lifecycle, origem entregue e evidência válidos |
+| `implemented_backlog_covered_by_features` | `implemented_backlog_covered_by_features: {features_path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Todo item de feature/US entregue está representado por algum `FEAT-*` |
 
 ### Testes
 | Validador | Uso | Descrição |
@@ -379,7 +432,7 @@ Ativa automaticamente para nodes de tipo `discovery` e `document`.
 ## Processo Fast Track V3
 
 O template recomendado está em `templates/fast-track-v3/process.yml` e é copiado
-para `process/process.yml` em projetos novos:
+para `.ft/process/process.yml` em projetos novos:
 
 ```bash
 ft init meu-projeto --template fast-track-v3
@@ -388,8 +441,8 @@ git init && git add -A && git commit -m "chore: bootstrap fast track"
 ft run . --auto
 ```
 
-O processo V2 legado continua disponível em `process/fast_track/FAST_TRACK_PROCESS_V2.yml`
-para compatibilidade e testes históricos.
+O processo V2 continua disponível como template histórico, mas projetos atuais usam
+o mesmo path canônico `.ft/process/process.yml` após o `ft init`.
 
 ---
 
@@ -416,8 +469,16 @@ ft/
 ~/.ft/worktrees/<projeto>/cycle-NN/
   state/
     engine_state.yml  # Estado do ciclo em modo isolated (NUNCA editar manualmente)
-process/
-  process.yml          # Processo local do projeto
+<projeto>/
+  docs/                # PRD, stack, UI criteria, backlog e catálogo de features visíveis
+  .ft/
+    manifest.yml
+    process/
+      process.yml      # Fork local e versionado do processo
+      environment.yml
+      scripts/
+    cycles/
+      cycle-NN/        # Task list, evidências, retro e handoff duráveis
 templates/
   fast-track-v3/
     process.yml        # Template recomendado
@@ -436,7 +497,7 @@ pip install -e .
 **BLOCKED após validação**
 ```bash
 ft status    # ver motivo do block
-ft init      # resetar e recomeçar (perde progresso)
+ft retry     # retentar o node atual
 ```
 
 **Artefato rejeitado pelo stakeholder**

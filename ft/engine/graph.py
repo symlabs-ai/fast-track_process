@@ -56,6 +56,14 @@ class ProcessGraph:
     """DAG de um processo YAML."""
 
     def __init__(self, nodes: list[Node], meta: dict[str, Any]):
+        node_ids = [node.id for node in nodes]
+        duplicated = sorted(
+            {node_id for node_id in node_ids if node_ids.count(node_id) > 1}
+        )
+        if duplicated:
+            raise ValueError(
+                "Processo contem IDs de node duplicados: " + ", ".join(duplicated)
+            )
         self.nodes: dict[str, Node] = {n.id: n for n in nodes}
         self.meta = meta
         self._validate()
@@ -78,6 +86,12 @@ class ProcessGraph:
             if node.reject_next and node.reject_next not in ids:
                 raise ValueError(
                     f"Node '{node.id}' reject_next aponta para '{node.reject_next}' que nao existe"
+                )
+            on_fail_target = (node.on_fail or {}).get("goto")
+            if on_fail_target and on_fail_target not in ids:
+                raise ValueError(
+                    f"Node '{node.id}' on_fail.goto aponta para "
+                    f"'{on_fail_target}' que nao existe"
                 )
 
         # Verificar que existe exatamente 1 end node
@@ -158,6 +172,10 @@ class ProcessGraph:
                 for target in other_node.branches.values():
                     if target == node_id and other_id not in completed:
                         return False
+            if other_node.reject_next == node_id and other_id not in completed:
+                return False
+            if (other_node.on_fail or {}).get("goto") == node_id and other_id not in completed:
+                return False
         # Se ninguem aponta para ele, e o primeiro — ready
         return True
 

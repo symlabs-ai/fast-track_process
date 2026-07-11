@@ -38,14 +38,14 @@ def _create_process_yaml(path: Path) -> Path:
 
 
 def _create_environment_yml(project: Path, run_mode: str = "isolated") -> None:
-    env_file = project / "process" / "environment.yml"
+    env_file = project / ".ft" / "process" / "environment.yml"
     env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text(f"run_mode: {run_mode}\n")
 
 
 def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     repo_root = str(Path(__file__).resolve().parent.parent.parent)
-    env = {**os.environ, "PYTHONPATH": repo_root}
+    env = {**os.environ, "PYTHONPATH": repo_root, "FT_SKIP_HEALTH_CHECK": "1"}
     return subprocess.run(
         [sys.executable, "-m", "ft.cli.main"] + args,
         capture_output=True, text=True, cwd=cwd, env=env,
@@ -80,17 +80,17 @@ class TestFindLatestStateContinuous:
     def test_continuous_state_takes_priority(self, tmp_path):
         from ft.cli.main import _find_latest_state
         # Create both continuous and isolated state
-        cont = tmp_path / "state" / "engine_state.yml"
+        cont = paths.continuous_state_path(tmp_path)
         cont.parent.mkdir(parents=True)
         cont.write_text("continuous")
-        iso = tmp_path / "runs" / "01" / "state" / "engine_state.yml"
+        iso = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
         iso.parent.mkdir(parents=True)
         iso.write_text("isolated")
         assert _find_latest_state(tmp_path) == cont
 
     def test_falls_back_to_isolated_when_no_continuous(self, tmp_path):
         from ft.cli.main import _find_latest_state
-        iso = tmp_path / "runs" / "01" / "state" / "engine_state.yml"
+        iso = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
         iso.parent.mkdir(parents=True)
         iso.write_text("isolated")
         assert _find_latest_state(tmp_path) == iso
@@ -103,13 +103,17 @@ class TestFindLatestStateContinuous:
 class TestRunIsolated:
     def test_creates_external_worktree(self, tmp_path):
         """BL-20: isolated mode creates cycle in ~/.ft/worktrees/, not runs/."""
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        _create_process_yaml(paths.project_process_file(tmp_path))
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         wt_home = paths.worktrees_home(tmp_path)
         assert wt_home.is_dir() and any(wt_home.iterdir())
 
     def test_output_shows_isolated(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        _create_process_yaml(paths.project_process_file(tmp_path))
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
         result = run_ft(["run", str(tmp_path)], cwd=tmp_path)
         output = result.stdout + result.stderr
         assert "isolated" in output.lower()
@@ -120,14 +124,19 @@ class TestRunIsolated:
 # ---------------------------------------------------------------------------
 
 class TestRunContinuous:
-    def test_creates_state_at_project_root(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+    def test_creates_state_outside_project_root(self, tmp_path):
+        _create_process_yaml(paths.project_process_file(tmp_path))
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        assert (tmp_path / "state" / "engine_state.yml").exists()
+        assert paths.continuous_state_path(tmp_path).exists()
+        assert not (tmp_path / "state").exists()
 
     def test_does_not_create_runs_dir_entries(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        _create_process_yaml(paths.project_process_file(tmp_path))
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         runs_dir = tmp_path / "runs"
@@ -136,7 +145,9 @@ class TestRunContinuous:
             assert len(run_dirs) == 0
 
     def test_output_shows_continuous(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        _create_process_yaml(paths.project_process_file(tmp_path))
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         result = run_ft(["run", str(tmp_path)], cwd=tmp_path)
         output = result.stdout + result.stderr
@@ -149,11 +160,13 @@ class TestRunContinuous:
 
 class TestCycleManagerAdvance:
     def test_second_run_advances_cycle(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        _create_process_yaml(paths.project_process_file(tmp_path))
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         # First run
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
-        state_path = tmp_path / "state" / "engine_state.yml"
+        state_path = paths.continuous_state_path(tmp_path)
         assert state_path.exists()
         with open(state_path) as f:
             state1 = yaml.safe_load(f)

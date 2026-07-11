@@ -6,31 +6,23 @@ Retorna (passed: bool, detail: str).
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from ft.engine import paths
 
 from ft.engine.validators.artifacts import (
     file_exists,
-    has_sections,
-    min_lines,
     tests_pass,
     coverage_min,
 )
 
 
 def _find_state_files(project_root: str) -> list[Path]:
-    """Retorna candidatos a engine_state.yml (run mais recente primeiro, depois legado)."""
+    """Retorna o runtime canônico sem inspecionar layouts legados do repo."""
     root = Path(project_root)
-    candidates = []
-    runs_dir = root / "runs"
-    if runs_dir.is_dir():
-        for rd in sorted(
-            [d for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit()],
-            reverse=True,
-        ):
-            candidates.append(rd / "state" / "engine_state.yml")
-    candidates.append(root / "project" / "state" / "engine_state.yml")
-    return candidates
+    if paths.is_worktree_path(root):
+        return [root / "state" / "engine_state.yml"]
+    return [paths.continuous_state_path(root)]
 
 
 def gate_delivery(
@@ -551,7 +543,6 @@ def gate_ui_vscode_layout(project_root: str = ".") -> tuple[bool, str]:
     Procura por evidências de: Activity Bar, Drawer lateral, tabs no painel
     central e Terminal como painel horizontal na base — os 4 pilares do layout.
     """
-    import re
 
     src_dir = Path(project_root) / "frontend" / "src"
     if not src_dir.exists():

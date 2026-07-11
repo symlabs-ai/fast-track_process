@@ -13,10 +13,12 @@ from typing import Any
 
 import yaml
 
+from ft.engine import paths
+
 
 def load_environment(project_root: str) -> dict[str, Any]:
-    """Carrega environment.yml do diretório process/ do projeto."""
-    env_path = Path(project_root) / "process" / "environment.yml"
+    """Carrega .ft/process/environment.yml do projeto."""
+    env_path = paths.project_environment_file(project_root)
     if not env_path.exists():
         return {}
     with open(env_path) as f:
@@ -54,7 +56,7 @@ def run_hooks(
 
     results: list[tuple[str, bool, str]] = []
     for script in scripts:
-        script_path = Path(project_root) / "process" / script if not Path(script).is_absolute() else Path(script)
+        script_path = paths.project_process_dir(project_root) / script if not Path(script).is_absolute() else Path(script)
         if not script_path.exists():
             results.append((script, False, f"script não encontrado: {script_path}"))
             print(f"  HOOK {event} FAIL: {script} — script não encontrado")

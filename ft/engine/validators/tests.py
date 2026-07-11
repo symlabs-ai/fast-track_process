@@ -68,7 +68,7 @@ def coverage_per_file(
     paths: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Verifica cobertura minima por arquivo. Se paths=None, checa todos."""
-    result = subprocess.run(
+    subprocess.run(
         ["python", "-m", "pytest", "--cov=src", "--cov-report=json", "-q"],
         cwd=project_root,
         capture_output=True,

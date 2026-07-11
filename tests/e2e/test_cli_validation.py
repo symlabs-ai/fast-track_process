@@ -21,6 +21,8 @@ from pathlib import Path
 import pytest
 
 from ft.engine import paths
+from ft.engine.layout import ensure_project_layout
+from ft.engine.runner import StepRunner
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -30,8 +32,23 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 def _state_file(project_dir: Path) -> Path:
-    """Retorna o caminho do engine_state.yml para um projeto (BL-20: worktree externo)."""
-    return paths.worktrees_home(project_dir) / "cycle-01" / "state" / "engine_state.yml"
+    """Retorna o runtime continuous usado pelas fixtures de comandos."""
+    return paths.continuous_state_path(project_dir)
+
+
+def _initialize_state(project_dir: Path) -> None:
+    import yaml
+
+    state = _state_file(project_dir)
+    runner = StepRunner(
+        process_path=paths.project_process_file(project_dir),
+        state_path=state,
+        project_root=project_dir,
+    )
+    runner.init_state()
+    data = yaml.safe_load(state.read_text()) or {}
+    data["_lock"] = None
+    state.write_text(yaml.safe_dump(data, sort_keys=False))
 
 
 def run_ft(args: list[str], cwd: Path, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -113,27 +130,27 @@ APPROVAL_PROCESS = textwrap.dedent("""\
 @pytest.fixture
 def ft_project(tmp_path: Path) -> Path:
     """Minimal ft project with a gate-only process (no LLM calls)."""
-    process_dir = tmp_path / "process"
-    process_dir.mkdir()
-    (process_dir / "test_process_v2.yml").write_text(GATE_ONLY_PROCESS)
+    ensure_project_layout(tmp_path)
+    paths.project_process_file(tmp_path).write_text(GATE_ONLY_PROCESS)
     return tmp_path
 
 
 @pytest.fixture
 def ft_project_initialized(ft_project: Path) -> Path:
-    """ft_project with state already initialized via ft init."""
+    """ft_project with runtime state initialized independently of ft init."""
     result = run_ft(["init"], cwd=ft_project)
     assert result.returncode == 0, f"init failed:\n{result.stdout}\n{result.stderr}"
+    _initialize_state(ft_project)
     return ft_project
 
 
 @pytest.fixture
 def ft_project_approval(tmp_path: Path) -> Path:
     """ft project using the approval process (LLM step with requires_approval)."""
-    process_dir = tmp_path / "process"
-    process_dir.mkdir()
-    (process_dir / "test_process_v2.yml").write_text(APPROVAL_PROCESS)
+    ensure_project_layout(tmp_path)
+    paths.project_process_file(tmp_path).write_text(APPROVAL_PROCESS)
     run_ft(["init"], cwd=tmp_path)
+    _initialize_state(tmp_path)
     return tmp_path
 
 
@@ -201,12 +218,10 @@ class TestInit:
         result = run_ft(["init"], cwd=ft_project)
         assert result.returncode == 0
 
-    def test_creates_state_file(self, ft_project):
+    def test_creates_no_state_file(self, ft_project):
         run_ft(["init"], cwd=ft_project)
-        # State lives in external worktree (BL-20)
-        wt_home = paths.worktrees_home(ft_project)
-        state_file = wt_home / "cycle-01" / "state" / "engine_state.yml"
-        assert state_file.exists(), f"engine_state.yml should be created by ft init (checked {state_file})"
+        assert not _state_file(ft_project).exists()
+        assert not list(paths.worktrees_home(ft_project).glob("*/state/engine_state.yml"))
 
     def test_output_mentions_process_title(self, ft_project):
         result = run_ft(["init"], cwd=ft_project)
@@ -248,26 +263,27 @@ class TestInit:
         process_file.write_text(GATE_ONLY_PROCESS)
         result = run_ft(["--process", str(process_file), "init"], cwd=tmp_path)
         assert result.returncode == 0
-        assert _state_file(tmp_path).exists()
+        assert paths.project_process_file(tmp_path).read_text() == GATE_ONLY_PROCESS
+        assert not _state_file(tmp_path).exists()
 
     def test_no_local_yaml_gives_clear_error(self, tmp_path):
         """Without a local process YAML, ft init gives a clear error with guidance."""
         (tmp_path / "project" / "state").mkdir(parents=True)
         result = run_ft(["init"], cwd=tmp_path)
-        assert result.returncode == 1
+        assert result.returncode == 0
         assert "ft init --template" in result.stdout
 
     def test_codex_flag_persists_engine_choice(self, ft_project):
         result = run_ft(["init", "--codex"], cwd=ft_project)
         assert result.returncode == 0
-        state_file = _state_file(ft_project)
-        assert "llm_engine: codex" in state_file.read_text()
+        manifest = paths.project_manifest(ft_project)
+        assert "llm_engine: codex" in manifest.read_text()
 
     def test_opencode_flag_persists_engine_choice(self, ft_project):
         result = run_ft(["init", "--opencode"], cwd=ft_project)
         assert result.returncode == 0
-        state_file = _state_file(ft_project)
-        assert "llm_engine: opencode" in state_file.read_text()
+        manifest = paths.project_manifest(ft_project)
+        assert "llm_engine: opencode" in manifest.read_text()
 
     def test_missing_process_file_exits_nonzero(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)

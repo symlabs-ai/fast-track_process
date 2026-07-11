@@ -3,16 +3,50 @@
 # Uso: ft run . --template fast-track-v3 [--claude|--codex|--gemini|--opencode]
 #
 # Estrutura de diretórios:
-#   docs/     — documentação (PRD, handoff, tech_stack, etc.)
-#   process/  — orquestração (process.yml, scripts/, environment.yml)
+#   docs/        — fontes de verdade humanas (PRD, tech stack, UI, backlog e features)
+#   .ft/process/ — orquestração versionada (process.yml, scripts/, environment.yml)
+#   .ft/cycles/  — histórico durável criado por ft close
 #   project/  — todo código-fonte (frontend/, backend/, tests/, Makefile, etc.)
 #
 # REGRA: todo código vai dentro de project/. Nunca criar frontend/, backend/
-#        ou tests/ na raiz. A raiz é reservada para docs/ e process/.
+#        ou tests/ na raiz.
 
 id: fast_track_v3
-version: "1.0.0"
+version: "1.2.0"
 title: "Fast Track V3 — MVP Completo"
+
+artifact_policy:
+  canonical:
+    - docs/PRD.md
+    - docs/TECH_STACK.md
+    - docs/tech_stack.md
+    - docs/ui_criteria.md
+    - docs/PROJECT_BACKLOG.md
+    - docs/FEATURES.md
+    - docs/hipotese.md
+    - docs/demanda.md
+    - docs/api_contract.md
+    - docs/test_data.md
+  cycle:
+    - .build_ok
+    - docs/task_list.md
+    - docs/screenshots/
+    - docs/screenshot-review.md
+    - docs/smoke-report.md
+    - docs/acceptance-report.md
+    - docs/acceptance-result.json
+    - docs/e2e-report.md
+    - docs/visual-check-report.md
+    - docs/stakeholder-feedback.md
+    - docs/retro.md
+    - docs/backlog-progress.md
+    - docs/PRD.next.md
+    - docs/critical-analysis.md
+    - docs/plano_de_voo.md
+    - docs/handoff.md
+    - docs/process-improvements.md
+    - docs/process-improvements.yml
+    - docs/exploration-report.md
 
 nodes:
 
@@ -34,12 +68,12 @@ nodes:
   - id: ft.start.ui_criteria.route
     type: decision
     title: "HyperMode — Critérios de UI existentes?"
-    description: "Detecta se já existe docs/ui_criteria.md. Se não existir, cria critérios visuais perguntando ao stakeholder antes de iniciar o planejamento."
+    description: "Detecta se já existe docs/ui_criteria.md. Se não existir, cria critérios visuais perguntando ao stakeholder antes de iniciar o planejamento. Depois valida/cria docs/PROJECT_BACKLOG.md antes da task list do ciclo."
     sprint: sprint-02-planning
     executor: python
     condition: "file_exists:docs/ui_criteria.md"
     branches:
-      "true": ft.plan.01.task_list
+      "true": ft.start.backlog.route
       "false": ft.hyper.00.ui_criteria_questions
 
   - id: ft.hyper.00.ui_criteria_questions
@@ -109,7 +143,29 @@ nodes:
     outputs:
       - docs/ui_criteria.md
     reject_next: ft.hyper.01.ui_criteria
-    next: ft.plan.01.task_list
+    next: ft.start.backlog.route
+
+  - id: ft.start.backlog.route
+    type: decision
+    title: "HyperMode — Backlog de Produto existente?"
+    description: "Detecta se já existe docs/PROJECT_BACKLOG.md. Se não existir, cria backlog canônico derivado do PRD antes de planejar o ciclo."
+    sprint: sprint-02-planning
+    executor: python
+    condition: "file_exists:docs/PROJECT_BACKLOG.md"
+    branches:
+      "true": ft.start.features.route
+      "false": ft.plan.00.project_backlog
+
+  - id: ft.start.features.route
+    type: decision
+    title: "HyperMode — Catálogo de Features existente?"
+    description: "Detecta se docs/FEATURES.md já existe. Se não existir, cria o catálogo canônico somente com recursos implementados e validados do PROJECT_BACKLOG antes de planejar o ciclo."
+    sprint: sprint-02-planning
+    executor: python
+    condition: "file_exists:docs/FEATURES.md"
+    branches:
+      "true": ft.plan.01.task_list
+      "false": ft.plan.00.features_catalog
 
   # ================================================================
   # Sprint 01 — MDD (Método de Desenvolvimento Dirigido)
@@ -191,11 +247,115 @@ nodes:
   # Sprint 02 — Planning
   # ================================================================
 
+  - id: ft.plan.00.project_backlog
+    type: document
+    title: "Criar Project Backlog"
+    description: "Derivar docs/PROJECT_BACKLOG.md do PRD. Este é o backlog canônico do produto: cada item tem ID estável, prioridade, status global, critérios de aceite, evidência e decisão/nota. Ciclos futuros consomem itens abertos daqui para gerar docs/task_list.md."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/PROJECT_BACKLOG.md
+    prompt: |
+      Crie docs/PROJECT_BACKLOG.md como artefato canônico do produto.
+
+      Fontes:
+      - docs/PRD.md (fonte primária)
+      - docs/ui_criteria.md quando existir
+      - o ciclo mais recente em .ft/cycles/*/ (handoff, critical-analysis, retro e PRD.next), se existir
+
+      Regras:
+      1. Não crie task técnica aqui. Backlog é produto/processo em nível de US, bug ou dívida.
+      2. Cada item deve ter ID estável PB-001, PB-002...
+      3. Prioridade obrigatória: P0, P1 ou P2.
+      4. Status obrigatório: planned, in_progress, done, deferred, blocked, rejected ou accepted.
+      5. Itens P0/P1 que não forem feitos no ciclo precisam terminar com decisão explícita no campo Decisão/Notas.
+      6. Preserve itens existentes se o arquivo já existir; atualize sem renumerar.
+
+      Formato obrigatório:
+
+      # PROJECT_BACKLOG
+
+      ## Progresso
+      - Total:
+      - Done:
+      - Open:
+      - P0/P1 sem decisão:
+
+      ## Itens do Backlog
+
+      | ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |
+      |---|---|---|---|---|---|---|---|---|
+      | PB-001 | US | P0 | planned | PRD §... | ... | ... | — | — |
+
+      ## Regras de Consumo pelos Ciclos
+      - docs/task_list.md deve referenciar IDs PB-* selecionados para o ciclo.
+      - Handoff deve atualizar Status, Evidência e Decisão/Notas.
+    validators:
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+    next: ft.start.features.route
+
+  - id: ft.plan.00.features_catalog
+    type: document
+    title: "Criar Catálogo de Features"
+    description: "Criar ou reconciliar docs/FEATURES.md a partir dos itens done/accepted do PROJECT_BACKLOG. O catálogo descreve capacidades efetivamente entregues; nunca duplica backlog planejado."
+    sprint: sprint-02-planning
+    executor: claude
+    outputs:
+      - docs/FEATURES.md
+    prompt: |
+      Crie ou reconcilie docs/FEATURES.md como catálogo canônico das capacidades
+      efetivamente implementadas e validadas do produto.
+
+      Fontes:
+      - docs/PROJECT_BACKLOG.md (fonte primária)
+      - docs/FEATURES.md, se existir durante um retry
+      - .ft/cycles/*/ (acceptance, E2E, handoff e retro), quando houver histórico
+
+      Regras:
+      1. Inclua somente itens PB-* com Status=done ou Status=accepted. Itens planned,
+         ready, in_progress, deferred, blocked ou rejected nunca viram feature.
+         Apenas tipos US, feature, recurso ou story criam uma capacidade nova.
+      2. Use IDs estáveis FEAT-001, FEAT-002... Nunca renumere, reutilize ou apague
+         um ID existente.
+      3. Preserve a mesma FEAT-* quando um novo PB-* evoluir, corrigir, depreciar ou
+         remover uma capacidade existente. Acrescente o PB-* à coluna Backlog.
+      4. Bugs, dívidas e manutenções não criam uma feature nova. Quando afetarem uma
+         capacidade existente, preserve a FEAT-* e acrescente o PB-* correspondente.
+      5. Status permitido: active, deprecated ou removed. Linhas removed permanecem
+         no catálogo para preservar histórico.
+      6. Entregue em registra o primeiro ciclo da feature. Última evolução registra o
+         ciclo da mudança mais recente ou — quando nunca houve evolução posterior.
+      7. Evidência deve apontar para testes/relatórios reais. Para legado sem ciclo
+         demonstrável, use `legacy` em Entregue em e explique a lacuna em Notas;
+         nunca invente um ciclo.
+      8. Se não houver nenhum PB-* done/accepted, gere o documento com a tabela vazia.
+
+      Formato obrigatório, sem adicionar/remover/reordenar colunas:
+
+      # FEATURES
+
+      ## Catálogo de Features
+
+      | ID | Status | Backlog | Título | Descrição | Entregue em | Evidência | Última evolução | Notas |
+      |---|---|---|---|---|---|---|---|---|
+    validators:
+      - file_exists: docs/FEATURES.md
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+    next: ft.plan.01.task_list
+
   - id: ft.plan.01.task_list
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Criar Task List"
-    description: "Decompor as user stories P0 do PRD em tasks técnicas ordenadas. Formato obrigatório: agrupar por US/P0; incluir tasks de frontend, backend/API, testes e aceite; cada task deve ser verificável e ter escopo claro de implementação."
+    description: "Selecionar itens abertos de docs/PROJECT_BACKLOG.md para este ciclo e quebrá-los em tasks técnicas ordenadas. A task list é por ciclo, não backlog global. Cada grupo deve referenciar IDs PB-* do backlog, status inicial, evidência esperada e critérios de aceite. Não decompor o PRD inteiro se o backlog já prioriza o escopo do ciclo."
     sprint: sprint-02-planning
     executor: claude
     outputs:
@@ -207,8 +367,12 @@ nodes:
           min_lines_count: 20
           max_lines_count: 120
           forbidden: ["<tool_call", "<arg_key", "<arg_value", "vou analisar", "vou criar", "preciso verificar", "devo decompor", "I'll help", "Let me first", "I need to", "I will"]
-          required_terms: ["US-", "task", "frontend", "backend", "teste"]
-          min_required_terms: 4
+          required_terms: ["PB-", "task", "frontend", "backend", "teste"]
+          min_required_terms: 5
+      - task_list_references_backlog:
+          task_path: docs/task_list.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_refs: 1
     next: ft.plan.02.tech_stack
 
   - id: ft.plan.02.tech_stack
@@ -242,7 +406,7 @@ nodes:
     type: document
     no_pre_seed: true
     title: "Definir Contrato de API"
-    description: "Documentar todos os endpoints da API em formato acionavel. Estrutura obrigatoria: ## Base URL e ## Endpoints. Em ## Endpoints, use tabela Markdown com colunas Método | Path | Descrição | Request | Response | Erros. Cada Path deve ser concreto e derivado do PRD/task list; é proibido usar / como endpoint de produto. Incluir GET /health sem prefixo /api. Endpoints de produto devem usar paths como /api/<recurso>. Se o produto tiver criação/cadastro, incluir POST /api/<recurso> para cada entidade criável. Servir como contrato entre frontend e backend — evita mismatch de rotas."
+    description: "Documentar todos os endpoints da API em formato acionavel. Estrutura obrigatoria: ## Base URL e ## Endpoints. Em ## Endpoints, use tabela Markdown com colunas Método | Path | Descrição | Request | Response | Erros. Cada Path deve ser concreto e derivado de docs/PROJECT_BACKLOG.md e docs/task_list.md; é proibido usar / como endpoint de produto. Incluir GET /health sem prefixo /api. Endpoints de produto devem usar paths como /api/<recurso>. Se o produto tiver criação/cadastro, incluir POST /api/<recurso> para cada entidade criável. Servir como contrato entre frontend e backend — evita mismatch de rotas."
     sprint: sprint-02-planning
     executor: claude
     outputs:
@@ -303,13 +467,28 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/task_list.md
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - file_exists: docs/FEATURES.md
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
       - document_quality:
           path: docs/task_list.md
           min_lines_count: 20
           max_lines_count: 120
           forbidden: ["<tool_call", "<arg_key", "<arg_value", "vou analisar", "vou criar", "preciso verificar", "devo decompor", "I'll help", "Let me first", "I need to", "I will"]
-          required_terms: ["US-", "task", "frontend", "backend", "teste"]
-          min_required_terms: 4
+          required_terms: ["PB-", "task", "frontend", "backend", "teste"]
+          min_required_terms: 5
+      - task_list_references_backlog:
+          task_path: docs/task_list.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_refs: 1
       - file_exists: docs/tech_stack.md
       - file_exists: docs/api_contract.md
       - api_contract_complete:
@@ -380,7 +559,7 @@ nodes:
   - id: ft.frontend.04.screenshot_review
     type: review
     title: "Screenshot Review — Validação Visual"
-    description: "Tirar screenshots de todas as telas principais e comparar com os critérios de docs/ui_criteria.md. Verificar estados vazios, responsividade mobile e ícones SVG (não emoji)."
+    description: "Tirar screenshots de todas as telas principais e comparar com os critérios de docs/ui_criteria.md. Verificar estados vazios, responsividade mobile e ícones SVG (não emoji). Se encontrar uma falha bloqueante verificável (ex.: tela branca, overflow horizontal mobile, ação crítica inacessível, ícones ausentes), escreva imediatamente o relatório com Resultado: REJECTED, cite a evidência e pare; não continue capturando telas apenas para completar uma lista."
     sprint: sprint-03-frontend
     executor: claude
     max_turns: 60
@@ -423,7 +602,7 @@ nodes:
   - id: ft.tdd.01.red
     type: test_red
     title: "Red — Escrever Testes"
-    description: "Escrever testes de unidade e integração para todas as US P0. Os testes devem falhar agora (red). Cobrir: criação, leitura, edição, exclusão e validações de cada entidade. Usar datas relativas nos fixtures."
+    description: "Escrever testes de unidade e integração para as obrigações P0 selecionadas em docs/task_list.md e para o comportamento observável de docs/api_contract.md. Cobrir fluxo feliz, erros, status, media type, schema e semânticas de estado relevantes. Os testes devem falhar por assertions do comportamento ausente (red), sem erro de coleta, import ou sintaxe. Usar datas relativas nos fixtures."
     sprint: sprint-04-tdd
     executor: claude
     outputs:
@@ -431,6 +610,23 @@ nodes:
     validators:
       - file_exists: project/tests/
       - command_succeeds: "cd project && python -c \"from pathlib import Path; import py_compile; files=list(Path('tests').rglob('test_*.py')); assert files, 'nenhum test_*.py encontrado'; [py_compile.compile(str(p), doraise=True) for p in files]\""
+      - command_succeeds: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [sys.executable, "-m", "pytest", "tests", "-q"],
+              cwd="project",
+              text=True,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+          )
+          assert result.returncode == 1, (
+              "RED invalido: esperado pytest exit 1 por falha de assertion; "
+              f"recebido {result.returncode}\n{result.stdout[-4000:]}"
+          )
+          PY
       - pytest_red_quality:
           tests_dir: project/tests
           min_test_files: 1
@@ -496,6 +692,8 @@ nodes:
     description: "Garantir que o servidor HTTP sobe corretamente: uvicorn na porta configurada do projeto (settings/.env — nunca hardcodar porta), middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
     sprint: sprint-05-delivery
     executor: claude
+    outputs:
+      - project/backend/main.py
     validators:
       - file_exists: project/backend/main.py
     next: ft.delivery.02.self_review
@@ -511,17 +709,17 @@ nodes:
   - id: ft.delivery.03.makefile
     type: build
     title: "Criar Makefile e Serve Script"
-    description: "Criar Makefile com targets obrigatórios: make dev (sobe backend + frontend simultaneamente), make test (roda pytest), make build (build do frontend), make run (sobe o servidor completo pronto para smoke, com a configuração local do projeto) e make url (imprime só a base URL do servidor, ex.: http://localhost:8021). Garantir também process/scripts/serve.sh para subir o servidor, gravar .serve_url e manter o processo vivo durante gates humanos. Sem dependências externas além do que já está instalado."
+    description: "Criar Makefile com targets obrigatórios: make dev (sobe backend + frontend simultaneamente), make test (roda pytest), make build (build do frontend), make run (sobe o servidor completo pronto para smoke, com a configuração local do projeto) e make url (imprime só a base URL do servidor, ex.: http://localhost:8021). Garantir também .ft/process/scripts/serve.sh para subir o servidor, gravar .serve_url e manter o processo vivo durante gates humanos. Sem dependências externas além do que já está instalado."
     sprint: sprint-05-delivery
     executor: claude
     outputs:
       - project/Makefile
-      - process/scripts/serve.sh
+      - .ft/process/scripts/serve.sh
     validators:
       - file_exists: project/Makefile
-      - file_exists: process/scripts/serve.sh
-      - command_succeeds: "bash -n process/scripts/serve.sh"
-      - command_succeeds: "cd project && make --dry-run dev 2>&1 | head -3"
+      - file_exists: .ft/process/scripts/serve.sh
+      - command_succeeds: "bash -n .ft/process/scripts/serve.sh"
+      - command_succeeds: "cd project && make --dry-run dev >/dev/null"
       - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \"$(make -s url)\""
     next: gate.delivery
 
@@ -534,8 +732,8 @@ nodes:
     validators:
       - file_exists: project/Makefile
       - file_exists: project/backend/main.py
-      - file_exists: process/scripts/serve.sh
-      - command_succeeds: "bash -n process/scripts/serve.sh"
+      - file_exists: .ft/process/scripts/serve.sh
+      - command_succeeds: "bash -n .ft/process/scripts/serve.sh"
       - command_succeeds: "cd project && python -m pytest tests/ -q"
     next: ft.smoke.01.run
 
@@ -544,21 +742,82 @@ nodes:
   # ================================================================
 
   - id: ft.smoke.01.run
+    no_pre_seed: true
     type: build
     title: "Smoke Test"
-    description: "Subir o servidor via make run e verificar que GET /health responde status ok (padrão /health com versão). Este teste valida que o servidor sobe com a configuração real do projeto e a rota de saúde responde."
+    description: "Subir o servidor real via make run em porta livre isolada, persistir a URL em .smoke_url e verificar /health e o HTML raiz com diagnóstico de transporte/status/body. O hook registra ownership do PID/process group e encerra somente o processo iniciado por este node; nunca mata ou reutiliza listener externo."
     sprint: sprint-06-smoke
     executor: claude
     env_setup:
-      - cd project && (make run &)
-      - sleep 3
+      - 'rm -f .smoke_started_process .smoke_url .smoke_server.log'
+      - |
+          set -eu
+          port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+          url="http://127.0.0.1:$port"
+          printf '%s\n' "$url" > .smoke_url
+          if command -v setsid >/dev/null 2>&1; then
+            (cd project && exec setsid env PORT="$port" make run) > .smoke_server.log 2>&1 &
+            printf 'group:%s\n' "$!" > .smoke_started_process
+          else
+            (cd project && exec env PORT="$port" make run) > .smoke_server.log 2>&1 &
+            printf 'pid:%s\n' "$!" > .smoke_started_process
+          fi
+          ready=0
+          for _ in $(seq 1 80); do
+            if curl -sf "$url/health" >/dev/null 2>&1; then ready=1; break; fi
+            token="$(cat .smoke_started_process)"
+            pid="${token#*:}"
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            sleep 0.25
+          done
+          [ "$ready" -eq 1 ] || { cat .smoke_server.log 2>/dev/null || true; exit 1; }
     outputs:
       - docs/smoke-report.md
     env_teardown:
-      - 'p=$(cd project && make -s url | grep -oE "[0-9]+$"); [ -n "$p" ] && fuser -k -TERM "$p/tcp" 2>/dev/null; true'
+      - |
+          if test -f .smoke_started_process; then
+            token="$(cat .smoke_started_process)"
+            mode="${token%%:*}"
+            pid="${token#*:}"
+            if test "$mode" = group; then
+              kill -TERM -- "-$pid" 2>/dev/null || true
+            else
+              kill -TERM "$pid" 2>/dev/null || true
+            fi
+          fi
+          rm -f .smoke_started_process .smoke_url .smoke_server.log
     validators:
-      - command_succeeds: "cd project && curl -sf \"$(make -s url)/health\" | python -c \"import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)\""
-      - command_succeeds: "cd project && curl -sf \"$(make -s url)/\" | python -c \"import sys; body=sys.stdin.read().lower(); sys.exit(0 if '<html' in body or '<!doctype html' in body else 1)\""
+      - command_succeeds: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          base = Path(".smoke_url").read_text(encoding="utf-8").strip().rstrip("/")
+
+          def fetch(path):
+              url = f"{base}{path}"
+              try:
+                  with urlopen(url, timeout=5) as response:
+                      status = response.status
+                      raw = response.read()
+              except Exception as exc:
+                  raise AssertionError(f"GET {url}: falha de transporte: {exc}") from exc
+              assert 200 <= status < 300, f"GET {url}: HTTP {status}"
+              assert raw, f"GET {url}: resposta vazia"
+              return raw
+
+          health_raw = fetch("/health")
+          try:
+              health = json.loads(health_raw)
+          except json.JSONDecodeError as exc:
+              preview = health_raw[:200].decode("utf-8", errors="replace")
+              raise AssertionError(f"GET {base}/health: JSON invalido: {preview!r}") from exc
+          assert health.get("status") == "ok", health
+
+          html = fetch("/").decode("utf-8", errors="replace").lower()
+          assert "<html" in html or "<!doctype html" in html, html[:200]
+          PY
       - file_exists: docs/smoke-report.md
     next: gate.smoke
 
@@ -584,7 +843,11 @@ nodes:
       Verificar cada endpoint P0: criar, listar, editar, excluir.
       Produzir DOIS artefatos:
         1. docs/acceptance-report.md — relatório legível para o stakeholder (Markdown com tabelas PASS/FAIL)
-        2. docs/acceptance-result.json — resultado estruturado para o validator: {"pass": N, "fail": M, "skip": K}
+        2. docs/acceptance-result.json — resultado estruturado para o validator:
+           {"pass": N, "fail": M, "skip": K, "p0_blockers": []}
+      Cada incompatibilidade, cenário P0 não executado ou evidência principal
+      mocked/fallback deve entrar em p0_blockers. A lista só pode ficar vazia
+      quando o aceite P0 for executado de forma real e completa.
       O validator lê o JSON. O relatório é para leitura humana.
     sprint: sprint-07-acceptance
     executor: claude
@@ -594,20 +857,20 @@ nodes:
       - docs/acceptance-result.json
     validators:
       - file_exists: docs/acceptance-result.json
-      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/acceptance-result.json')); sys.exit(0 if d.get('fail',1)==0 and d.get('skip',1)==0 and d.get('pass',0)>=5 else 1)\""
+      - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and d.get('skip')==0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
       - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.acceptance
 
   - id: gate.acceptance
     type: gate
     title: "Gate Acceptance"
-    description: "Verificação determinística: relatório de aceitação existe e não há FAILs."
+    description: "Verificação determinística: relatório de aceitação existe, há cenários executados e não existem FAIL, SKIP ou p0_blockers. Contagem agregada isolada não representa cobertura."
     sprint: sprint-07-acceptance
     executor: python
     validators:
       - file_exists: docs/acceptance-report.md
       - file_exists: docs/acceptance-result.json
-      - command_succeeds: "python -c \"import json,sys; d=json.load(open('docs/acceptance-result.json')); sys.exit(0 if d.get('fail',1)==0 and d.get('skip',1)==0 and d.get('pass',0)>=5 else 1)\""
+      - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and d.get('skip')==0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
       - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.e2e.01.browser
 
@@ -669,7 +932,7 @@ nodes:
   - id: ft.final.01.visual_check
     type: build
     title: "Verificação Visual Final"
-    description: "Comparar screenshots E2E com os critérios de docs/ui_criteria.md. Verificar que todas as telas P0 estão presentes, estados vazios funcionam, ícones são SVG, navegação está correta. Gerar relatório com PASS/FAIL por critério."
+    description: "Comparar screenshots E2E com docs/ui_criteria.md e gerar PASS/FAIL por critério. A síntese deve conter exatamente uma linha P0_ACCEPTANCE: PASS ou P0_ACCEPTANCE: FAIL; o marcador representa o aceite do produto, não apenas a conclusão da auditoria. Qualquer critério P0 FAIL torna o marcador FAIL."
     sprint: sprint-09-final
     executor: claude
     max_turns: 40
@@ -678,7 +941,9 @@ nodes:
     validators:
       - file_exists: docs/visual-check-report.md
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
-      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - visual_p0_acceptance:
+          path: docs/visual-check-report.md
       - ui_criteria_coverage:
           criteria_path: docs/ui_criteria.md
           report_path: docs/visual-check-report.md
@@ -689,13 +954,15 @@ nodes:
   - id: gate.visual_check
     type: gate
     title: "Gate Visual Check"
-    description: "Verificação determinística: relatório de visual check existe."
+    description: "Verificação determinística: relatório visual usa evidência E2E, contém um único P0_ACCEPTANCE: PASS e não registra critério reprovado. Conclusão da auditoria não equivale ao aceite."
     sprint: sprint-09-final
     executor: python
     validators:
       - file_exists: docs/visual-check-report.md
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
-      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - visual_p0_acceptance:
+          path: docs/visual-check-report.md
       - ui_criteria_coverage:
           criteria_path: docs/ui_criteria.md
           report_path: docs/visual-check-report.md
@@ -710,19 +977,22 @@ nodes:
     sprint: sprint-09-final
     executor: python
     env_setup:
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - docs/stakeholder-feedback.md
     reject_next: ft.final.03.stakeholder_fix
     next: ft.handoff.01.retro
 
   - id: ft.final.03.stakeholder_fix
+    no_pre_seed: true
     type: build
     title: "Correção Stakeholder"
     description: "Aplicar as correções solicitadas pelo stakeholder na validação. Focar nos problemas reportados sem expandir escopo."
     sprint: sprint-09-final
     executor: claude
     max_turns: 60
+    outputs:
+      - project/
     next: ft.final.02.stakeholder
 
   # ================================================================
@@ -733,26 +1003,133 @@ nodes:
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: retro
     title: "Retro do Ciclo"
-    description: "Registrar os aprendizados do ciclo: o que funcionou, o que travou, quantas intervenções manuais foram necessárias e por quê. Este registro alimenta o processo do próximo ciclo."
+    description: "Registrar os aprendizados usando também o log do ciclo: o que funcionou, o que travou, retries/BLOCK e intervenções. Enumerar ROUTED, PASS, BLOCKED, REJECTED e BYPASSED sem normalizar bypass como aprovação. Este registro alimenta o próximo ciclo."
     sprint: sprint-10-handoff
     executor: claude
     outputs:
       - docs/retro.md
     validators:
       - file_exists: docs/retro.md
+    next: ft.handoff.02.backlog_update
+
+  - id: ft.handoff.02.backlog_update
+    no_pre_seed: true   # artefato por ciclo — nunca herdar progresso antigo
+    type: document
+    title: "Atualizar Project Backlog"
+    description: "Atualizar docs/PROJECT_BACKLOG.md com o resultado do ciclo. Fonte: docs/task_list.md, relatórios de teste, handoff/retro/critical-analysis e evidências geradas. Marcar itens entregues como done com evidência. Qualquer P0/P1 não entregue deve ficar deferred ou blocked com decisão/nota explícita. Gerar docs/backlog-progress.md com progresso do backlog, pendências e próximos itens."
+    sprint: sprint-10-handoff
+    executor: claude
+    outputs:
+      - docs/PROJECT_BACKLOG.md
+      - docs/backlog-progress.md
+    prompt: |
+      Atualize o backlog canônico do produto.
+
+      Fontes obrigatórias:
+      - docs/PROJECT_BACKLOG.md
+      - docs/task_list.md
+      - docs/acceptance-report.md
+      - docs/e2e-report.md
+      - docs/visual-check-report.md
+      - docs/retro.md
+      - docs/critical-analysis.md se existir
+
+      Regras:
+      1. Preserve IDs PB-* existentes. Nunca renumere.
+      2. Itens executados neste ciclo devem receber Status=done e Evidência apontando para relatório/teste/screenshot.
+      3. Itens P0/P1 não entregues não podem ficar planned/ready/in_progress no fim do ciclo. Use deferred ou blocked com Decisão/Notas explícita.
+      4. Pendências novas descobertas no ciclo devem virar novos PB-* com origem handoff/retro/critical-analysis.
+      5. BYPASSED em human gate não é aprovação nem evidência suficiente para Status=done.
+      6. Gere docs/backlog-progress.md com:
+         - ## Progresso do Backlog
+         - ## Entregue neste ciclo
+         - ## Pendências P0/P1
+         - ## Pendências P2
+         - ## Próximo Ciclo
+    validators:
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - backlog_pending_decisions:
+          path: docs/PROJECT_BACKLOG.md
+      - file_exists: docs/backlog-progress.md
+      - has_sections:
+          path: docs/backlog-progress.md
+          sections:
+            - Progresso do Backlog
+            - Entregue neste ciclo
+            - Pendências P0/P1
+            - Próximo Ciclo
+    next: ft.handoff.02b.features_update
+
+  - id: ft.handoff.02b.features_update
+    no_pre_seed: true   # sempre reconciliar evoluções/bugs; FEATURES é canônico e não é apagado
+    type: document
+    title: "Atualizar Catálogo de Features"
+    description: "Reconciliar docs/FEATURES.md depois da atualização do PROJECT_BACKLOG. Criar features para capacidades novas entregues, manter IDs em evoluções e bugs, e registrar depreciação/remoção sem apagar o histórico."
+    sprint: sprint-10-handoff
+    executor: claude
+    outputs:
+      - docs/FEATURES.md
+    prompt: |
+      Atualize docs/FEATURES.md com o resultado validado deste ciclo.
+
+      Fontes obrigatórias:
+      - docs/FEATURES.md, quando existir
+      - docs/PROJECT_BACKLOG.md já atualizado
+      - docs/task_list.md
+      - docs/acceptance-report.md
+      - docs/e2e-report.md
+      - docs/visual-check-report.md
+      - docs/stakeholder-feedback.md, quando existir
+      - docs/retro.md
+
+      Regras:
+      1. Somente PB-* com Status=done ou Status=accepted pode aparecer no catálogo.
+         Nunca promova planned, ready, in_progress, deferred, blocked ou rejected.
+         Apenas tipos US, feature, recurso ou story criam uma capacidade nova.
+      2. Para uma capacidade nova entregue, crie o próximo ID FEAT-NNN e registre
+         título, descrição, primeiro ciclo e evidência verificável.
+      3. Se um PB-* evolui uma capacidade existente, preserve a FEAT-*, acrescente o
+         PB-* à coluna Backlog, atualize Evidência e registre o ciclo em Última evolução.
+      4. Bugs, dívidas e manutenções não criam outra FEAT-*. Quando afetarem uma
+         feature existente, anexe seu PB-* e a evidência à mesma capacidade.
+      5. Status permitido: active, deprecated ou removed. Só marque deprecated ou
+         removed quando um PB-* concluído e sua decisão/evidência sustentarem a mudança.
+      6. Nunca apague ou renumere linhas. Features removed permanecem como histórico.
+      7. BYPASSED em human gate não é evidência suficiente por si só.
+      8. Se nenhum item foi entregue, preserve o catálogo sem inventar features.
+
+      Formato obrigatório, sem adicionar/remover/reordenar colunas:
+
+      # FEATURES
+
+      ## Catálogo de Features
+
+      | ID | Status | Backlog | Título | Descrição | Entregue em | Evidência | Última evolução | Notas |
+      |---|---|---|---|---|---|---|---|---|
+    validators:
+      - file_exists: docs/FEATURES.md
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
     next: ft.handoff.02.prd_rewrite
 
   - id: ft.handoff.02.prd_rewrite
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
-    title: "Reescrever PRD — Incorporar Aprendizados"
-    description: "Atualizar o PRD com os aprendizados do ciclo: dívidas técnicas identificadas, decisões tomadas (decision log), US entregues vs pendentes e ajustes na hipótese. Este PRD vira o seed do próximo ciclo."
+    title: "Propor Ajustes ao PRD"
+    description: "Gerar docs/PRD.next.md com propostas de atualização do PRD canônico a partir do backlog, decisões e aprendizados do ciclo. Não usar este documento como backlog paralelo: pendências concretas devem estar em docs/PROJECT_BACKLOG.md."
     sprint: sprint-10-handoff
     executor: claude
     outputs:
-      - docs/PRD.md
+      - docs/PRD.next.md
     validators:
-      - file_exists: docs/PRD.md
+      - file_exists: docs/PRD.next.md
     next: ft.handoff.03.critical_analysis
 
   - id: ft.handoff.03.critical_analysis
@@ -772,7 +1149,7 @@ nodes:
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Gerar Plano de Voo — Próximo Ciclo"
-    description: "Documentar o contexto para o próximo ciclo: estado atual do produto, US pendentes, dívidas técnicas P1/P2, sugestões da análise crítica escolhidas pelo stakeholder e qualquer contexto técnico necessário."
+    description: "Documentar o contexto para o próximo ciclo: estado atual do produto, progresso do docs/PROJECT_BACKLOG.md, mudanças em docs/FEATURES.md (novas, evoluídas, depreciadas ou removidas), itens entregues, pendências P0/P1 com decisão, dívidas P2, sugestões da análise crítica escolhidas pelo stakeholder e qualquer contexto técnico necessário. Tanto o plano quanto o handoff devem ter a seção Mudanças em Features."
     sprint: sprint-10-handoff
     executor: claude
     outputs:
@@ -781,22 +1158,42 @@ nodes:
     validators:
       - file_exists: docs/plano_de_voo.md
       - file_exists: docs/handoff.md
+      - file_exists: docs/backlog-progress.md
       - has_sections:
-          - O que foi entregue
-          - O que ficou pendente
-          - Dívidas Técnicas
-          - Próximo Ciclo
+          path: docs/plano_de_voo.md
+          sections:
+            - O que foi entregue
+            - Mudanças em Features
+            - O que ficou pendente
+            - Dívidas Técnicas
+            - Próximo Ciclo
+      - has_sections:
+          path: docs/handoff.md
+          sections:
+            - O que foi entregue
+            - Mudanças em Features
+            - O que ficou pendente
+            - Próximo Ciclo
+      - backlog_pending_decisions:
+          path: docs/PROJECT_BACKLOG.md
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
     next: ft.handoff.gate
 
   - id: ft.handoff.gate
     type: human_gate
     title: "Revisão do Handoff"
-    description: "Leia docs/handoff.md e docs/plano_de_voo.md. Confirme se o contexto para o próximo ciclo está completo e correto. Rejeite com ajustes se algo estiver faltando."
+    description: "Leia docs/handoff.md, docs/plano_de_voo.md e docs/FEATURES.md. Confirme se o contexto para o próximo ciclo e as features novas/evoluídas/depreciadas/removidas estão completos e corretos. Rejeite com ajustes se algo estiver faltando. APPROVED, REJECTED e BYPASSED permanecem distintos; bypass não valida o handoff."
     sprint: sprint-10-handoff
     executor: python
     outputs:
       - docs/handoff.md
       - docs/plano_de_voo.md
+      - docs/FEATURES.md
     reject_next: ft.handoff.04.plano_voo
     next: ft.handoff.05.process_evolve
 
@@ -808,15 +1205,125 @@ nodes:
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Meta-Melhoria do Processo"
-    description: "Analisar o ciclo pelo lado do PROCESSO, não do produto. Fontes: o log do ciclo (<cycle>_log.md na raiz do ciclo), docs/retro.md, docs/critical-analysis.md e os motivos de retry/BLOCK registrados. Identificar meta-melhorias no processo — validators frágeis ou específicos demais, descrições ambíguas que geraram retrabalho, gates que deixaram passar problemas, env_setup/env_teardown faltando, hardcodes de porta/path — e APLICÁ-LAS cirurgicamente no process/process.yml do projeto (fork local), mantendo o YAML válido e a estrutura de sprints. NÃO redesenhar o processo nem criar/remover sprints. Registrar em docs/process-improvements.md: cada mudança aplicada (antes/depois + evidência do ciclo que a motivou) e as sugestões NÃO aplicadas com o porquê."
+    description: "Analisar o ciclo pelo lado do PROCESSO, não do produto. Aplicar correções cirúrgicas somente ao fork local e classificar cada achado como local, global_candidate ou rejected. Um candidato global precisa ser independente de domínio, não conter identificadores do produto, ser configurável, ter sido verificado no ciclo e ser retrocompatível. O ciclo nunca edita o engine ou o template global diretamente."
     sprint: sprint-10-handoff
     executor: claude
     outputs:
       - docs/process-improvements.md
-      - process/process.yml
+      - docs/process-improvements.yml
+      - .ft/process/process.yml
+    write_scope:
+      - docs/process-improvements.md
+      - docs/process-improvements.yml
+      - .ft/process/process.yml
+    prompt: |
+      Analise o ciclo pelo lado do PROCESSO, nao do produto.
+
+      Fontes obrigatorias:
+      - o log do ciclo (<cycle>_log.md na raiz do ciclo);
+      - docs/retro.md;
+      - docs/critical-analysis.md;
+      - motivos de retry/BLOCK e resultados BYPASSED registrados.
+
+      Procure validators frageis ou especificos demais, descricoes ambiguas,
+      gates com falso PASS, env_setup/env_teardown inseguros e hardcodes de
+      porta, path, tecnologia, requisito ou identificador do produto.
+
+      Para cada achado, use um ID PI-NNN e aplique esta regua:
+
+      1. global_candidate somente quando TODOS forem verdadeiros:
+         - domain_independent: serve para projetos de dominios diferentes;
+         - no_product_identifiers: nao cita nomes, rotas, IDs, telas ou regras do produto;
+         - configurable: diferencas entre projetos podem ser obtidas dos artefatos ou configuradas;
+         - verified_in_cycle: ha evidencia concreta do ciclo ou simulacao retrospectiva reproduzivel;
+         - backward_compatible: nao quebra projetos validos criados pelo template vigente.
+      2. local quando a melhoria pertence ao fork deste projeto e ao menos um
+         criterio global e falso. Aplique-a cirurgicamente em .ft/process/process.yml.
+      3. rejected quando a proposta nao deve ser aplicada. Registre o motivo e
+         nao altere o processo por causa dela.
+
+      Uma regra util nao e automaticamente global. Se todos os cinco criterios
+      forem verdadeiros, classifica-la como local e invalido. Nunca edite o repo
+      do engine nem templates/; a promocao global pertence ao mantenedor.
+
+      Gere docs/process-improvements.md com uma secao por PI-NNN contendo:
+      classificacao, evidencia, antes/depois, paths alterados e justificativa.
+
+      Gere docs/process-improvements.yml neste schema exato:
+
+      schema_version: 1
+      no_findings_reason: ""
+      improvements:
+        - id: PI-001
+          title: "Titulo objetivo"
+          classification: local  # local | global_candidate | rejected
+          rationale: "Por que recebeu esta classificacao"
+          evidence:
+            - source: "cycle_log|retro|critical_analysis|retry|blocked|validator"
+              detail: "Evidencia concreta e reproduzivel"
+          criteria:
+            domain_independent: false
+            no_product_identifiers: false
+            configurable: true
+            verified_in_cycle: true
+            backward_compatible: true
+          change:
+            applied_locally: true
+            summary: "Mudanca aplicada ou motivo para nao aplicar"
+            paths:
+              - .ft/process/process.yml
+
+      Para classification: global_candidate, acrescente:
+
+          global:
+            target: process_template  # process_template | engine | documentation
+            summary: "Mudanca generica proposta"
+            test_plan:
+              - "Teste deterministico que deve passar antes da promocao"
+            resolution:
+              status: pending
+              reason: ""
+              reference: ""
+
+      Para classification: rejected, use change.applied_locally: false e paths: [].
+      Se nao houver nenhum achado, use improvements: [] e preencha
+      no_findings_reason com a evidencia da analise. Nao invente achados para
+      satisfazer quantidade minima.
+
+      Mantenha o YAML do processo valido, os IDs e transicoes existentes e a
+      estrutura de sprints. Nao crie/remova/reordene sprints ou nodes.
     validators:
       - file_exists: docs/process-improvements.md
-      - command_succeeds: "python3 -c \"import yaml; yaml.safe_load(open('process/process.yml'))\""
+      - file_exists: docs/process-improvements.yml
+      - file_exists: .ft/process/process.yml
+      - process_improvements_classified:
+          path: docs/process-improvements.yml
+          report_path: docs/process-improvements.md
+      - command_succeeds: |
+          python3 - <<'PY'
+          import yaml
+
+          data = yaml.safe_load(open(".ft/process/process.yml", encoding="utf-8"))
+          nodes = data.get("nodes") if isinstance(data, dict) else None
+          assert isinstance(nodes, list) and nodes, ".ft/process/process.yml deve ter lista top-level nodes"
+          assert sum(1 for node in nodes if node.get("type") == "end") == 1, "processo deve ter exatamente um node type=end"
+          assert all(node.get("id") and node.get("type") for node in nodes), "todos os nodes precisam de id e type"
+          ids = [node["id"] for node in nodes]
+          assert len(ids) == len(set(ids)), "ids de node precisam ser unicos"
+          known = set(ids)
+          references = []
+          for node in nodes:
+              for key in ("next", "reject_next"):
+                  if node.get(key):
+                      references.append((node["id"], key, node[key]))
+              for target in (node.get("branches") or {}).values():
+                  references.append((node["id"], "branches", target))
+              on_fail = node.get("on_fail") or {}
+              if on_fail.get("goto"):
+                  references.append((node["id"], "on_fail.goto", on_fail["goto"]))
+          dangling = [item for item in references if item[2] not in known]
+          assert not dangling, f"referencias para nodes inexistentes: {dangling}"
+          PY
     next: ft.explore
 
   - id: ft.explore

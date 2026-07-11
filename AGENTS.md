@@ -30,18 +30,19 @@ ft init <nome> --template <T>          # 0. criar projeto
 ft run . [--auto]                       # 3. rodar o ciclo (worktree externo)
   → ft status / graph                   # 4. monitorar
   → approve | reject | fix              # 5. decidir nos human gates / destravar
-ft close                                # 6. merge dos artefatos + remover worktree
+ft close                                # 6. arquivar ciclo, fazer merge e remover worktree
   → validação do stakeholder            # 7. feedback vira US no PRD → próximo ciclo
 ```
 
 O ciclo roda num **worktree externo** em `~/.ft/worktrees/<projeto>/cycle-NN/` — o repo
 do projeto fica limpo até o `ft close` fazer o merge. Ciclos são **descartáveis**:
-mudanças de PRD/processo vão sempre na **raiz do projeto**, nunca dentro do ciclo.
+mudanças de PRD/processo entram pelo checkout principal antes de um ciclo; melhorias
+produzidas pelo próprio processo são integradas pelo `ft close`.
 
 ## 0. Criar o projeto
 
 ```bash
-ft init meu-projeto --template fast-track-v3   # cria a pasta e a estrutura (process/, docs/, src/)
+ft init meu-projeto --template fast-track-v3   # cria .ft/process/, docs/ e src/, sem runtime
 cd meu-projeto
 git init && git add -A && git commit -m "chore: bootstrap fast track"
 ```
@@ -50,14 +51,30 @@ Templates disponíveis (`templates/` no repo do engine):
 
 | Template | Uso |
 |----------|-----|
-| `base` | Estrutura mínima com docs seed: `process.yml` + `docs/PRD.md` + `docs/TECH_STACK.md` + `src/` |
+| `base` | Estrutura mínima com `.ft/process/process.yml`, docs seed e `src/` |
 | `fast-track-v3` | Processo completo V3 (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
 | `fast-track-v2` | Processo V2 legado |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
 
-Integrações externas são opt-in via scripts em `process/scripts/`. Para SymGateway,
-use um template de ambiente que forneça `process/scripts/register_gateway.sh` e rode
+Projetos anteriores que ainda possuem `process/` precisam de migração explícita:
+
+```bash
+ft migrate-layout . --dry-run
+ft migrate-layout .
+```
+
+Se os documentos soltos pertencem a um ciclo conhecido, informe-o explicitamente:
+`ft migrate-layout . --cycle-id cycle-08-claude`. Históricos em
+`docs/archive/<ciclo>/` também são importados; runtime legado sai do repositório e é
+preservado sob `$FT_HOME/migrations/` apenas como backup inativo.
+Referências inequívocas nos arquivos atuais são atualizadas para `.ft/process/`; os
+arquivos históricos em `.ft/cycles/` nunca são reescritos.
+
+O CLI atual não faz descoberta automática do layout antigo.
+
+Integrações externas são opt-in via scripts em `.ft/process/scripts/`. Para SymGateway,
+use um template de ambiente que forneça `.ft/process/scripts/register_gateway.sh` e rode
 `ft setup-env` com `SYM_GATEWAY_PROJECT_KEY` definida. Precisa da key? Peça ao
 DevOps — nunca ao usuário.
 
@@ -67,6 +84,9 @@ O engine delega construção ao LLM com o contexto de `docs/`. Antes de rodar:
 
 - **Tem PRD pronto?** Preencha `docs/PRD.md` (e `docs/TECH_STACK.md`). O HyperMode do
   template v3 detecta PRD existente e pula o discovery (MDD).
+- **Produto existente?** Preserve `docs/PROJECT_BACKLOG.md` como histórico das mudanças
+  desejadas e `docs/FEATURES.md` como catálogo das capacidades já entregues. O V3 cria
+  ou reconcilia o catálogo antes do planejamento e novamente no handoff.
 - **Só uma ideia/demanda bruta?** Use `ft run . --input demanda.md` — o engine classifica
   produto vs. processo e conduz o discovery.
 - **Hipótese já escrita?** `ft run . --hipotese hipotese.md` pula o step de hipótese.
@@ -151,7 +171,25 @@ ft close --keep-worktree     # preserva o worktree no disco
 ft close --force             # encerra mesmo incompleto
 ```
 
+Antes do close, revise aprendizados de processo estruturados:
+
+```bash
+ft process-candidates
+ft process-candidates PI-001 --status promoted \
+  --reason "Aplicado e testado no engine" --reference "commit/path"
+```
+
+O template V3 só aceita `global_candidate` quando a melhoria é independente de
+domínio, não contém identificadores do produto, é configurável, foi verificada no
+ciclo e é retrocompatível. O ciclo altera apenas seu fork local; `ft close` bloqueia
+candidatos globais `pending` até o mantenedor registrar `promoted`, `deferred` ou
+`rejected`. Nunca marque `promoted` sem atualizar e testar o global referenciado.
+
 Depois do close:
+
+0. **Histórico do ciclo**: relatórios, task list, evidências, retro e handoff ficam em
+   `.ft/cycles/<cycle>/`. `docs/` mantém somente as fontes de verdade humanas, incluindo
+   `PROJECT_BACKLOG.md` para mudanças desejadas e `FEATURES.md` para capacidades entregues.
 
 1. **Validação do stakeholder**: suba o servidor do projeto e apresente o link — feedback
    vira User Stories no `docs/PRD.md` (raiz).
@@ -167,6 +205,9 @@ Depois do close:
 | `FT_ALLOW_ENGINE_REPO` | Libera rodar no repo do template — só para dev do engine |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no `ft run` |
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`) |
+| `FT_CODEX_REASONING_EFFORT` | Override explícito do `model_reasoning_effort` do Codex; ausente, respeita o `config.toml` do Codex |
+| `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de cada turno delegado, em segundos; default 1800 |
+| `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex; reasoning `ultra` usa 3600 por default |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Janela de contexto anunciada ao OpenCode; default 200000 para `pgx/zai-org_glm-4.7-flash` |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Limite de saída anunciado ao OpenCode; default 32768 para `pgx/zai-org_glm-4.7-flash` |
 | `FT_OPENCODE_PROVIDER_TIMEOUT` / `FT_OPENCODE_TIMEOUT` | Timeout total do provider OpenCode, em milissegundos |
@@ -178,14 +219,16 @@ Depois do close:
 | `FT_OPENCODE_SCRIPT_MODE` | Opt-in para modo script Bash em nodes de código OpenCode |
 | `FT_OPENCODE_DEBUG` | Ativa logs detalhados do OpenCode (`--print-logs --log-level DEBUG`) |
 | `FT_OPENCODE_THINKING` | Exibe reasoning do OpenCode (`--thinking`); use só para diagnóstico, pois pode aumentar latência |
-| `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `process/scripts/register_gateway.sh` |
+| `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `.ft/process/scripts/register_gateway.sh` |
 
 ## Referências
 
 No projeto:
 
-- Processo do ciclo: `process/process.yml`
-- Conhecimento seed: `docs/PRD.md`, `docs/TECH_STACK.md`
+- Processo versionado do projeto: `.ft/process/process.yml`
+- Histórico versionado dos ciclos: `.ft/cycles/<cycle>/`
+- Conhecimento seed: `docs/PRD.md`, `docs/TECH_STACK.md`, `docs/PROJECT_BACKLOG.md`,
+  `docs/FEATURES.md`
 
 No repo do engine (`fast-track`):
 

@@ -5,6 +5,15 @@
 id: base_process
 version: 1.0.0
 
+artifact_policy:
+  canonical:
+    - docs/PRD.md
+    - docs/TECH_STACK.md
+    - docs/hipotese.md
+  cycle:
+    - .build_ok
+    - docs/validation-report.md
+
 sprints:
   - id: sprint-01-discovery
     title: "Discovery"

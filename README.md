@@ -3,7 +3,7 @@
 Motor determinístico de processos para solo dev + AI. O pacote se chama
 `ft-engine`, mas o comando instalado é `ft`.
 
-Versão atual: **0.13.2**.
+Versão atual: **0.13.3**.
 
 ## O que é
 
@@ -40,6 +40,10 @@ O ciclo roda em worktree externo:
 ```
 
 A raiz do projeto permanece limpa até `ft close` fazer o merge escolhido.
+Ao fechar, os artefatos específicos da execução são arquivados em
+`.ft/cycles/<cycle>/`; PRD, stack, critérios de UI, backlog e catálogo de features
+permanecem em `docs/`. O backlog descreve mudanças desejadas; `docs/FEATURES.md`
+descreve as capacidades efetivamente entregues.
 
 ## Comandos principais
 
@@ -54,8 +58,15 @@ ft graph                       # grafo com status
 ft approve "nota opcional"     # aprovar human gate
 ft reject "motivo objetivo"    # rejeitar e reenviar com feedback
 ft fix "instrução"             # corrigir pending_fix
+ft process-candidates          # revisar melhorias candidatas ao processo global
 ft close                       # encerrar ciclo e escolher merge
 ```
+
+O template V3 classifica cada aprendizado de processo como `local`,
+`global_candidate` ou `rejected`. `ft close` bloqueia enquanto houver candidato
+global pendente; o mantenedor registra `promoted`, `deferred` ou `rejected` com
+`ft process-candidates PI-NNN --status ... --reason "..."`. Promoções exigem
+uma referência ao commit/path global que recebeu e validou a mudança.
 
 Use `--codex`, `--claude [modelo]`, `--gemini [modelo]` ou `--opencode [modelo]`
 para escolher o executor LLM. O default de `--opencode` é
@@ -71,14 +82,29 @@ worktree fica read-only e apenas outputs/write_scope do node são writable
 
 | Template | Uso |
 |----------|-----|
-| `base` | Estrutura mínima com `process/process.yml`, `docs/` e `src/` |
+| `base` | Estrutura mínima com `.ft/process/process.yml`, `docs/` e `src/` |
 | `fast-track-v3` | Processo completo recomendado para MVP |
 | `fast-track-v2` | Processo V2 legado |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
 
 Integrações externas pertencem ao projeto/template de ambiente. O engine chama
-scripts em `process/scripts/` e não precisa conhecer o provedor.
+scripts em `.ft/process/scripts/` e não precisa conhecer o provedor.
+
+Projetos do layout anterior devem ser migrados explicitamente:
+
+```bash
+ft migrate-layout . --dry-run
+ft migrate-layout .
+```
+
+Use `--cycle-id <id>` para atribuir os relatórios soltos ao último ciclo conhecido.
+O migrador também importa `docs/archive/<ciclo>/` e retira runtime legado do repo,
+preservando-o como backup inativo em `$FT_HOME/migrations/`.
+Referências atuais ao processo são atualizadas; o conteúdo arquivado dos ciclos é
+preservado byte a byte.
+
+O CLI não procura automaticamente processos em `process/`.
 
 ## Documentação
 

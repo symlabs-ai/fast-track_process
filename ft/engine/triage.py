@@ -115,6 +115,7 @@ def classify_demand(
     process_yaml_path: str | Path,
     project_root: str = ".",
     llm_engine: str = "claude",
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
     """Classifica a demanda bruta do usuário.
 
@@ -136,6 +137,8 @@ def classify_demand(
         allowed_paths=[],
         max_turns=5,
         llm_engine=llm_engine,
+        llm_model=llm_model,
+        raw_output=True,
     )
 
     # Parse JSON da resposta
@@ -225,6 +228,7 @@ def adapt_process(
     conflicts: list[str],
     project_root: str = ".",
     llm_engine: str = "claude",
+    llm_model: str | None = None,
 ) -> str | None:
     """Adapta o YAML do processo com base nos requisitos detectados.
 
@@ -246,6 +250,8 @@ def adapt_process(
         allowed_paths=["process/"],
         max_turns=10,
         llm_engine=llm_engine,
+        llm_model=llm_model,
+        raw_output=True,
     )
 
     if not result.success:

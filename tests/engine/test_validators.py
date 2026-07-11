@@ -12,12 +12,17 @@ from ft.engine.validators.artifacts import (
     demand_coverage,
     document_quality,
     file_exists,
+    features_catalog_valid,
     has_sections,
+    implemented_backlog_covered_by_features,
     min_lines,
     min_user_stories,
+    backlog_pending_decisions,
+    project_backlog_valid,
     pytest_red_quality,
     relative_dates_only,
     sections_unchanged,
+    task_list_references_backlog,
     ui_criteria_ids,
     ui_criteria_coverage,
 )
@@ -154,6 +159,227 @@ class TestDocumentQuality:
 
         assert not passed
         assert "max 10" in detail
+
+
+class TestProjectBacklog:
+    def test_project_backlog_valid_passes_for_canonical_table(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            "# PROJECT_BACKLOG\n\n"
+            "## Itens do Backlog\n\n"
+            "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| PB-001 | US | P0 | planned | PRD | Cadastro | Criar item pela UI | — | — |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = project_backlog_valid(project_root=str(tmp_path))
+
+        assert passed
+        assert "1 item" in detail
+
+    def test_project_backlog_valid_fails_invalid_priority(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| PB-001 | US | P9 | planned | PRD | Cadastro | Criar item pela UI | — | — |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = project_backlog_valid(project_root=str(tmp_path))
+
+        assert not passed
+        assert "prioridade invalida" in detail
+
+    def test_task_list_must_reference_backlog_id(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| PB-001 | US | P0 | planned | PRD | Cadastro | Criar item pela UI | — | — |\n",
+            encoding="utf-8",
+        )
+        (docs / "task_list.md").write_text(
+            "# Task List\n\n## PB-001\n- Task frontend: criar formulario.\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = task_list_references_backlog(project_root=str(tmp_path))
+
+        assert passed
+        assert "1 item" in detail
+
+    def test_backlog_pending_decisions_blocks_planned_p0(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| PB-001 | US | P0 | planned | PRD | Cadastro | Criar item pela UI | — | — |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = backlog_pending_decisions(project_root=str(tmp_path))
+
+        assert not passed
+        assert "PB-001" in detail
+
+    def test_backlog_pending_decisions_allows_deferred_with_note(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| PB-001 | US | P1 | deferred | PRD | Relatorio | Exportar CSV | — | Adiado para ciclo 02 |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = backlog_pending_decisions(project_root=str(tmp_path))
+
+        assert passed
+        assert "nenhum P0/P1" in detail
+
+
+class TestFeaturesCatalog:
+    HEADER = (
+        "| ID | Status | Backlog | Título | Descrição | Entregue em | Evidência | Última evolução | Notas |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+    )
+    BACKLOG_HEADER = (
+        "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+    )
+
+    def _write_backlog(self, tmp_path, *rows):
+        docs = tmp_path / "docs"
+        docs.mkdir(exist_ok=True)
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            self.BACKLOG_HEADER + "".join(f"{row}\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    def _write_features(self, tmp_path, *rows):
+        docs = tmp_path / "docs"
+        docs.mkdir(exist_ok=True)
+        (docs / "FEATURES.md").write_text(
+            "# FEATURES\n\n" + self.HEADER + "".join(f"{row}\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    def test_valid_catalog_passes(self, tmp_path):
+        self._write_backlog(
+            tmp_path,
+            "| PB-001 | US | P0 | done | PRD | Cadastro | Criar pela UI | docs/e2e.md | Entregue |",
+        )
+        self._write_features(
+            tmp_path,
+            "| FEAT-001 | active | PB-001 | Cadastro | Cadastro de clientes | cycle-01 | docs/e2e.md | cycle-01 | — |",
+        )
+
+        passed, detail = features_catalog_valid(project_root=str(tmp_path))
+
+        assert passed
+        assert "1 feature" in detail
+
+    @pytest.mark.parametrize(
+        ("rows", "expected"),
+        [
+            (
+                (
+                    "| FEAT-001 | active | PB-001 | Cadastro | Cadastro de clientes | cycle-01 | docs/e2e.md | cycle-01 | — |",
+                    "| FEAT-001 | deprecated | PB-001 | Cadastro antigo | Fluxo legado | cycle-01 | docs/e2e.md | cycle-02 | Substituído |",
+                ),
+                "duplicados",
+            ),
+            (
+                (
+                    "| FEAT-001 | planned | PB-001 | Cadastro | Cadastro de clientes | cycle-01 | docs/e2e.md | cycle-01 | — |",
+                ),
+                "status invalido",
+            ),
+        ],
+    )
+    def test_duplicate_id_or_invalid_status_fails(self, tmp_path, rows, expected):
+        self._write_backlog(
+            tmp_path,
+            "| PB-001 | US | P0 | done | PRD | Cadastro | Criar pela UI | docs/e2e.md | Entregue |",
+        )
+        self._write_features(tmp_path, *rows)
+
+        passed, detail = features_catalog_valid(project_root=str(tmp_path))
+
+        assert not passed
+        assert expected in detail
+
+    @pytest.mark.parametrize(
+        ("feature_backlog", "backlog_status", "expected"),
+        [
+            ("PB-001", "planned", "ainda nao implementados"),
+            ("PB-999", "done", "desconhecidos"),
+        ],
+    )
+    def test_open_or_unknown_backlog_reference_fails(
+        self, tmp_path, feature_backlog, backlog_status, expected
+    ):
+        self._write_backlog(
+            tmp_path,
+            f"| PB-001 | US | P0 | {backlog_status} | PRD | Cadastro | Criar pela UI | docs/e2e.md | — |",
+        )
+        self._write_features(
+            tmp_path,
+            f"| FEAT-001 | active | {feature_backlog} | Cadastro | Cadastro de clientes | cycle-01 | docs/e2e.md | cycle-01 | — |",
+        )
+
+        passed, detail = features_catalog_valid(project_root=str(tmp_path))
+
+        assert not passed
+        assert expected in detail
+
+    def test_coverage_requires_delivered_feature_backlog(self, tmp_path):
+        self._write_backlog(
+            tmp_path,
+            "| PB-001 | US | P0 | done | PRD | Cadastro | Criar pela UI | docs/e2e.md | Entregue |",
+            "| PB-002 | Feature | P1 | accepted | PRD | Busca | Buscar clientes | docs/e2e.md | Aceita |",
+        )
+        self._write_features(
+            tmp_path,
+            "| FEAT-001 | active | PB-001 | Cadastro | Cadastro de clientes | cycle-01 | docs/e2e.md | cycle-01 | — |",
+        )
+
+        passed, detail = implemented_backlog_covered_by_features(project_root=str(tmp_path))
+
+        assert not passed
+        assert "PB-002" in detail
+
+    def test_coverage_excludes_delivered_bug_and_debt(self, tmp_path):
+        self._write_backlog(
+            tmp_path,
+            "| PB-001 | Bug | P0 | done | QA | Corrigir login | Login corrigido | docs/e2e.md | Entregue |",
+            "| PB-002 | Debt | P1 | accepted | Retro | Refatorar | Código refatorado | docs/tests.md | Aceita |",
+        )
+        self._write_features(tmp_path)
+
+        passed, detail = implemented_backlog_covered_by_features(project_root=str(tmp_path))
+
+        assert passed
+        assert "0 PB" in detail
+
+    def test_empty_catalog_is_valid_without_delivered_features(self, tmp_path):
+        self._write_backlog(
+            tmp_path,
+            "| PB-001 | US | P1 | planned | PRD | Busca | Buscar clientes | — | — |",
+        )
+        self._write_features(tmp_path)
+
+        catalog_passed, _ = features_catalog_valid(project_root=str(tmp_path))
+        coverage_passed, _ = implemented_backlog_covered_by_features(project_root=str(tmp_path))
+
+        assert catalog_passed
+        assert coverage_passed
 
 
 class TestApiContractComplete:

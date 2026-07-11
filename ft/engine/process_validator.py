@@ -97,6 +97,9 @@ def _check_graph_integrity(graph: ProcessGraph, report: ValidationReport) -> Non
             targets.extend(node.branches.values())
         if node.reject_next:
             targets.append(node.reject_next)
+        on_fail_target = (node.on_fail or {}).get("goto")
+        if on_fail_target:
+            targets.append(on_fail_target)
         return targets
 
     # Nós apontados por algum outro nó

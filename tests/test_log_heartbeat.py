@@ -7,7 +7,8 @@ subtype aparece e o `init` expõe modelo / modo de permissão / nº de tools.
 
 import json
 
-from ft.cli.main import _track_heartbeat
+from ft.cli.main import _log_model_prefix, _track_heartbeat
+from ft.engine.delegate import _format_stream_line
 
 
 def _track(ev: dict) -> dict:
@@ -25,6 +26,12 @@ def test_system_init_mostra_modelo_e_tools():
     assert "claude-opus-4-8" in ctx["desc"]
     assert "3 tools" in ctx["desc"]
     assert "acceptEdits" in ctx["desc"]
+    assert ctx["model"] == "claude-opus-4-8"
+
+
+def test_log_model_prefix():
+    assert _log_model_prefix("claude-fable-5") == "[claude-fable-5] "
+    assert _log_model_prefix(None) == ""
 
 
 def test_system_init_sem_permission_mode_nao_quebra():
@@ -92,6 +99,18 @@ def _assistant(blocks):
     return _track({"type": "assistant", "message": {"role": "assistant", "content": blocks}})
 
 
+def test_assistant_message_model_atualiza_contexto():
+    ctx = _track({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "model": "claude-fable-5",
+            "content": [{"type": "text", "text": "ok"}],
+        },
+    })
+    assert ctx["model"] == "claude-fable-5"
+
+
 def test_assistant_tool_use_arquivo_mostra_basename():
     ctx = _assistant([{"type": "tool_use", "name": "Edit",
                        "input": {"file_path": "/home/x/project/app/api/projects.py"}}])
@@ -104,16 +123,39 @@ def test_assistant_tool_use_bash_mostra_comando():
     assert ctx["desc"] == "Bash: python -m pytest -q"
 
 
-def test_assistant_tool_use_comando_longo_truncado():
+def test_assistant_tool_use_comando_longo_preservado():
     cmd = "echo " + "a" * 200
     ctx = _assistant([{"type": "tool_use", "name": "Bash", "input": {"command": cmd}}])
-    assert ctx["desc"].startswith("Bash: ")
-    assert len(ctx["desc"]) <= len("Bash: ") + 60
+    assert ctx["desc"] == f"Bash: {cmd}"
+
+
+def test_assistant_texto_longo_preservado_no_heartbeat():
+    text = "The zoom button click is intercepted even on the active graph tab — this could be a real usability bug. Let me probe what is covering it."
+    ctx = _assistant([{"type": "text", "text": text}])
+    assert ctx["desc"] == f"escrevendo: {text}"
 
 
 def test_assistant_texto_mostra_trecho():
     ctx = _assistant([{"type": "text", "text": "Now let me run the suite\nto confirm"}])
     assert ctx["desc"] == "escrevendo: Now let me run the suite to confirm"
+
+
+def test_format_stream_line_claude_texto_longo_nao_trunca():
+    text = "The zoom button click is intercepted even on the active graph tab — this could be a real usability bug. Let me probe what is covering it."
+    line = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": text}]},
+    })
+    assert _format_stream_line("claude", line) == f"→ {text}"
+
+
+def test_format_stream_line_claude_bash_longo_nao_trunca():
+    command = "python - <<'PY'\nprint('x' * 200)\nPY"
+    line = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": command}}]},
+    })
+    assert _format_stream_line("claude", line) == "$ python - <<'PY' print('x' * 200) PY"
 
 
 def test_assistant_so_thinking_mostra_trecho():

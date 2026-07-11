@@ -355,6 +355,39 @@ def ui_criteria_ids(
     return True, f"ui_criteria_ids: {path} tem {len(criteria)} criterios identificados"
 
 
+def visual_p0_acceptance(
+    path: str = "docs/visual-check-report.md",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Require one explicit P0 verdict and reject criterion rows marked FAIL."""
+    report = Path(project_root) / path
+    if not report.is_file():
+        return False, f"visual_p0_acceptance FAIL: {path} nao encontrado"
+
+    raw = report.read_text(encoding="utf-8", errors="ignore")
+    verdicts = re.findall(r"(?mi)^P0_ACCEPTANCE:\s*(PASS|FAIL)\s*$", raw)
+    if verdicts != ["PASS"]:
+        return False, (
+            "visual_p0_acceptance FAIL: esperado exatamente "
+            f"P0_ACCEPTANCE: PASS; encontrado {verdicts}"
+        )
+
+    failed_criteria: list[str] = []
+    for line in raw.splitlines():
+        parts = [part.strip() for part in line.strip().strip("|").split("|")]
+        if len(parts) < 2 or not re.search(r"\bC\d+\b", parts[0], re.IGNORECASE):
+            continue
+        normalized = [re.sub(r"[*_`]", "", part).strip() for part in parts[1:]]
+        if any(re.match(r"^FAIL\b", part, re.IGNORECASE) for part in normalized):
+            failed_criteria.append(line.strip())
+    if failed_criteria:
+        return False, (
+            "visual_p0_acceptance FAIL: criterios reprovados: "
+            + "; ".join(failed_criteria[:8])
+        )
+    return True, "visual_p0_acceptance: veredito P0 PASS sem criterios reprovados"
+
+
 def _ui_component_requirements(criteria_text: str) -> list[tuple[str, re.Pattern[str]]]:
     """Detecta componentes de UI comuns citados no critério.
 
@@ -783,6 +816,488 @@ def sections_unchanged(
     return True, (
         "sections_unchanged: secoes preservadas "
         f"({', '.join(sections)})"
+    )
+
+
+_BACKLOG_ID_RE = re.compile(r"\b(?:PB|BL|US|DV)-\d+[A-Z]?\b", re.IGNORECASE)
+_BACKLOG_PRIORITIES = {"P0", "P1", "P2"}
+_BACKLOG_STATUSES = {
+    "planned",
+    "ready",
+    "in_progress",
+    "done",
+    "deferred",
+    "blocked",
+    "rejected",
+    "accepted",
+}
+_BACKLOG_UNDECIDED_OPEN = {"planned", "ready", "in_progress"}
+
+
+def _normalize_header(value: str) -> str:
+    value = _normalize(value)
+    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return value
+
+
+def _markdown_table_records(content: str) -> list[dict[str, str]]:
+    """Parse simple Markdown tables into dictionaries."""
+    records: list[dict[str, str]] = []
+    header: list[str] | None = None
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            header = None
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if not cells:
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
+            continue
+        if header is None:
+            header = [_normalize_header(cell) for cell in cells]
+            continue
+        row = {
+            header[idx]: cells[idx]
+            for idx in range(min(len(header), len(cells)))
+            if header[idx]
+        }
+        records.append(row)
+    return records
+
+
+def _row_value(row: dict[str, str], *names: str) -> str:
+    normalized = {_normalize_header(name) for name in names}
+    for key, value in row.items():
+        if key in normalized:
+            return value.strip()
+    for key, value in row.items():
+        if any(name in key for name in normalized):
+            return value.strip()
+    return ""
+
+
+def _backlog_rows(content: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for row in _markdown_table_records(content):
+        raw_id = _row_value(row, "id", "item", "backlog")
+        match = _BACKLOG_ID_RE.search(raw_id)
+        if not match:
+            joined = " | ".join(row.values())
+            match = _BACKLOG_ID_RE.search(joined)
+        if not match:
+            continue
+        normalized = dict(row)
+        normalized["_id"] = match.group(0).upper()
+        normalized["_priority"] = _row_value(row, "prioridade", "priority").upper()
+        normalized["_status"] = _normalize(_row_value(row, "status", "estado")).replace("-", "_")
+        normalized["_decision"] = _row_value(
+            row,
+            "decisao",
+            "decisão",
+            "notas",
+            "nota",
+            "motivo",
+            "racional",
+        )
+        rows.append(normalized)
+    return rows
+
+
+def project_backlog_summary(
+    path: str = "docs/PROJECT_BACKLOG.md",
+    project_root: str = ".",
+) -> dict[str, object]:
+    """Return deterministic counters for PROJECT_BACKLOG.md."""
+    backlog_file = Path(project_root) / path
+    rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore")) if backlog_file.exists() else []
+    by_status: dict[str, int] = {}
+    by_priority: dict[str, int] = {}
+    undecided_p0_p1: list[str] = []
+    for row in rows:
+        status = row.get("_status", "")
+        priority = row.get("_priority", "")
+        by_status[status] = by_status.get(status, 0) + 1
+        by_priority[priority] = by_priority.get(priority, 0) + 1
+        decision = row.get("_decision", "").strip(" -—")
+        if priority in {"P0", "P1"}:
+            if status in _BACKLOG_UNDECIDED_OPEN:
+                undecided_p0_p1.append(row["_id"])
+            elif status in {"blocked", "deferred"} and not decision:
+                undecided_p0_p1.append(row["_id"])
+    return {
+        "total": len(rows),
+        "by_status": by_status,
+        "by_priority": by_priority,
+        "undecided_p0_p1": undecided_p0_p1,
+    }
+
+
+def project_backlog_valid(
+    path: str = "docs/PROJECT_BACKLOG.md",
+    min_items: int = 1,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate the canonical product backlog shape."""
+    backlog_file = Path(project_root) / path
+    if not backlog_file.exists():
+        return False, f"project_backlog_valid FAIL: {path} nao encontrado"
+    rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+    if len(rows) < min_items:
+        return False, (
+            f"project_backlog_valid FAIL: {path} tem {len(rows)} item(ns), "
+            f"min {min_items}"
+        )
+    ids = [row["_id"] for row in rows]
+    duplicated = sorted({item for item in ids if ids.count(item) > 1})
+    if duplicated:
+        return False, f"project_backlog_valid FAIL: IDs duplicados: {', '.join(duplicated)}"
+    bad_priority = [row["_id"] for row in rows if row.get("_priority") not in _BACKLOG_PRIORITIES]
+    if bad_priority:
+        return False, f"project_backlog_valid FAIL: prioridade invalida em {', '.join(bad_priority[:8])}"
+    bad_status = [row["_id"] for row in rows if row.get("_status") not in _BACKLOG_STATUSES]
+    if bad_status:
+        return False, f"project_backlog_valid FAIL: status invalido em {', '.join(bad_status[:8])}"
+    return True, f"project_backlog_valid: {len(rows)} item(ns) validos em {path}"
+
+
+def task_list_references_backlog(
+    task_path: str = "docs/task_list.md",
+    backlog_path: str = "docs/PROJECT_BACKLOG.md",
+    min_refs: int = 1,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Ensure cycle task list is derived from the canonical backlog."""
+    root = Path(project_root)
+    task_file = root / task_path
+    backlog_file = root / backlog_path
+    if not task_file.exists():
+        return False, f"task_list_references_backlog FAIL: {task_path} nao encontrado"
+    if not backlog_file.exists():
+        return False, f"task_list_references_backlog FAIL: {backlog_path} nao encontrado"
+    backlog_rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+    backlog_ids = {row["_id"] for row in backlog_rows}
+    if not backlog_ids:
+        return False, f"task_list_references_backlog FAIL: nenhum ID de backlog em {backlog_path}"
+    text = task_file.read_text(encoding="utf-8", errors="ignore").upper()
+    referenced = sorted({match.group(0).upper() for match in _BACKLOG_ID_RE.finditer(text)} & backlog_ids)
+    if len(referenced) < min_refs:
+        return False, (
+            f"task_list_references_backlog FAIL: {task_path} referencia "
+            f"{len(referenced)} item(ns) de backlog, min {min_refs}"
+        )
+    return True, f"task_list_references_backlog: {len(referenced)} item(ns) referenciados"
+
+
+def backlog_pending_decisions(
+    path: str = "docs/PROJECT_BACKLOG.md",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Block P0/P1 backlog items that remain open without explicit decision."""
+    backlog_file = Path(project_root) / path
+    if not backlog_file.exists():
+        return True, f"backlog_pending_decisions: {path} nao existe — pulando"
+    summary = project_backlog_summary(path=path, project_root=project_root)
+    undecided = summary.get("undecided_p0_p1", [])
+    if undecided:
+        return False, (
+            "backlog_pending_decisions FAIL: P0/P1 sem decisao explicita: "
+            + ", ".join(undecided[:12])
+        )
+    return True, "backlog_pending_decisions: nenhum P0/P1 aberto sem decisao"
+
+
+_FEATURE_ID_RE = re.compile(r"\bFEAT-\d{3}\b", re.IGNORECASE)
+_FEATURE_BACKLOG_ID_RE = re.compile(r"\bPB-\d+[A-Z]?\b", re.IGNORECASE)
+_FEATURE_STATUSES = {"active", "deprecated", "removed"}
+_FEATURE_TABLE_HEADERS = (
+    "id",
+    "status",
+    "backlog",
+    "titulo",
+    "descricao",
+    "entregue_em",
+    "evidencia",
+    "ultima_evolucao",
+    "notas",
+)
+_DEFAULT_FEATURE_TYPES = {"us", "feature", "recurso", "story"}
+_EMPTY_FEATURE_VALUES = {"", "-", "—", "–", "n/a", "na", "none", "null", "tbd", "todo"}
+
+
+def _markdown_table_cells(line: str) -> list[str] | None:
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return None
+    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def _feature_table_records(content: str) -> tuple[list[dict[str, str]], str | None]:
+    """Return rows from the exact FEATURES table and an optional schema error."""
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        cells = _markdown_table_cells(line)
+        if cells is None:
+            continue
+        headers = tuple(_normalize_header(cell) for cell in cells)
+        if headers != _FEATURE_TABLE_HEADERS:
+            continue
+        if index + 1 >= len(lines):
+            return [], "separador da tabela ausente"
+        separator = _markdown_table_cells(lines[index + 1])
+        if (
+            separator is None
+            or len(separator) != len(_FEATURE_TABLE_HEADERS)
+            or not all(
+                re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
+                for cell in separator
+            )
+        ):
+            return [], "separador da tabela invalido"
+
+        records: list[dict[str, str]] = []
+        for row_number, raw_line in enumerate(lines[index + 2 :], start=index + 3):
+            row_cells = _markdown_table_cells(raw_line)
+            if row_cells is None:
+                break
+            if len(row_cells) != len(_FEATURE_TABLE_HEADERS):
+                return [], f"linha {row_number} tem {len(row_cells)} coluna(s), esperado 9"
+            records.append(dict(zip(_FEATURE_TABLE_HEADERS, row_cells)))
+        return records, None
+    return [], (
+        "tabela obrigatoria ausente; esperado: "
+        "ID | Status | Backlog | Título | Descrição | Entregue em | "
+        "Evidência | Última evolução | Notas"
+    )
+
+
+def _feature_rows(content: str) -> tuple[list[dict[str, object]], str | None]:
+    records, schema_error = _feature_table_records(content)
+    rows: list[dict[str, object]] = []
+    for record in records:
+        raw_id = record.get("id", "").strip().strip("`")
+        id_match = _FEATURE_ID_RE.fullmatch(raw_id)
+        backlog_ids = sorted(
+            {match.group(0).upper() for match in _FEATURE_BACKLOG_ID_RE.finditer(record.get("backlog", ""))}
+        )
+        normalized: dict[str, object] = dict(record)
+        normalized["_id"] = id_match.group(0).upper() if id_match else ""
+        normalized["_raw_id"] = raw_id
+        normalized["_status"] = _normalize(record.get("status", "")).replace("-", "_").strip()
+        normalized["_backlog_ids"] = backlog_ids
+        rows.append(normalized)
+    return rows, schema_error
+
+
+def _feature_value_filled(value: object) -> bool:
+    normalized = _normalize(str(value)).strip()
+    return normalized not in _EMPTY_FEATURE_VALUES
+
+
+def features_summary(
+    path: str = "docs/FEATURES.md",
+    project_root: str = ".",
+) -> dict[str, object]:
+    """Return deterministic counters for the canonical feature catalogue."""
+    feature_file = Path(project_root) / path
+    if not feature_file.exists():
+        return {"total": 0, "by_status": {}, "backlog_ids": []}
+    rows, _ = _feature_rows(feature_file.read_text(encoding="utf-8", errors="ignore"))
+    by_status: dict[str, int] = {}
+    backlog_ids: set[str] = set()
+    for row in rows:
+        status = str(row.get("_status", ""))
+        by_status[status] = by_status.get(status, 0) + 1
+        backlog_ids.update(str(item) for item in row.get("_backlog_ids", []))
+    return {
+        "total": len(rows),
+        "by_status": by_status,
+        "backlog_ids": sorted(backlog_ids),
+    }
+
+
+def features_catalog_valid(
+    path: str = "docs/FEATURES.md",
+    backlog_path: str = "docs/PROJECT_BACKLOG.md",
+    min_items: int = 0,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate FEATURES schema and references to implemented backlog items."""
+    root = Path(project_root)
+    feature_file = root / path
+    backlog_file = root / backlog_path
+    if not feature_file.exists():
+        return False, f"features_catalog_valid FAIL: {path} nao encontrado"
+    if not backlog_file.exists():
+        return False, f"features_catalog_valid FAIL: {backlog_path} nao encontrado"
+
+    rows, schema_error = _feature_rows(feature_file.read_text(encoding="utf-8", errors="ignore"))
+    if schema_error:
+        return False, f"features_catalog_valid FAIL: schema invalido em {path}: {schema_error}"
+    if len(rows) < min_items:
+        return False, (
+            f"features_catalog_valid FAIL: {path} tem {len(rows)} item(ns), "
+            f"min {min_items}"
+        )
+
+    invalid_ids = [str(row.get("_raw_id") or "<vazio>") for row in rows if not row.get("_id")]
+    if invalid_ids:
+        return False, "features_catalog_valid FAIL: IDs invalidos: " + ", ".join(invalid_ids[:8])
+    ids = [str(row["_id"]) for row in rows]
+    duplicated = sorted({item for item in ids if ids.count(item) > 1})
+    if duplicated:
+        return False, f"features_catalog_valid FAIL: IDs duplicados: {', '.join(duplicated)}"
+
+    bad_status = [str(row["_id"]) for row in rows if row.get("_status") not in _FEATURE_STATUSES]
+    if bad_status:
+        return False, f"features_catalog_valid FAIL: status invalido em {', '.join(bad_status[:8])}"
+
+    required_fields = {
+        "titulo": "Título",
+        "descricao": "Descrição",
+        "entregue_em": "Entregue em",
+        "evidencia": "Evidência",
+    }
+    missing_fields: list[str] = []
+    for row in rows:
+        for field, label in required_fields.items():
+            if not _feature_value_filled(row.get(field, "")):
+                missing_fields.append(f"{row['_id']}:{label}")
+    if missing_fields:
+        return False, (
+            "features_catalog_valid FAIL: campos obrigatorios vazios: "
+            + ", ".join(missing_fields[:12])
+        )
+
+    without_backlog = [str(row["_id"]) for row in rows if not row.get("_backlog_ids")]
+    if without_backlog:
+        return False, (
+            "features_catalog_valid FAIL: feature sem referencia PB: "
+            + ", ".join(without_backlog[:8])
+        )
+
+    backlog_rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+    backlog_by_id = {str(row["_id"]): row for row in backlog_rows if str(row["_id"]).startswith("PB-")}
+    referenced = {
+        str(backlog_id)
+        for row in rows
+        for backlog_id in row.get("_backlog_ids", [])
+    }
+    unknown = sorted(referenced - set(backlog_by_id))
+    if unknown:
+        return False, f"features_catalog_valid FAIL: PBs desconhecidos: {', '.join(unknown[:12])}"
+    not_implemented = sorted(
+        backlog_id
+        for backlog_id in referenced
+        if backlog_by_id[backlog_id].get("_status") not in {"done", "accepted"}
+    )
+    if not_implemented:
+        return False, (
+            "features_catalog_valid FAIL: PBs ainda nao implementados: "
+            + ", ".join(not_implemented[:12])
+        )
+    return True, f"features_catalog_valid: {len(rows)} feature(s) valida(s) em {path}"
+
+
+def implemented_backlog_covered_by_features(
+    features_path: str = "docs/FEATURES.md",
+    backlog_path: str = "docs/PROJECT_BACKLOG.md",
+    feature_types: list[str] | tuple[str, ...] | set[str] | str | None = None,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Ensure delivered product backlog items are represented in FEATURES."""
+    root = Path(project_root)
+    feature_file = root / features_path
+    backlog_file = root / backlog_path
+    if not feature_file.exists():
+        return False, f"implemented_backlog_covered_by_features FAIL: {features_path} nao encontrado"
+    if not backlog_file.exists():
+        return False, f"implemented_backlog_covered_by_features FAIL: {backlog_path} nao encontrado"
+
+    feature_rows, schema_error = _feature_rows(
+        feature_file.read_text(encoding="utf-8", errors="ignore")
+    )
+    if schema_error:
+        return False, (
+            "implemented_backlog_covered_by_features FAIL: "
+            f"schema invalido em {features_path}: {schema_error}"
+        )
+    covered = {
+        str(backlog_id)
+        for row in feature_rows
+        for backlog_id in row.get("_backlog_ids", [])
+    }
+
+    if feature_types is None:
+        allowed_types = set(_DEFAULT_FEATURE_TYPES)
+    else:
+        raw_types = [feature_types] if isinstance(feature_types, str) else feature_types
+        allowed_types = {_normalize(str(value)).strip() for value in raw_types}
+
+    backlog_rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+    implemented = {
+        str(row["_id"])
+        for row in backlog_rows
+        if str(row["_id"]).startswith("PB-")
+        and row.get("_status") in {"done", "accepted"}
+        and _normalize(_row_value(row, "tipo", "type")).strip() in allowed_types
+    }
+    missing = sorted(implemented - covered)
+    if missing:
+        return False, (
+            "implemented_backlog_covered_by_features FAIL: PBs entregues sem feature: "
+            + ", ".join(missing[:12])
+        )
+    return True, (
+        "implemented_backlog_covered_by_features: "
+        f"{len(implemented)} PB(s) implementado(s) coberto(s)"
+    )
+
+
+def process_improvements_classified(
+    path: str = "docs/process-improvements.yml",
+    report_path: str = "docs/process-improvements.md",
+    require_pending_global: bool = True,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate the structured local/global process-improvement decision."""
+    from ft.engine.process_improvements import (
+        ProcessImprovementError,
+        load_process_improvement_review,
+    )
+
+    try:
+        review = load_process_improvement_review(
+            project_root,
+            path=path,
+            report_path=report_path,
+        )
+    except ProcessImprovementError as exc:
+        return False, f"process_improvements_classified FAIL: {exc}"
+
+    if require_pending_global:
+        self_resolved = [
+            item.improvement_id
+            for item in review.global_candidates
+            if item.status != "pending"
+        ]
+        if self_resolved:
+            return False, (
+                "process_improvements_classified FAIL: o ciclo nao pode resolver "
+                "sua propria promocao global: " + ", ".join(self_resolved)
+            )
+
+    local_count = sum(
+        1 for item in review.improvements if item.get("classification") == "local"
+    )
+    rejected_count = sum(
+        1 for item in review.improvements if item.get("classification") == "rejected"
+    )
+    return True, (
+        "process_improvements_classified: "
+        f"{len(review.improvements)} achado(s), {local_count} local(is), "
+        f"{len(review.global_candidates)} candidato(s) global(is), "
+        f"{rejected_count} rejeitado(s)"
     )
 
 

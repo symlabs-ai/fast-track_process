@@ -1,12 +1,35 @@
 # FT UI Prototype — Processo genérico para validação de interface gráfica
 # Sem TDD, sem backend, sem delivery refactor.
 # Foco: demanda → scaffold → build → screenshots → guidelines review → E2E → stakeholder.
-# Toda especificidade do projeto vive em docs/ e process/scripts/.
-# Uso: ft run . --process process/FT_UI_PROTOTYPE.yml [--codex|--gemini|--claude|--opencode]
+# Toda especificidade do projeto vive em docs/ e .ft/process/scripts/.
+# Uso: ft run . [--codex|--gemini|--claude|--opencode]
 
 id: ft_ui_prototype
 version: "3.0.0"
 title: "FT UI Prototype — Validação Visual"
+
+artifact_policy:
+  canonical:
+    - docs/PRD.md
+    - docs/tech_stack.md
+    - docs/ui_criteria.md
+    - docs/hipotese.md
+  cycle:
+    - .build_ok
+    - docs/plano_de_voo.md
+    - docs/screenshot-review.md
+    - docs/screenshot-review-result.json
+    - docs/screenshots/
+    - docs/prd-coverage-report.md
+    - docs/guidelines-review.md
+    - docs/guidelines-review-result.json
+    - docs/smoke-report.md
+    - docs/e2e-browser-report.md
+    - docs/visual-check-report.md
+    - docs/plano-check-report.md
+    - docs/stakeholder-feedback.md
+    - docs/critical-analysis.md
+    - docs/handoff.md
 
 # Protótipo: código é descartável, ft close pergunta estratégia de merge
 
@@ -314,7 +337,7 @@ nodes:
       PASSOS:
         1. Crie a estrutura de diretórios conforme o tech stack definido
         2. Crie todos os arquivos fonte (componentes, estilos, configurações)
-        3. Execute: bash process/scripts/scaffold_post.sh
+        3. Execute: bash .ft/process/scripts/scaffold_post.sh
            (instala dependências e faz o build — não faça npm install manualmente)
 
       Ao final diga DONE.
@@ -354,8 +377,8 @@ nodes:
     sprint: sprint-02-prototype
     max_turns: 30
     env_setup:
-      - bash process/scripts/build.sh
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/build.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - .build_ok
     prompt: |
@@ -392,7 +415,7 @@ nodes:
     sprint: sprint-03-screenshots
     max_turns: 60
     env_setup:
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - docs/screenshot-review.md
       - docs/screenshot-review-result.json
@@ -537,7 +560,7 @@ nodes:
     executor: llm_coder
     sprint: sprint-04-smoke
     env_setup:
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - docs/smoke-report.md
     prompt: |
@@ -573,8 +596,8 @@ nodes:
     sprint: sprint-04-smoke
     max_turns: 20
     env_setup:
-      - bash process/scripts/build.sh
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/build.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - .build_ok
     prompt: |
@@ -595,7 +618,7 @@ nodes:
     sprint: sprint-04-smoke
     max_turns: 30
     env_setup:
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - docs/screenshots/e2e/
     prompt: |
@@ -679,7 +702,7 @@ nodes:
     sprint: sprint-05-final
     max_turns: 40
     env_setup:
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - docs/visual-check-report.md
       - docs/screenshots/final/
@@ -778,7 +801,7 @@ nodes:
     sprint: sprint-05-final
     max_turns: 10
     env_setup:
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - docs/stakeholder-feedback.md
     prompt: |
@@ -806,7 +829,7 @@ nodes:
     sprint: sprint-05-final
     reject_next: ui.final.02c.stakeholder_fix
     env_setup:
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/serve.sh
     prompt: |
       A aplicação está pronta para validação.
 
@@ -825,8 +848,8 @@ nodes:
     sprint: sprint-05-final
     max_turns: 40
     env_setup:
-      - bash process/scripts/build.sh
-      - bash process/scripts/serve.sh
+      - bash .ft/process/scripts/build.sh
+      - bash .ft/process/scripts/serve.sh
     outputs:
       - .build_ok
     prompt: |
@@ -835,7 +858,7 @@ nodes:
       PASSO 1 — Leia docs/stakeholder-feedback.md para entender o que foi reportado.
       PASSO 2 — Leia o motivo da rejeição (fornecido acima em RESULTADO DA VALIDACAO).
       PASSO 3 — Corrija o problema no código-fonte.
-      PASSO 4 — Rebuilde: bash process/scripts/build.sh
+      PASSO 4 — Rebuilde: bash .ft/process/scripts/build.sh
       PASSO 5 — Verifique que o servidor responde: leia .serve_url e teste com curl.
 
       Não modifique o que já está funcionando — corrija apenas o que foi reportado.

@@ -1,8 +1,7 @@
-"""Tests for BL-13: Project structure — process/, docs/, runs/.
+"""Tests for the repository-local .ft layout and external runtime.
 
-Covers: find_project_root by process/, _find_latest_state, _next_run_dir,
-_ensure_runs_gitignore, ft init creates docs/runs, ft run creates run subdir,
-legacy project/state/ fallback.
+Covers: root discovery, external state, versioned cycle numbering, zero-state
+initialization, and isolated execution.
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ def _create_process_yaml(path: Path, num_nodes: int = 2) -> Path:
 
 def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     repo_root = str(Path(__file__).resolve().parent.parent.parent)
-    env = {**os.environ, "PYTHONPATH": repo_root}
+    env = {**os.environ, "PYTHONPATH": repo_root, "FT_SKIP_HEALTH_CHECK": "1"}
     return subprocess.run(
         [sys.executable, "-m", "ft.cli.main"] + args,
         capture_output=True, text=True, cwd=cwd, env=env,
@@ -54,15 +53,15 @@ def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProc
 # ---------------------------------------------------------------------------
 
 class TestFindProjectRoot:
-    def test_detects_by_process_dir(self, tmp_path, monkeypatch):
+    def test_detects_by_hidden_process(self, tmp_path, monkeypatch):
         from ft.cli.main import find_project_root
-        (tmp_path / "process").mkdir()
+        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
         monkeypatch.chdir(tmp_path)
         assert find_project_root() == tmp_path
 
     def test_walks_up_to_find_process(self, tmp_path, monkeypatch):
         from ft.cli.main import find_project_root
-        (tmp_path / "process").mkdir()
+        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
         sub = tmp_path / "sub" / "deep"
         sub.mkdir(parents=True)
         monkeypatch.chdir(sub)
@@ -74,12 +73,10 @@ class TestFindProjectRoot:
         assert find_project_root() == tmp_path
 
     def test_does_not_match_legacy_project_state(self, tmp_path, monkeypatch):
-        """project/state/ alone does NOT identify root anymore."""
+        """Runtime-like directories do not identify a project root."""
         from ft.cli.main import find_project_root
         (tmp_path / "project" / "state").mkdir(parents=True)
         monkeypatch.chdir(tmp_path)
-        # Without process/, it falls back to cwd (same dir, so still matches)
-        # But the point is: the matching is via process/, not project/state/
         result = find_project_root()
         assert result == tmp_path
 
@@ -89,38 +86,57 @@ class TestFindProjectRoot:
 # ---------------------------------------------------------------------------
 
 class TestFindLatestState:
-    def test_finds_state_in_latest_run(self, tmp_path):
-        from ft.cli.main import _find_latest_state
-        (tmp_path / "runs" / "01" / "state").mkdir(parents=True)
-        (tmp_path / "runs" / "02" / "state").mkdir(parents=True)
-        state1 = tmp_path / "runs" / "01" / "state" / "engine_state.yml"
-        state2 = tmp_path / "runs" / "02" / "state" / "engine_state.yml"
-        state1.write_text("old")
-        state2.write_text("new")
-        assert _find_latest_state(tmp_path) == state2
+    def test_current_worktree_uses_own_project_runtime_and_state(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "ft_ui"
+        worktree_home = paths.worktrees_home(project)
+        worktree = worktree_home / "cycle-09-codex"
+        _create_process_yaml(worktree / ".ft" / "process" / "process.yml")
+        state = worktree / "state" / "engine_state.yml"
+        state.parent.mkdir(parents=True)
+        state.write_text("current_node: start\n")
 
-    def test_falls_back_to_legacy(self, tmp_path):
+        from ft.cli.main import _find_latest_state
+
+        assert paths.project_runtime_key(worktree) == "ft_ui"
+        assert paths.worktrees_home(worktree) == worktree_home
+        assert paths.runtime_home(worktree) == paths.runtime_home(project)
+        assert _find_latest_state(worktree) == state
+
+    def test_finds_global_continuous_state(self, tmp_path):
+        from ft.cli.main import _find_latest_state
+        state = paths.continuous_state_path(tmp_path)
+        state.parent.mkdir(parents=True)
+        state.write_text("current_node: start\n")
+        assert _find_latest_state(tmp_path) == state
+
+    def test_ignores_repository_local_legacy_state(self, tmp_path):
         from ft.cli.main import _find_latest_state
         legacy = tmp_path / "project" / "state" / "engine_state.yml"
         legacy.parent.mkdir(parents=True)
         legacy.write_text("legacy")
-        assert _find_latest_state(tmp_path) == legacy
+        assert _find_latest_state(tmp_path) != legacy
 
-    def test_defaults_to_external_worktree(self, tmp_path):
+    def test_defaults_to_continuous_runtime_without_existing_cycle(self, tmp_path):
         from ft.cli.main import _find_latest_state
         result = _find_latest_state(tmp_path)
-        # BL-20: default is external worktree, not runs/
-        expected = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
+        expected = paths.continuous_state_path(tmp_path)
         assert result == expected
 
-    def test_ignores_non_numeric_dirs_in_runs(self, tmp_path):
-        from ft.cli.main import _find_latest_state
-        (tmp_path / "runs" / "archive").mkdir(parents=True)
-        result = _find_latest_state(tmp_path)
-        # BL-20: still defaults to external worktree when no real state found
-        expected = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
-        assert result == expected
+    def test_state_only_directory_is_not_a_worktree(self, tmp_path, monkeypatch):
+        from ft.cli.main import _worktree_root_from_state
 
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        candidate = paths.worktrees_home(project) / "cycle-01"
+        state = candidate / "state" / "engine_state.yml"
+        state.parent.mkdir(parents=True)
+        state.write_text("node_status: ready\n", encoding="utf-8")
+
+        assert _worktree_root_from_state(state) is None
+
+        _create_process_yaml(paths.project_process_file(candidate))
+        assert _worktree_root_from_state(state) == candidate
 
 # ---------------------------------------------------------------------------
 # _next_run_dir
@@ -136,9 +152,8 @@ class TestNextRunDir:
 
     def test_increments_from_existing(self, tmp_path):
         from ft.cli.main import _next_run_dir
-        # runs/ legado ainda conta para a numeração do próximo ciclo
-        (tmp_path / "runs" / "cycle-01").mkdir(parents=True)
-        (tmp_path / "runs" / "cycle-02").mkdir()
+        (tmp_path / ".ft" / "cycles" / "cycle-01").mkdir(parents=True)
+        (tmp_path / ".ft" / "cycles" / "cycle-02").mkdir()
         run_dir = _next_run_dir(tmp_path)
         assert run_dir == paths.worktrees_home(tmp_path) / "cycle-03"
         assert run_dir.is_dir()
@@ -150,24 +165,25 @@ class TestNextRunDir:
 
 
 # ---------------------------------------------------------------------------
-# _ensure_runs_gitignore
+# project .ft ignore policy
 # ---------------------------------------------------------------------------
 
-class TestEnsureRunsGitignore:
-    def test_adds_runs_to_root_gitignore(self, tmp_path):
-        """_ensure_runs_gitignore adds runs/ to .gitignore in project root."""
-        from ft.cli.main import _ensure_runs_gitignore
-        _ensure_runs_gitignore(tmp_path)
-        gitignore = tmp_path / ".gitignore"
+class TestProjectFtGitignore:
+    def test_ignores_only_runtime_subdirectories(self, tmp_path):
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
+        gitignore = tmp_path / ".ft" / ".gitignore"
         assert gitignore.exists()
-        assert "runs/" in gitignore.read_text()
+        content = gitignore.read_text()
+        assert "/runtime/" in content
+        assert "/cycles/" not in content
 
     def test_idempotent(self, tmp_path):
-        from ft.cli.main import _ensure_runs_gitignore
-        _ensure_runs_gitignore(tmp_path)
-        _ensure_runs_gitignore(tmp_path)
-        content = (tmp_path / ".gitignore").read_text()
-        assert content.count("runs/") == 1
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(tmp_path)
+        ensure_project_layout(tmp_path)
+        content = (tmp_path / ".ft" / ".gitignore").read_text()
+        assert content.count("/runtime/") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -176,27 +192,23 @@ class TestEnsureRunsGitignore:
 
 class TestInitCreatesStructure:
     def test_creates_process_dir(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        run_ft(["init"], cwd=tmp_path)
-        assert (tmp_path / "process").is_dir()
+        run_ft(["init", "--template", "base"], cwd=tmp_path)
+        assert (tmp_path / ".ft" / "process").is_dir()
 
     def test_creates_docs_dir(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        run_ft(["init"], cwd=tmp_path)
+        run_ft(["init", "--template", "base"], cwd=tmp_path)
         assert (tmp_path / "docs").is_dir()
 
     def test_does_not_create_runs_dir(self, tmp_path):
         """BL-20: ft init no longer creates runs/ inside the repo."""
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        run_ft(["init"], cwd=tmp_path)
+        run_ft(["init", "--template", "base"], cwd=tmp_path)
         assert not (tmp_path / "runs").is_dir()
 
-    def test_state_in_external_worktree(self, tmp_path):
-        """BL-20: state lives in ~/.ft/worktrees/<project>/cycle-01/."""
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        run_ft(["init"], cwd=tmp_path)
+    def test_init_creates_no_execution_state(self, tmp_path):
+        run_ft(["init", "--template", "base"], cwd=tmp_path)
         state = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
-        assert state.exists()
+        assert not state.exists()
+        assert not (tmp_path / "state").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +218,11 @@ class TestInitCreatesStructure:
 class TestRunCreatesRunSubdir:
     def test_run_creates_external_worktree(self, tmp_path):
         """BL-20: ft run creates cycle in ~/.ft/worktrees/, not runs/."""
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        from ft.engine.layout import ensure_project_layout
+        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        ensure_project_layout(tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "src").mkdir()
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         wt_home = paths.worktrees_home(tmp_path)
         assert wt_home.is_dir()
@@ -214,7 +230,9 @@ class TestRunCreatesRunSubdir:
         assert len(cycles) >= 1
 
     def test_run_creates_docs(self, tmp_path):
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        from ft.engine.layout import ensure_project_layout
+        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        ensure_project_layout(tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         assert (tmp_path / "docs").is_dir()
 
@@ -234,7 +252,9 @@ class TestRunIncrementsRunNumber:
 
     def test_second_ft_run_creates_second_cycle_e2e(self, tmp_path):
         """Two ft run calls should create cycle-01 and cycle-02 in worktrees."""
-        _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
+        from ft.engine.layout import ensure_project_layout
+        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        ensure_project_layout(tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         wt_home = paths.worktrees_home(tmp_path)
@@ -246,15 +266,14 @@ class TestRunIncrementsRunNumber:
 # Legacy fallback
 # ---------------------------------------------------------------------------
 
-class TestLegacyFallback:
-    def test_get_runner_reads_legacy_state(self, tmp_path):
-        """If project/state/ has state but runs/ doesn't, engine finds it."""
+class TestNoLegacyFallback:
+    def test_get_runner_does_not_read_legacy_state(self, tmp_path):
         from ft.cli.main import _find_latest_state
         legacy = tmp_path / "project" / "state" / "engine_state.yml"
         legacy.parent.mkdir(parents=True)
         legacy.write_text("process_id: test\n")
         result = _find_latest_state(tmp_path)
-        assert result == legacy
+        assert result != legacy
 
 
 # ---------------------------------------------------------------------------

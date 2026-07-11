@@ -142,11 +142,11 @@ class TestRunInputs:
         assert FakeRunner.instances[-1].llm_engine == "opencode"
         assert FakeRunner.instances[-1].llm_model == "pgx/zai-org_glm-4.7-flash"
 
-    def test_run_inherits_engine_from_init_state_before_cleanup(self, tmp_path, monkeypatch):
+    def test_run_uses_versioned_engine_default_without_init_state(self, tmp_path, monkeypatch):
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / "process" / "process.yml"
+        process = project / ".ft" / "process" / "process.yml"
         process.parent.mkdir(parents=True)
         process.write_text(
             """
@@ -158,22 +158,8 @@ nodes:
     title: End
 """
         )
-        init_state = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01" / "state" / "engine_state.yml"
-        init_state.parent.mkdir(parents=True)
-        init_state.write_text(
-            """
-process_id: plain_project
-version: 1.0.0
-llm_engine: opencode
-llm_model: null
-current_node: start
-node_status: ready
-completed_nodes: []
-metrics:
-  steps_completed: 0
-  steps_total: 1
-"""
-        )
+        from ft.engine.layout import ensure_project_layout
+        ensure_project_layout(project, defaults={"llm_engine": "opencode"})
 
         with patch("ft.cli.main.StepRunner", FakeRunner):
             cli_main.cmd_run(_args(project, template=None))
@@ -185,7 +171,7 @@ metrics:
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / "process" / "process.yml"
+        process = project / ".ft" / "process" / "process.yml"
         process.parent.mkdir(parents=True)
         process.write_text(
             """
@@ -208,14 +194,14 @@ nodes:
 
         run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01-opencode"
         assert FakeRunner.instances[-1].project_root == run_dir
-        assert FakeRunner.instances[-1].process_path == run_dir / "process" / "process.yml"
-        assert (run_dir / "process" / "process.yml").exists()
+        assert FakeRunner.instances[-1].process_path == run_dir / ".ft" / "process" / "process.yml"
+        assert (run_dir / ".ft" / "process" / "process.yml").exists()
 
     def test_run_without_git_accepts_explicit_cycle_name(self, tmp_path, monkeypatch):
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / "process" / "process.yml"
+        process = project / ".ft" / "process" / "process.yml"
         process.parent.mkdir(parents=True)
         process.write_text(
             """
@@ -238,14 +224,14 @@ nodes:
 
         run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
         assert FakeRunner.instances[-1].project_root == run_dir
-        assert (run_dir / "process" / "process.yml").exists()
+        assert (run_dir / ".ft" / "process" / "process.yml").exists()
         assert (tmp_path / "ft-home" / "worktrees" / "project" / ".cycles").read_text() == "11\n"
 
     def test_run_rejects_existing_explicit_cycle_name(self, tmp_path, monkeypatch):
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / "process" / "process.yml"
+        process = project / ".ft" / "process" / "process.yml"
         process.parent.mkdir(parents=True)
         process.write_text(
             """
@@ -328,7 +314,7 @@ nodes:
 class TestSetupEnv:
     def test_setup_env_runs_project_script(self, tmp_path, monkeypatch):
         project = tmp_path / "project"
-        scripts = project / "process" / "scripts"
+        scripts = project / ".ft" / "process" / "scripts"
         scripts.mkdir(parents=True)
         marker = project / "configured.txt"
         script = scripts / "register_gateway.sh"
@@ -342,7 +328,7 @@ class TestSetupEnv:
 
     def test_setup_env_runs_relative_project_script_from_parent_cwd(self, tmp_path, monkeypatch):
         project = tmp_path / "project"
-        scripts = project / "process" / "scripts"
+        scripts = project / ".ft" / "process" / "scripts"
         scripts.mkdir(parents=True)
         script = scripts / "register_gateway.sh"
         script.write_text("#!/usr/bin/env bash\nset -e\ntouch configured-from-cwd.txt\n")
@@ -478,6 +464,9 @@ class TestAbort:
             "current_node: ft.plan.03.api_contract\n"
             "node_status: blocked\n"
         )
+        other_cycle = tmp_path / "ft-home" / "worktrees" / "demo" / "cycle-01-opencode"
+        (other_cycle / "state").mkdir(parents=True)
+        (other_cycle / "state" / "engine_state.yml").write_text("node_status: blocked\n")
 
         args = Namespace(
             process=None,
@@ -491,6 +480,98 @@ class TestAbort:
         cli_main.cmd_abort(args)
 
         assert not cycle.exists()
+        assert other_cycle.exists()
+
+
+class TestClose:
+    def test_close_blocks_merge_when_backlog_has_undecided_p0(self, tmp_path):
+        work = tmp_path / "cycle"
+        docs = work / "docs"
+        docs.mkdir(parents=True)
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| PB-001 | US | P0 | planned | PRD | Cadastro | Criar item pela UI | — | — |\n",
+            encoding="utf-8",
+        )
+
+        class _StateMgr:
+            def load(self):
+                return SimpleNamespace(node_status="done", current_node=None)
+
+        class _Runner:
+            project_root = work
+            state_mgr = _StateMgr()
+            merge_called = False
+
+            def merge_on_close(self, *_args, **_kwargs):
+                self.merge_called = True
+                return True
+
+        runner = _Runner()
+        args = Namespace(
+            process=None,
+            force=False,
+            merge="full",
+            merge_paths=None,
+            keep_worktree=False,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+
+        with patch("ft.cli.main.get_runner", return_value=runner):
+            cli_main.cmd_close(args)
+
+        assert runner.merge_called is False
+
+    def test_close_blocks_declared_features_catalog_without_delivered_coverage(self, tmp_path):
+        work = tmp_path / "cycle"
+        docs = work / "docs"
+        docs.mkdir(parents=True)
+        (docs / "PROJECT_BACKLOG.md").write_text(
+            "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| PB-001 | US | P0 | done | PRD | Cadastro | Criar item pela UI | report.md | Entregue |\n",
+            encoding="utf-8",
+        )
+
+        class _StateMgr:
+            def load(self):
+                return SimpleNamespace(node_status="done", current_node=None)
+
+        class _Runner:
+            project_root = work
+            state_mgr = _StateMgr()
+            graph = SimpleNamespace(
+                meta={"artifact_policy": {"canonical": ["docs/FEATURES.md"]}}
+            )
+            merge_called = False
+
+            def merge_on_close(self, *_args, **_kwargs):
+                self.merge_called = True
+                return True
+
+        runner = _Runner()
+        args = Namespace(
+            process=None,
+            force=False,
+            merge="full",
+            merge_paths=None,
+            keep_worktree=False,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+
+        with patch("ft.cli.main.get_runner", return_value=runner):
+            cli_main.cmd_close(args)
+
+        assert runner.merge_called is False
 
 
 class TestCancel:
@@ -691,6 +772,52 @@ class TestFix:
         assert note is not None
         assert "determinístico" in note
         assert "def test_ok" in target.read_text(encoding="utf-8")
+
+    def test_postprocess_opencode_fix_rewrites_outerhtml_canvas_e2e(self, tmp_path):
+        target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
+        target.parent.mkdir(parents=True)
+        target.write_text(
+            "def test_canvas():\n"
+            "    before = 'arena-board outerHTML'\n"
+            "    assert before\n",
+            encoding="utf-8",
+        )
+
+        class Runner:
+            project_root = tmp_path
+            _work_dir = str(tmp_path)
+
+            def _write_opencode_e2e_test(self, root):
+                target.write_text("def test_ok():\n    assert 'toDataURL()'\n", encoding="utf-8")
+
+        note = cli_main._postprocess_opencode_fix_capture(
+            Runner(),
+            "project/tests/e2e/test_navigation.py",
+        )
+
+        assert note is not None
+        assert "toDataURL" in note
+        assert "outerHTML" not in target.read_text(encoding="utf-8")
+
+    def test_arena_board_fix_adds_canvas_testid_without_delegate(self, tmp_path):
+        source = tmp_path / "project" / "frontend" / "src" / "main.js"
+        dist = tmp_path / "project" / "frontend" / "dist" / "src" / "main.js"
+        for target in (source, dist):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('<canvas id="arena-canvas" width="280"></canvas>\n', encoding="utf-8")
+
+        class Runner:
+            project_root = tmp_path
+            _work_dir = str(tmp_path)
+
+        note = cli_main._try_apply_opencode_arena_board_fix(
+            Runner(),
+            'adicione data-testid="arena-board" ao canvas',
+        )
+
+        assert note is not None
+        assert 'data-testid="arena-board"' in source.read_text(encoding="utf-8")
+        assert 'data-testid="arena-board"' in dist.read_text(encoding="utf-8")
 
     def _blocked_runner(self, tmp_path):
         state_path = tmp_path / "state" / "engine_state.yml"

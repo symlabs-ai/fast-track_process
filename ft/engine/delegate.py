@@ -40,6 +40,8 @@ _MAX_ARGV_PROMPT_BYTES = 100_000
 DEFAULT_OPENCODE_MODEL = "pgx/zai-org_glm-4.7-flash"
 DEFAULT_OPENCODE_CONTEXT_LIMIT = 200_000
 DEFAULT_OPENCODE_OUTPUT_LIMIT = 32_768
+DEFAULT_EXECUTOR_TIMEOUT = 1_800
+DEFAULT_CODEX_ULTRA_TIMEOUT = 3_600
 
 
 @dataclass
@@ -81,6 +83,18 @@ def _env_nonnegative_int(*names: str) -> int | None:
         if value >= 0:
             return value
     return None
+
+
+def _executor_timeout_seconds(llm_engine: str) -> int:
+    """Resolve the wall-clock limit for one delegated executor turn."""
+    engine = llm_engine.strip().lower()
+    specific_name = f"FT_{engine.upper()}_EXECUTOR_TIMEOUT"
+    configured = _env_positive_int(specific_name, "FT_LLM_EXECUTOR_TIMEOUT")
+    if configured is not None:
+        return configured
+    if engine == "codex" and os.environ.get("FT_CODEX_REASONING_EFFORT", "").strip().lower() == "ultra":
+        return DEFAULT_CODEX_ULTRA_TIMEOUT
+    return DEFAULT_EXECUTOR_TIMEOUT
 
 
 def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -> list[str]:
@@ -594,6 +608,13 @@ def _build_executor_command(
         cmd = [
             "codex",
             "exec",
+        ]
+        reasoning_effort = os.environ.get("FT_CODEX_REASONING_EFFORT", "").strip()
+        if reasoning_effort:
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", reasoning_effort):
+                raise ValueError("FT_CODEX_REASONING_EFFORT contém valor inválido")
+            cmd += ["-c", f"model_reasoning_effort={json.dumps(reasoning_effort)}"]
+        cmd += [
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
@@ -659,6 +680,19 @@ def _write_log_preamble(log_path: str, llm_engine: str, cmd: list[str], prompt: 
         f.write("\n## Output\n\n")
 
 
+def _stream_oneline(value: object) -> str:
+    """Colapsa texto de evento em uma linha sem cortar conteúdo."""
+    return " ".join(str(value or "").strip().split())
+
+
+def _clip_stream_status(value: object, limit: int = 120) -> str:
+    """Resumo curto para heartbeat/status ao vivo, sempre com reticencias."""
+    text = _stream_oneline(value)
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
 def _format_stream_line(llm_engine: str, line: str) -> str:
     """Formata linhas do stream para observação humana no terminal."""
     text = line.rstrip()
@@ -683,13 +717,13 @@ def _format_stream_line(llm_engine: str, line: str) -> str:
                 if btype == "tool_use":
                     return _describe_tool_call(block.get("name", ""), block.get("input", {}))
                 if btype == "text":
-                    return f"→ {block.get('text', '').strip()[:120]}"
+                    return f"→ {_stream_oneline(block.get('text', ''))}"
                 if btype == "thinking":
-                    t = (block.get("thinking") or "").strip()
+                    t = _stream_oneline(block.get("thinking"))
                     if t:
-                        return f"✻ {t[:120]}"
+                        return f"✻ {t}"
         if etype == "result":
-            return f"result: {event.get('result', '')[:80]}"
+            return f"result: {_stream_oneline(event.get('result', ''))}"
         return f"event {etype}"
     if llm_engine != "codex":
         return text
@@ -1134,7 +1168,7 @@ def _describe_tool_call(name: str, input_data: dict) -> str:
         path = input_data.get("file_path") or input_data.get("path", "")
         return f"Edit {path}"
     if name_lower == "bash":
-        cmd = (input_data.get("command") or "")[:60].replace("\n", " ")
+        cmd = _stream_oneline(input_data.get("command") or "")
         return f"$ {cmd}"
     if name_lower == "glob":
         pat = input_data.get("pattern", "")
@@ -1166,10 +1200,10 @@ def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
             item = event.get("item", {})
             itype = item.get("type", "")
             if itype == "command_execution":
-                cmd = (item.get("command") or "")[:60].replace("\n", " ")
+                cmd = _clip_stream_status(item.get("command") or "", 80)
                 return f"$ {cmd}"
             if itype == "agent_message":
-                msg = (item.get("text") or "").strip().replace("\n", " ")[:60]
+                msg = _clip_stream_status(item.get("text") or "", 80)
                 return f"→ {msg}" if msg else None
             if itype == "tool_call":
                 name = item.get("name") or item.get("tool", "")
@@ -1182,11 +1216,11 @@ def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
         return None
     elif llm_engine == "claude":
         if not text.startswith("{"):
-            return text[:80] if text else None
+            return _clip_stream_status(text, 80) if text else None
         try:
             event = json.loads(text)
         except json.JSONDecodeError:
-            return text[:80] if text else None
+            return _clip_stream_status(text, 80) if text else None
         etype = event.get("type", "")
         if etype == "assistant":
             msg = event.get("message", {})
@@ -1199,7 +1233,7 @@ def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
                     ctx["last_tool"] = desc
                     return desc
                 if btype == "text":
-                    snippet = block.get("text", "").strip().replace("\n", " ")[:80]
+                    snippet = _clip_stream_status(block.get("text", ""), 80)
                     if snippet:
                         return f"→ {snippet}"
         if etype == "result":
@@ -1211,7 +1245,7 @@ def _live_status(llm_engine: str, line: str, ctx: dict) -> str | None:
     else:
         # Outros engines: plain text
         if text and not text.startswith("["):
-            return text[:80]
+            return _clip_stream_status(text, 80)
         return None
 
 
@@ -1276,7 +1310,6 @@ def _stream_process_output(
     """Consome stdout/stderr combinado do subprocesso, gravando em arquivo e espelhando no terminal."""
     import shutil as _shutil
     import threading
-    import select
     chunks: list[str] = []
     stream = proc.stdout
     assert stream is not None
@@ -1324,7 +1357,7 @@ def _stream_process_output(
                         return True
                     lines = [l.strip() for l in output_section.splitlines() if _useful(l)]
                     if lines:
-                        status = lines[-1][:120]
+                        status = _clip_stream_status(lines[-1], 120)
                 except Exception:
                     pass
             ts = time.strftime("%H:%M:%S")
@@ -1441,9 +1474,9 @@ def _stream_process_output(
                                             )
                                             break
                                         if btype == "text":
-                                            t = block.get("text", "").strip().replace("\n", " ")
+                                            t = _stream_oneline(block.get("text", ""))
                                             if t:
-                                                decoded = f"→ {t[:120]}"
+                                                decoded = f"→ {t}"
                                             break
                                 elif etype == "result":
                                     tok = event.get("usage", {}).get("output_tokens", 0) or 0
@@ -1454,10 +1487,10 @@ def _stream_process_output(
                                     item = event.get("item", {})
                                     itype = item.get("type", "")
                                     if itype == "command_execution":
-                                        cmd_text = (item.get("command") or "")[:80].replace("\n", " ")
+                                        cmd_text = _stream_oneline(item.get("command") or "")
                                         decoded = f"$ {cmd_text}"
                                     elif itype == "agent_message":
-                                        msg_text = (item.get("text") or "").strip().replace("\n", " ")[:120]
+                                        msg_text = _stream_oneline(item.get("text") or "")
                                         if msg_text:
                                             decoded = f"→ {msg_text}"
                                     elif itype == "tool_call":
@@ -1478,10 +1511,10 @@ def _stream_process_output(
                 # Atualiza last_status com qualquer linha não-vazia do LLM
                 stripped = line.strip()
                 if stripped and not stripped.startswith("{"):
-                    last_status[0] = stripped[:120]
+                    last_status[0] = _clip_stream_status(stripped, 120)
                 status = _live_status(llm_engine, line, ctx)
                 if status:
-                    status = status[:120]
+                    status = _clip_stream_status(status, 120)
                     last_status[0] = status
                     elapsed = int(time.time() - start_time)
                     # Inline: sempre nova linha — cada ação fica visível no scrollback
@@ -1512,6 +1545,7 @@ def delegate_to_llm(
     opencode_deny_edit_tools: bool = False,
     opencode_early_success_paths: list[str] | None = None,
     opencode_capture_output_path: str | None = None,
+    raw_output: bool = False,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -1565,7 +1599,30 @@ def delegate_to_llm(
         "- assumido: <o que voce assumiu SEM testar, se houver>\n"
         "- armadilhas: <pegadinhas que o proximo node precisa saber, se houver>"
     )
-    if opencode_capture_mode:
+    autonomy_rule = (
+        "- Seja objetivo: quando tiver informacao suficiente, aja. Nao reanalise fatos ja estabelecidos, "
+        "nao faca pesquisas amplas sem necessidade e nao explique raciocinio interno.\n"
+        "- Mantenha o escopo estrito do node. Nao adicione funcionalidades, refactors, abstracoes, "
+        "fallbacks ou validacoes fora do que a tarefa e os validadores pedem.\n"
+        "- Baseie progresso e conclusoes em evidencia real de arquivos, comandos ou validadores que voce "
+        "acabou de observar. Se algo nao foi verificado, declare como nao verificado no NODE_SUMMARY.\n"
+        "- NUNCA encerre, mate ou reinicie processos que nao tenham sido iniciados por esta propria "
+        "delegacao. Em conflito de porta, use uma porta alternativa somente quando o contrato permitir; "
+        "caso contrario, responda BLOCKED com a identidade do listener existente.\n"
+        "- Voce esta operando de forma autonoma. Nao pergunte se deve prosseguir em acoes reversiveis "
+        "e coerentes com a tarefa; prossiga ate DONE ou BLOCKED.\n"
+    )
+    if raw_output:
+        write_tool_rule = (
+            "- NAO use ferramentas de escrita; esta tarefa deve retornar somente texto estruturado.\n"
+            "- Retorne exatamente o formato solicitado pela tarefa, sem markdown, sem explicacoes "
+            "e sem texto antes ou depois."
+        )
+        completion_rule = (
+            "- Nao inclua DONE, NODE_SUMMARY ou lista de arquivos.\n"
+            "- Se nao conseguir produzir o formato solicitado, responda apenas: BLOCKED: <motivo>."
+        )
+    elif opencode_capture_mode:
         write_tool_rule = (
             f"- NAO use ferramentas. NAO use Read, Glob, Grep, List, Bash, Write, Edit ou Patch.\n"
             f"- Responda SOMENTE com o conteudo completo que deve ser gravado em "
@@ -1673,6 +1730,10 @@ REGRAS:
 {restricted_tools_rule}
 - NAO edite ft_state.yml ou qualquer arquivo de estado do motor
 - NAO tome decisoes sobre o processo (o motor decide)
+- NAO use `git checkout`, `git reset`, `git restore`, `git clean` ou `git revert`
+  para descartar mudancas do worktree. Corrija incrementalmente os arquivos
+  necessarios; o ciclo pode conter alteracoes validas de tentativas anteriores.
+{autonomy_rule}
 {write_tool_rule}
 {completion_rule}
 """
@@ -1743,6 +1804,7 @@ REGRAS:
 
     idle_timeout = None
     idle_retries = 0
+    executor_timeout = _executor_timeout_seconds(llm_engine)
     if llm_engine.lower().strip() == "opencode":
         idle_timeout = _env_positive_int("FT_OPENCODE_IDLE_TIMEOUT") or 480
         configured_retries = _env_nonnegative_int("FT_OPENCODE_IDLE_RETRIES")
@@ -1814,7 +1876,7 @@ REGRAS:
         try:
             returncode, early_success = _wait_for_process(
                 proc,
-                timeout=1800,
+                timeout=executor_timeout,
                 early_success_paths=early_success_paths,
                 early_success_grace=early_success_grace,
                 activity=activity,
@@ -1829,7 +1891,7 @@ REGRAS:
         except subprocess.TimeoutExpired:
             _stop_process(proc)
             reader.join(timeout=5)
-            msg = "\n[TIMEOUT] Executor excedeu 1800 segundos.\n"
+            msg = f"\n[TIMEOUT] Executor excedeu {executor_timeout} segundos.\n"
             _append_log(msg)
             return 124, False, output_holder["output"] + msg, "timeout"
         except BaseException:
@@ -2053,20 +2115,9 @@ def delegate_opencode_file_bundle_raw(
         )
     except subprocess.TimeoutExpired as exc:
         output = _timeout_stream_text(exc.stdout) + _timeout_stream_text(exc.stderr) + "\n[TIMEOUT] OpenCode raw excedeu 180 segundos.\n"
-        if content.strip() and _write_scope_allows(path, project_root, allowed_paths):
-            target = (Path(project_root).resolve() / path).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content.rstrip() + "\n", encoding="utf-8")
-            if log_path:
-                with Path(log_path).open("a", encoding="utf-8") as f:
-                    f.write(output)
-                    f.write(f"\n[TIMEOUT_RECOVERY] Arquivo gravado pelo engine: {path}\n")
-            return DelegateResult(
-                True,
-                f"DONE\nArquivo gravado pelo engine apos timeout OpenCode: {path}\n{output}",
-                [path],
-                [],
-            )
+        if log_path:
+            with Path(log_path).open("a", encoding="utf-8") as f:
+                f.write(output)
         return DelegateResult(False, output, [], [])
 
     raw = (result.stdout or "") + (result.stderr or "")

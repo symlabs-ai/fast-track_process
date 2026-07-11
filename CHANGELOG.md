@@ -4,6 +4,69 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## Unreleased
+
+### Catálogo de produto
+- O template `fast-track-v3` passa a manter `docs/FEATURES.md` como fonte de
+  verdade das capacidades entregues, separada do `PROJECT_BACKLOG` de mudanças
+  desejadas e histórico.
+- IDs `FEAT-*`, lifecycle e referências a itens `PB-*` concluídos são verificados
+  deterministicamente; itens abertos não podem ser promovidos e bugs atualizam a
+  feature relacionada sem criar capacidades artificiais.
+- O planejamento reconcilia catálogos ausentes e o handoff atualiza features após
+  consolidar o backlog; `ft close` bloqueia inconsistências quando o processo
+  declara o catálogo como artefato canônico.
+
+### Governança de processo
+- O template `fast-track-v3` v1.1.0 passa a gerar
+  `docs/process-improvements.yml`, classificando cada achado como `local`,
+  `global_candidate` ou `rejected` por uma régua explícita de generalidade,
+  parametrização, evidência e compatibilidade.
+- Novo validator `process_improvements_classified` impede esconder como local uma
+  melhoria que satisfaz todos os critérios globais e exige evidência/test plan.
+- Novo comando `ft process-candidates` lista e resolve candidatos; `ft close`
+  bloqueia itens `pending`, e promoções exigem referência ao global validado.
+- Lições genéricas comprovadas no cycle 09 foram promovidas: fase RED exige pytest
+  realmente falhando por assertion, smoke usa porta isolada e encerra apenas seu
+  próprio processo, aceite declara `p0_blockers`, visual check exige
+  `P0_ACCEPTANCE: PASS`, e bypass humano não é tratado como aprovação.
+- O grafo rejeita IDs duplicados e valida `on_fail.goto`, evitando que mappings
+  sobrescritos ou transições de recuperação quebradas cheguem à execução.
+
+### Arquitetura
+- Processo local movido para `.ft/process/process.yml`, sem fallback automático para `process/`.
+- `ft init` agora cria apenas metadados versionáveis e nunca cria estado de execução.
+- Runtime continuous movido para `$FT_HOME/runtime/<projeto>/`; worktrees continuam em `$FT_HOME/worktrees/`.
+- `ft close` arquiva task list, evidências, relatórios, retro e handoff em `.ft/cycles/<cycle>/`, preservando os documentos canônicos em `docs/`.
+- Novo `.ft/manifest.yml` registra layout, origem do template, digest base e defaults de LLM.
+- Novo `ft migrate-layout` realiza migração explícita do layout antigo, importa
+  históricos, atualiza referências atuais e preserva evidências de ciclos sem reescrita.
+- Templates são rejeitados se contiverem estado, logs ou dados de ciclos anteriores.
+
+### Codex
+- Removido o override rígido `model_reasoning_effort=high`; o provider respeita a
+  configuração nativa do Codex ou `FT_CODEX_REASONING_EFFORT` quando informado.
+- Turnos com reasoning `ultra` passam a ter timeout default de 3600 segundos;
+  `FT_CODEX_EXECUTOR_TIMEOUT` e `FT_LLM_EXECUTOR_TIMEOUT` permitem override explícito.
+
+### Correções
+- `no_pre_seed` agora limpa somente artefatos descartáveis definidos pela política
+  do ciclo; source, configuração e documentos canônicos não são mais apagados entre nodes.
+- Comandos executados dentro de uma worktree preservam a identidade do projeto e
+  usam o state do ciclo atual; `ft status --full` não procura mais um ciclo aninhado inexistente.
+- Delegações não podem encerrar ou reiniciar listeners/processos que não tenham
+  sido iniciados pelo próprio turno; conflitos de porta devem usar isolamento ou bloquear.
+
+## [v0.13.3] - 2026-07-08
+
+### Correções
+- Corrigido timeout de `delegate_opencode_file_bundle_raw()`: o caminho agora retorna `DelegateResult` com diagnóstico em vez de acessar variáveis inexistentes.
+- Fallbacks determinísticos e guards específicos de OpenCode foram extraídos do `StepRunner` para `ft.providers.opencode_fallbacks`, reduzindo acoplamento do runner ao domínio de demonstração.
+- Adicionado gate de CI com `ruff check ft --select F821,F401,F841` para bloquear nomes indefinidos, imports mortos e variáveis atribuídas sem uso.
+- README sincronizado com a versão do pacote (`0.13.3`).
+
+---
+
 ## [v0.13.2] - 2026-07-04
 
 ### Melhorias

@@ -164,12 +164,14 @@ class StateManager:
         first_node_id: str,
         total_steps: int,
         llm_engine: str = "claude",
+        current_cycle: str = "cycle-01",
     ):
         """Inicializa estado a partir de um grafo de processo."""
         self._state = EngineState(
             process_id=graph_meta.get("id", "unknown"),
             version=graph_meta.get("version", "0.1.0"),
             llm_engine=llm_engine,
+            current_cycle=current_cycle,
             current_node=first_node_id,
             node_status="ready",
             metrics={

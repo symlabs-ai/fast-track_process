@@ -31,6 +31,7 @@ def _make_graph(nodes_raw: list[dict], meta: dict | None = None) -> ProcessGraph
             condition=n.get("condition"),
             max_turns=n.get("max_turns"),
             reject_next=n.get("reject_next"),
+            on_fail=n.get("on_fail"),
         ))
     return ProcessGraph(nodes, meta or {"id": "test", "version": "1.0.0"})
 
@@ -103,6 +104,71 @@ class TestGraphIntegrity:
         report = validate_process(graph)
         assert not any(e.node_id == "fix" and "órfão" in e.message for e in report.errors)
         assert not any(e.node_id == "fix" and "inalcançável" in e.message for e in report.errors)
+
+    def test_on_fail_goto_is_reachable_edge(self):
+        graph = _make_graph([
+            {
+                "id": "build",
+                "type": "build",
+                "title": "Build",
+                "outputs": ["src/app.py"],
+                "next": "end",
+                "on_fail": {"goto": "fix"},
+            },
+            {
+                "id": "fix",
+                "type": "build",
+                "title": "Fix",
+                "outputs": ["src/app.py"],
+                "next": "end",
+            },
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+
+        report = validate_process(graph)
+
+        assert not any(
+            error.node_id == "fix" and "órfão" in error.message
+            for error in report.errors
+        )
+        assert not any(
+            error.node_id == "fix" and "inalcançável" in error.message
+            for error in report.errors
+        )
+
+    def test_dangling_on_fail_goto_is_rejected(self):
+        with pytest.raises(ValueError, match="on_fail.goto"):
+            _make_graph([
+                {
+                    "id": "build",
+                    "type": "build",
+                    "title": "Build",
+                    "outputs": ["src/app.py"],
+                    "next": "end",
+                    "on_fail": {"goto": "missing"},
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ])
+
+    def test_duplicate_node_ids_are_rejected(self):
+        with pytest.raises(ValueError, match="duplicados: build"):
+            _make_graph([
+                {
+                    "id": "build",
+                    "type": "build",
+                    "title": "Build one",
+                    "outputs": ["src/one.py"],
+                    "next": "end",
+                },
+                {
+                    "id": "build",
+                    "type": "build",
+                    "title": "Build two",
+                    "outputs": ["src/two.py"],
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ])
 
     def test_non_terminal_without_next_error(self):
         graph = _make_graph([

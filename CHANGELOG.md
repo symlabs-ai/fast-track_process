@@ -6,6 +6,25 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+### ft evolve — evolução de processo paralela ao ciclo
+- Novo comando `ft evolve [diretriz] --project e/ou --global`: deriva melhorias
+  de processo a partir do contexto do ciclo (ativo, `--cycle` ou último
+  arquivado) sem avançar nenhum step.
+- Roda em workspace descartável em `$FT_HOME/runtime/<projeto>/evolve/` —
+  fora de `worktrees/`, então nunca aparece como ciclo nem bloqueia
+  `ft run`/`ft feature`; pode rodar em paralelo a um ciclo ativo.
+- Novo template global `evolve_process` (entrypoint `evolve`): playbook em dois
+  nodes — `evolve.analyze` (melhorias `EV-NN` com evidência obrigatória do
+  contexto) e `evolve.apply` (edita somente o staging em `targets/` e relata em
+  `report/evolution-report.md`).
+- Apply determinístico: todos os `process.yml` staged passam pelo validador de
+  grafo e templates globais são checados como pristine antes do espelhamento;
+  diff exibido e confirmação interativa (`--yes` pula, `--dry-run` nunca
+  aplica). Mudanças ficam uncommitted para revisão via git — no projeto
+  (`.ft/process/` na raiz) e/ou no checkout do engine (`templates/`).
+- Novo módulo `ft/engine/evolve.py` e helper `paths.evolve_home()`; cobertura
+  em `tests/engine/test_evolve.py`.
+
 ### Processo incremental de features
 - Novo template global `feature`: discovery iterativo com perguntas ao
   stakeholder, escopo aprovado antes do código, implementação/testes em worktree,

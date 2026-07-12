@@ -1,0 +1,4 @@
+# Ambiente do playbook evolve_process.
+# O workspace de evolução É o diretório de trabalho — não há worktree de ciclo.
+run_mode: continuous
+max_node_retries: 2

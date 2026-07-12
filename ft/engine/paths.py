@@ -98,6 +98,15 @@ def runtime_home(project_root: str | Path) -> Path:
     return ft_home() / "runtime" / project_runtime_key(project_root)
 
 
+def evolve_home(project_root: str | Path) -> Path:
+    """Workspaces de evolução de processo (ft evolve) de um projeto.
+
+    Vive em runtime_home — nunca em worktrees/ — para que um evolve em
+    andamento jamais apareça como ciclo (ft runs, ft continue, active-run).
+    """
+    return runtime_home(project_root) / "evolve"
+
+
 def migration_backups_home(project_root: str | Path) -> Path:
     """Non-active backup area used while removing legacy runtime from a repo."""
     return ft_home() / "migrations" / project_runtime_key(project_root)

@@ -2468,6 +2468,148 @@ def cmd_explore(args):
         runner.explore_request(request)
 
 
+def cmd_evolve(args):
+    """Evolui o processo (local e/ou global) em paralelo ao ciclo.
+
+    Usa o contexto do ciclo para derivar melhorias, mas nunca avança steps:
+    o playbook roda num workspace descartável em runtime_home e as mudanças
+    só chegam aos alvos reais via apply determinístico pós-validação.
+    """
+    from ft.engine import evolve as _evolve
+    from ft.engine import ui as _ui
+
+    sys.stdout.reconfigure(line_buffering=True)
+    if getattr(args, "process", None):
+        raise ValueError(
+            "ft evolve não aceita --process; use --template para escolher o playbook"
+        )
+
+    root = find_project_root().resolve()
+
+    include_project = bool(getattr(args, "project_target", False))
+    include_global = bool(getattr(args, "global_target", False))
+    try:
+        targets = _evolve.resolve_targets(
+            root,
+            include_project=include_project,
+            include_global=include_global,
+            engine_root=engine_root(),
+        )
+    except _evolve.EvolveError as exc:
+        print(_ui.fail(str(exc)))
+        print(_ui.info("Uso: ft evolve [diretriz] --project e/ou --global"))
+        sys.exit(1)
+
+    # Mudanças globais ficam uncommitted no checkout do engine para revisão —
+    # sem git não há revisão possível (ex.: instalação de wheel).
+    if include_global and not (engine_root() / ".git").exists():
+        print(_ui.fail(
+            "--global exige um checkout git do engine; "
+            f"{engine_root()} não é um repositório"
+        ))
+        sys.exit(1)
+
+    template = str(getattr(args, "template", None) or "evolve_process")
+    available = available_templates("evolve")
+    if template not in available:
+        choices = ", ".join(available) if available else "nenhum"
+        print(_ui.fail(
+            f"template '{template}' não pertence ao entrypoint evolve. "
+            f"Templates disponíveis: {choices}"
+        ))
+        sys.exit(1)
+
+    try:
+        workspace = _evolve.prepare_workspace(
+            root,
+            template_dir=engine_root() / "templates" / template,
+            targets=targets,
+            directive=getattr(args, "directive", None),
+            cycle=getattr(args, "cycle", None),
+        )
+    except (_evolve.EvolveError, ValueError) as exc:
+        print(_ui.fail(str(exc)))
+        sys.exit(1)
+
+    print(_ui.header("ft evolve — evolução de processo"))
+    print(f"  Workspace: {workspace.root}")
+    print(f"  Contexto:  {workspace.context_label}")
+    print(f"  Alvos:     {', '.join(targets.labels)}")
+    print(_ui.dim("  O ciclo atual não é afetado — nenhum step avança."))
+
+    manifest_engine, manifest_model, manifest_effort = manifest_llm_defaults(root)
+    runner = StepRunner(
+        process_path=workspace.process_file,
+        state_path=workspace.state_file,
+        project_root=workspace.root,
+        llm_engine=resolve_llm_engine(args) or manifest_engine,
+        llm_model=resolve_llm_model(args) or manifest_model,
+        llm_effort=resolve_llm_effort(args) or manifest_effort,
+        verbose=getattr(args, "verbose", False),
+    )
+    runner.init_state()
+    runner.run(mode="mvp")
+
+    state = runner.state_mgr.load()
+    if not _cycle_complete(state):
+        print(_ui.fail(
+            f"Evolução não concluiu ({state.current_node} — {state.node_status})."
+        ))
+        print(_ui.info(f"Workspace preservado para inspeção: {workspace.root}"))
+        sys.exit(1)
+
+    errors = _evolve.validate_staged(workspace)
+    if errors:
+        print(_ui.fail("Staging inválido — nada foi aplicado:"))
+        for error in errors:
+            print(f"  ✗ {error}")
+        print(_ui.info(f"Workspace preservado para inspeção: {workspace.root}"))
+        sys.exit(1)
+
+    report = workspace.report_dir / "evolution-report.md"
+    changes = _evolve.diff_staged(workspace)
+    if not changes:
+        print(_ui.warn("O playbook não alterou nenhum arquivo de processo."))
+        if report.is_file():
+            print(_ui.info(f"Relatório: {report}"))
+        return
+
+    print()
+    print(_ui.header(f"Mudanças staged ({len(changes)})"))
+    for change in changes:
+        print(f"  {change.status:8s} {change.target}: {change.relative}")
+
+    if getattr(args, "dry_run", False):
+        print(_ui.info("--dry-run: nada foi aplicado."))
+        print(_ui.info(f"Staging preservado: {workspace.targets_dir}"))
+        if report.is_file():
+            print(_ui.info(f"Relatório: {report}"))
+        return
+
+    if not getattr(args, "yes", False):
+        try:
+            answer = input("Aplicar aos alvos reais? [s/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt, OSError):
+            answer = ""
+        if answer not in {"s", "sim", "y", "yes"}:
+            print(_ui.warn(
+                "Não aplicado. Workspace preservado — rode novamente com --yes "
+                "para aplicar sem prompt."
+            ))
+            return
+
+    applied = _evolve.apply_staged(workspace, changes)
+    print(_ui.success(f"{len(applied)} arquivo(s) aplicado(s):"))
+    for line in applied:
+        print(f"  {line}")
+    if include_project:
+        print(_ui.info(f"Revise no projeto: git -C {root} diff .ft/process"))
+    if include_global:
+        print(_ui.info(f"Revise no engine: git -C {engine_root()} diff templates"))
+    if report.is_file():
+        print(_ui.info(f"Relatório: {report}"))
+
+
 def _prompt_merge_strategy(work: Path) -> tuple[str, list[str] | None]:
     """Prompt interativo para escolher estratégia de merge no ft close."""
     from ft.engine import ui as _ui
@@ -4349,6 +4491,27 @@ def main():
     ex.add_argument("--finish", action="store_true", help="Encerrar exploração e gerar relatório")
     ex.add_argument("--skip", action="store_true", help="Pular o node de exploração sem gerar relatório")
 
+    # evolve
+    ev = sub.add_parser(
+        "evolve",
+        help="Evoluir o processo em paralelo ao ciclo (não avança steps)",
+    )
+    add_llm_engine_flags(ev)
+    ev.add_argument("directive", nargs="?",
+                    help="Diretriz para orientar a evolução (entre aspas; opcional)")
+    ev.add_argument("--template", "-t", default="evolve_process", metavar="TEMPLATE",
+                    help="Playbook de evolução com entrypoint evolve (default: evolve_process)")
+    ev.add_argument("--project", dest="project_target", action="store_true",
+                    help="Aplicar melhorias no fork local .ft/process/ do projeto")
+    ev.add_argument("--global", dest="global_target", action="store_true",
+                    help="Aplicar melhorias no template global do engine")
+    ev.add_argument("--cycle", metavar="NAME",
+                    help="Ciclo de onde derivar contexto (default: ativo ou último arquivado)")
+    ev.add_argument("--dry-run", dest="dry_run", action="store_true",
+                    help="Derivar e validar melhorias sem aplicar nos alvos")
+    ev.add_argument("--yes", "-y", action="store_true",
+                    help="Aplicar sem confirmação interativa")
+
     # retry
     rt = sub.add_parser("retry", help="Retenta o node atual bloqueado sem aplicar correção")
     add_llm_engine_flags(rt)
@@ -4472,6 +4635,8 @@ def main():
             cmd_lint_process(args)
         elif args.command == "explore":
             cmd_explore(args)
+        elif args.command == "evolve":
+            cmd_evolve(args)
         elif args.command == "retry":
             cmd_retry(args)
         elif args.command == "fix":

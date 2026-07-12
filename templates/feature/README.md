@@ -48,6 +48,8 @@ preflight, evitando que o processo altere o produto errado.
 - nenhum código antes do human gate de escopo;
 - `make test` e `make build` obrigatórios em cada implementação/correção;
 - aceite humano antes de atualizar backlog e catálogo;
+- reconciliação final obrigatória de `docs/PROJECT_BACKLOG.md`,
+  `docs/FEATURES.md`, documentação canônica afetada e `CHANGELOG.md`;
 - somente o PB/FEAT selecionado pode ser reconciliado;
 - merge somente por `ft close`.
 

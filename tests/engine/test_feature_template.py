@@ -78,6 +78,7 @@ def _write(root: Path, relative: str, content: str) -> None:
 
 
 def _base_project(tmp_path: Path, product_dir: str = "project") -> Path:
+    _write(tmp_path, "CHANGELOG.md", "# Changelog\n\n## Histórico\n\n- PB-001 entregue.\n")
     _write(tmp_path, "docs/feature-request.md", "Adicionar busca por telefone.\n")
     _write(tmp_path, "docs/PRD.md", "# PRD\n\nProduto existente.\n")
     _write(tmp_path, "docs/PROJECT_BACKLOG.md", BACKLOG)
@@ -196,6 +197,8 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     ]
     assert nodes["feature.review"].on_fail["goto"] == "feature.implement"
     assert nodes["feature.end"].type == "end"
+    assert "CHANGELOG.md" in nodes["feature.reconcile"].outputs
+    assert "CHANGELOG.md" in nodes["feature.reconcile"].write_scope
 
     raw = PROCESS.read_text(encoding="utf-8")
     assert "templates/feature" not in raw
@@ -207,6 +210,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert nodes["feature.implement"].write_scope[:2] == ["project", "src"]
 
     policy = graph.meta["artifact_policy"]
+    assert "CHANGELOG.md" in policy["canonical"]
     assert not (set(policy["canonical"]) & set(policy["cycle"]))
     environment = yaml.safe_load((TEMPLATE / "environment.yml").read_text())
     assert environment == {
@@ -328,11 +332,84 @@ def test_feature_validator_implementation_review_and_reconcile_pass(tmp_path):
     _write(
         root,
         "docs/feature-result.md",
-        "# Resultado PB-002\n\n| AC-01 | PASS |\n| AC-02 | PASS |\n",
+        "# Resultado PB-002\n\n| AC-01 | PASS |\n| AC-02 | PASS |\n\n"
+        "## Documentação atualizada\n\n"
+        "- CHANGELOG.md\n- docs/PROJECT_BACKLOG.md\n- docs/FEATURES.md\n",
+    )
+    _write(
+        root,
+        "CHANGELOG.md",
+        "# Changelog\n\n## Não lançado\n\n- PB-002: busca de clientes entregue.\n",
     )
 
     reconcile = _run_validator(root, "reconcile")
     assert reconcile.returncode == 0, reconcile.stderr
+
+
+def test_feature_validator_reconcile_requires_updated_changelog(tmp_path):
+    root = _base_project(tmp_path)
+    _snapshot_baseline(root)
+    _clear_discovery(root)
+    _write(root, "docs/PROJECT_BACKLOG.md", BACKLOG.replace("in_progress", "accepted"))
+    _write(
+        root,
+        "docs/FEATURES.md",
+        FEATURES.replace("| PB-001 |", "| PB-001, PB-002 |"),
+    )
+    _write(
+        root,
+        "docs/feature-result.md",
+        "PB-002\nAC-01 PASS\nAC-02 PASS\n"
+        "CHANGELOG.md\ndocs/PROJECT_BACKLOG.md\ndocs/FEATURES.md\n",
+    )
+
+    result = _run_validator(root, "reconcile")
+
+    assert result.returncode == 1
+    assert "CHANGELOG.md não foi atualizado" in result.stderr
+
+
+def test_feature_validator_reconcile_requires_changelog_backlog_reference(tmp_path):
+    root = _base_project(tmp_path)
+    _snapshot_baseline(root)
+    _clear_discovery(root)
+    _write(root, "docs/PROJECT_BACKLOG.md", BACKLOG.replace("in_progress", "accepted"))
+    _write(
+        root,
+        "docs/FEATURES.md",
+        FEATURES.replace("| PB-001 |", "| PB-001, PB-002 |"),
+    )
+    _write(
+        root,
+        "docs/feature-result.md",
+        "PB-002\nAC-01 PASS\nAC-02 PASS\n"
+        "CHANGELOG.md\ndocs/PROJECT_BACKLOG.md\ndocs/FEATURES.md\n",
+    )
+    _write(root, "CHANGELOG.md", "# Changelog\n\n- Busca entregue sem referência.\n")
+
+    result = _run_validator(root, "reconcile")
+
+    assert result.returncode == 1
+    assert "CHANGELOG.md não referencia PB-002" in result.stderr
+
+
+def test_feature_validator_reconcile_requires_documentation_section(tmp_path):
+    root = _base_project(tmp_path)
+    _snapshot_baseline(root)
+    _clear_discovery(root)
+    _write(root, "docs/PROJECT_BACKLOG.md", BACKLOG.replace("in_progress", "accepted"))
+    _write(
+        root,
+        "docs/FEATURES.md",
+        FEATURES.replace("| PB-001 |", "| PB-001, PB-002 |"),
+    )
+    _write(root, "docs/feature-result.md", "PB-002\nAC-01 PASS\nAC-02 PASS\n")
+    _write(root, "CHANGELOG.md", "# Changelog\n\n- PB-002: busca entregue.\n")
+
+    result = _run_validator(root, "reconcile")
+
+    assert result.returncode == 1
+    assert "sem seção `Documentação atualizada`" in result.stderr
 
 
 def test_feature_validator_review_accepts_rejected_with_failed_ac(tmp_path):

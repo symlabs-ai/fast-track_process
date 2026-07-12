@@ -42,6 +42,7 @@ close_policy:
 
 artifact_policy:
   canonical:
+    - CHANGELOG.md
     - docs/PRD.md
     - docs/TECH_STACK.md
     - docs/tech_stack.md
@@ -166,7 +167,9 @@ nodes:
 
       feature-plan.md deve referenciar o mesmo PB-* e FEAT-*, listar impacto
       técnico, contratos afetados, tarefas ordenadas, estratégia de testes,
-      compatibilidade/migração, evidências esperadas e riscos.
+      compatibilidade/migração, evidências esperadas, riscos e a documentação
+      canônica que precisará ser atualizada após o aceite. Todo ciclo deve
+      prever a atualização de CHANGELOG.md, PROJECT_BACKLOG.md e FEATURES.md.
 
       feature-discovery.md deve preservar um resumo das perguntas e respostas
       que levaram ao escopo atual. Não altere código nem FEATURES neste node.
@@ -339,15 +342,30 @@ nodes:
     title: "Reconciliar Backlog e Catálogo"
     description: >-
       Registra somente a capacidade aceita neste ciclo, preservando todos os IDs
-      e itens alheios. Produz o resumo final usado pelo close.
+      e itens alheios. Reconcilia a documentação afetada e o CHANGELOG e produz
+      o resumo final usado pelo close.
     sprint: feature-03-acceptance
     executor: claude
     max_turns: 40
     outputs:
+      - CHANGELOG.md
+      - docs/PRD.md
+      - docs/TECH_STACK.md
+      - docs/tech_stack.md
+      - docs/ui_criteria.md
+      - docs/api_contract.md
+      - docs/test_data.md
       - docs/PROJECT_BACKLOG.md
       - docs/FEATURES.md
       - docs/feature-result.md
     write_scope:
+      - CHANGELOG.md
+      - docs/PRD.md
+      - docs/TECH_STACK.md
+      - docs/tech_stack.md
+      - docs/ui_criteria.md
+      - docs/api_contract.md
+      - docs/test_data.md
       - docs/PROJECT_BACKLOG.md
       - docs/FEATURES.md
       - docs/feature-result.md
@@ -362,10 +380,21 @@ nodes:
       - Nunca renumere, reutilize ou apague IDs.
       - Bugs/dívidas/manutenção não criam uma FEAT-* nova.
       - Não decida, adie ou conclua itens de backlog alheios ao ciclo.
+      - Releia feature-plan, implementation-report, feature-review, o feedback
+        do stakeholder e o diff. Atualize somente a documentação canônica
+        realmente afetada pelo comportamento, contrato, configuração ou uso da
+        feature; não faça churn em documentos alheios.
+      - Crie ou atualize sempre CHANGELOG.md na raiz, preservando o formato já
+        adotado pelo projeto. Registre de forma humana o PB/FEAT, a mudança
+        entregue e qualquer compatibilidade ou migração relevante.
 
       Gere docs/feature-result.md com escopo entregue, AC-*, testes/build,
-      evidências, PB/FEAT final, arquivos alterados e nenhuma pendência escondida.
+      evidências, PB/FEAT final, arquivos alterados, nenhuma pendência escondida
+      e uma seção `Documentação atualizada` que liste os caminhos realmente
+      reconciliados, incluindo sempre CHANGELOG.md, docs/PROJECT_BACKLOG.md e
+      docs/FEATURES.md.
     validators:
+      - file_exists: CHANGELOG.md
       - file_exists: docs/feature-result.md
       - project_backlog_valid:
           path: docs/PROJECT_BACKLOG.md

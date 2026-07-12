@@ -8,6 +8,7 @@ owned by ``process.yml`` so command output is visible in the engine gate log.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -26,6 +27,17 @@ CLARIFICATION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 BASELINE_PATH = "docs/feature-baseline.yml"
+DOCUMENTATION_PATHS = (
+    "CHANGELOG.md",
+    "docs/PRD.md",
+    "docs/TECH_STACK.md",
+    "docs/tech_stack.md",
+    "docs/ui_criteria.md",
+    "docs/api_contract.md",
+    "docs/test_data.md",
+    "docs/PROJECT_BACKLOG.md",
+    "docs/FEATURES.md",
+)
 
 
 class FeatureValidationError(ValueError):
@@ -171,15 +183,25 @@ def _detect_product_root(root: Path) -> str:
     return candidates[0]
 
 
+def _sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _write_baseline(root: Path, product_root: str) -> None:
     path = root / BASELINE_PATH
     if path.exists():
         return
     payload = {
-        "version": 1,
+        "version": 2,
         "product_root": product_root,
         "project_backlog": _markdown_records(_read(root, "docs/PROJECT_BACKLOG.md")),
         "features": _markdown_records(_read(root, "docs/FEATURES.md")),
+        "documentation_sha256": {
+            relative: _sha256(root / relative)
+            for relative in DOCUMENTATION_PATHS
+        },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -196,7 +218,7 @@ def _load_baseline(
         payload = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
         raise FeatureValidationError(f"{BASELINE_PATH}: YAML inválido: {exc}") from exc
-    if not isinstance(payload, dict) or payload.get("version") != 1:
+    if not isinstance(payload, dict) or payload.get("version") not in {1, 2}:
         raise FeatureValidationError(f"{BASELINE_PATH}: versão ausente ou inválida")
     backlog = payload.get("project_backlog")
     features = payload.get("features")
@@ -208,6 +230,25 @@ def _load_baseline(
     if not all(isinstance(row, dict) for row in [*backlog, *features]):
         raise FeatureValidationError(f"{BASELINE_PATH}: registros inválidos")
     return backlog, features, str(product_root)
+
+
+def _baseline_documentation(root: Path) -> dict[str, str | None]:
+    text = _read(root, BASELINE_PATH)
+    try:
+        payload = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise FeatureValidationError(f"{BASELINE_PATH}: YAML inválido: {exc}") from exc
+    values = payload.get("documentation_sha256", {})
+    if values is None:
+        return {}
+    if not isinstance(values, dict):
+        raise FeatureValidationError(
+            f"{BASELINE_PATH}: documentation_sha256 inválido"
+        )
+    return {
+        str(path): str(digest) if digest is not None else None
+        for path, digest in values.items()
+    }
 
 
 def _assert_unrelated_records_unchanged(
@@ -544,6 +585,38 @@ def validate_reconcile(root: Path) -> None:
     _assert_ac_pass(result, acceptance_ids, "docs/feature-result.md")
     if backlog not in result.upper():
         raise FeatureValidationError(f"docs/feature-result.md não referencia {backlog}")
+
+    changelog = _read(root, "CHANGELOG.md")
+    baseline_documentation = _baseline_documentation(root)
+    baseline_changelog = baseline_documentation.get("CHANGELOG.md")
+    if baseline_changelog is not None and _sha256(root / "CHANGELOG.md") == baseline_changelog:
+        raise FeatureValidationError("CHANGELOG.md não foi atualizado neste ciclo")
+    if backlog not in changelog.upper():
+        raise FeatureValidationError(f"CHANGELOG.md não referencia {backlog}")
+
+    required_documentation = (
+        "CHANGELOG.md",
+        "docs/PROJECT_BACKLOG.md",
+        "docs/FEATURES.md",
+    )
+    documentation_section = _section(
+        result,
+        ("Documentação atualizada", "Documentacao atualizada", "Updated Documentation"),
+    )
+    if not documentation_section:
+        raise FeatureValidationError(
+            "docs/feature-result.md sem seção `Documentação atualizada`"
+        )
+    missing_documentation = [
+        relative
+        for relative in required_documentation
+        if relative not in documentation_section
+    ]
+    if missing_documentation:
+        raise FeatureValidationError(
+            "docs/feature-result.md não lista documentação obrigatória: "
+            + ", ".join(missing_documentation)
+        )
 
 
 VALIDATORS = {

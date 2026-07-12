@@ -1,0 +1,159 @@
+# Evolve Process — Evolução de Processo Guiada por Contexto de Ciclo
+#
+# Playbook do `ft evolve`. Nunca roda dentro de um ciclo: o engine copia este
+# diretório para um workspace descartável em $FT_HOME/runtime/<projeto>/evolve/
+# e executa o grafo lá. O LLM só escreve em targets/ (staging dos processos) e
+# report/; o apply de volta aos alvos reais é determinístico e feito pelo CLI
+# depois que todos os YAMLs staged validam.
+#
+# Regra de ouro (igual ao resto do engine): processo é GENÉRICO. Nenhuma
+# especificidade de produto pode entrar num process.yml — muito menos no
+# template global.
+
+id: evolve_process
+version: "1.0.0"
+title: "Evolve Process — Evolução de Processo"
+
+execution_policy:
+  entrypoint: evolve
+  template: evolve_process
+  materialization: per_run
+  runtime_source: workspace
+
+artifact_policy:
+  cycle:
+    - report/findings.md
+    - report/evolution-report.md
+
+nodes:
+  - id: evolve.analyze
+    type: document
+    title: "Analisar Contexto do Ciclo e Derivar Melhorias"
+    description: >-
+      Lê o contexto do ciclo (retro, handoff, process-improvements, estado) e
+      os processos staged, e deriva melhorias de processo com evidência.
+    executor: llm_coach
+    max_turns: 25
+    write_scope:
+      - report/
+    outputs:
+      - report/findings.md
+    prompt: |
+      Você está num workspace de EVOLUÇÃO DE PROCESSO. Aqui não existe produto:
+      o objeto de trabalho são os próprios arquivos de processo (process.yml,
+      environment.yml, scripts/ e docs de processo).
+
+      PASSO 1 — Leia context/targets.md: ele lista o que está staged em
+      targets/ e quais artefatos de contexto existem.
+
+      PASSO 2 — Leia TODO o contexto disponível:
+      - context/directive.md (se existir) — diretriz do stakeholder; tem prioridade.
+      - context/cycle/ — retro, handoff, process-improvements, relatórios,
+        feedback do stakeholder do ciclo mais recente.
+      - context/cycle_state.yml (se existir) — estado do ciclo: nodes que
+        bloquearam, retries, node atual.
+
+      PASSO 3 — Leia os processos staged em targets/ (project e/ou global).
+
+      PASSO 4 — Escreva report/findings.md com a estrutura OBRIGATÓRIA:
+
+        # Findings — Evolução de Processo
+
+        ## Contexto
+        De qual ciclo o contexto veio e o que ele revela (3-6 linhas).
+
+        ## Dores Observadas
+        Lista numerada. Cada dor DEVE citar a evidência concreta no contexto
+        (arquivo e trecho). Sem evidência, não é dor — não invente.
+
+        ## Melhorias Propostas
+        Uma subseção por melhoria, id EV-NN:
+        ### EV-01 — [título curto]
+        - Alvo: project | global:<template> | ambos
+        - Arquivos: paths dentro de targets/ que serão alterados
+        - Mudança: o que muda, objetivamente
+        - Justificativa: qual dor resolve e por que essa é a correção certa
+        - Risco: o que pode quebrar e como o design mitiga
+
+        ## Fora de Escopo
+        O que você observou mas decidiu NÃO propor, e por quê.
+
+      REGRAS INVIOLÁVEIS:
+      - Melhorias são de PROCESSO e genéricas: sequência de nodes, prompts,
+        validators, gates, políticas, scripts de ambiente. Nomes de produto,
+        rotas, portas ou domínios de negócio NÃO podem entrar em process.yml.
+      - Alvo global só aceita mudança que serve a QUALQUER projeto.
+      - Neste node você ainda NÃO altera targets/ — apenas report/findings.md.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: report/findings.md
+      - min_lines: 25
+      - has_sections:
+          - Contexto
+          - Dores Observadas
+          - Melhorias Propostas
+          - Fora de Escopo
+    next: evolve.apply
+
+  - id: evolve.apply
+    type: document
+    title: "Aplicar Melhorias no Staging e Relatar"
+    description: >-
+      Aplica as melhorias EV-NN editando somente o staging em targets/ e
+      registra o antes/depois em report/evolution-report.md.
+    executor: llm_coach
+    max_turns: 40
+    write_scope:
+      - targets/
+      - report/
+    outputs:
+      - report/evolution-report.md
+    prompt: |
+      Aplique as melhorias descritas em report/findings.md.
+
+      PASSO 1 — Releia report/findings.md.
+
+      PASSO 2 — Para cada EV-NN, edite os arquivos correspondentes DENTRO de
+      targets/. Regras:
+      - Edite SOMENTE dentro de targets/ e report/. context/ e process/ são
+        somente leitura.
+      - Todo YAML editado deve continuar válido e o grafo coerente (ids únicos,
+        next apontando para nodes existentes, um node type: end alcançável).
+      - Preserve ids de nodes existentes sempre que possível — históricos e
+        states antigos referenciam esses ids.
+      - Nada de especificidade de produto em process.yml; no alvo global,
+        nada de especificidade do projeto.
+      - Se durante a aplicação uma EV se mostrar errada ou arriscada demais,
+        NÃO aplique — registre a desistência no relatório.
+
+      PASSO 3 — Escreva report/evolution-report.md:
+
+        # Evolution Report
+
+        ## Aplicadas
+        Uma subseção por EV aplicada:
+        ### EV-NN — [título]
+        - Arquivos alterados (paths em targets/)
+        - Antes → Depois (resumo objetivo da mudança)
+        - Justificativa (1-2 linhas)
+
+        ## Descartadas
+        EVs propostas e não aplicadas, com o motivo.
+
+        ## Recomendações de Acompanhamento
+        O que observar nos próximos ciclos para confirmar que as melhorias
+        funcionaram.
+
+      Ao final diga DONE.
+    validators:
+      - file_exists: report/evolution-report.md
+      - min_lines: 15
+      - has_sections:
+          - Aplicadas
+          - Descartadas
+    next: evolve.end
+
+  - id: evolve.end
+    type: end
+    title: "Evolução Concluída"

@@ -47,6 +47,7 @@ ft approve                 # Aprovar artefato pendente
 ft reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
 ft reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
 ft lint-process                   # Lint semântico — detecta especificidades de projeto no YAML
+ft evolve --project        # Evoluir o processo em paralelo ao ciclo (não avança steps)
 ```
 
 `--template` é obrigatório no `ft init`. O engine não possui template default;
@@ -185,6 +186,48 @@ ft process-candidates PI-003 --status rejected --reason "Regra específica do pr
 `ft close` recusa candidatos `pending`. `--force` permite ignorar a governança
 somente de forma explícita. Ao fechar, os dois relatórios são arquivados em
 `.ft/cycles/<cycle>/` com a decisão e a referência preservadas.
+
+### Evolução de processo (ft evolve)
+
+`ft evolve` evolui o processo usando o contexto do ciclo — sem avançar nenhum
+step. Ele roda em paralelo ao ciclo: o playbook executa num workspace
+descartável em `$FT_HOME/runtime/<projeto>/evolve/evolve-NN/` (nunca em
+`worktrees/`, então um evolve jamais aparece em `ft runs` nem bloqueia
+`ft run`/`ft feature`).
+
+```bash
+ft evolve --project                       # Melhorar o fork local .ft/process/
+ft evolve --global                        # Melhorar o template global do engine
+ft evolve --project --global              # Ambos
+ft evolve "reduzir retries no build" --project   # Com diretriz do stakeholder
+ft evolve --project --cycle cycle-07      # Contexto de um ciclo específico
+ft evolve --project --dry-run             # Derivar e validar sem aplicar
+ft evolve --project --yes                 # Aplicar sem confirmação
+ft evolve --project -t evolve_process     # Playbook explícito (default)
+```
+
+Fluxo:
+
+1. **Contexto** — copia read-only os artefatos do ciclo ativo mais recente
+   (ou `--cycle`, ou o último arquivado em `.ft/cycles/`): retro, handoff,
+   process-improvements, relatórios e o `engine_state.yml` do ciclo.
+2. **Staging** — copia integralmente os alvos para o workspace:
+   `targets/project/` (fork `.ft/process/` da raiz do projeto) e/ou
+   `targets/global/<template>/` (template global resolvido pelo manifesto).
+3. **Playbook** — o template `evolve_process` (entrypoint `evolve`) roda no
+   workspace via runner normal: `evolve.analyze` deriva melhorias `EV-NN`
+   com evidência obrigatória; `evolve.apply` edita somente o staging e
+   escreve `report/evolution-report.md`.
+4. **Apply determinístico** — todo `process.yml` staged precisa passar no
+   validador de grafo e templates globais precisam continuar pristine; só
+   então o CLI mostra o diff e espelha o staging nos alvos reais. As
+   mudanças ficam uncommitted para revisão via `git diff`.
+
+`--global` exige um checkout git do engine e aplica direto no working tree
+de `templates/` — a promoção continua sendo decisão do mantenedor no commit.
+Mudanças no fork local vão para a raiz do projeto (nunca para dentro de um
+ciclo), então o ciclo em andamento não é afetado; o próximo ciclo nasce do
+processo evoluído.
 
 ---
 

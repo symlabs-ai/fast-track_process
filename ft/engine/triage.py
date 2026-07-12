@@ -116,6 +116,7 @@ def classify_demand(
     project_root: str = ".",
     llm_engine: str = "claude",
     llm_model: str | None = None,
+    llm_effort: str | None = None,
 ) -> dict[str, Any]:
     """Classifica a demanda bruta do usuário.
 
@@ -138,6 +139,7 @@ def classify_demand(
         max_turns=5,
         llm_engine=llm_engine,
         llm_model=llm_model,
+        llm_effort=llm_effort,
         raw_output=True,
     )
 
@@ -229,6 +231,7 @@ def adapt_process(
     project_root: str = ".",
     llm_engine: str = "claude",
     llm_model: str | None = None,
+    llm_effort: str | None = None,
 ) -> str | None:
     """Adapta o YAML do processo com base nos requisitos detectados.
 
@@ -251,6 +254,7 @@ def adapt_process(
         max_turns=10,
         llm_engine=llm_engine,
         llm_model=llm_model,
+        llm_effort=llm_effort,
         raw_output=True,
     )
 

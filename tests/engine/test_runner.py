@@ -17,6 +17,7 @@ from ft.engine.runner import (
     _opencode_compact_bundle_prompt,
 )
 from ft.engine.delegate import DelegateResult
+from ft.engine.state import EngineState
 
 
 _TEST_PROCESS_V2_YAML = """\
@@ -127,6 +128,65 @@ class TestInitState:
         runner.init_state()
         state = runner.state_mgr.load()
         assert state.llm_engine == "codex"
+
+    def test_init_persists_selected_model_and_effort(self, tmp_path):
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(_TEST_PROCESS_V2_YAML)
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=tmp_path / "state.yml",
+            project_root=".",
+            llm_engine="claude",
+            llm_model="fable",
+            llm_effort="max",
+        )
+
+        runner.init_state()
+
+        state = runner.state_mgr.load()
+        assert state.llm_model == "fable"
+        assert state.llm_effort == "max"
+
+    def test_node_effort_overrides_run_effort(self, tmp_path):
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(_TEST_PROCESS_V2_YAML)
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=tmp_path / "state.yml",
+            project_root=".",
+            llm_effort="high",
+        )
+        node = runner.graph.first_node()
+        node.llm_effort = "max"
+
+        assert runner._resolve_llm_effort(EngineState(llm_effort="low"), node) == "max"
+
+    def test_explicit_default_effort_clears_active_state_effort(self, tmp_path):
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(_TEST_PROCESS_V2_YAML)
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=tmp_path / "state.yml",
+            project_root=".",
+            llm_effort="default",
+        )
+        state = EngineState(llm_effort="max")
+
+        assert runner._resolve_llm_effort(state) is None
+
+    def test_node_default_effort_clears_inherited_effort(self, tmp_path):
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(_TEST_PROCESS_V2_YAML)
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=tmp_path / "state.yml",
+            project_root=".",
+            llm_effort="high",
+        )
+        node = runner.graph.first_node()
+        node.llm_effort = "default"
+
+        assert runner._resolve_llm_effort(EngineState(llm_effort="max"), node) is None
 
     def test_explicit_write_scope_overrides_output_derived_paths(self, runner_v2):
         from ft.engine.graph import Node
@@ -3355,6 +3415,21 @@ nodes:
 # ---------------------------------------------------------------------------
 
 class TestStatus:
+    def test_status_preserves_engine_line_and_adds_model_effort(self, runner_v2, capsys):
+        runner_v2.init_state()
+        state = runner_v2.state_mgr.load()
+        state.llm_engine = "codex"
+        state.llm_model = "gpt-5.6-sol"
+        state.llm_effort = "max"
+        runner_v2.state_mgr.save()
+
+        runner_v2.status()
+
+        out = capsys.readouterr().out
+        assert "LLM engine: codex" in out
+        assert "LLM model: gpt-5.6-sol" in out
+        assert "LLM effort: max" in out
+
     def test_status_shows_current_node(self, runner_v2, capsys):
         runner_v2.init_state()
         runner_v2.status()

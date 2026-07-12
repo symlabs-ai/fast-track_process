@@ -788,6 +788,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         llm_engine: str | None = None,
         llm_model: str | None = None,
         verbose: bool = False,
+        llm_effort: str | None = None,
     ):
         self.project_root = str(Path(project_root).resolve())
         selected_process = Path(process_path)
@@ -812,6 +813,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         self.state_mgr = StateManager(state_path)
         self._llm_engine_override = llm_engine.lower().strip() if llm_engine else None
         self._llm_model_override = llm_model.strip() if llm_model else None
+        self._llm_effort_override_set = llm_effort is not None
+        self._llm_effort_override = self._normalize_llm_effort(llm_effort)
         self._auto_approve = False
         self._verbose = verbose
         # KB path: diretório com lições de runs anteriores (opcional)
@@ -1035,6 +1038,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     project_root=self._work_dir,
                     allowed_paths=allowed_paths,
                     llm_model=self._resolve_llm_model(state, node=node),
+                    llm_effort=self._resolve_llm_effort(state, node=node),
                     log_path=log_path,
                 )
             finally:
@@ -1603,16 +1607,44 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             return state.llm_model
         return os.environ.get("FT_LLM_MODEL") or None
 
+    @staticmethod
+    def _normalize_llm_effort(value: Any) -> str | None:
+        """Normaliza sentinelas que significam usar o default nativo do provider."""
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized or normalized.lower() == "default":
+            return None
+        return normalized
+
+    def _resolve_llm_effort(self, state: Any | None = None, node: Any | None = None) -> str | None:
+        """Resolve effort efetivo. Prioridade: node > CLI override > state > env."""
+        if node is not None:
+            raw_node_effort = getattr(node, "llm_effort", None)
+            if raw_node_effort is not None:
+                return self._normalize_llm_effort(raw_node_effort)
+        if self._llm_effort_override_set:
+            return self._llm_effort_override
+        if state is not None:
+            state_effort = self._normalize_llm_effort(getattr(state, "llm_effort", None))
+            if state_effort:
+                return state_effort
+        return self._normalize_llm_effort(os.environ.get("FT_LLM_EFFORT"))
+
     def _persist_llm_engine(self, state: Any) -> None:
-        """Persiste engine e model no estado para comandos subsequentes do projeto."""
+        """Persiste engine, model e effort para comandos subsequentes do projeto."""
         effective_engine = self._resolve_llm_engine(state)
         effective_model = self._resolve_llm_model(state)
+        effective_effort = self._resolve_llm_effort(state)
         changed = False
         if getattr(state, "llm_engine", None) != effective_engine:
             state.llm_engine = effective_engine
             changed = True
         if getattr(state, "llm_model", None) != effective_model:
             state.llm_model = effective_model
+            changed = True
+        if getattr(state, "llm_effort", None) != effective_effort:
+            state.llm_effort = effective_effort
             changed = True
         if changed:
             self.state_mgr.save()
@@ -2446,6 +2478,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             first.id,
             total,
             llm_engine=self._resolve_llm_engine(),
+            llm_model=self._resolve_llm_model(),
+            llm_effort=self._resolve_llm_effort(),
             current_cycle=cycle_id,
             process_path=selected_process_path,
             process_digest=process_digest(process_file),
@@ -2884,6 +2918,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             allowed_paths=allowed,
             llm_engine=effective_engine,
             llm_model=self._resolve_llm_model(state, node=node),
+            llm_effort=self._resolve_llm_effort(state, node=node),
             log_path=log_path,
             stream_prefix=self._stream_prefix(effective_engine),
         )
@@ -2998,6 +3033,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=self._resolve_llm_engine(state, node=node),
                         llm_model=self._resolve_llm_model(state, node=node),
+                        llm_effort=self._resolve_llm_effort(state, node=node),
                         max_turns=node.max_turns or 50,
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state, node=node)),
@@ -3191,6 +3227,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 allowed_paths=allowed,
                 llm_engine=effective_engine,
                 llm_model=self._resolve_llm_model(state, node=node),
+                llm_effort=self._resolve_llm_effort(state, node=node),
                 max_turns=node.max_turns or 50,
                 log_path=log_path,
                 stream_prefix=self._stream_prefix(effective_engine),
@@ -3293,6 +3330,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         allowed_paths=self._delegate_allowed_paths(["src/", "tests/", "docs/", "main.py", "app.py", "server.py", "frontend/"]),
                         llm_engine=self._resolve_llm_engine(state),
                         llm_model=self._resolve_llm_model(state),
+                        llm_effort=self._resolve_llm_effort(state),
                         log_path=log_path,
                         stream_prefix=self._stream_prefix(self._resolve_llm_engine(state)),
                     )
@@ -3743,6 +3781,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             allowed_paths=self._delegate_allowed_paths(allowed),
             llm_engine=effective_engine,
             llm_model=self._resolve_llm_model(state, node=node),
+            llm_effort=self._resolve_llm_effort(state, node=node),
             log_path=review_log_path,
             stream_prefix=self._stream_prefix(effective_engine),
         )
@@ -3813,6 +3852,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=effective_engine,
                         llm_model=self._resolve_llm_model(state, node=node),
+                        llm_effort=self._resolve_llm_effort(state, node=node),
                         max_turns=node.max_turns or 50,
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(effective_engine),
@@ -3895,6 +3935,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=effective_engine,
                         llm_model=self._resolve_llm_model(state, node=node),
+                        llm_effort=self._resolve_llm_effort(state, node=node),
                         max_turns=node.max_turns or 50,
                         log_path=retry_log_path,
                         stream_prefix=self._stream_prefix(effective_engine),
@@ -3976,6 +4017,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             allowed_paths=self._delegate_allowed_paths(allowed),
             llm_engine=self._resolve_llm_engine(state),
             llm_model=self._resolve_llm_model(state),
+            llm_effort=self._resolve_llm_effort(state),
             log_path=log_path,
         )
 
@@ -4030,6 +4072,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 allowed_paths=self._delegate_allowed_paths(allowed),
                 llm_engine=self._resolve_llm_engine(state),
                 llm_model=self._resolve_llm_model(state),
+                llm_effort=self._resolve_llm_effort(state),
                 log_path=str(self._llm_log_dir() / "exploration_report.log"),
             )
             if report_result.success:
@@ -4077,11 +4120,13 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         try:
             llm_engine = self._resolve_llm_engine(self.state_mgr.state)
             llm_model = self._resolve_llm_model(self.state_mgr.state)
+            llm_effort = self._resolve_llm_effort(self.state_mgr.state)
             results = par.run_parallel(
                 tasks,
                 lambda **kwargs: delegate_to_llm(
                     llm_engine=llm_engine,
                     llm_model=llm_model,
+                    llm_effort=llm_effort,
                     stream_prefix=self._stream_prefix(llm_engine),
                     **kwargs,
                 ),
@@ -4355,6 +4400,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     allowed_paths=self._delegate_allowed_paths(allowed),
                     llm_engine=retry_engine,
                     llm_model=self._resolve_llm_model(state, node=retry_node),
+                    llm_effort=self._resolve_llm_effort(state, node=retry_node),
                     max_turns=retry_node.max_turns or 50,
                     log_path=retry_log_path,
                     stream_prefix=self._stream_prefix(retry_engine),
@@ -4415,7 +4461,13 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             current_sprint = self.graph.sprint_of(state.current_node)
 
         print(ui.header(f"{state.process_id} v{state.version}"))
+        # Preserve the public text consumed by existing status parsers; model
+        # and effort are additive lines instead of a breaking replacement.
         print(ui.info(f"LLM engine: {state.llm_engine}"))
+        if state.llm_model:
+            print(ui.info(f"LLM model: {state.llm_model}"))
+        if state.llm_effort:
+            print(ui.info(f"LLM effort: {state.llm_effort}"))
         print(ui.info(f"Node atual: {state.current_node}"))
         print(ui.info(f"Status: {state.node_status}"))
         if current_sprint:

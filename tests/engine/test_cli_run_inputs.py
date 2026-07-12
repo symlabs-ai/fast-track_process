@@ -23,6 +23,7 @@ class FakeRunner:
         project_root=".",
         llm_engine=None,
         llm_model=None,
+        llm_effort=None,
         verbose=False,
     ):
         self.process_path = process_path
@@ -30,6 +31,7 @@ class FakeRunner:
         self.project_root = Path(project_root)
         self.llm_engine = llm_engine
         self.llm_model = llm_model
+        self.llm_effort = llm_effort
         self.verbose = verbose
         self._bypass_human_gates = False
         self.inited = False
@@ -60,6 +62,7 @@ def _args(project: Path, **overrides) -> Namespace:
         "codex": None,
         "gemini": None,
         "opencode": None,
+        "effort": None,
         "verbose": False,
     }
     base.update(overrides)
@@ -96,10 +99,14 @@ class TestRunInputs:
         ):
             classify.return_value = {"questions": [], "process": {}}
 
-            cli_main.cmd_run(_args(project, demand_input=str(demand), codex=True))
+            cli_main.cmd_run(
+                _args(project, demand_input=str(demand), codex=True, effort="max")
+            )
 
         assert classify.call_args.kwargs["llm_engine"] == "codex"
+        assert classify.call_args.kwargs["llm_effort"] == "max"
         assert FakeRunner.instances[-1].llm_engine == "codex"
+        assert FakeRunner.instances[-1].llm_effort == "max"
         assert FakeRunner.instances[-1].run_mode == "mvp"
         run_root = FakeRunner.instances[-1].project_root
         assert (run_root / "docs" / "demanda.md").exists()
@@ -161,12 +168,16 @@ nodes:
 """
         )
         from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(project, defaults={"llm_engine": "opencode"})
+        ensure_project_layout(
+            project,
+            defaults={"llm_engine": "opencode", "llm_effort": "high"},
+        )
 
         with patch("ft.cli.main.StepRunner", FakeRunner):
             cli_main.cmd_run(_args(project, template=None))
 
         assert FakeRunner.instances[-1].llm_engine == "opencode"
+        assert FakeRunner.instances[-1].llm_effort == "high"
         assert FakeRunner.instances[-1].project_root.name == "cycle-01-opencode"
 
     def test_run_without_git_executes_inside_plain_isolated_run_dir(self, tmp_path, monkeypatch):
@@ -801,6 +812,9 @@ class TestFix:
             def _resolve_llm_model(self, loaded_state=None, node=None):
                 return loaded_state.llm_model if loaded_state else None
 
+            def _resolve_llm_effort(self, loaded_state=None, node=None):
+                return loaded_state.llm_effort if loaded_state else None
+
         args = Namespace(
             instruction="Corrija somente project/tests/e2e/test_navigation.py.",
             process=None,
@@ -956,6 +970,9 @@ class TestFix:
 
             def _resolve_llm_model(self, loaded_state=None, node=None):
                 return loaded_state.llm_model if loaded_state else None
+
+            def _resolve_llm_effort(self, loaded_state=None, node=None):
+                return loaded_state.llm_effort if loaded_state else None
 
             def _print_validation(self, validation):
                 self.validation_seen = validation

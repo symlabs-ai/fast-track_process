@@ -5,6 +5,7 @@ ft engine CLI — comandos do motor deterministico.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -34,8 +35,10 @@ from ft.engine.layout import (
     process_digest,
     register_project_process,
     resolve_project_process,
+    update_manifest_llm_defaults,
     validate_template_is_pristine,
 )
+from ft.engine.llm_capabilities import discover_llm_capabilities
 from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
 from ft.engine.process_improvements import (
     ProcessImprovementError,
@@ -64,6 +67,11 @@ def add_llm_engine_flags(parser):
                        help="Usar Gemini CLI (opcional: modelo, ex: --gemini gemini-2.5-pro)")
     group.add_argument("--opencode", nargs="?", const=True, metavar="MODEL",
                        help="Usar OpenCode CLI (default: pgx/zai-org_glm-4.7-flash)")
+    parser.add_argument(
+        "--effort",
+        metavar="LEVEL",
+        help="Effort de raciocínio do modelo (provider-specific; default omite override)",
+    )
 
 
 def resolve_bypass_human_gates(args) -> bool:
@@ -116,6 +124,21 @@ def resolve_llm_model(args) -> str | None:
         if val is not None and val is not True:
             return str(val)
     return None
+
+
+def resolve_llm_effort(args) -> str | None:
+    """Return an explicit effort, preserving ``default`` as an override.
+
+    O runner distingue ausência do flag de ``--effort default``: o segundo
+    limpa um effort herdado do ciclo sem inventar um catálogo global.
+    """
+    value = getattr(args, "effort", None)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized
 
 
 def engine_root() -> Path:
@@ -382,6 +405,258 @@ def find_project_root() -> Path:
         if paths.project_manifest(parent).is_file() or paths.project_process_file(parent).is_file():
             return parent
     return current
+
+
+def _capability_agent(
+    capabilities: dict[str, object],
+    agent_id: str,
+) -> dict[str, object] | None:
+    agents = capabilities.get("agents", [])
+    if not isinstance(agents, list):
+        return None
+    return next(
+        (
+            agent
+            for agent in agents
+            if isinstance(agent, dict) and agent.get("id") == agent_id
+        ),
+        None,
+    )
+
+
+def _capability_model(
+    agent: dict[str, object],
+    model_id: str,
+) -> dict[str, object] | None:
+    models = agent.get("models", [])
+    if not isinstance(models, list):
+        return None
+    return next(
+        (
+            model
+            for model in models
+            if isinstance(model, dict) and model.get("id") == model_id
+        ),
+        None,
+    )
+
+
+def _overlay_project_llm_defaults(
+    capabilities: dict[str, object],
+    project_root: Path,
+) -> dict[str, object]:
+    """Add saved, provider-reported and effective defaults to a fresh probe."""
+
+    existing_errors = capabilities.get("errors")
+    if isinstance(existing_errors, list):
+        capabilities["errors"] = [
+            error
+            for error in existing_errors
+            if not isinstance(error, dict)
+            or error.get("code") != "invalid_saved_default"
+        ]
+
+    saved_agent, saved_model, saved_effort = manifest_llm_defaults(project_root)
+    raw_defaults = capabilities.get("defaults")
+    cli_defaults = raw_defaults if isinstance(raw_defaults, dict) else {}
+    reported = {
+        "agent": cli_defaults.get("agent"),
+        "models": cli_defaults.get("models", {}),
+        "efforts": cli_defaults.get("efforts", {}),
+        "source": "provider_cli",
+    }
+    saved = {
+        "agent": saved_agent,
+        "model": saved_model,
+        "effort": saved_effort,
+        "source": "project_manifest",
+    }
+
+    # Claude is FT's executor default when the project has no persisted agent.
+    # A null model/effort intentionally means "let that provider choose".
+    effective_agent = saved_agent or str(reported.get("agent") or "claude")
+    effective_model = saved_model
+    effective_effort = saved_effort
+    if any(value is not None for value in (saved_agent, saved_model, saved_effort)):
+        effective_source = "project_manifest"
+    elif reported.get("agent"):
+        effective_source = "provider_cli"
+    else:
+        effective_source = "ft_default"
+    valid = True
+    reason: str | None = None
+
+    agent = _capability_agent(capabilities, effective_agent)
+    if agent is None:
+        valid = False
+        reason = f"Agente salvo não foi anunciado pela descoberta: {effective_agent}"
+    elif not agent.get("available"):
+        valid = False
+        reason = str(agent.get("reason") or f"Agente indisponível: {effective_agent}")
+    else:
+        if effective_model is None:
+            reported_model = agent.get("default_model")
+            effective_model = str(reported_model) if reported_model else None
+
+        model = _capability_model(agent, effective_model) if effective_model else None
+        if effective_model is not None and model is None:
+            valid = False
+            reason = (
+                f"Modelo salvo não está disponível para {effective_agent}: "
+                f"{effective_model}"
+            )
+        elif model is not None:
+            advertised_efforts = model.get("efforts")
+            if effective_effort is None:
+                reported_effort = model.get("default_effort")
+                effective_effort = str(reported_effort) if reported_effort else None
+            elif not isinstance(advertised_efforts, list) or effective_effort not in advertised_efforts:
+                valid = False
+                reason = (
+                    f"Effort salvo não é compatível com {effective_agent}/"
+                    f"{effective_model}: {effective_effort}"
+                )
+
+    effective = {
+        "agent": effective_agent,
+        "model": effective_model,
+        "effort": effective_effort,
+        "valid": valid,
+        "reason": reason,
+        "source": effective_source,
+    }
+    capabilities["defaults"] = {
+        **cli_defaults,
+        "saved": saved,
+        "reported": reported,
+        "effective": effective,
+    }
+    if not valid:
+        errors = capabilities.setdefault("errors", [])
+        if isinstance(errors, list):
+            errors.append(
+                {
+                    "code": "invalid_saved_default",
+                    "message": reason or "Default LLM salvo é inválido",
+                }
+            )
+    return capabilities
+
+
+def _print_llm_json(payload: dict[str, object], compact: bool) -> None:
+    print(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=None if compact else 2,
+            separators=(",", ":") if compact else None,
+        )
+    )
+
+
+def _fail_llm_command(
+    capabilities: dict[str, object],
+    *,
+    code: str,
+    message: str,
+    compact: bool,
+) -> None:
+    capabilities["updated"] = False
+    errors = capabilities.setdefault("errors", [])
+    if isinstance(errors, list):
+        errors.append({"code": code, "message": message})
+    _print_llm_json(capabilities, compact)
+    raise SystemExit(2)
+
+
+def cmd_llm_capabilities(args) -> None:
+    """Probe providers afresh and expose their project-default overlay."""
+
+    root = find_project_root()
+    capabilities = discover_llm_capabilities(cwd=root)
+    _overlay_project_llm_defaults(capabilities, root)
+    _print_llm_json(capabilities, bool(getattr(args, "json", False)))
+
+
+def cmd_llm_defaults(args) -> None:
+    """Validate and atomically persist one project LLM default selection."""
+
+    root = find_project_root()
+    compact = bool(getattr(args, "json", False))
+    capabilities = discover_llm_capabilities(cwd=root)
+    _overlay_project_llm_defaults(capabilities, root)
+
+    manifest_path = paths.project_manifest(root)
+    if not manifest_path.is_file():
+        _fail_llm_command(
+            capabilities,
+            code="project_not_initialized",
+            message="Projeto sem .ft/manifest.yml; execute ft init primeiro",
+            compact=compact,
+        )
+
+    agent_id = str(args.agent).strip().lower()
+    model_id = str(args.model).strip()
+    requested_effort = getattr(args, "effort", None)
+    effort = str(requested_effort).strip() if requested_effort is not None else None
+    if not effort or effort.lower() == "default":
+        effort = None
+
+    agent = _capability_agent(capabilities, agent_id)
+    if agent is None:
+        _fail_llm_command(
+            capabilities,
+            code="agent_unknown",
+            message=f"Agente não anunciado pela descoberta: {agent_id}",
+            compact=compact,
+        )
+    if not agent.get("available"):
+        _fail_llm_command(
+            capabilities,
+            code="agent_unavailable",
+            message=str(agent.get("reason") or f"Agente indisponível: {agent_id}"),
+            compact=compact,
+        )
+
+    model = _capability_model(agent, model_id)
+    if model is None or not model.get("available", True):
+        _fail_llm_command(
+            capabilities,
+            code="model_unavailable",
+            message=f"Modelo não disponível para {agent_id}: {model_id}",
+            compact=compact,
+        )
+
+    advertised_efforts = model.get("efforts")
+    if effort is not None and (
+        not isinstance(advertised_efforts, list) or effort not in advertised_efforts
+    ):
+        _fail_llm_command(
+            capabilities,
+            code="effort_unsupported",
+            message=f"Effort não compatível com {agent_id}/{model_id}: {effort}",
+            compact=compact,
+        )
+
+    try:
+        update_manifest_llm_defaults(
+            root,
+            llm_engine=agent_id,
+            llm_model=model_id,
+            llm_effort=effort,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        _fail_llm_command(
+            capabilities,
+            code="manifest_update_failed",
+            message=str(exc),
+            compact=compact,
+        )
+
+    _overlay_project_llm_defaults(capabilities, root)
+    capabilities["updated"] = True
+    capabilities["manifest"] = ".ft/manifest.yml"
+    _print_llm_json(capabilities, compact)
 
 
 def find_process_yaml(root: Path) -> Path | None:
@@ -1096,7 +1371,14 @@ def _worktree_root_from_state(state_path: Path) -> Path | None:
     return None
 
 
-def get_runner(process: str | None = None, llm_engine: str | None = None, llm_model: str | None = None, verbose: bool = False, cycle: str | None = None) -> StepRunner:
+def get_runner(
+    process: str | None = None,
+    llm_engine: str | None = None,
+    llm_model: str | None = None,
+    verbose: bool = False,
+    cycle: str | None = None,
+    llm_effort: str | None = None,
+) -> StepRunner:
     root = find_project_root()
     if cycle:
         # Estados de execução existem somente no FT_HOME.
@@ -1179,6 +1461,7 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, llm_mo
         project_root=effective_root,
         llm_engine=llm_engine,
         llm_model=llm_model,
+        llm_effort=llm_effort,
         verbose=verbose,
     )
 
@@ -1231,6 +1514,7 @@ def cmd_init(args):
     defaults = {
         "llm_engine": resolve_llm_engine(args),
         "llm_model": resolve_llm_model(args),
+        "llm_effort": resolve_llm_effort(args),
     }
     # copy_template registra a origem quando realmente copia um template. Se o
     # processo já existia, não atribuímos uma origem que não foi aplicada.
@@ -1362,7 +1646,7 @@ def cmd_continue(args):
     sys.stdout.reconfigure(line_buffering=True)
     if not _ensure_runtime_selected(args):
         return
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     # Ciclo já concluído? NÃO reiniciar do zero (footgun: continue num ciclo
@@ -1390,6 +1674,7 @@ def cmd_status(args):
         args.process,
         llm_engine=resolve_llm_engine(args),
         llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
         verbose=getattr(args, "verbose", False),
         cycle=getattr(args, "cycle", None),
     )
@@ -1769,6 +2054,7 @@ def cmd_log(args):
         args.process,
         llm_engine=resolve_llm_engine(args),
         llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
         cycle=getattr(args, "cycle", None),
     )
     if not _ensure_runtime_selected(args, runner):
@@ -2123,7 +2409,7 @@ def cmd_runs(args):
 
 
 def cmd_approve(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
     if not _ensure_runtime_selected(args, runner):
         return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -2136,7 +2422,7 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
     if not _ensure_runtime_selected(args, runner):
         return
     retry = not args.no_retry
@@ -2157,6 +2443,7 @@ def cmd_explore(args):
 
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
+                        llm_effort=resolve_llm_effort(args),
                         verbose=getattr(args, "verbose", False))
     if not _ensure_runtime_selected(args, runner):
         return
@@ -2311,7 +2598,7 @@ def cmd_close(args):
     import subprocess as _sp
     from ft.engine import ui as _ui
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
     if not _ensure_runtime_selected(args, runner):
         return
     state = runner.state_mgr.load()
@@ -2498,7 +2785,7 @@ def cmd_close(args):
 def cmd_graph(args):
     if not _ensure_runtime_selected(args):
         return
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
     runner.status(full=True)
 
 
@@ -2634,8 +2921,10 @@ def cmd_lint_process(args):
 
     from ft.engine.delegate import delegate_to_llm
 
-    engine = resolve_llm_engine(args)
-    model = resolve_llm_model(args)
+    manifest_engine, manifest_model, manifest_effort = manifest_llm_defaults(root)
+    engine = resolve_llm_engine(args) or manifest_engine or "claude"
+    model = resolve_llm_model(args) or manifest_model
+    effort = resolve_llm_effort(args) or manifest_effort
     result = delegate_to_llm(
         task=prompt,
         project_root=str(root),
@@ -2643,6 +2932,7 @@ def cmd_lint_process(args):
         max_turns=5,
         llm_engine=engine,
         llm_model=model,
+        llm_effort=effort,
     )
 
     output = result.output.strip()
@@ -2699,6 +2989,7 @@ def cmd_retry(args):
 
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
+                        llm_effort=resolve_llm_effort(args),
                         verbose=getattr(args, "verbose", False))
     if not _ensure_runtime_selected(args, runner):
         return
@@ -2741,6 +3032,7 @@ def cmd_fix(args):
     instruction = args.instruction
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
+                        llm_effort=resolve_llm_effort(args),
                         verbose=getattr(args, "verbose", False))
     if not _ensure_runtime_selected(args, runner):
         return
@@ -2775,6 +3067,7 @@ def cmd_fix(args):
     state = runner.state_mgr.load() if state_path.exists() else None
     fix_engine = runner._resolve_llm_engine(state)
     fix_model = runner._resolve_llm_model(state)
+    fix_effort = runner._resolve_llm_effort(state)
     fix_node = None
     if state and state.current_node and state.current_node in runner.graph.nodes:
         fix_node = runner.graph.get_node(state.current_node)
@@ -2840,6 +3133,7 @@ def cmd_fix(args):
         allowed_paths=fix_allowed_paths,
         llm_engine=fix_engine,
         llm_model=fix_model,
+        llm_effort=fix_effort,
     )
     if opencode_capture_output_path:
         fix_kwargs["opencode_capture_output_path"] = opencode_capture_output_path
@@ -3080,7 +3374,9 @@ def cmd_cancel(args):
     # Análise LLM do cancelamento
     print(_ui.info("Gerando análise do cancelamento..."))
     from ft.engine.delegate import delegate_to_llm
-    llm_engine = resolve_llm_engine(args) or "claude"
+    llm_engine = resolve_llm_engine(args) or data.get("llm_engine") or "claude"
+    llm_model = resolve_llm_model(args) or data.get("llm_model")
+    llm_effort = resolve_llm_effort(args) or data.get("llm_effort")
 
     analysis_prompt = (
         f"Um run do processo Fast Track foi cancelado. Analise o contexto e produza "
@@ -3108,6 +3404,8 @@ def cmd_cancel(args):
         allowed_paths=[str(cancel_report_rel)],
         max_turns=10,
         llm_engine=llm_engine,
+        llm_model=llm_model,
+        llm_effort=llm_effort,
     )
 
     if result.success:
@@ -3161,6 +3459,7 @@ def _normalize_hipotese(
     project_root: Path,
     llm_engine: str = "claude",
     llm_model: str | None = None,
+    llm_effort: str | None = None,
 ) -> None:
     """Verifica se hipotese.md está no formato correto; corrige via LLM se não estiver.
 
@@ -3211,7 +3510,8 @@ Ao final diga DONE."""
     result = delegate_to_llm(task=prompt, project_root=str(project_root),
                              allowed_paths=["docs/"], max_turns=5,
                              llm_engine=llm_engine,
-                             llm_model=llm_model)
+                             llm_model=llm_model,
+                             llm_effort=llm_effort)
 
     if not result.success:
         print(f"  AVISO: LLM não conseguiu corrigir hipotese.md — o processo vai solicitar reescrita")
@@ -3489,7 +3789,7 @@ def cmd_run(args):
         sys.exit(1)
 
     inherited_engine = _engine_from_last_cycle(project_root)
-    manifest_engine, manifest_model = manifest_llm_defaults(project_root)
+    manifest_engine, manifest_model, manifest_effort = manifest_llm_defaults(project_root)
 
     _cleanup_pristine_runs(project_root)
 
@@ -3666,6 +3966,7 @@ def cmd_run(args):
                 print(f"  Contexto anterior: {source.relative_to(project_root)} → docs/{filename}")
 
     llm_model = resolve_llm_model(args) or manifest_model
+    llm_effort = resolve_llm_effort(args) or manifest_effort
 
     runner = StepRunner(
         process_path=process_path,
@@ -3673,6 +3974,7 @@ def cmd_run(args):
         project_root=project_root,
         llm_engine=_effective_engine,
         llm_model=llm_model,
+        llm_effort=llm_effort,
         verbose=getattr(args, "verbose", False),
     )
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -3727,6 +4029,7 @@ def cmd_run(args):
                 project_root=str(project_root),
                 llm_engine=_effective_engine,
                 llm_model=llm_model,
+                llm_effort=llm_effort,
             )
 
         print(present_triage(classification))
@@ -3754,6 +4057,7 @@ def cmd_run(args):
                         project_root=str(project_root),
                         llm_engine=_effective_engine,
                         llm_model=llm_model,
+                        llm_effort=llm_effort,
                     )
                 print(present_triage(classification))
 
@@ -3774,6 +4078,7 @@ def cmd_run(args):
                     project_root=str(project_root),
                     llm_engine=_effective_engine,
                     llm_model=llm_model,
+                    llm_effort=llm_effort,
                 )
 
             if adapted:
@@ -3813,6 +4118,7 @@ def cmd_run(args):
                             project_root=project_root,
                             llm_engine=_effective_engine,
                             llm_model=llm_model,
+                            llm_effort=llm_effort,
                             verbose=getattr(args, "verbose", False),
                         )
                     else:
@@ -3838,6 +4144,7 @@ def cmd_run(args):
             project_root,
             llm_engine=_effective_engine,
             llm_model=llm_model,
+            llm_effort=llm_effort,
         )
 
     # Copiar e normalizar hipótese inicial se fornecida (pre-seed de ft.mdd.01.hipotese)
@@ -3856,6 +4163,7 @@ def cmd_run(args):
             project_root,
             llm_engine=_effective_engine,
             llm_model=llm_model,
+            llm_effort=llm_effort,
         )
 
     # Health check da API antes de começar
@@ -3969,6 +4277,43 @@ def main():
     # runs — tabela comparativa de todos os ciclos
     ru2 = sub.add_parser("runs", help="Ciclos ativos no runtime e fechados em .ft/cycles/")
     ru2.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
+
+    llm_capabilities = sub.add_parser(
+        "llm-capabilities",
+        help="Descobrir agentes, modelos, efforts e defaults via CLIs instaladas",
+    )
+    llm_capabilities.add_argument(
+        "--json",
+        action="store_true",
+        help="Emitir JSON compacto para integração",
+    )
+
+    llm_defaults = sub.add_parser(
+        "llm-defaults",
+        help="Validar e persistir os defaults LLM do projeto",
+    )
+    llm_defaults.add_argument(
+        "--agent",
+        required=True,
+        choices=["claude", "codex", "opencode"],
+        help="Coding agent padrão",
+    )
+    llm_defaults.add_argument(
+        "--model",
+        required=True,
+        metavar="MODEL",
+        help="Modelo anunciado pelo probe fresco do agent",
+    )
+    llm_defaults.add_argument(
+        "--effort",
+        metavar="LEVEL",
+        help="Effort anunciado pelo modelo; omita ou use default para o provider escolher",
+    )
+    llm_defaults.add_argument(
+        "--json",
+        action="store_true",
+        help="Emitir JSON compacto para integração",
+    )
 
     # approve
     ap = sub.add_parser("approve", help="Aprovar artefato pendente")
@@ -4147,6 +4492,10 @@ def main():
             cmd_run(args)
         elif args.command == "runs":
             cmd_runs(args)
+        elif args.command == "llm-capabilities":
+            cmd_llm_capabilities(args)
+        elif args.command == "llm-defaults":
+            cmd_llm_defaults(args)
         else:
             parser.print_help()
     except KeyboardInterrupt:

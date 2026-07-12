@@ -29,6 +29,26 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   daquela registrada ao criar a worktree.
 - `ft init` falha quando `.ft/manifest.yml` já existe, em vez de tratar uma
   segunda inicialização como operação idempotente.
+- O reconcile do template `feature` passa a criar ou atualizar obrigatoriamente
+  `CHANGELOG.md`, reconciliar `PROJECT_BACKLOG.md`/`FEATURES.md`, atualizar a
+  documentação canônica realmente afetada e listar esses caminhos no resultado.
+- A baseline registra hashes da documentação e o gate final recusa CHANGELOG
+  inalterado, sem referência ao PB ou ausente do handoff documental.
+
+### Defaults e capabilities de LLM
+- Novo `ft llm-capabilities --json`: consulta Claude, Codex e OpenCode em
+  paralelo a cada chamada, normaliza modelos/efforts/defaults anunciados pelas
+  CLIs e falha fechado por provider sem recorrer a catálogo estático.
+- Novo `ft llm-defaults --agent ... --model ... [--effort ...] --json`:
+  revalida a combinação por probe fresco e atualiza atomicamente somente os
+  defaults LLM de `.ft/manifest.yml`, preservando as demais chaves.
+- `llm_effort` passa a atravessar manifesto, estado, archive, overrides por node
+  e todos os caminhos de delegação. Claude recebe `--effort`, Codex recebe
+  `model_reasoning_effort` e OpenCode recebe a variante compatível.
+- Os comandos delegáveis aceitam `--effort`; o valor explícito `default` limpa
+  um override anterior sem alterar uma delegação que já esteja em execução.
+- `ft status` preserva a linha compatível `LLM engine:` e acrescenta modelo e
+  effort em linhas aditivas quando disponíveis.
 
 ### Catálogo de produto
 - O template `mvp-builder` passa a manter `docs/FEATURES.md` como fonte de

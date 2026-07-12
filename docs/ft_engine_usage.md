@@ -41,6 +41,8 @@ ft continue --sprint       # Avançar até fim da sprint atual
 ft continue --auto         # Modo autônomo até human gate, MVP ou BLOCK
 ft status                  # Status resumido
 ft status --full           # Grafo completo agrupado por sprint
+ft llm-capabilities --json # Descobrir modelos/efforts pelas CLIs instaladas
+ft llm-defaults --agent codex --model gpt-5.6-sol --effort max --json
 ft approve                 # Aprovar artefato pendente
 ft reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
 ft reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
@@ -82,6 +84,7 @@ Por padrão, o engine usa `claude`. Você pode trocar o executor por comando:
 ```bash
 ft init --template base --codex
 ft continue --codex --sprint
+ft continue --codex gpt-5.6-sol --effort max --sprint
 ft run ~/dev/projects/examples/pokemon --hipotese ~/dev/projects/examples/pokemon.md --codex
 ft run . --opencode
 ft run . --opencode anthropic/claude-sonnet-4-5
@@ -96,11 +99,19 @@ export FT_LLM_ENGINE=opencode
 Quando `--opencode` é usado sem modelo explícito, o comando chama
 `opencode run -m pgx/zai-org_glm-4.7-flash "<prompt>"`.
 
-O default escolhido no `ft init` é persistido em `.ft/manifest.yml`. Durante uma
+O default escolhido no `ft init` é persistido em `.ft/manifest.yml`, nos campos
+`defaults.llm_engine`, `defaults.llm_model` e `defaults.llm_effort`. Durante uma
 execução, o executor fica no runtime em `~/.ft/runtime/<projeto>/continuous/` no modo
 continuous ou em `~/.ft/worktrees/<projeto>/cycle-NN/state/` no modo isolated.
 Assim, `status`, `approve` e `reject` continuam usando o mesmo engine nas execuções
 seguintes.
+
+Para integrações que precisam refletir as CLIs realmente instaladas, use
+`ft llm-capabilities --json`. O comando não mantém cache: a cada chamada executa
+probes limitados e paralelos de Claude, Codex e OpenCode. Para trocar o default
+do projeto, `ft llm-defaults` valida a combinação contra um probe fresco e faz
+replace atômico do manifest. O valor `--effort default` remove o override e deixa
+o provider escolher seu nível nativo.
 
 ### Opção `--process`
 
@@ -125,6 +136,7 @@ Também atualiza referências inequívocas nos arquivos atuais. Artefatos já mo
 | `FT_ALLOW_ENGINE_REPO` | O `ft` opera sempre num repo de projeto — **todos** os comandos são bloqueados dentro do repositório do engine/template. Esta variável libera o bloqueio, só para desenvolvimento do engine. |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no início do `ft run`. |
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`). |
+| `FT_LLM_EFFORT` | Effort provider-specific herdado quando node, flag e estado não definem um valor. |
 | `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de cada turno delegado, em segundos; default 1800. |
 | `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex; reasoning `ultra` usa 3600 por default. |
 | `FT_CODEX_REASONING_EFFORT` | Override explícito do nível de raciocínio do Codex (por exemplo `ultra`). Sem a variável, o Codex usa seu `config.toml`. |

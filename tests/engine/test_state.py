@@ -46,6 +46,20 @@ class TestStateManager:
         state = tmp_state.load()
         assert state.llm_engine == "codex"
 
+    def test_init_from_graph_persists_llm_selection(self, tmp_state):
+        tmp_state.init_from_graph(
+            {"id": "test_proc", "version": "1.0.0"},
+            first_node_id="node.01",
+            total_steps=5,
+            llm_engine="claude",
+            llm_model="fable",
+            llm_effort="max",
+        )
+
+        state = tmp_state.load()
+        assert state.llm_model == "fable"
+        assert state.llm_effort == "max"
+
     def test_persists_active_and_last_llm_logs(self, initialized_state):
         state = initialized_state.load()
         state.active_llm_log = "project/state/llm_logs/current.jsonl"

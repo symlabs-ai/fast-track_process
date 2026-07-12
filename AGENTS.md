@@ -128,6 +128,7 @@ ft run .                       # interativo: para nos human_gates
 ft run . --auto                # autônomo: avança até human_gate, MVP ou BLOCK
 ft run . --auto --bypass-human-gates  # sem intervenção: LLM decide human_gates
 ft run . --codex               # trocar engine LLM (--claude [modelo] | --codex | --gemini | --opencode)
+ft run . --codex gpt-5.6-sol --effort max  # trocar também modelo/effort
 ft run . --force               # novo ciclo mesmo com um ativo
 ft run . --from-project PATH   # retomada: copia plano_de_voo do ciclo anterior
 ```
@@ -143,6 +144,17 @@ Modos de avanço (também no `ft continue`):
 
 `--bypass-human-gates` deixa o LLM decidir nos gates humanos. Use com critério:
 `--auto` sozinho **não** pula human_gates.
+
+Descoberta e defaults reais do projeto:
+
+```bash
+ft llm-capabilities --json
+ft llm-defaults --agent codex --model gpt-5.6-sol --effort max --json
+```
+
+O segundo comando valida a combinação por um probe fresco e atualiza
+atomicamente `defaults.llm_engine`, `defaults.llm_model` e `defaults.llm_effort`
+em `.ft/manifest.yml`.
 
 ## 3. Monitorar
 
@@ -232,6 +244,7 @@ Depois do close:
 | `FT_ALLOW_ENGINE_REPO` | Libera rodar no repo do template — só para dev do engine |
 | `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no `ft run` |
 | `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`) |
+| `FT_LLM_EFFORT` | Effort herdado quando node, flag e estado não definem override |
 | `FT_CODEX_REASONING_EFFORT` | Override explícito do `model_reasoning_effort` do Codex; ausente, respeita o `config.toml` do Codex |
 | `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de cada turno delegado, em segundos; default 1800 |
 | `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex; reasoning `ultra` usa 3600 por default |

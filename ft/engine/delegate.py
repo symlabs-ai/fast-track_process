@@ -85,14 +85,35 @@ def _env_nonnegative_int(*names: str) -> int | None:
     return None
 
 
-def _executor_timeout_seconds(llm_engine: str) -> int:
+def _normalize_executor_effort(value: str | None, *, source: str = "llm_effort") -> str | None:
+    """Return a CLI-safe effort value, or None for provider defaults."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized or normalized.lower() == "default":
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", normalized):
+        raise ValueError(f"{source} contém valor inválido")
+    return normalized
+
+
+def _executor_timeout_seconds(llm_engine: str, llm_effort: str | None = None) -> int:
     """Resolve the wall-clock limit for one delegated executor turn."""
     engine = llm_engine.strip().lower()
     specific_name = f"FT_{engine.upper()}_EXECUTOR_TIMEOUT"
     configured = _env_positive_int(specific_name, "FT_LLM_EXECUTOR_TIMEOUT")
     if configured is not None:
         return configured
-    if engine == "codex" and os.environ.get("FT_CODEX_REASONING_EFFORT", "").strip().lower() == "ultra":
+    effective_effort = _normalize_executor_effort(llm_effort)
+    if engine == "codex":
+        effective_effort = (
+            _normalize_executor_effort(
+                os.environ.get("FT_CODEX_REASONING_EFFORT"),
+                source="FT_CODEX_REASONING_EFFORT",
+            )
+            or effective_effort
+        )
+    if engine == "codex" and effective_effort == "ultra":
         return DEFAULT_CODEX_ULTRA_TIMEOUT
     return DEFAULT_EXECUTOR_TIMEOUT
 
@@ -587,9 +608,11 @@ def _build_executor_command(
     project_root: str,
     max_turns: int,
     model: str | None = None,
+    effort: str | None = None,
 ) -> list[str]:
     """Monta o comando do executor não-interativo com bypass habilitado."""
     engine = llm_engine.lower().strip()
+    normalized_effort = _normalize_executor_effort(effort)
 
     if engine == "claude":
         cmd = [
@@ -601,6 +624,8 @@ def _build_executor_command(
         ]
         if model:
             cmd += ["--model", model]
+        if normalized_effort:
+            cmd += ["--effort", normalized_effort]
         cmd += ["-p", prompt]
         return cmd
 
@@ -609,10 +634,14 @@ def _build_executor_command(
             "codex",
             "exec",
         ]
-        reasoning_effort = os.environ.get("FT_CODEX_REASONING_EFFORT", "").strip()
+        reasoning_effort = (
+            _normalize_executor_effort(
+                os.environ.get("FT_CODEX_REASONING_EFFORT"),
+                source="FT_CODEX_REASONING_EFFORT",
+            )
+            or normalized_effort
+        )
         if reasoning_effort:
-            if not re.fullmatch(r"[A-Za-z0-9_-]+", reasoning_effort):
-                raise ValueError("FT_CODEX_REASONING_EFFORT contém valor inválido")
             cmd += ["-c", f"model_reasoning_effort={json.dumps(reasoning_effort)}"]
         cmd += [
             "--dangerously-bypass-approvals-and-sandbox",
@@ -643,9 +672,14 @@ def _build_executor_command(
             cmd.append("--auto")
         if not _env_falsey("FT_OPENCODE_PURE"):
             cmd.append("--pure")
-        variant = (os.environ.get("FT_OPENCODE_VARIANT") or "").strip()
-        if variant and variant.lower() not in {"0", "false", "no", "off", "none"}:
-            cmd += ["--variant", variant]
+        configured_variant = (os.environ.get("FT_OPENCODE_VARIANT") or "").strip()
+        if configured_variant:
+            # Preserve the legacy env sentinel while allowing an explicit
+            # provider variant literally named "none".
+            if configured_variant.lower() not in {"0", "false", "no", "off", "none"}:
+                cmd += ["--variant", configured_variant]
+        elif normalized_effort:
+            cmd += ["--variant", normalized_effort]
         debug_enabled = os.environ.get("FT_OPENCODE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
         print_logs = debug_enabled or os.environ.get("FT_OPENCODE_PRINT_LOGS", "").strip().lower() in {
             "1", "true", "yes", "on"
@@ -1546,6 +1580,7 @@ def delegate_to_llm(
     opencode_early_success_paths: list[str] | None = None,
     opencode_capture_output_path: str | None = None,
     raw_output: bool = False,
+    llm_effort: str | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -1738,7 +1773,14 @@ REGRAS:
 {completion_rule}
 """
 
-    cmd = _build_executor_command(llm_engine, prompt, project_root, max_turns, model=llm_model)
+    cmd = _build_executor_command(
+        llm_engine,
+        prompt,
+        project_root,
+        max_turns,
+        model=llm_model,
+        effort=llm_effort,
+    )
     if opencode_capture_mode or opencode_bundle_mode or opencode_script_mode:
         cmd = _opencode_capture_command(cmd)
 
@@ -1804,7 +1846,7 @@ REGRAS:
 
     idle_timeout = None
     idle_retries = 0
-    executor_timeout = _executor_timeout_seconds(llm_engine)
+    executor_timeout = _executor_timeout_seconds(llm_engine, llm_effort)
     if llm_engine.lower().strip() == "opencode":
         idle_timeout = _env_positive_int("FT_OPENCODE_IDLE_TIMEOUT") or 480
         configured_retries = _env_nonnegative_int("FT_OPENCODE_IDLE_RETRIES")
@@ -2087,6 +2129,7 @@ def delegate_opencode_file_bundle_raw(
     allowed_paths: list[str] | None = None,
     llm_model: str | None = None,
     log_path: str | None = None,
+    llm_effort: str | None = None,
 ) -> DelegateResult:
     """Chamada OpenCode mínima para ecoar/materializar um file bundle pequeno."""
     cmd = _build_executor_command(
@@ -2095,6 +2138,7 @@ def delegate_opencode_file_bundle_raw(
         project_root,
         max_turns=1,
         model=llm_model or DEFAULT_OPENCODE_MODEL,
+        effort=llm_effort,
     )
     cmd = _opencode_capture_command(cmd)
     env = _executor_env(
@@ -2146,6 +2190,7 @@ def delegate_opencode_exact_file_raw(
     allowed_paths: list[str] | None = None,
     llm_model: str | None = None,
     log_path: str | None = None,
+    llm_effort: str | None = None,
 ) -> DelegateResult:
     """Pede ao OpenCode para ecoar conteudo pequeno e grava em um path conhecido."""
     prompt = f"Retorne exatamente este texto, sem markdown e sem explicacoes:\n{content}"
@@ -2155,6 +2200,7 @@ def delegate_opencode_exact_file_raw(
         project_root,
         max_turns=1,
         model=llm_model or DEFAULT_OPENCODE_MODEL,
+        effort=llm_effort,
     )
     cmd = _opencode_capture_command(cmd)
     env = _executor_env(
@@ -2232,6 +2278,7 @@ def delegate_with_feedback(
     opencode_deny_edit_tools: bool = False,
     opencode_early_success_paths: list[str] | None = None,
     opencode_capture_output_path: str | None = None,
+    llm_effort: str | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -2249,6 +2296,7 @@ Nao modifique o que ja esta funcionando."""
         allowed_paths=allowed_paths,
         llm_engine=llm_engine,
         llm_model=llm_model,
+        llm_effort=llm_effort,
         max_turns=max_turns,
         log_path=log_path,
         stream_prefix=stream_prefix,

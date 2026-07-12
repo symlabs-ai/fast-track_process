@@ -81,6 +81,8 @@ ft continue                    # avançar um node
 ft continue --sprint           # avançar uma sprint
 ft continue --auto             # avançar até o próximo human gate/MVP/BLOCK
 ft status --full               # status + grafo
+ft llm-capabilities --json     # modelos/efforts anunciados pelas CLIs locais
+ft llm-defaults --agent codex --model gpt-5.6-sol --effort max --json
 ft graph                       # grafo com status
 ft approve "nota opcional"     # aprovar human gate
 ft reject "motivo objetivo"    # rejeitar e reenviar com feedback
@@ -96,7 +98,10 @@ global pendente; o mantenedor registra `promoted`, `deferred` ou `rejected` com
 uma referência ao commit/path global que recebeu e validou a mudança.
 
 Use `--codex`, `--claude [modelo]`, `--gemini [modelo]` ou `--opencode [modelo]`
-para escolher o executor LLM. O default de `--opencode` é
+para escolher o executor LLM e `--effort` para selecionar um nível compatível.
+Os defaults persistentes vivem em `.ft/manifest.yml`; `ft llm-capabilities`
+descobre as opções pelas CLIs instaladas e `ft llm-defaults` valida e grava uma
+combinação sem editar o manifest por fora do engine. O default de `--opencode` é
 `pgx/zai-org_glm-4.7-flash`. Também é possível definir `FT_LLM_ENGINE=opencode`.
 Para esse modelo default, o `ft` anuncia ao OpenCode uma janela de contexto de
 200k tokens e saída de 32k tokens; sobrescreva com `FT_OPENCODE_CONTEXT_LIMIT`

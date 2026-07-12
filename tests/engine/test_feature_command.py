@@ -204,6 +204,7 @@ def test_feature_runs_selected_local_process_inside_external_worktree(tmp_path, 
             project_root=".",
             llm_engine=None,
             llm_model=None,
+            llm_effort=None,
             verbose=False,
         ):
             self.process_path = Path(process_path)
@@ -211,6 +212,7 @@ def test_feature_runs_selected_local_process_inside_external_worktree(tmp_path, 
             self.project_root = Path(project_root)
             self.llm_engine = llm_engine
             self.llm_model = llm_model
+            self.llm_effort = llm_effort
             self._environment = {}
             self._bypass_human_gates = False
             self.inited = False

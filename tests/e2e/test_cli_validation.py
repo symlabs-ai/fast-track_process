@@ -180,6 +180,7 @@ class TestHelpAndUsage:
         assert "--claude" in output
         assert "--codex" in output
         assert "--opencode" in output
+        assert "--effort" in output
 
     def test_feature_help_exposes_template_input_and_llm_flags(self, tmp_path):
         result = run_ft(["feature", "--help"], cwd=tmp_path)
@@ -290,10 +291,14 @@ class TestInit:
         assert not (tmp_path / ".ft").exists()
 
     def test_codex_flag_persists_engine_choice(self, ft_project):
-        result = run_ft(["init", "--template", "base", "--codex"], cwd=ft_project)
+        result = run_ft(
+            ["init", "--template", "base", "--codex", "--effort", "max"],
+            cwd=ft_project,
+        )
         assert result.returncode == 0
         manifest = paths.project_manifest(ft_project)
         assert "llm_engine: codex" in manifest.read_text()
+        assert "llm_effort: max" in manifest.read_text()
 
     def test_opencode_flag_persists_engine_choice(self, ft_project):
         result = run_ft(["init", "--template", "base", "--opencode"], cwd=ft_project)

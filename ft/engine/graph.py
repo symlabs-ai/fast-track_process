@@ -36,7 +36,7 @@ class Node:
     # Comandos shell executados antes da delegação ao LLM (setup determinístico)
     env_setup: list[str] = field(default_factory=list)
     env_teardown: list[str] = field(default_factory=list)
-    # Override de engine/modelo por node (substitui o global do run)
+    # Override de engine/modelo/effort por node (substitui o global do run)
     llm_engine: str | None = None
     llm_model: str | None = None
     # Desabilita o pre-seed check — node sempre roda mesmo se outputs já existem
@@ -50,6 +50,8 @@ class Node:
     on_fail: dict | None = None
     # Nó opcional — pode ser pulado com ft explore --skip
     optional: bool = False
+    # Override provider-specific de reasoning effort para este node
+    llm_effort: str | None = None
 
 
 class ProcessGraph:
@@ -230,6 +232,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             env_teardown=node_raw.get("env_teardown", []),
             llm_engine=node_raw.get("llm_engine"),
             llm_model=node_raw.get("llm_model"),
+            llm_effort=node_raw.get("llm_effort"),
             no_pre_seed=node_raw.get("no_pre_seed", False),
             description=node_raw.get("description"),
             reject_next=node_raw.get("reject_next"),

@@ -64,6 +64,27 @@ class TestBuildExecutorCommand:
         assert "-p" in cmd
         assert "faça algo" in cmd
 
+    def test_builds_claude_command_with_effort(self):
+        cmd = _build_executor_command(
+            "claude",
+            "faça algo",
+            "/tmp/proj",
+            7,
+            model="fable",
+            effort="max",
+        )
+
+        assert ["--model", "fable"] == cmd[cmd.index("--model"):cmd.index("--model") + 2]
+        assert ["--effort", "max"] == cmd[cmd.index("--effort"):cmd.index("--effort") + 2]
+
+    @pytest.mark.parametrize("effort", [None, "", "default"])
+    def test_claude_default_effort_omits_override(self, effort):
+        cmd = _build_executor_command(
+            "claude", "faça algo", "/tmp/proj", 7, effort=effort
+        )
+
+        assert "--effort" not in cmd
+
     def test_builds_codex_command_with_bypass(self):
         cmd = _build_executor_command("codex", "faça algo", "/tmp/proj", 7)
         assert cmd[:2] == ["codex", "exec"]
@@ -88,6 +109,31 @@ class TestBuildExecutorCommand:
 
         assert ["-c", 'model_reasoning_effort="ultra"'] == cmd[2:4]
         assert ["-m", "gpt-5.6-sol"] == cmd[-3:-1]
+
+    def test_builds_codex_command_with_project_effort(self, monkeypatch):
+        monkeypatch.delenv("FT_CODEX_REASONING_EFFORT", raising=False)
+
+        cmd = _build_executor_command(
+            "codex", "faça algo", "/tmp/proj", 7, effort="max"
+        )
+
+        assert ["-c", 'model_reasoning_effort="max"'] == cmd[2:4]
+
+    def test_codex_env_effort_overrides_project_effort(self, monkeypatch):
+        monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", "ultra")
+
+        cmd = _build_executor_command(
+            "codex", "faça algo", "/tmp/proj", 7, effort="max"
+        )
+
+        assert ["-c", 'model_reasoning_effort="ultra"'] == cmd[2:4]
+        assert _executor_timeout_seconds("codex", "max") == 3600
+
+    def test_rejects_invalid_project_effort(self):
+        with pytest.raises(ValueError, match="llm_effort"):
+            _build_executor_command(
+                "claude", "faça algo", "/tmp/proj", 7, effort="high;rm"
+            )
 
     def test_rejects_invalid_codex_reasoning_effort(self, monkeypatch):
         monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", 'ultra" --sandbox read-only')
@@ -131,6 +177,24 @@ class TestBuildExecutorCommand:
         cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
 
         assert ["--variant", "low"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
+
+    def test_builds_opencode_command_with_project_effort(self, monkeypatch):
+        monkeypatch.delenv("FT_OPENCODE_VARIANT", raising=False)
+
+        cmd = _build_executor_command(
+            "opencode", "faça algo", "/tmp/proj", 7, effort="high"
+        )
+
+        assert ["--variant", "high"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
+
+    def test_opencode_allows_explicit_variant_named_none(self, monkeypatch):
+        monkeypatch.delenv("FT_OPENCODE_VARIANT", raising=False)
+
+        cmd = _build_executor_command(
+            "opencode", "faça algo", "/tmp/proj", 7, effort="none"
+        )
+
+        assert ["--variant", "none"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
 
     def test_builds_opencode_command_allows_disabling_pure_and_variant(self, monkeypatch):
         monkeypatch.setenv("FT_OPENCODE_AUTO", "0")
@@ -764,6 +828,7 @@ class TestDelegateWithFeedback:
                 project_root="/tmp/proj",
                 allowed_paths=["project/docs/"],
                 llm_engine="codex",
+                llm_effort="max",
                 max_turns=12,
                 log_path="/tmp/proj/run.jsonl",
                 stream_prefix="codex>",
@@ -776,6 +841,7 @@ class TestDelegateWithFeedback:
         assert kwargs["project_root"] == "/tmp/proj"
         assert kwargs["allowed_paths"] == ["project/docs/"]
         assert kwargs["llm_engine"] == "codex"
+        assert kwargs["llm_effort"] == "max"
         assert kwargs["max_turns"] == 12
         assert kwargs["log_path"] == "/tmp/proj/run.jsonl"
         assert kwargs["stream_prefix"] == "codex>"

@@ -39,14 +39,18 @@ def test_layout_contains_only_versionable_metadata(tmp_path):
     ensure_project_layout(
         tmp_path,
         template_id="base",
-        defaults={"llm_engine": "opencode", "llm_model": "example/model"},
+        defaults={
+            "llm_engine": "opencode",
+            "llm_model": "example/model",
+            "llm_effort": "high",
+        },
     )
 
     assert (tmp_path / ".ft" / "manifest.yml").is_file()
     assert (tmp_path / ".ft" / "cycles" / ".gitkeep").is_file()
     assert not (tmp_path / ".ft" / "runtime").exists()
     assert not (tmp_path / "state").exists()
-    assert manifest_llm_defaults(tmp_path) == ("opencode", "example/model")
+    assert manifest_llm_defaults(tmp_path) == ("opencode", "example/model", "high")
 
 
 def test_nested_gitignore_keeps_process_and_cycles_trackable(tmp_path):
@@ -100,6 +104,7 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
         version="1.0.0",
         llm_engine="claude",
         llm_model="claude-fable-5",
+        llm_effort="max",
         node_status="done",
         gate_log={"build": "PASS", "review": "PASS"},
         metrics={"steps_completed": 44, "steps_total": 44},
@@ -121,6 +126,7 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     assert record["progress"] == {"completed": 44, "total": 44}
     assert record["gate_summary"] == {"PASS": 2}
     assert record["llm"]["model"] == "claude-fable-5"
+    assert record["llm"]["effort"] == "max"
     assert record["process"]["path"] == ".ft/process/feature/process.yml"
     assert record["process"]["template"] == "feature"
     assert record["process"]["initial_digest"] == "sha256:initial"

@@ -10,11 +10,13 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import os
 from pathlib import Path
 import re
 import shutil
 import stat
 import subprocess
+import tempfile
 from typing import Any
 
 import yaml
@@ -276,6 +278,12 @@ def ensure_project_layout(
     if defaults:
         current = manifest.setdefault("defaults", {})
         current.update({key: value for key, value in defaults.items() if value is not None})
+        requested_effort = defaults.get("llm_effort")
+        if (
+            isinstance(requested_effort, str)
+            and requested_effort.strip().lower() == "default"
+        ):
+            current.pop("llm_effort", None)
     manifest_path.write_text(
         yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
@@ -287,13 +295,107 @@ def read_manifest(project_root: str | Path) -> dict[str, Any]:
     return _read_yaml(paths.project_manifest(project_root))
 
 
-def manifest_llm_defaults(project_root: str | Path) -> tuple[str | None, str | None]:
+def manifest_llm_defaults(
+    project_root: str | Path,
+) -> tuple[str | None, str | None, str | None]:
     defaults = read_manifest(project_root).get("defaults", {})
     if not isinstance(defaults, dict):
-        return None, None
+        return None, None, None
     engine = defaults.get("llm_engine")
     model = defaults.get("llm_model")
-    return (str(engine) if engine else None, str(model) if model else None)
+    effort = defaults.get("llm_effort")
+    return (
+        str(engine) if engine else None,
+        str(model) if model else None,
+        str(effort) if effort else None,
+    )
+
+
+def update_manifest_llm_defaults(
+    project_root: str | Path,
+    *,
+    llm_engine: str,
+    llm_model: str,
+    llm_effort: str | None,
+) -> Path:
+    """Atomically replace only the project's persisted LLM defaults.
+
+    ``None`` means provider default and removes ``defaults.llm_effort``.  A
+    caller must validate the agent/model/effort combination against a fresh
+    provider capability probe before invoking this storage primitive.
+    """
+
+    engine = str(llm_engine).strip()
+    model = str(llm_model).strip()
+    effort = str(llm_effort).strip() if llm_effort is not None else None
+    if not engine:
+        raise ValueError("llm_engine não pode ser vazio")
+    if not model:
+        raise ValueError("llm_model não pode ser vazio")
+    if effort == "":
+        effort = None
+
+    manifest_path = paths.project_manifest(Path(project_root).resolve())
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"projeto não inicializado: {manifest_path} não existe"
+        )
+    try:
+        loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"manifest inválido: {manifest_path}") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"manifest inválido: raiz YAML deve ser mapping em {manifest_path}")
+
+    manifest: dict[str, Any] = loaded
+    existing_defaults = manifest.get("defaults")
+    if existing_defaults is None:
+        defaults: dict[str, Any] = {}
+        manifest["defaults"] = defaults
+    elif isinstance(existing_defaults, dict):
+        defaults = existing_defaults
+    else:
+        raise ValueError("manifest inválido: defaults deve ser mapping")
+
+    defaults["llm_engine"] = engine
+    defaults["llm_model"] = model
+    if effort is None or effort.lower() == "default":
+        defaults.pop("llm_effort", None)
+    else:
+        defaults["llm_effort"] = effort
+
+    payload = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
+    original_mode = stat.S_IMODE(manifest_path.stat().st_mode)
+    temporary_path: Path | None = None
+    try:
+        fd, raw_temporary_path = tempfile.mkstemp(
+            prefix=f".{manifest_path.name}.",
+            suffix=".tmp",
+            dir=manifest_path.parent,
+        )
+        temporary_path = Path(raw_temporary_path)
+        os.fchmod(fd, original_mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as temporary:
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, manifest_path)
+        temporary_path = None
+
+        # Persist the directory entry as well when the platform supports it.
+        try:
+            directory_fd = os.open(manifest_path.parent, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return manifest_path
 
 
 def validate_template_is_pristine(template_dir: str | Path) -> None:
@@ -645,6 +747,7 @@ def archive_cycle_artifacts(
         "llm": {
             "engine": getattr(state, "llm_engine", None) if state is not None else None,
             "model": getattr(state, "llm_model", None) if state is not None else None,
+            "effort": getattr(state, "llm_effort", None) if state is not None else None,
         },
         "progress": {
             "completed": (

@@ -24,6 +24,10 @@ class FakeRunner:
         llm_engine=None,
         llm_model=None,
         llm_effort=None,
+        llm_defaults_root=None,
+        llm_engine_is_override=None,
+        llm_model_is_override=None,
+        llm_effort_is_override=None,
         verbose=False,
     ):
         self.process_path = process_path
@@ -32,6 +36,10 @@ class FakeRunner:
         self.llm_engine = llm_engine
         self.llm_model = llm_model
         self.llm_effort = llm_effort
+        self.llm_defaults_root = llm_defaults_root
+        self.llm_engine_is_override = llm_engine_is_override
+        self.llm_model_is_override = llm_model_is_override
+        self.llm_effort_is_override = llm_effort_is_override
         self.verbose = verbose
         self._bypass_human_gates = False
         self.inited = False
@@ -815,6 +823,13 @@ class TestFix:
             def _resolve_llm_effort(self, loaded_state=None, node=None):
                 return loaded_state.llm_effort if loaded_state else None
 
+            def _capture_delegation_llm_selection(self, loaded_state, node=None):
+                return SimpleNamespace(
+                    engine=self._resolve_llm_engine(loaded_state, node),
+                    model=self._resolve_llm_model(loaded_state, node),
+                    effort=self._resolve_llm_effort(loaded_state, node),
+                )
+
         args = Namespace(
             instruction="Corrija somente project/tests/e2e/test_navigation.py.",
             process=None,
@@ -973,6 +988,13 @@ class TestFix:
 
             def _resolve_llm_effort(self, loaded_state=None, node=None):
                 return loaded_state.llm_effort if loaded_state else None
+
+            def _capture_delegation_llm_selection(self, loaded_state, node=None):
+                return SimpleNamespace(
+                    engine=self._resolve_llm_engine(loaded_state, node),
+                    model=self._resolve_llm_model(loaded_state, node),
+                    effort=self._resolve_llm_effort(loaded_state, node),
+                )
 
             def _print_validation(self, validation):
                 self.validation_seen = validation

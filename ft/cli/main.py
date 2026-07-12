@@ -28,6 +28,7 @@ from pathlib import Path
 
 from ft.engine import paths
 from ft.engine.layout import (
+    canonical_project_root,
     ensure_project_layout,
     latest_cycle_artifact,
     manifest_llm_defaults,
@@ -572,7 +573,7 @@ def _fail_llm_command(
 def cmd_llm_capabilities(args) -> None:
     """Probe providers afresh and expose their project-default overlay."""
 
-    root = find_project_root()
+    root = canonical_project_root(find_project_root())
     capabilities = discover_llm_capabilities(cwd=root)
     _overlay_project_llm_defaults(capabilities, root)
     _print_llm_json(capabilities, bool(getattr(args, "json", False)))
@@ -581,7 +582,7 @@ def cmd_llm_capabilities(args) -> None:
 def cmd_llm_defaults(args) -> None:
     """Validate and atomically persist one project LLM default selection."""
 
-    root = find_project_root()
+    root = canonical_project_root(find_project_root())
     compact = bool(getattr(args, "json", False))
     capabilities = discover_llm_capabilities(cwd=root)
     _overlay_project_llm_defaults(capabilities, root)
@@ -1379,7 +1380,7 @@ def get_runner(
     cycle: str | None = None,
     llm_effort: str | None = None,
 ) -> StepRunner:
-    root = find_project_root()
+    root = canonical_project_root(find_project_root())
     if cycle:
         # Estados de execução existem somente no FT_HOME.
         wt_home = paths.worktrees_home(root)
@@ -1462,6 +1463,7 @@ def get_runner(
         llm_engine=llm_engine,
         llm_model=llm_model,
         llm_effort=llm_effort,
+        llm_defaults_root=root,
         verbose=verbose,
     )
 
@@ -3064,13 +3066,17 @@ def cmd_fix(args):
         f"e diga DONE quando terminar."
     )
 
-    state = runner.state_mgr.load() if state_path.exists() else None
-    fix_engine = runner._resolve_llm_engine(state)
-    fix_model = runner._resolve_llm_model(state)
-    fix_effort = runner._resolve_llm_effort(state)
+    state = runner.state_mgr.load()
     fix_node = None
     if state and state.current_node and state.current_node in runner.graph.nodes:
         fix_node = runner.graph.get_node(state.current_node)
+    fix_selection = runner._capture_delegation_llm_selection(
+        state,
+        node=fix_node,
+    )
+    fix_engine = fix_selection.engine
+    fix_model = fix_selection.model
+    fix_effort = fix_selection.effort
     fix_allowed_paths = ["project/", "src/", "tests/", "docs/", "main.py", "app.py", "server.py",
                          "frontend/", ".ft/process/"]
     opencode_capture_output_path = None
@@ -3975,6 +3981,10 @@ def cmd_run(args):
         llm_engine=_effective_engine,
         llm_model=llm_model,
         llm_effort=llm_effort,
+        llm_defaults_root=source_project_root,
+        llm_engine_is_override=resolve_llm_engine(args) is not None,
+        llm_model_is_override=resolve_llm_model(args) is not None,
+        llm_effort_is_override=resolve_llm_effort(args) is not None,
         verbose=getattr(args, "verbose", False),
     )
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -4119,6 +4129,10 @@ def cmd_run(args):
                             llm_engine=_effective_engine,
                             llm_model=llm_model,
                             llm_effort=llm_effort,
+                            llm_defaults_root=source_project_root,
+                            llm_engine_is_override=resolve_llm_engine(args) is not None,
+                            llm_model_is_override=resolve_llm_model(args) is not None,
+                            llm_effort_is_override=resolve_llm_effort(args) is not None,
                             verbose=getattr(args, "verbose", False),
                         )
                     else:

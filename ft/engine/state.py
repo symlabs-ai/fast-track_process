@@ -28,6 +28,7 @@ class EngineState:
     llm_engine: str = "claude"
     llm_model: str | None = None
     llm_effort: str | None = None
+    llm_defaults_digest: str | None = None
     active_llm_log: str | None = None
     last_llm_log: str | None = None
     current_node: str | None = None
@@ -104,6 +105,7 @@ class StateManager:
                 llm_engine=raw.get("llm_engine", "claude"),
                 llm_model=raw.get("llm_model"),
                 llm_effort=raw.get("llm_effort"),
+                llm_defaults_digest=raw.get("llm_defaults_digest"),
                 active_llm_log=raw.get("active_llm_log"),
                 last_llm_log=raw.get("last_llm_log"),
                 current_node=raw.get("current_node"),
@@ -150,6 +152,7 @@ class StateManager:
             "llm_engine": self._state.llm_engine,
             "llm_model": self._state.llm_model,
             "llm_effort": self._state.llm_effort,
+            "llm_defaults_digest": self._state.llm_defaults_digest,
             "active_llm_log": self._state.active_llm_log,
             "last_llm_log": self._state.last_llm_log,
             "current_node": self._state.current_node,
@@ -194,6 +197,7 @@ class StateManager:
         worktree_branch: str | None = None,
         llm_model: str | None = None,
         llm_effort: str | None = None,
+        llm_defaults_digest: str | None = None,
     ):
         """Inicializa estado a partir de um grafo de processo."""
         self._state = EngineState(
@@ -208,6 +212,7 @@ class StateManager:
             llm_engine=llm_engine,
             llm_model=llm_model,
             llm_effort=llm_effort,
+            llm_defaults_digest=llm_defaults_digest,
             current_cycle=current_cycle,
             current_node=first_node_id,
             node_status="ready",

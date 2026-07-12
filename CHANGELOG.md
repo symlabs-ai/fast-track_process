@@ -47,6 +47,11 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   `model_reasoning_effort` e OpenCode recebe a variante compatível.
 - Os comandos delegáveis aceitam `--effort`; o valor explícito `default` limpa
   um override anterior sem alterar uma delegação que já esteja em execução.
+- Defaults alterados por `ft llm-defaults` passam a ser relidos do checkout
+  principal antes de cada nova delegação: a chamada já em voo preserva seu
+  snapshot, enquanto a próxima chamada do mesmo ciclo usa o novo bundle
+  agent/model/effort de forma atômica, inclusive em retries, reviews e grupos
+  paralelos.
 - `ft status` preserva a linha compatível `LLM engine:` e acrescenta modelo e
   effort em linhas aditivas quando disponíveis.
 

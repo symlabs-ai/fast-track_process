@@ -295,6 +295,33 @@ def read_manifest(project_root: str | Path) -> dict[str, Any]:
     return _read_yaml(paths.project_manifest(project_root))
 
 
+def canonical_project_root(project_root: str | Path) -> Path:
+    """Return the owning checkout when called from a linked Git worktree.
+
+    Project-persistent metadata such as LLM defaults belongs to the main
+    checkout, not to the cycle's versioned manifest snapshot.
+    """
+    root = Path(project_root).resolve()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return root
+    if result.returncode != 0 or not result.stdout.strip():
+        return root
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = root / common_dir
+    common_dir = common_dir.resolve()
+    owner = common_dir.parent if common_dir.name == ".git" else root
+    return owner if paths.project_manifest(owner).is_file() else root
+
+
 def manifest_llm_defaults(
     project_root: str | Path,
 ) -> tuple[str | None, str | None, str | None]:
@@ -363,6 +390,10 @@ def update_manifest_llm_defaults(
         defaults.pop("llm_effort", None)
     else:
         defaults["llm_effort"] = effort
+    raw_revision = manifest.get("llm_defaults_revision", 0)
+    if not isinstance(raw_revision, int) or isinstance(raw_revision, bool) or raw_revision < 0:
+        raise ValueError("manifest inválido: llm_defaults_revision deve ser inteiro >= 0")
+    manifest["llm_defaults_revision"] = raw_revision + 1
 
     payload = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
     original_mode = stat.S_IMODE(manifest_path.stat().st_mode)

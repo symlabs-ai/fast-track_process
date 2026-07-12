@@ -205,6 +205,10 @@ def test_feature_runs_selected_local_process_inside_external_worktree(tmp_path, 
             llm_engine=None,
             llm_model=None,
             llm_effort=None,
+            llm_defaults_root=None,
+            llm_engine_is_override=None,
+            llm_model_is_override=None,
+            llm_effort_is_override=None,
             verbose=False,
         ):
             self.process_path = Path(process_path)
@@ -213,6 +217,10 @@ def test_feature_runs_selected_local_process_inside_external_worktree(tmp_path, 
             self.llm_engine = llm_engine
             self.llm_model = llm_model
             self.llm_effort = llm_effort
+            self.llm_defaults_root = llm_defaults_root
+            self.llm_engine_is_override = llm_engine_is_override
+            self.llm_model_is_override = llm_model_is_override
+            self.llm_effort_is_override = llm_effort_is_override
             self._environment = {}
             self._bypass_human_gates = False
             self.inited = False

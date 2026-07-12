@@ -185,6 +185,7 @@ class ParallelRunner:
                     task=task["task_prompt"],
                     project_root=worktree_path,
                     allowed_paths=task.get("allowed_paths"),
+                    **task.get("delegate_kwargs", {}),
                 )
 
                 # Commit no worktree

@@ -35,6 +35,7 @@ ft --help
 ```bash
 ft init --template base    # Criar layout versionado, sem estado de execução
 ft feature "demanda" --template feature  # Evoluir produto em worktree isolada
+ft feature --parallel "d1" "d2" "d3" -t feature  # Batch de features em waves paralelas
 ft migrate-layout . --cycle-id cycle-08  # Migrar process/ e atribuir artefatos soltos
 ft continue                # Avançar 1 step
 ft continue --sprint       # Avançar até fim da sprint atual
@@ -537,6 +538,50 @@ path e digest dentro da worktree, então `continue`, `approve`, `reject`, `statu
 e `close` retomam o mesmo processo sem redescobrir o default. Rejeições retornam
 ao node de correção e percorrem novamente os gates intermediários. O `close`
 valida apenas o `backlog_item` de `docs/feature.md` e aplica merge full.
+
+`approve`, `reject`, `retry` e `close` aceitam `--cycle <nome>` para mirar um
+ciclo específico quando há mais de um ativo.
+
+### Features paralelas (ft feature --parallel)
+
+`--parallel` recebe N demandas de uma vez e orquestra um batch de ciclos
+`feature`, paralelizando tanto quanto possível:
+
+```bash
+ft feature --parallel "Busca por telefone" "Dark mode" "Exportar CSV" -t feature
+ft feature --parallel --input demandas.md -t feature      # seções '## ' ou blocos '---'
+ft feature --parallel ... --engines claude:opus,codex:gpt-5.3@high   # engines por feature
+ft feature --parallel ... --max-parallel 3 --yes          # 3 ciclos simultâneos, sem confirmação
+ft feature --parallel --resume                             # retomar o batch mais recente
+```
+
+Fluxo do orquestrador:
+
+1. **Plano** — um planner LLM analisa as demandas e o projeto (catálogo,
+   backlog, árvore de arquivos) e declara, por feature, as áreas de CÓDIGO
+   tocadas e as dependências reais (`plan.yml`, schema validado). O ENGINE
+   computa as waves deterministicamente: níveis topológicos por dependência
+   e, dentro do nível, features com áreas sobrepostas não rodam juntas.
+   O plano é apresentado para aprovação (`--yes` pula).
+2. **Execução por wave** — os ciclos da wave são criados sequencialmente
+   (worktree + state, sem executar nodes) e executados em paralelo via
+   `ft continue --auto --cycle <nome>` com log por feature em
+   `$FT_HOME/runtime/<projeto>/parallel/<batch>/logs/`. `--engines` atribui
+   executor/modelo/effort por feature em round-robin (`engine[:model][@effort]`);
+   uma linha `engine:` na seção do `--input` tem prioridade.
+3. **Gates inline** — cada ciclo para nos human gates (PV-9: auto ≠ bypass) e
+   o orquestrador apresenta cada gate pendente neste terminal:
+   `[a]provar / [r]ejeitar / [d]epois / [p]ausar`. `--bypass-human-gates`
+   propaga o bypass para todos os ciclos. Ciclos bloqueados oferecem
+   `[r]etentar / [f]alhar / [p]ausar`; rate limit re-spawna sozinho (até 3x).
+4. **Close por wave** — ao final da wave, cada ciclo done é fechado com merge
+   full em ordem estável; a wave seguinte nasce do HEAD já mergeado. Conflito
+   de merge pausa o batch preservando worktree e branch; resolva e rode
+   `ft feature --parallel --resume`. Features com dependência falhada são
+   marcadas `skipped`.
+
+O estado do batch (`batch.yml`) é persistido a cada transição — qualquer
+interrupção é retomável com `--resume [batch-id]`.
 
 ---
 

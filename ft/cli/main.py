@@ -1558,6 +1558,20 @@ def cmd_feature(args):
         raise ValueError(
             "ft feature não aceita --process; use --template para materializar o processo local"
         )
+
+    # Batch paralelo: N demandas orquestradas em waves (ft/cli/feature_parallel.py).
+    if getattr(args, "parallel", False) or getattr(args, "resume", None):
+        from ft.cli.feature_parallel import run_parallel_batch
+
+        run_parallel_batch(args)
+        return
+
+    demand = getattr(args, "demand", None)
+    if isinstance(demand, list):
+        if len(demand) > 1:
+            raise ValueError("múltiplas demandas exigem ft feature --parallel")
+        demand = demand[0] if demand else None
+
     root = find_project_root().resolve()
     if not paths.project_manifest(root).is_file() or find_process_yaml(root) is None:
         raise ValueError(
@@ -1565,7 +1579,6 @@ def cmd_feature(args):
             "execute ft init <nome> --template <template> primeiro"
         )
 
-    demand = getattr(args, "demand", None)
     input_file = getattr(args, "feature_input", None)
     if demand and input_file:
         raise ValueError("informe a demanda posicional ou --input FILE, não ambos")
@@ -1622,7 +1635,14 @@ def cmd_feature(args):
             f"já existe um ciclo ativo: {active}. Use ft continue ou --force"
         )
 
-    template = str(args.template)
+    template = getattr(args, "template", None)
+    if not template:
+        available = available_templates("feature")
+        choices = ", ".join(available) if available else "nenhum"
+        raise ValueError(
+            f"--template é obrigatório no ft feature. Templates disponíveis: {choices}"
+        )
+    template = str(template)
     local_process = materialize_process_template(
         template,
         root,
@@ -2411,7 +2431,7 @@ def cmd_runs(args):
 
 
 def cmd_approve(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -2424,7 +2444,7 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
     retry = not args.no_retry
@@ -2742,7 +2762,7 @@ def cmd_close(args):
     import subprocess as _sp
     from ft.engine import ui as _ui
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
     state = runner.state_mgr.load()
@@ -3134,7 +3154,8 @@ def cmd_retry(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         llm_effort=resolve_llm_effort(args),
-                        verbose=getattr(args, "verbose", False))
+                        verbose=getattr(args, "verbose", False),
+                        cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -4322,8 +4343,13 @@ def cmd_run(args):
             llm_effort=llm_effort,
         )
 
+    # ft feature --parallel: o orquestrador cria o ciclo agora e executa
+    # depois via subprocess `ft continue --auto --cycle <nome>`.
+    setup_only = bool(getattr(args, "_setup_only", False))
+
     # Health check da API antes de começar
-    _api_health_check(project_root, _effective_engine)
+    if not setup_only:
+        _api_health_check(project_root, _effective_engine)
 
     # Init + run MVP
     if run_mode == "continuous" and state_path.exists():
@@ -4336,6 +4362,9 @@ def cmd_run(args):
         runner._fire_hooks("on_cycle_end")
     else:
         runner.init_state()
+    if setup_only:
+        print(f"  Ciclo preparado (setup-only): {project_root}")
+        return
     runner.run(mode="mvp")
 
 
@@ -4369,21 +4398,50 @@ def main():
     add_llm_engine_flags(feature)
     feature.add_argument(
         "demand",
-        nargs="?",
-        help="Demanda da feature em texto livre",
+        nargs="*",
+        help="Demanda da feature em texto livre (com --parallel: várias, entre aspas)",
     )
     feature.add_argument(
         "--input",
         metavar="FILE",
         dest="feature_input",
-        help="Arquivo contendo a demanda da feature",
+        help="Arquivo com a demanda (com --parallel: seções '## ' ou blocos '---')",
     )
     feature.add_argument(
         "--template",
         "-t",
-        required=True,
         choices=available_templates("feature"),
         help="Template de processo incremental a materializar",
+    )
+    feature.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Orquestrar múltiplas demandas em ciclos paralelos por waves",
+    )
+    feature.add_argument(
+        "--engines",
+        metavar="LIST",
+        help="Engines por feature em round-robin (ex: claude:opus,codex:gpt-5.3@high)",
+    )
+    feature.add_argument(
+        "--max-parallel",
+        dest="max_parallel",
+        type=int,
+        metavar="N",
+        help="Máximo de ciclos simultâneos por wave (default: 2)",
+    )
+    feature.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Executar o plano do batch sem confirmação",
+    )
+    feature.add_argument(
+        "--resume",
+        nargs="?",
+        const=True,
+        metavar="BATCH",
+        help="Retomar um batch paralelo (default: o mais recente)",
     )
     feature.add_argument(
         "--force",
@@ -4480,12 +4538,14 @@ def main():
     ap.add_argument("--auto", action="store_true", help="Após aprovar, avança sozinho até o próximo human gate (modo autônomo)")
     ap.add_argument("--sprint", action="store_true", help="Após aprovar, avança até o fim da sprint")
     ap.add_argument("--bypass-human-gates", action="store_true", help="Pular human_gates automaticamente (LLM decide)")
+    ap.add_argument("--cycle", help="Ciclo específico a aprovar (ex: cycle-12-f01-busca)")
 
     # reject
     rj = sub.add_parser("reject", help="Rejeitar artefato pendente")
     add_llm_engine_flags(rj)
     rj.add_argument("reason", help="Motivo da rejeicao")
     rj.add_argument("--no-retry", action="store_true", help="Nao reenviar ao LLM apos rejeicao")
+    rj.add_argument("--cycle", help="Ciclo específico a rejeitar (ex: cycle-12-f01-busca)")
 
     # graph
     graph = sub.add_parser("graph", help="Mostrar grafo com status")
@@ -4532,6 +4592,7 @@ def main():
     rt.add_argument("--auto", action="store_true", help="Continuar em modo MVP após retry")
     rt.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
                     help="Pular human_gates automaticamente após retry (LLM decide)")
+    rt.add_argument("--cycle", help="Ciclo específico a retentar (ex: cycle-12-f01-busca)")
 
     # fix
     fx = sub.add_parser("fix", help="Corrigir problema e desbloquear o ciclo")
@@ -4550,6 +4611,7 @@ def main():
                      help="Estratégia de merge (sem prompt interativo)")
     cl.add_argument("--merge-paths", dest="merge_paths",
                      help="Paths para merge selective (separados por espaço, entre aspas)")
+    cl.add_argument("--cycle", help="Ciclo específico a encerrar (ex: cycle-12-f01-busca)")
 
     # process-candidates
     pc = sub.add_parser(

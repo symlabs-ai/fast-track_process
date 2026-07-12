@@ -6,6 +6,28 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+### ft feature --parallel — batch de features em waves paralelas
+- `ft feature --parallel "d1" "d2" ... | --input FILE`: N demandas viram um
+  batch de ciclos `feature`, cada um em worktree próprio, orquestrados para
+  maximizar paralelismo. Um planner LLM declara áreas de código e dependências
+  reais (`plan.yml` com schema validado, DAG checado); o ENGINE computa as
+  waves deterministicamente — níveis topológicos + guarda de overlap de áreas.
+- Engines/modelos diferentes por feature: `--engines claude:opus,codex:gpt-5.3@high`
+  (round-robin) ou linha `engine:` por seção do `--input`.
+- Execução por wave via subprocess `ft continue --auto --cycle <nome>` com log
+  por feature; gates apresentados inline no terminal do orquestrador
+  (aprovar/rejeitar/depois/pausar — PV-9 preservado, `--bypass-human-gates`
+  propaga); bloqueios oferecem retry/falhar/pausar; rate limit re-spawna até 3x.
+- Close automático por wave com merge full em ordem estável; a wave seguinte
+  nasce do HEAD mergeado. Conflito pausa o batch preservando worktree/branch;
+  estado persistido em `$FT_HOME/runtime/<projeto>/parallel/<batch>/batch.yml`
+  e retomável com `--resume [batch-id]`. Dependentes de feature falhada viram
+  `skipped`.
+- `approve`, `reject`, `retry` e `close` agora aceitam `--cycle <nome>` para
+  operar um ciclo específico com múltiplos ativos.
+- Novos módulos `ft/engine/feature_batch.py` e `ft/cli/feature_parallel.py`;
+  cobertura em `tests/engine/test_feature_batch.py`.
+
 ### ft evolve — evolução de processo paralela ao ciclo
 - Novo comando `ft evolve [diretriz] --project e/ou --global`: deriva melhorias
   de processo a partir do contexto do ciclo (ativo, `--cycle` ou último

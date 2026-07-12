@@ -45,7 +45,7 @@ def test_global_serve_script_isolates_occupied_port_and_preserves_listener(tmp_p
     template = (
         Path(__file__).resolve().parents[2]
         / "templates"
-        / "fast-track-v3"
+        / "mvp-builder"
         / "scripts"
         / "serve.sh"
     )

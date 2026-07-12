@@ -39,7 +39,7 @@ from ft.engine.validators import check_paths as cp_val
 from ft.engine.git_ops import auto_commit, commit_knowledge
 from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
 from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
-from ft.engine.layout import archive_cycle_artifacts, is_cycle_artifact
+from ft.engine.layout import archive_cycle_artifacts, is_cycle_artifact, process_digest
 from ft.engine import ui
 from ft.providers.opencode_fallbacks import (
     OpenCodeDomainFallbackMixin,
@@ -232,6 +232,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "project_backlog_valid": val.project_backlog_valid,
     "task_list_references_backlog": val.task_list_references_backlog,
     "backlog_pending_decisions": val.backlog_pending_decisions,
+    "backlog_referenced_decisions": val.backlog_referenced_decisions,
     "features_catalog_valid": val.features_catalog_valid,
     "implemented_backlog_covered_by_features": val.implemented_backlog_covered_by_features,
     "process_improvements_classified": val.process_improvements_classified,
@@ -788,10 +789,27 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         llm_model: str | None = None,
         verbose: bool = False,
     ):
-        self.graph = load_graph(process_path)
-        self.process_path = str(process_path)
-        self.state_mgr = StateManager(state_path)
         self.project_root = str(Path(project_root).resolve())
+        selected_process = Path(process_path)
+        if not selected_process.is_absolute():
+            selected_process = Path(self.project_root) / selected_process
+        selected_process = selected_process.resolve()
+        self.graph = load_graph(selected_process)
+        self.process_path = str(selected_process)
+        execution_policy = self.graph.meta.get("execution_policy", {})
+        if (
+            isinstance(execution_policy, dict)
+            and execution_policy.get("runtime_source") == "local_only"
+        ):
+            process_catalog = paths.project_process_dir(self.project_root).resolve()
+            try:
+                process_catalog.relative_to(Path(self.project_root).resolve())
+                selected_process.relative_to(process_catalog)
+            except ValueError as exc:
+                raise ValueError(
+                    "processo com runtime_source=local_only deve estar dentro de .ft/process/"
+                ) from exc
+        self.state_mgr = StateManager(state_path)
         self._llm_engine_override = llm_engine.lower().strip() if llm_engine else None
         self._llm_model_override = llm_model.strip() if llm_model else None
         self._auto_approve = False
@@ -801,7 +819,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         # Nome do log derivado da pasta do projeto (ex: pokemon_log.md)
         self._log_filename = f"{Path(self.project_root).name}_log.md"
         # Environment config + hooks
-        self._environment = load_environment(self.project_root)
+        self._environment = load_environment(
+            self.project_root,
+            process_path=self.process_path,
+        )
         self._max_node_retries = self._environment.get("max_node_retries", MAX_RETRIES)
         self._max_gate_retries = self._environment.get("max_gate_retries", MAX_RETRIES)
         self._max_auto_fix = self._environment.get("max_auto_fix", 2)
@@ -1479,11 +1500,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if self._is_valid_yaml_file(target):
             return
 
-        repo_root = Path(__file__).resolve().parents[2]
         candidates = [
             Path(self.process_path),
             paths.project_process_file(self.project_root),
-            repo_root / "templates" / "fast-track-v3" / "process.yml",
         ]
         for source in candidates:
             source = source.resolve()
@@ -1493,10 +1512,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             shutil.copyfile(source, target)
             return
 
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            'id: fast_track_v3_local\nversion: "1.0.0"\ntitle: Local Process\nnodes: []\n',
-            encoding="utf-8",
+        raise RuntimeError(
+            ".ft/process/process.yml ausente ou inválido; "
+            "o engine não escolhe um template de recuperação automaticamente"
         )
 
     def _finish_opencode_fallback_node(self, node: Node, summary: str, result: str = "PASS") -> bool:
@@ -2016,6 +2034,16 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         work_root = Path(self.project_root)
         state = self.state_mgr.load()
+        wt = self._detect_worktree()
+        if wt:
+            _, _, active_branch = wt
+            expected_branch = getattr(state, "worktree_branch", None)
+            if expected_branch and active_branch != expected_branch:
+                print(ui.fail(
+                    "Merge: branch ativa da worktree diverge da branch fixada "
+                    f"no ciclo ({active_branch or '<detached>'} != {expected_branch})"
+                ))
+                return False
         cycle_id = (
             work_root.name
             if _engine_paths.is_worktree_path(work_root)
@@ -2046,7 +2074,6 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             print(ui.fail(detail))
             return False
 
-        wt = self._detect_worktree()
         if not wt:
             # Cycle dir não é git worktree (diretório puro em ~/.ft/worktrees/):
             # merge por cópia — nunca retornar em silêncio.
@@ -2211,6 +2238,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
         if self.state_mgr.state.node_status == "blocked":
             self.state_mgr.unblock()
+        # A mensagem do stakeholder pertence ao node que acabou de executá-la.
+        # Mantê-la até o avanço permite que um retry após interrupção/orfandade
+        # reconstrua exatamente o mesmo prompt, sem vazá-la para o próximo node.
+        self.state_mgr.state.last_approval_message = None
         self.state_mgr.advance(completed_node, next_node, gate_result)
         state = self.state_mgr.state
         self._mark_unselected_paths_skipped(state, completed_node, next_node)
@@ -2270,7 +2301,12 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
     def _fire_hooks(self, event: str) -> bool:
         """Dispara hooks para um evento. Retorna True se todos passaram (ou nenhum)."""
-        results = run_hooks(event, self.project_root, self._environment)
+        results = run_hooks(
+            event,
+            self.project_root,
+            self._environment,
+            process_path=self.process_path,
+        )
         if not results:
             return True
         return hooks_all_passed(results)
@@ -2370,12 +2406,56 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         state_path = self.state_mgr.path.resolve()
         if paths.is_worktree_path(state_path):
             cycle_id = state_path.parent.parent.name
+        process_file = Path(self.process_path).resolve()
+        root = Path(self.project_root).resolve()
+        try:
+            selected_process_path = process_file.relative_to(root).as_posix()
+        except ValueError:
+            selected_process_path = str(process_file)
+        execution_policy = self.graph.meta.get("execution_policy", {})
+        template_id = (
+            execution_policy.get("template")
+            if isinstance(execution_policy, dict)
+            else None
+        ) or self.graph.meta.get("id")
+        base_commit = None
+        worktree_branch = None
+        try:
+            base_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if base_result.returncode == 0:
+                base_commit = base_result.stdout.strip() or None
+            branch_result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if branch_result.returncode == 0:
+                worktree_branch = branch_result.stdout.strip() or None
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         self.state_mgr.init_from_graph(
             self.graph.meta,
             first.id,
             total,
             llm_engine=self._resolve_llm_engine(),
             current_cycle=cycle_id,
+            process_path=selected_process_path,
+            process_digest=process_digest(process_file),
+            process_immutable=(
+                isinstance(execution_policy, dict)
+                and execution_policy.get("runtime_source") == "local_only"
+            ),
+            template_id=str(template_id) if template_id else None,
+            base_commit=base_commit,
+            worktree_branch=worktree_branch,
         )
         print(ui.init_banner(
             self.graph.meta.get("title", "?"), first.id, first.title, total,
@@ -2703,9 +2783,6 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 f"Leve esta mensagem em conta ao executar sua tarefa.\n\n"
                 f"{task_prompt}"
             )
-            # Consumir — não passa para o próximo nó
-            self.state_mgr.state.last_approval_message = None
-            self.state_mgr.save()
             print(ui.info("Contexto: mensagem do stakeholder injetada no prompt"))
 
         # Hyper-mode: enriquecer prompt com docs existentes.
@@ -3616,7 +3693,18 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
         early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
-        if early_check.passed and not self._review_output_semantically_stale(node):
+        correction_policy = self.graph.meta.get("correction_policy", {})
+        mandatory_reviews = (
+            correction_policy.get("mandatory_after_implementation", [])
+            if isinstance(correction_policy, dict)
+            else []
+        )
+        requires_fresh_review = node.id in mandatory_reviews
+        if (
+            early_check.passed
+            and not requires_fresh_review
+            and not self._review_output_semantically_stale(node)
+        ):
             print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
             for output_path in node.outputs:
                 self.state_mgr.record_artifact(Path(output_path).stem, output_path)
@@ -3624,7 +3712,11 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             self._advance_state(node.id, next_id, "PASS")
             return
         if early_check.passed:
-            print(ui.warn("Expert Review: relatório pré-existente contradiz o produto — regenerando"))
+            if requires_fresh_review:
+                print(ui.warn("Expert Review: review obrigatório após implementação — regenerando"))
+                self._remove_node_outputs_from_worktree(node.id)
+            else:
+                print(ui.warn("Expert Review: relatório pré-existente contradiz o produto — regenerando"))
         else:
             blocking_reason = self._review_blocking_evidence_reason(node)
             if blocking_reason:
@@ -3670,13 +3762,41 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             if pre_check.passed:
                 print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
-            elif getattr(result, "rate_limited", False):
+            else:
+                rejected_review_output = self._read_review_output(node)
+                rejected_verdict = (
+                    _parse_review_verdict(rejected_review_output)
+                    if rejected_review_output
+                    else None
+                )
+                if rejected_verdict in _REVIEW_REJECT_VERDICTS:
+                    reason = _extract_review_rejection_reason(
+                        rejected_review_output,
+                        rejected_verdict,
+                    )
+                    print(ui.fail("REVIEW REJECTED"))
+                    print(ui.dim(f"  Motivo: {reason[:300]}"))
+                    if node.on_fail:
+                        self._handle_on_fail(
+                            node,
+                            reason or (pre_check.feedback or "review rejeitado"),
+                        )
+                    else:
+                        self.state_mgr.block(
+                            f"Expert Review {rejected_verdict}:\n{reason[:500]}"
+                        )
+                    return
+            if not pre_check.passed and getattr(result, "rate_limited", False):
                 self.state_mgr.block(
                     f"{RATE_LIMIT_MARKER} API do LLM indisponível (rate limit persistiu "
                     f"após todo o backoff) no review do node {node.id}"
                 )
                 return
-            elif self._try_opencode_deterministic_review(node, effective_engine, require_opt_in=False):
+            elif not pre_check.passed and self._try_opencode_deterministic_review(
+                node,
+                effective_engine,
+                require_opt_in=False,
+            ):
                 return
             elif pre_check.retryable:
                 print(f"  REVIEW: LLM falhou mas validadores deram feedback recuperável — finalizando relatório...")
@@ -3735,7 +3855,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     self.state_mgr.block(f"Review falhou: {recovery_result.output[:300] or result.output[:300]}")
                     print(f"  REVIEW BLOCK: LLM nao conseguiu revisar")
                     return
-            else:
+            elif not pre_check.passed:
                 self.state_mgr.block(f"Review falhou: {result.output[:300]}")
                 print(f"  REVIEW BLOCK: LLM nao conseguiu revisar")
                 return
@@ -3812,69 +3932,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             reason = _extract_review_rejection_reason(review_output, verdict)
             print(ui.fail(f"REVIEW REJECTED"))
             print(ui.dim(f"  Motivo: {reason[:300]}"))
-
-            # Se tem on_fail com goto, delegar correção ao LLM com contexto completo
-            if node.on_fail and node.on_fail.get("goto"):
-                goto_id = node.on_fail["goto"]
-                goto_node = self.graph.get_node(goto_id)
-                if goto_node and goto_node.executor.startswith("llm"):
-                    print(ui.info(f"Delegando correção ao LLM ({goto_id}) com contexto da rejeição..."))
-
-                    original_prompt = build_task_prompt(goto_node, {})
-                    fix_prompt = (
-                        f"{original_prompt}\n\n"
-                        f"─── CONTEXTO: REVIEW REJEITOU O RESULTADO ANTERIOR ───\n"
-                        f"O expert review encontrou os seguintes problemas:\n\n"
-                        f"{reason}\n\n"
-                        f"Relatório completo em: {node.outputs[0] if node.outputs else 'N/A'}\n\n"
-                        f"Corrija TODOS os problemas listados acima. "
-                        f"Quando terminar, diga DONE."
-                    )
-
-                    allowed = self._resolve_allowed_paths(goto_node)
-                    fix_engine = self._resolve_llm_engine(state, node=goto_node)
-                    fix_opencode_options = self._opencode_options_for_node(goto_node, fix_engine)
-                    fix_log = self._start_llm_log(state, goto_id, "review-fix")
-                    self.state_mgr.save()
-
-                    try:
-                        fix_kwargs: dict = dict(
-                            task=fix_prompt,
-                            project_root=self._work_dir,
-                            allowed_paths=self._delegate_allowed_paths(allowed),
-                            llm_engine=fix_engine,
-                            llm_model=self._resolve_llm_model(state, node=goto_node),
-                            max_turns=goto_node.max_turns or 50,
-                            log_path=fix_log,
-                            stream_prefix=self._stream_prefix(fix_engine),
-                        )
-                        self._apply_opencode_options(fix_kwargs, fix_opencode_options)
-                        fix_result = delegate_to_llm(**fix_kwargs)
-                    finally:
-                        self._clear_active_llm_log(state)
-                    state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
-
-                    if fix_result.success:
-                        # Validar o goto_node
-                        fix_validation = run_validators(goto_node, self.project_root,
-                                                        state_dir=str(self.state_mgr.path.parent),
-                                                        work_dir=self._run_dir)
-                        self._print_validation(fix_validation)
-                        if fix_validation.passed:
-                            print(ui.success("Correção aplicada — re-executando review"))
-                            # Re-rodar o review (recursão controlada — 1 nível)
-                            self._run_review(node)
-                            return
-
-                    # Fix falhou — bloqueia com contexto
-                    self.state_mgr.block(
-                        f"Review REJECTED e auto-fix falhou.\n"
-                        f"Motivo da rejeição:\n{reason[:500]}"
-                    )
-                    return
-
-            # Sem on_fail — bloqueia com o motivo
-            self.state_mgr.block(f"Expert Review REJECTED:\n{reason[:500]}")
+            if node.on_fail:
+                self._handle_on_fail(node, reason or "review rejeitado")
+            else:
+                self.state_mgr.block(f"Expert Review REJECTED:\n{reason[:500]}")
             return
 
         next_id = self.graph.resolve_next(node.id)
@@ -4101,6 +4162,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         node_id = state.pending_approval
         node = self.graph.get_node(node_id)
+        if node.env_teardown:
+            self._run_env_teardown(node)
         next_id = self.graph.resolve_next(node_id)
         self._advance_state(node_id, next_id)
         log_msg = f"APROVADO: {node_id} → {next_id}"
@@ -4125,16 +4188,34 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             target_idx = ordered.index(goto)
         except ValueError:
             return False
+        removed = [
+            n for n in state.completed_nodes
+            if n in ordered and ordered.index(n) >= target_idx
+        ]
         state.completed_nodes = [
             n for n in state.completed_nodes
             if n in ordered and ordered.index(n) < target_idx
         ]
+        for node_id in removed:
+            state.gate_log.pop(node_id, None)
+            self._clear_validator_snapshots(node_id)
+            node = self.graph.nodes.get(node_id)
+            if node is None:
+                continue
+            output_paths = {str(path) for path in node.outputs}
+            for artifact_name, artifact_path in list(state.artifacts.items()):
+                if artifact_path in output_paths:
+                    state.artifacts.pop(artifact_name, None)
         state.current_node = goto
-        state.node_status = "running"
+        state.node_status = "ready"
         state.blocked_reason = None
         state.pending_fix = None
+        state.pending_approval = None
         state.last_approval_message = message
         state.metrics["steps_completed"] = len(state.completed_nodes)
+        cycle_memory = self._cycle_memory_path()
+        if cycle_memory.exists():
+            cycle_memory.unlink()
         self.state_mgr.save()
         print(ui.info(f"↩ Voltando para {goto} com contexto de correção"))
         return True
@@ -4198,6 +4279,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         node_id = state.pending_approval
         node = self.graph.get_node(node_id)
         print(f"  REJEITADO: {node_id} — {reason}")
+        if node.env_teardown:
+            self._run_env_teardown(node)
 
         # Encontrar o node LLM que deve receber o feedback:
         # - Se o node rejeitado é LLM, usa ele mesmo
@@ -4217,6 +4300,25 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         if target == node_id:
                             retry_node = other_node
                             break
+
+        correction_policy = self.graph.meta.get("correction_policy", {})
+        follow_graph = (
+            isinstance(correction_policy, dict)
+            and correction_policy.get("follow_graph_after_retry") is True
+        )
+        if retry and follow_graph:
+            if not retry_node.executor.startswith("llm"):
+                self.state_mgr.block(
+                    f"Node de correção não é executável por LLM: {retry_node.id}"
+                )
+                return
+            feedback = (
+                f"REJEITADO PELO STAKEHOLDER no gate {node_id}:\n{reason}\n\n"
+                "Corrija o escopo aprovado e siga novamente todos os nodes do grafo."
+            )
+            if not self._rewind_to_node(retry_node.id, feedback):
+                self.state_mgr.block(f"Não foi possível retornar para {retry_node.id}")
+            return
 
         if retry and retry_node.executor.startswith("llm"):
             # Reenviar ao LLM com feedback da rejeicao

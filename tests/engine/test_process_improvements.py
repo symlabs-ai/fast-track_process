@@ -174,7 +174,7 @@ def test_promoted_candidate_requires_reference_and_unblocks_close(tmp_path):
         "PI-001",
         status="promoted",
         reason="Aplicado no template e validado pela suíte do engine.",
-        reference="commit abc123 templates/fast-track-v3/process.yml",
+        reference="commit abc123 templates/mvp-builder/process.yml",
     )
 
     assert review.global_candidates[0].status == "promoted"
@@ -261,7 +261,7 @@ def test_process_candidates_reads_active_worktree_from_project_root(tmp_path, ca
 def test_global_template_declares_structured_process_governance():
     root = Path(__file__).resolve().parents[2]
     data = yaml.safe_load(
-        (root / "templates/fast-track-v3/process.yml").read_text(encoding="utf-8")
+        (root / "templates/mvp-builder/process.yml").read_text(encoding="utf-8")
     )
     node = next(
         item for item in data["nodes"] if item["id"] == "ft.handoff.05.process_evolve"

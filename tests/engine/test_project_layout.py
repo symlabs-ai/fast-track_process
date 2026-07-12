@@ -73,6 +73,9 @@ def test_nested_gitignore_keeps_process_and_cycles_trackable(tmp_path):
 
 def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     ensure_project_layout(tmp_path)
+    selected_process = tmp_path / ".ft" / "process" / "feature" / "process.yml"
+    selected_process.parent.mkdir(parents=True)
+    selected_process.write_text(MINIMAL_PROCESS)
     docs = tmp_path / "docs"
     screenshots = docs / "screenshots"
     screenshots.mkdir(parents=True)
@@ -88,7 +91,12 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     (state_dir / "engine_state.yml").write_text("runtime")
 
     state = EngineState(
-        process_id="fast_track_v3",
+        process_id="test_process",
+        process_path=".ft/process/feature/process.yml",
+        process_digest="sha256:initial",
+        template_id="feature",
+        base_commit="deadbeef",
+        worktree_branch="cycle-07",
         version="1.0.0",
         llm_engine="claude",
         llm_model="claude-fable-5",
@@ -113,6 +121,14 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     assert record["progress"] == {"completed": 44, "total": 44}
     assert record["gate_summary"] == {"PASS": 2}
     assert record["llm"]["model"] == "claude-fable-5"
+    assert record["process"]["path"] == ".ft/process/feature/process.yml"
+    assert record["process"]["template"] == "feature"
+    assert record["process"]["initial_digest"] == "sha256:initial"
+    assert record["process"]["closed_digest"].startswith("sha256:")
+    assert record["git"] == {
+        "base_commit": "deadbeef",
+        "worktree_branch": "cycle-07",
+    }
 
 
 def test_archive_uses_process_artifact_policy_and_is_idempotent(tmp_path):

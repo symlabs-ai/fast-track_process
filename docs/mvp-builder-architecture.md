@@ -1,4 +1,4 @@
-# Fast Track V3 - Arquitetura de Projeto
+# MVP Builder - Arquitetura de Projeto
 
 ## Objetivo
 
@@ -119,7 +119,7 @@ para a branch principal.
 schema_version: 1
 process: .ft/process/process.yml
 template:
-  id: fast-track-v3
+  id: mvp-builder
   base_digest: sha256:...
 defaults:
   llm_engine: opencode
@@ -154,7 +154,7 @@ ciclo. Se um path aparecer nas duas listas, a classificação canônica prevalec
 ## Ciclo de Vida
 
 ```text
-ft init
+ft init --template <template>
   -> cria docs/, src/ e .ft/ versionável
   -> copia template para .ft/process/process.yml
   -> NÃO cria engine_state.yml

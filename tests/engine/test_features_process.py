@@ -11,10 +11,10 @@ from ft.engine.validators.artifacts import (
 )
 
 
-def test_v3_process_maintains_features_before_planning_and_after_delivery():
+def test_mvp_builder_maintains_features_before_planning_and_after_delivery():
     root = Path(__file__).resolve().parents[2]
     data = yaml.safe_load(
-        (root / "templates/fast-track-v3/process.yml").read_text(encoding="utf-8")
+        (root / "templates/mvp-builder/process.yml").read_text(encoding="utf-8")
     )
     by_id = {node["id"]: node for node in data["nodes"]}
 

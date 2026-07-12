@@ -16,9 +16,30 @@ import yaml
 from ft.engine import paths
 
 
-def load_environment(project_root: str) -> dict[str, Any]:
-    """Carrega .ft/process/environment.yml do projeto."""
-    env_path = paths.project_environment_file(project_root)
+def _selected_process_dir(
+    project_root: str | Path,
+    process_path: str | Path | None = None,
+    process_dir: str | Path | None = None,
+) -> Path:
+    """Resolve o diretório do processo, preservando o layout legado como default."""
+    root = Path(project_root)
+    if process_dir is not None:
+        selected = Path(process_dir)
+    elif process_path is not None:
+        selected = Path(process_path).parent
+    else:
+        return paths.project_process_dir(root)
+
+    return selected if selected.is_absolute() else root / selected
+
+
+def load_environment(
+    project_root: str | Path,
+    process_path: str | Path | None = None,
+    process_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Carrega environment.yml ao lado do processo selecionado."""
+    env_path = _selected_process_dir(project_root, process_path, process_dir) / "environment.yml"
     if not env_path.exists():
         return {}
     with open(env_path) as f:
@@ -42,12 +63,18 @@ def get_hooks(environment: dict[str, Any]) -> dict[str, list[str]]:
 
 def run_hooks(
     event: str,
-    project_root: str,
+    project_root: str | Path,
     environment: dict[str, Any] | None = None,
+    process_path: str | Path | None = None,
+    process_dir: str | Path | None = None,
 ) -> list[tuple[str, bool, str]]:
     """Executa hooks para um evento. Retorna [(script, success, detail)]."""
     if environment is None:
-        environment = load_environment(project_root)
+        environment = load_environment(
+            project_root,
+            process_path=process_path,
+            process_dir=process_dir,
+        )
 
     hooks = get_hooks(environment)
     scripts = hooks.get(event, [])
@@ -55,9 +82,24 @@ def run_hooks(
         return []
 
     results: list[tuple[str, bool, str]] = []
+    selected_process_dir = _selected_process_dir(
+        project_root, process_path, process_dir
+    ).resolve()
     for script in scripts:
-        script_path = paths.project_process_dir(project_root) / script if not Path(script).is_absolute() else Path(script)
-        if not script_path.exists():
+        requested_script = Path(script)
+        script_path = (
+            requested_script
+            if requested_script.is_absolute()
+            else selected_process_dir / requested_script
+        ).resolve()
+        try:
+            script_path.relative_to(selected_process_dir)
+        except ValueError:
+            detail = f"script fora do processo local: {script_path}"
+            results.append((script, False, detail))
+            print(f"  HOOK {event} FAIL: {script} — fora do processo local")
+            continue
+        if not script_path.is_file():
             results.append((script, False, f"script não encontrado: {script_path}"))
             print(f"  HOOK {event} FAIL: {script} — script não encontrado")
             continue

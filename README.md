@@ -25,13 +25,39 @@ ft --help
 ## Criar um projeto
 
 ```bash
-ft init meu-projeto --template fast-track-v3
+ft init meu-projeto --template mvp-builder
 cd meu-projeto
 git init
 git add -A
 git commit -m "chore: bootstrap fast track"
 ft run . --auto
 ```
+
+`ft init` não escolhe um processo implicitamente: `--template` é obrigatório e
+`ft init --help` mostra os nomes compatíveis com esse entrypoint no catálogo
+instalado. Templates de outros comandos, como `feature`, não são aceitos no init.
+Se `.ft/manifest.yml` já existir, uma nova chamada a `ft init` falha.
+
+Um projeto pode manter vários processos locais. O manifesto registra o default e
+os processos nomeados; quando um entrypoint recebe `--template`, a primeira
+invocação materializa o template aplicável sob `.ft/process/` e as seguintes
+preservam a cópia versionada. O runtime nunca executa arquivos de `templates/`
+diretamente.
+
+## Evoluir uma feature
+
+Num produto FT já inicializado e commitado:
+
+```bash
+ft feature "Adicionar busca por telefone" --template feature --claude
+# ou: ft feature --input demanda.md --template feature --codex
+```
+
+Na primeira chamada, o template é copiado para `.ft/process/feature/`; chamadas
+seguintes preservam esse fork local. A demanda existe apenas na worktree do
+ciclo. Perguntas, aprovação de escopo, implementação, review e aceite são
+conduzidos pelo grafo. Ao final, `ft close` valida somente o PB selecionado, faz
+merge full e remove worktree/branch.
 
 O ciclo roda em worktree externo:
 
@@ -49,6 +75,7 @@ descreve as capacidades efetivamente entregues.
 
 ```bash
 ft run .                       # iniciar ciclo
+ft feature "demanda" --template feature  # evoluir capacidade existente
 ft run . --auto                # avançar automaticamente até human gate/MVP/BLOCK
 ft continue                    # avançar um node
 ft continue --sprint           # avançar uma sprint
@@ -62,7 +89,7 @@ ft process-candidates          # revisar melhorias candidatas ao processo global
 ft close                       # encerrar ciclo e escolher merge
 ```
 
-O template V3 classifica cada aprendizado de processo como `local`,
+O template `mvp-builder` classifica cada aprendizado de processo como `local`,
 `global_candidate` ou `rejected`. `ft close` bloqueia enquanto houver candidato
 global pendente; o mantenedor registra `promoted`, `deferred` ou `rejected` com
 `ft process-candidates PI-NNN --status ... --reason "..."`. Promoções exigem
@@ -83,13 +110,15 @@ worktree fica read-only e apenas outputs/write_scope do node são writable
 | Template | Uso |
 |----------|-----|
 | `base` | Estrutura mínima com `.ft/process/process.yml`, `docs/` e `src/` |
-| `fast-track-v3` | Processo completo recomendado para MVP |
+| `feature` | Evolução incremental de uma única feature em produto FT existente |
+| `mvp-builder` | Processo completo recomendado para construir um MVP do zero |
 | `fast-track-v2` | Processo V2 legado |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
 
 Integrações externas pertencem ao projeto/template de ambiente. O engine chama
-scripts em `.ft/process/scripts/` e não precisa conhecer o provedor.
+scripts ao lado do processo selecionado (`.ft/process/scripts/` no layout
+default ou `.ft/process/<nome>/scripts/` em processos nomeados).
 
 Projetos do layout anterior devem ser migrados explicitamente:
 
@@ -109,7 +138,7 @@ O CLI não procura automaticamente processos em `process/`.
 ## Documentação
 
 - Guia do engine: [`docs/ft_engine_usage.md`](docs/ft_engine_usage.md)
-- Arquitetura V3: [`docs/V3_ARCHITECTURE.md`](docs/V3_ARCHITECTURE.md)
+- Arquitetura do MVP Builder: [`docs/mvp-builder-architecture.md`](docs/mvp-builder-architecture.md)
 - Playbook de condução: [`AGENTS.md`](AGENTS.md)
 - Templates: [`templates/`](templates/)
 - Processo legado V2: [`process/fast_track/`](process/fast_track/)
@@ -118,6 +147,7 @@ O CLI não procura automaticamente processos em `process/`.
 
 ```bash
 python -m pytest -q
-FT_ALLOW_ENGINE_REPO=1 ft --process templates/fast-track-v3/process.yml validate
+FT_ALLOW_ENGINE_REPO=1 ft --process templates/mvp-builder/process.yml validate
+FT_ALLOW_ENGINE_REPO=1 ft --process templates/feature/process.yml validate
 FT_ALLOW_ENGINE_REPO=1 ft --process templates/ft-ui-prototype/process.yml validate
 ```

@@ -26,6 +26,10 @@ ft = "ft.cli.main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["ft"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "templates"
+"AGENTS.md" = "AGENTS.md"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

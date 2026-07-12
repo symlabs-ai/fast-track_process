@@ -42,17 +42,27 @@ produzidas pelo próprio processo são integradas pelo `ft close`.
 ## 0. Criar o projeto
 
 ```bash
-ft init meu-projeto --template fast-track-v3   # cria .ft/process/, docs/ e src/, sem runtime
+ft init meu-projeto --template mvp-builder     # cria .ft/process/, docs/ e src/, sem runtime
 cd meu-projeto
 git init && git add -A && git commit -m "chore: bootstrap fast track"
 ```
+
+`--template` é obrigatório. Rode `ft init --help` para ver os nomes compatíveis
+com o init; o engine não escolhe um processo automaticamente. Templates de
+outros entrypoints, como `feature`, não são aceitos nesse comando.
+Uma segunda chamada no mesmo projeto falha porque `.ft/manifest.yml` já existe.
+O manifesto pode registrar vários processos locais: um default e processos
+nomeados em `.ft/process/<template>/`. Quando um comando recebe `--template`, ele
+materializa a cópia aplicável na primeira vez e preserva o fork local depois; o
+engine nunca executa diretamente o catálogo global `templates/`.
 
 Templates disponíveis (`templates/` no repo do engine):
 
 | Template | Uso |
 |----------|-----|
 | `base` | Estrutura mínima com `.ft/process/process.yml`, docs seed e `src/` |
-| `fast-track-v3` | Processo completo V3 (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
+| `feature` | Evolução incremental de uma única feature em produto já entregue; destinado ao comando `ft feature` |
+| `mvp-builder` | Processo completo de MVP (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
 | `fast-track-v2` | Processo V2 legado |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
@@ -93,6 +103,23 @@ O engine delega construção ao LLM com o contexto de `docs/`. Antes de rodar:
 
 > **Commite antes de rodar.** O worktree do ciclo nasce do último commit — mudanças não
 > commitadas ficam de fora.
+
+### Evoluir uma feature em produto existente
+
+Use o entrypoint incremental em vez de iniciar outro ciclo completo de MVP:
+
+```bash
+ft feature "Adicionar busca por telefone" --template feature --claude
+# ou
+ft feature --input demanda.md --template feature --codex
+```
+
+O comando exige projeto inicializado, repositório Git com HEAD e checkout limpo.
+Na primeira chamada, copia o template para `.ft/process/feature/`; depois preserva
+esse fork local. A demanda é gravada somente na worktree. O processo pode perguntar
+para elucidar o escopo, exige aprovação antes do código, repete implementação e
+review após rejeições e encerra com `ft close` em merge full. P0/P1 alheios não
+bloqueiam o close: apenas o `backlog_item` selecionado precisa estar aceito.
 
 ## 2. Rodar o ciclo
 
@@ -179,7 +206,7 @@ ft process-candidates PI-001 --status promoted \
   --reason "Aplicado e testado no engine" --reference "commit/path"
 ```
 
-O template V3 só aceita `global_candidate` quando a melhoria é independente de
+O template `mvp-builder` só aceita `global_candidate` quando a melhoria é independente de
 domínio, não contém identificadores do produto, é configurável, foi verificada no
 ciclo e é retrocompatível. O ciclo altera apenas seu fork local; `ft close` bloqueia
 candidatos globais `pending` até o mantenedor registrar `promoted`, `deferred` ou
@@ -225,7 +252,8 @@ Depois do close:
 
 No projeto:
 
-- Processo versionado do projeto: `.ft/process/process.yml`
+- Processo default versionado: `.ft/process/process.yml`
+- Processos nomeados materializados: `.ft/process/<template>/process.yml`
 - Histórico versionado dos ciclos: `.ft/cycles/<cycle>/`
 - Conhecimento seed: `docs/PRD.md`, `docs/TECH_STACK.md`, `docs/PROJECT_BACKLOG.md`,
   `docs/FEATURES.md`

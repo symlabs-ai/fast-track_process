@@ -44,6 +44,25 @@ def project_scripts_dir(project_root: str | Path) -> Path:
     return project_process_dir(project_root) / "scripts"
 
 
+def project_named_process_dir(project_root: str | Path, process_name: str) -> Path:
+    """Directory of a named local process under ``.ft/process/``."""
+    if not process_name or Path(process_name).name != process_name:
+        raise ValueError(f"nome de processo inválido: {process_name!r}")
+    return project_process_dir(project_root) / process_name
+
+
+def project_named_process_file(project_root: str | Path, process_name: str) -> Path:
+    return project_named_process_dir(project_root, process_name) / "process.yml"
+
+
+def project_named_environment_file(project_root: str | Path, process_name: str) -> Path:
+    return project_named_process_dir(project_root, process_name) / "environment.yml"
+
+
+def project_named_scripts_dir(project_root: str | Path, process_name: str) -> Path:
+    return project_named_process_dir(project_root, process_name) / "scripts"
+
+
 def project_cycles_dir(project_root: str | Path) -> Path:
     return project_ft_dir(project_root) / "cycles"
 

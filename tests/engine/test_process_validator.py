@@ -243,7 +243,8 @@ class TestRealProcess:
 
     @pytest.mark.parametrize("template", [
         "templates/base/process.yml",
-        "templates/fast-track-v3/process.yml",
+        "templates/feature/process.yml",
+        "templates/mvp-builder/process.yml",
         "templates/ft-ui-prototype/process.yml",
     ])
     def test_templates_pass_process_validation(self, template):

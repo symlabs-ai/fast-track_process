@@ -2670,7 +2670,115 @@ nodes:
         assert state.current_node == "ft.end"
         assert state.gate_log["ft.review.visual"] == "APPROVED WITH NOTES"
 
-    def test_review_rejected_verdict_routes_to_on_fail_before_validation_retry(self, tmp_path):
+    def test_mandatory_review_regenerates_preexisting_valid_report(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        report = docs / "feature-review.md"
+        report.write_text("Resultado: APPROVED\nrelatório antigo\n", encoding="utf-8")
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+correction_policy:
+  mandatory_after_implementation:
+    - feature.review
+nodes:
+  - id: feature.review
+    type: review
+    title: Feature Review
+    executor: claude
+    outputs:
+      - docs/feature-review.md
+    validators:
+      - file_exists: docs/feature-review.md
+    next: feature.end
+  - id: feature.end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        node = runner.graph.get_node("feature.review")
+
+        def delegate_side_effect(**kwargs):
+            assert not report.exists()
+            report.write_text("Resultado: APPROVED\nrelatório novo\n", encoding="utf-8")
+            return DelegateResult(
+                success=True,
+                output="Resultado: APPROVED",
+                files_created=["docs/feature-review.md"],
+                files_modified=[],
+            )
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect) as delegated:
+            runner._run_review(node)
+
+        assert delegated.called
+        assert "relatório novo" in report.read_text(encoding="utf-8")
+        assert runner.state_mgr.load().current_node == "feature.end"
+
+    def test_stakeholder_message_survives_interrupted_delegation(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+nodes:
+  - id: feature.implement
+    type: build
+    title: Implement
+    executor: claude
+    next: feature.end
+  - id: feature.end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.last_approval_message = "corrigir branches e current_step"
+        runner.state_mgr.save()
+        node = runner.graph.get_node("feature.implement")
+
+        with (
+            patch(
+                "ft.engine.runner.delegate_to_llm",
+                side_effect=KeyboardInterrupt,
+            ),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            runner._run_llm_step(node)
+
+        recovered = runner.state_mgr.load()
+        assert recovered.last_approval_message == "corrigir branches e current_step"
+
+    @pytest.mark.parametrize("delegate_success", [True, False])
+    def test_review_rejected_verdict_routes_to_on_fail_before_validation_retry(
+        self,
+        tmp_path,
+        delegate_success,
+    ):
         project_root = tmp_path / "project"
         docs = project_root / "docs"
         state_dir = project_root / "state"
@@ -2723,8 +2831,8 @@ nodes:
                 encoding="utf-8",
             )
             return DelegateResult(
-                success=True,
-                output="DONE",
+                success=delegate_success,
+                output="DONE" if delegate_success else "BLOCKED",
                 files_created=["docs/visual-review.md"],
                 files_modified=[],
             )
@@ -2739,6 +2847,89 @@ nodes:
         assert state.node_status == "pending_fix"
         assert state.pending_fix["goto"] == "ft.frontend.fix"
         assert "REJECTED" in state.pending_fix["feedback"]
+
+    @pytest.mark.parametrize("delegate_success", [True, False])
+    def test_review_rejected_with_passing_validators_routes_to_claude_on_fail(
+        self,
+        tmp_path,
+        delegate_success,
+    ):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: feature
+version: "1.0.0"
+title: Feature
+nodes:
+  - id: feature.review
+    type: review
+    title: Review
+    executor: claude
+    outputs:
+      - docs/feature-review.md
+    validators:
+      - file_exists: docs/feature-review.md
+    on_fail:
+      human_gate: Corrija a implementação.
+      goto: feature.implement
+    next: feature.acceptance
+  - id: feature.implement
+    type: build
+    title: Implement
+    executor: claude
+    next: feature.review
+  - id: feature.acceptance
+    type: human_gate
+    title: Acceptance
+    executor: python
+    next: feature.end
+  - id: feature.end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        node = runner.graph.get_node("feature.review")
+
+        def delegate_side_effect(**kwargs):
+            (docs / "feature-review.md").write_text(
+                "Resultado: REJECTED\n\nRegressão de contrato público.\n",
+                encoding="utf-8",
+            )
+            return DelegateResult(
+                success=delegate_success,
+                output="Resultado: REJECTED" if delegate_success else "max turns",
+                files_created=["docs/feature-review.md"],
+                files_modified=[],
+            )
+
+        with (
+            patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect) as delegated,
+            patch(
+                "ft.engine.runner.delegate_with_feedback",
+                side_effect=AssertionError("review rejeitado não deve entrar em recovery"),
+            ),
+        ):
+            runner._run_review(node)
+
+        assert delegated.call_count == 1
+        state = runner.state_mgr.load()
+        assert state.node_status == "pending_fix"
+        assert state.pending_fix["goto"] == "feature.implement"
+        assert "Regressão de contrato público" in state.pending_fix["feedback"]
 
     def test_bypass_human_gates_applies_on_fail_automatically(self, tmp_path):
         project_root = tmp_path / "project"

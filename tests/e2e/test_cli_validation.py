@@ -21,7 +21,6 @@ from pathlib import Path
 import pytest
 
 from ft.engine import paths
-from ft.engine.layout import ensure_project_layout
 from ft.engine.runner import StepRunner
 
 # ---------------------------------------------------------------------------
@@ -130,7 +129,7 @@ APPROVAL_PROCESS = textwrap.dedent("""\
 @pytest.fixture
 def ft_project(tmp_path: Path) -> Path:
     """Minimal ft project with a gate-only process (no LLM calls)."""
-    ensure_project_layout(tmp_path)
+    paths.project_process_dir(tmp_path).mkdir(parents=True)
     paths.project_process_file(tmp_path).write_text(GATE_ONLY_PROCESS)
     return tmp_path
 
@@ -138,7 +137,7 @@ def ft_project(tmp_path: Path) -> Path:
 @pytest.fixture
 def ft_project_initialized(ft_project: Path) -> Path:
     """ft_project with runtime state initialized independently of ft init."""
-    result = run_ft(["init"], cwd=ft_project)
+    result = run_ft(["init", "--template", "base"], cwd=ft_project)
     assert result.returncode == 0, f"init failed:\n{result.stdout}\n{result.stderr}"
     _initialize_state(ft_project)
     return ft_project
@@ -147,9 +146,9 @@ def ft_project_initialized(ft_project: Path) -> Path:
 @pytest.fixture
 def ft_project_approval(tmp_path: Path) -> Path:
     """ft project using the approval process (LLM step with requires_approval)."""
-    ensure_project_layout(tmp_path)
+    paths.project_process_dir(tmp_path).mkdir(parents=True)
     paths.project_process_file(tmp_path).write_text(APPROVAL_PROCESS)
-    run_ft(["init"], cwd=tmp_path)
+    run_ft(["init", "--template", "base"], cwd=tmp_path)
     _initialize_state(tmp_path)
     return tmp_path
 
@@ -167,7 +166,7 @@ class TestHelpAndUsage:
     def test_help_lists_all_subcommands(self, tmp_path):
         result = run_ft(["--help"], cwd=tmp_path)
         output = result.stdout + result.stderr
-        for cmd in ("init", "status", "continue", "approve", "reject", "graph"):
+        for cmd in ("init", "feature", "status", "continue", "approve", "reject", "graph"):
             assert cmd in output, f"'{cmd}' not listed in --help output"
 
     def test_help_mentions_process_flag(self, tmp_path):
@@ -181,6 +180,17 @@ class TestHelpAndUsage:
         assert "--claude" in output
         assert "--codex" in output
         assert "--opencode" in output
+
+    def test_feature_help_exposes_template_input_and_llm_flags(self, tmp_path):
+        result = run_ft(["feature", "--help"], cwd=tmp_path)
+        output = result.stdout + result.stderr
+
+        assert result.returncode == 0
+        assert "--template" in output
+        assert "--input" in output
+        assert "--claude" in output
+        assert "--codex" in output
+        assert "{feature}" in output
 
     def test_no_args_shows_usage(self, tmp_path):
         result = run_ft([], cwd=tmp_path)
@@ -215,37 +225,38 @@ class TestHelpAndUsage:
 
 class TestInit:
     def test_exits_zero(self, ft_project):
-        result = run_ft(["init"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base"], cwd=ft_project)
         assert result.returncode == 0
 
     def test_creates_no_state_file(self, ft_project):
-        run_ft(["init"], cwd=ft_project)
+        run_ft(["init", "--template", "base"], cwd=ft_project)
         assert not _state_file(ft_project).exists()
         assert not list(paths.worktrees_home(ft_project).glob("*/state/engine_state.yml"))
 
     def test_output_mentions_process_title(self, ft_project):
-        result = run_ft(["init"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base"], cwd=ft_project)
         output = result.stdout + result.stderr
         assert "E2E Test Process" in output
 
     def test_output_mentions_first_node(self, ft_project):
-        result = run_ft(["init"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base"], cwd=ft_project)
         output = result.stdout + result.stderr
         assert "gate.01.start" in output
 
     def test_output_mentions_total_steps(self, ft_project):
-        result = run_ft(["init"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base"], cwd=ft_project)
         output = result.stdout + result.stderr
         assert "steps" in output.lower() or "total" in output.lower()
 
-    def test_idempotent_second_init(self, ft_project):
-        run_ft(["init"], cwd=ft_project)
-        result = run_ft(["init"], cwd=ft_project)
-        assert result.returncode == 0
+    def test_second_init_fails_for_initialized_project(self, ft_project):
+        run_ft(["init", "--template", "base"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base"], cwd=ft_project)
+        assert result.returncode != 0
+        assert "já inicializado" in (result.stdout + result.stderr)
 
     def test_copies_agents_md_playbook(self, ft_project):
         """ft init copia o AGENTS.md do engine para a raiz do projeto."""
-        run_ft(["init"], cwd=ft_project)
+        run_ft(["init", "--template", "base"], cwd=ft_project)
         agents = ft_project / "AGENTS.md"
         assert agents.exists(), "AGENTS.md deveria ser copiado pelo ft init"
         assert "ft engine" in agents.read_text()
@@ -254,40 +265,48 @@ class TestInit:
         """AGENTS.md pré-existente do projeto não é sobrescrito."""
         custom = "# AGENTS.md customizado do projeto\n"
         (ft_project / "AGENTS.md").write_text(custom)
-        run_ft(["init"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base"], cwd=ft_project)
+        assert result.returncode == 0
         assert (ft_project / "AGENTS.md").read_text() == custom
 
     def test_explicit_process_flag(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)
         process_file = tmp_path / "custom.yml"
         process_file.write_text(GATE_ONLY_PROCESS)
-        result = run_ft(["--process", str(process_file), "init"], cwd=tmp_path)
+        result = run_ft(
+            ["--process", str(process_file), "init", "--template", "base"],
+            cwd=tmp_path,
+        )
         assert result.returncode == 0
         assert paths.project_process_file(tmp_path).read_text() == GATE_ONLY_PROCESS
         assert not _state_file(tmp_path).exists()
 
-    def test_no_local_yaml_gives_clear_error(self, tmp_path):
-        """Without a local process YAML, ft init gives a clear error with guidance."""
-        (tmp_path / "project" / "state").mkdir(parents=True)
+    def test_missing_template_lists_available_names(self, tmp_path):
         result = run_ft(["init"], cwd=tmp_path)
-        assert result.returncode == 0
-        assert "ft init --template" in result.stdout
+        output = result.stdout + result.stderr
+        assert result.returncode == 2
+        assert "--template" in output
+        assert "mvp-builder" in output
+        assert not (tmp_path / ".ft").exists()
 
     def test_codex_flag_persists_engine_choice(self, ft_project):
-        result = run_ft(["init", "--codex"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base", "--codex"], cwd=ft_project)
         assert result.returncode == 0
         manifest = paths.project_manifest(ft_project)
         assert "llm_engine: codex" in manifest.read_text()
 
     def test_opencode_flag_persists_engine_choice(self, ft_project):
-        result = run_ft(["init", "--opencode"], cwd=ft_project)
+        result = run_ft(["init", "--template", "base", "--opencode"], cwd=ft_project)
         assert result.returncode == 0
         manifest = paths.project_manifest(ft_project)
         assert "llm_engine: opencode" in manifest.read_text()
 
     def test_missing_process_file_exits_nonzero(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)
-        result = run_ft(["--process", "/does/not/exist.yml", "init"], cwd=tmp_path)
+        result = run_ft(
+            ["--process", "/does/not/exist.yml", "init", "--template", "base"],
+            cwd=tmp_path,
+        )
         assert result.returncode != 0
 
 
@@ -336,6 +355,79 @@ class TestStatus:
         """status with no state file should not raise an unhandled exception."""
         result = run_ft(["status"], cwd=ft_project)
         assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "nenhum ciclo ativo" in output.lower()
+        assert "Progresso:" not in output
+
+    def test_status_ignores_pristine_legacy_continuous_state(self, ft_project):
+        """Um runtime vazio não ressuscita o processo default nem progresso 1/N."""
+        state = _state_file(ft_project)
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(
+            "process_id: removed_process\n"
+            "version: 1.1.0\n"
+            "llm_engine: claude\n"
+            "current_node: null\n"
+            "node_status: ready\n"
+            "completed_nodes: []\n"
+            "metrics:\n"
+            "  steps_completed: 0\n"
+            "  steps_total: 54\n"
+        )
+        archive = paths.project_cycles_dir(ft_project) / "cycle-10"
+        archive.mkdir(parents=True)
+        (archive / "cycle.yml").write_text(
+            "id: cycle-10\n"
+            "status: done\n"
+            "progress:\n"
+            "  completed: 11\n"
+            "  total: 11\n"
+        )
+
+        result = run_ft(["status"], cwd=ft_project)
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "nenhum ciclo ativo" in output.lower()
+        assert "cycle-10 (concluído)" in output
+        assert "removed_process" not in output
+        assert "1/54" not in output
+
+    def test_status_does_not_create_state_when_no_cycle_exists(self, ft_project):
+        state = _state_file(ft_project)
+        assert not state.exists()
+
+        result = run_ft(["status"], cwd=ft_project)
+
+        assert result.returncode == 0
+        assert not state.exists()
+
+    def test_explicit_cycle_cannot_reopen_pristine_state(self, ft_project):
+        cycle = "cycle-07"
+        state = (
+            paths.worktrees_home(ft_project)
+            / cycle
+            / "state"
+            / "engine_state.yml"
+        )
+        state.parent.mkdir(parents=True)
+        state.write_text(
+            "process_id: removed_process\n"
+            "current_node: null\n"
+            "node_status: ready\n"
+            "completed_nodes: []\n"
+            "metrics:\n"
+            "  steps_completed: 0\n"
+            "  steps_total: 54\n"
+        )
+
+        result = run_ft(["status", "--cycle", cycle], cwd=ft_project)
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "nenhum ciclo ativo" in output.lower()
+        assert "removed_process" not in output
+        assert "1/54" not in output
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +453,14 @@ class TestGraph:
         assert graph_result.returncode == 0
         assert status_full_result.returncode == 0
 
+    def test_without_cycle_does_not_show_default_process(self, ft_project):
+        result = run_ft(["graph"], cwd=ft_project)
+        output = result.stdout + result.stderr
+
+        assert result.returncode == 0
+        assert "nenhum ciclo ativo" in output.lower()
+        assert "e2e_test_process" not in output
+
 
 # ---------------------------------------------------------------------------
 # Tests: ft continue
@@ -385,11 +485,16 @@ class TestContinue:
         output = result.stdout + result.stderr
         assert "PASS" in output or "pass" in output.lower() or "gate.01" in output
 
-    def test_continue_without_init_auto_initializes(self, ft_project):
-        """continue on an uninitialized project should initialize automatically."""
+    def test_continue_without_active_cycle_does_not_initialize(self, ft_project):
+        """continue retoma ciclos; não fabrica um run a partir do default local."""
+        state = _state_file(ft_project)
+        assert not state.exists()
+
         result = run_ft(["continue"], cwd=ft_project)
-        # Must not crash — either initializes or shows a clear message
-        assert result.returncode == 0 or len(result.stdout + result.stderr) > 0
+
+        assert result.returncode == 0
+        assert "nenhum ciclo ativo" in (result.stdout + result.stderr).lower()
+        assert not state.exists()
 
     def test_sprint_flag_exits_zero(self, ft_project_initialized):
         result = run_ft(["continue", "--sprint"], cwd=ft_project_initialized)
@@ -506,7 +611,10 @@ class TestErrorHandling:
 
     def test_process_flag_with_missing_file(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)
-        result = run_ft(["--process", "/nonexistent/path.yml", "init"], cwd=tmp_path)
+        result = run_ft(
+            ["--process", "/nonexistent/path.yml", "init", "--template", "base"],
+            cwd=tmp_path,
+        )
         # Should fail gracefully
         assert result.returncode != 0 or "erro" in (result.stdout + result.stderr).lower()
 

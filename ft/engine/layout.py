@@ -13,6 +13,7 @@ import hashlib
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 from typing import Any
 
@@ -103,10 +104,143 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _process_digest(process_file: Path) -> str | None:
-    if not process_file.exists():
+def process_digest(process_file: str | Path) -> str | None:
+    """Hash the complete runtime bundle selected by ``process_file``.
+
+    A process is more than its graph: the adjacent ``environment.yml`` and
+    every file under ``scripts/`` can change execution semantics as well.  The
+    relative path and permission mode are part of the digest so renames and
+    executable-bit changes cannot bypass cycle pinning.
+    """
+    requested_process = Path(process_file)
+    if not requested_process.is_file():
         return None
-    return "sha256:" + hashlib.sha256(process_file.read_bytes()).hexdigest()
+
+    bundle_root = requested_process.parent.resolve()
+    candidates = [requested_process]
+    environment = requested_process.parent / "environment.yml"
+    if environment.is_file():
+        candidates.append(environment)
+
+    scripts_dir = requested_process.parent / "scripts"
+    if scripts_dir.is_dir():
+        for candidate in scripts_dir.rglob("*"):
+            if candidate.is_symlink():
+                raise ValueError(
+                    f"bundle de processo contém link simbólico não permitido: {candidate}"
+                )
+            if candidate.is_file():
+                candidates.append(candidate)
+
+    def relative_name(candidate: Path) -> str:
+        return candidate.relative_to(requested_process.parent).as_posix()
+
+    digest = hashlib.sha256()
+    digest.update(b"ft-process-bundle-v1\0")
+    for candidate in sorted(candidates, key=relative_name):
+        if candidate.is_symlink():
+            raise ValueError(
+                f"bundle de processo contém link simbólico não permitido: {candidate}"
+            )
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(bundle_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"arquivo do bundle escapa do processo local: {candidate}"
+            ) from exc
+        relative = relative_name(candidate)
+        payload = resolved.read_bytes()
+        mode = stat.S_IMODE(resolved.stat().st_mode)
+        header = f"{len(relative)}:{relative}:{mode:o}:{len(payload)}:".encode("utf-8")
+        digest.update(header)
+        digest.update(payload)
+        digest.update(b"\0")
+    return "sha256:" + digest.hexdigest()
+
+
+def _safe_manifest_process_path(root: Path, raw_path: object) -> Path | None:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    relative = Path(raw_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None
+    candidate = (root / relative).resolve()
+    process_catalog = paths.project_process_dir(root).resolve()
+    try:
+        process_catalog.relative_to(root.resolve())
+        candidate.relative_to(process_catalog)
+    except ValueError:
+        return None
+    return candidate
+
+
+def resolve_project_process(
+    project_root: str | Path,
+    process_name: str | None = None,
+) -> Path | None:
+    """Resolve a project-owned process without consulting the global catalog."""
+    root = Path(project_root).resolve()
+    manifest = _read_yaml(paths.project_manifest(root))
+    if process_name:
+        processes = manifest.get("processes", {})
+        if isinstance(processes, dict):
+            record = processes.get(process_name, {})
+            if isinstance(record, dict):
+                candidate = _safe_manifest_process_path(root, record.get("path"))
+                if candidate and candidate.is_file():
+                    return candidate
+        conventional = paths.project_named_process_file(root, process_name)
+        return conventional if conventional.is_file() else None
+
+    candidate = _safe_manifest_process_path(root, manifest.get("process"))
+    if candidate and candidate.is_file():
+        return candidate
+    legacy = paths.project_process_file(root)
+    if legacy.is_file():
+        return legacy
+    return None
+
+
+def register_project_process(
+    project_root: str | Path,
+    *,
+    process_name: str,
+    process_path: str | Path,
+    template_id: str,
+    entrypoint: str,
+    source_digest: str | None = None,
+    set_default: bool = False,
+) -> Path:
+    """Register one named, local process in the versioned project manifest."""
+    root = Path(project_root).resolve()
+    manifest_path = ensure_project_layout(root)
+    manifest = _read_yaml(manifest_path)
+    process_file = Path(process_path).resolve()
+    try:
+        relative = process_file.relative_to(root).as_posix()
+        process_file.relative_to(paths.project_process_dir(root).resolve())
+    except ValueError as exc:
+        raise ValueError("processo registrado deve estar dentro de .ft/process/") from exc
+
+    processes = manifest.setdefault("processes", {})
+    if not isinstance(processes, dict):
+        processes = {}
+        manifest["processes"] = processes
+    processes[process_name] = {
+        "path": relative,
+        "template": template_id,
+        "entrypoint": entrypoint,
+        "source_digest": source_digest,
+        "base_digest": process_digest(process_file),
+    }
+    if set_default:
+        manifest["process"] = relative
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return manifest_path
 
 
 def ensure_project_layout(
@@ -134,11 +268,11 @@ def ensure_project_layout(
     manifest_path = paths.project_manifest(root)
     manifest = _read_yaml(manifest_path)
     manifest["schema_version"] = LAYOUT_VERSION
-    manifest["process"] = ".ft/process/process.yml"
+    manifest.setdefault("process", ".ft/process/process.yml")
     if template_id:
         template = manifest.setdefault("template", {})
         template["id"] = template_id
-        template["base_digest"] = _process_digest(paths.project_process_file(root))
+        template["base_digest"] = process_digest(paths.project_process_file(root))
     if defaults:
         current = manifest.setdefault("defaults", {})
         current.update({key: value for key, value in defaults.items() if value is not None})
@@ -471,6 +605,10 @@ def archive_cycle_artifacts(
     gate_log = getattr(state, "gate_log", {}) if state is not None else {}
     metrics = getattr(state, "metrics", {}) if state is not None else {}
     process_meta = graph_meta or {}
+    selected_process_path = (
+        getattr(state, "process_path", None) if state is not None else None
+    )
+    selected_process = _safe_manifest_process_path(root, selected_process_path)
     timestamp = datetime.now(timezone.utc).isoformat()
     record = {
         "schema_version": LAYOUT_VERSION,
@@ -490,6 +628,18 @@ def archive_cycle_artifacts(
                 getattr(state, "version", None)
                 if state is not None
                 else process_meta.get("version")
+            ),
+            "path": selected_process_path,
+            "template": getattr(state, "template_id", None) if state is not None else None,
+            "initial_digest": (
+                getattr(state, "process_digest", None) if state is not None else None
+            ),
+            "closed_digest": process_digest(selected_process) if selected_process else None,
+        },
+        "git": {
+            "base_commit": getattr(state, "base_commit", None) if state is not None else None,
+            "worktree_branch": (
+                getattr(state, "worktree_branch", None) if state is not None else None
             ),
         },
         "llm": {

@@ -9,6 +9,8 @@ import os
 import re
 import sys
 
+import yaml
+
 # Sequências ANSI (para higienizar texto do estado antes de exibir).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -29,6 +31,9 @@ from ft.engine.layout import (
     latest_cycle_artifact,
     manifest_llm_defaults,
     migrate_legacy_layout,
+    process_digest,
+    register_project_process,
+    resolve_project_process,
     validate_template_is_pristine,
 )
 from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
@@ -41,6 +46,7 @@ from ft.engine.process_improvements import (
 from ft.engine.runner import StepRunner
 from ft.engine.validators.artifacts import (
     backlog_pending_decisions,
+    backlog_referenced_decisions,
     features_catalog_valid,
     features_summary,
     implemented_backlog_covered_by_features,
@@ -117,6 +123,145 @@ def engine_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def _template_process_file(template_dir: Path) -> Path | None:
+    """Resolve o YAML de processo sem confundi-lo com environment.yml."""
+    canonical = template_dir / "process.yml"
+    if canonical.is_file():
+        return canonical
+    legacy = sorted(
+        path for path in template_dir.glob("*.yml")
+        if path.name != "environment.yml"
+    )
+    return legacy[0] if legacy else None
+
+
+def _template_entrypoint(template_dir: Path) -> str:
+    """Retorna o comando dono do template; templates legados pertencem ao init."""
+    process_file = _template_process_file(template_dir)
+    if process_file is None:
+        return "init"
+    try:
+        payload = yaml.safe_load(process_file.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return "init"
+    if not isinstance(payload, dict):
+        return "init"
+    policy = payload.get("execution_policy") or {}
+    if not isinstance(policy, dict):
+        return "init"
+    return str(policy.get("entrypoint") or "init")
+
+
+def available_templates(entrypoint: str | None = "init") -> list[str]:
+    """Descobre templates por entrypoint sem acoplar o CLI a nomes concretos.
+
+    O default preserva a semântica histórica do catálogo usado por ``ft init``.
+    Passe ``None`` para inspecionar o catálogo global completo.
+    """
+    templates_root = engine_root() / "templates"
+    if not templates_root.is_dir():
+        return []
+    return sorted(
+        item.name
+        for item in templates_root.iterdir()
+        if item.is_dir()
+        and _template_process_file(item) is not None
+        and (entrypoint is None or _template_entrypoint(item) == entrypoint)
+    )
+
+
+def _print_template_options(entrypoint: str = "init") -> None:
+    available = available_templates(entrypoint)
+    if available:
+        print(f"  Templates disponíveis: {', '.join(available)}")
+
+
+def materialize_process_template(
+    template_name: str,
+    project_root: Path,
+    *,
+    entrypoint: str,
+) -> Path:
+    """Copy one global template into a named local process exactly once.
+
+    The returned path is always project-owned. Existing local forks are never
+    overwritten, even when the global template changes later.
+    """
+    import shutil
+
+    root = project_root.resolve()
+    process_catalog = paths.project_process_dir(root).resolve()
+    try:
+        process_catalog.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("catálogo local .ft/process/ escapa da raiz do projeto") from exc
+    available = available_templates(entrypoint)
+    if template_name not in available:
+        choices = ", ".join(available) if available else "nenhum"
+        raise ValueError(
+            f"template '{template_name}' não pertence ao entrypoint {entrypoint}. "
+            f"Templates disponíveis: {choices}"
+        )
+
+    source = engine_root() / "templates" / template_name
+    validate_template_is_pristine(source)
+    source_process = _template_process_file(source)
+    if source_process is None:
+        raise ValueError(f"template '{template_name}' não contém process.yml")
+
+    destination = paths.project_named_process_dir(root, template_name)
+    local_process = paths.project_named_process_file(root, template_name)
+    if destination.exists():
+        if not local_process.is_file():
+            raise ValueError(
+                f"processo local parcial em {destination.relative_to(root)}; "
+                "remova ou corrija o diretório antes de tentar novamente"
+            )
+        print(f"  Processo local preservado: {local_process.relative_to(root)}")
+        return local_process
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copytree(source, destination)
+    except Exception:
+        if destination.exists():
+            shutil.rmtree(destination)
+        raise
+
+    # Templates de init legados usam o path flat. Ao materializá-los como um
+    # processo nomeado, torne todas as referências runtime locais ao fork.
+    text_suffixes = {
+        ".md", ".py", ".sh", ".toml", ".txt", ".yaml", ".yml"
+    }
+    named_scripts = f".ft/process/{template_name}/scripts"
+    named_process = f".ft/process/{template_name}/process.yml"
+    for file_path in destination.rglob("*"):
+        if not file_path.is_file() or file_path.suffix.lower() not in text_suffixes:
+            continue
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        rewritten = content.replace(
+            ".ft/process/scripts", named_scripts
+        ).replace(
+            ".ft/process/process.yml", named_process
+        )
+        if rewritten != content:
+            file_path.write_text(rewritten, encoding="utf-8")
+
+    register_project_process(
+        root,
+        process_name=template_name,
+        process_path=local_process,
+        template_id=template_name,
+        entrypoint=entrypoint,
+        source_digest=process_digest(source_process),
+    )
+    print(f"  Template '{template_name}' materializado em {local_process.relative_to(root)}")
+    return local_process
+
+
 def _guard_engine_repo(root: Path) -> None:
     """Impede usar o repositório do engine/template como projeto.
 
@@ -126,7 +271,8 @@ def _guard_engine_repo(root: Path) -> None:
         return
     if root.resolve() == engine_root().resolve():
         print("ERRO: este é o repositório do ft engine/template — não pode ser usado como projeto.")
-        print("  Crie um projeto novo: ft init <nome> --template fast-track-v3")
+        print("  Crie um projeto novo: ft init <nome> --template <template>")
+        _print_template_options()
         print("  Ou rode em outro diretório: ft run <path-do-projeto>")
         print("  (override para desenvolvimento do engine: FT_ALLOW_ENGINE_REPO=1)")
         sys.exit(1)
@@ -139,12 +285,11 @@ def copy_template(template_name: str, project_root: Path) -> Path:
     """
     import shutil
 
+    available = available_templates()
     src_dir = engine_root() / "templates" / template_name
-    if not src_dir.is_dir():
-        available = [d.name for d in (engine_root() / "templates").iterdir() if d.is_dir()] if (engine_root() / "templates").is_dir() else []
+    if template_name not in available:
         print(f"ERRO: template '{template_name}' não encontrado.")
-        if available:
-            print(f"  Templates disponíveis: {', '.join(available)}")
+        _print_template_options()
         sys.exit(1)
 
     try:
@@ -153,16 +298,16 @@ def copy_template(template_name: str, project_root: Path) -> Path:
         print(f"ERRO: {exc}")
         sys.exit(1)
 
-    # Encontrar o YAML no template
-    yamls = sorted(src_dir.glob("*.yml"))
-    if not yamls:
+    # Encontrar o YAML de processo sem selecionar arquivos de ambiente.
+    source_process = _template_process_file(src_dir)
+    if source_process is None:
         print(f"ERRO: template '{template_name}' não contém nenhum arquivo .yml")
         sys.exit(1)
 
     dest_dir = paths.project_process_dir(project_root)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = paths.project_process_file(project_root)
-    shutil.copy(yamls[0], dest)
+    shutil.copy(source_process, dest)
     print(f"  Template '{template_name}' copiado para .ft/process/process.yml")
 
     # Copiar subdirs do template (docs/, src/, scripts/)
@@ -181,6 +326,15 @@ def copy_template(template_name: str, project_root: Path) -> Path:
             shutil.copy(env_yml, dest_env)
 
     ensure_project_layout(project_root, template_id=template_name)
+    register_project_process(
+        project_root,
+        process_name=template_name,
+        process_path=dest,
+        template_id=template_name,
+        entrypoint="init",
+        source_digest=process_digest(source_process),
+        set_default=True,
+    )
 
     return dest
 
@@ -231,9 +385,29 @@ def find_project_root() -> Path:
 
 
 def find_process_yaml(root: Path) -> Path | None:
-    """Return the single canonical, project-owned process file."""
-    process_file = paths.project_process_file(root)
-    return process_file if process_file.is_file() else None
+    """Return the default project-owned process declared by the manifest."""
+    return resolve_project_process(root)
+
+
+def _resolve_pinned_process(root: Path, raw_path: str) -> Path:
+    """Resolve a state-owned process path strictly inside the local catalog."""
+    relative = Path(raw_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"process_path inválido no state: {raw_path}")
+    candidate = (root / relative).resolve()
+    process_catalog = paths.project_process_dir(root).resolve()
+    try:
+        process_catalog.relative_to(root.resolve())
+        candidate.relative_to(process_catalog)
+    except ValueError as exc:
+        raise ValueError(
+            f"process_path do ciclo escapa de .ft/process/: {raw_path}"
+        ) from exc
+    if not candidate.is_file():
+        raise FileNotFoundError(
+            f"processo local fixado no ciclo não existe: {raw_path}"
+        )
+    return candidate
 
 
 def _is_cycle_dir(d: Path) -> bool:
@@ -277,6 +451,16 @@ def _cycle_num(d: Path) -> int:
 
 
 _TERMINAL_STATUSES = {"done", "completed", "failed", "aborted", "cancelled", "canceled"}
+_RUNTIME_STATUSES = _TERMINAL_STATUSES | {
+    "ready",
+    "running",
+    "delegated",
+    "validating",
+    "blocked",
+    "awaiting_approval",
+    "pending_fix",
+    "exploring",
+}
 
 
 def _is_active_state_data(data: dict) -> bool:
@@ -292,6 +476,48 @@ def _is_active_state_data(data: dict) -> bool:
     return True
 
 
+def _state_represents_runtime(data: dict) -> bool:
+    """True quando há um ciclo real para consultar ou encerrar.
+
+    Um state recém-inicializado com ``current_node`` ainda representa um ciclo,
+    mesmo antes do primeiro node concluir. Já o arquivo continuous legado que
+    contém apenas metadados/defaults (``current_node: null``, zero progresso)
+    não pode ressuscitar um processo depois que a worktree foi fechada.
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    node_status = data.get("node_status")
+    if not isinstance(node_status, str) or node_status not in _RUNTIME_STATUSES:
+        return False
+    if data.get("current_node"):
+        return True
+    if node_status in _TERMINAL_STATUSES:
+        return True
+
+    evidence_fields = (
+        "completed_nodes",
+        "gate_log",
+        "artifacts",
+        "pending_approval",
+        "last_approval_message",
+        "pending_fix",
+        "exploration_log",
+        "active_llm_log",
+        "last_llm_log",
+        "blocked_reason",
+    )
+    if any(data.get(key) for key in evidence_fields):
+        return True
+
+    metrics = data.get("metrics") or {}
+    if isinstance(metrics, dict):
+        return any(
+            key != "steps_total" and value not in (0, 0.0, None, "", [], {})
+            for key, value in metrics.items()
+        )
+    return False
+
+
 def _state_data(path: Path) -> dict:
     import yaml as _yaml
 
@@ -302,18 +528,11 @@ def _state_data(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _prefer_active_state(candidates: list[Path]) -> Path | None:
-    """Retorna o primeiro state ativo; se não houver, o candidato mais recente."""
-    for state in candidates:
-        if _is_active_state_data(_state_data(state)):
-            return state
-    return candidates[0] if candidates else None
-
-
 def _find_latest_state(root: Path) -> Path:
     """Encontra o state mais recente.
 
-    Prioridade: runtime continuous global > worktrees externos.
+    Um runtime continuous ativo preserva a prioridade histórica. Um continuous
+    inativo, porém, não pode ocultar uma worktree ativa mais recente.
     """
     # Dentro de uma worktree, o ciclo local sempre vence. Procurar pelo nome
     # do diretório pode selecionar outro ciclo ativo do mesmo projeto.
@@ -321,13 +540,15 @@ def _find_latest_state(root: Path) -> Path:
     if paths.is_worktree_path(root) and local_worktree_state.exists():
         return local_worktree_state
 
-    # 1. Continuous mode: runtime fora do repositório.
+    # 1. Continuous mode ativo: runtime fora do repositório.
     continuous = paths.continuous_state_path(root)
-    if continuous.exists():
+    if continuous.exists() and _is_active_state_data(_state_data(continuous)):
         return continuous
 
-    # 2. Worktrees externos (~/.ft/worktrees/<project>/)
+    # 2. Worktrees externos (~/.ft/worktrees/<project>/). Somente uma worktree
+    # ativa deve superar o fallback continuous histórico.
     wt_home = paths.worktrees_home(root)
+    wt_states: list[Path] = []
     if wt_home.is_dir():
         wt_dirs = sorted(
             [d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d)],
@@ -338,14 +559,103 @@ def _find_latest_state(root: Path) -> Path:
             for wd in wt_dirs
             if (wd / "state" / "engine_state.yml").exists()
         ]
-        picked = _prefer_active_state(wt_states)
-        if picked:
-            return picked
+        for state in wt_states:
+            if _is_active_state_data(_state_data(state)):
+                return state
+
+    # 3. Sem ciclo ativo, preserve runtimes reais (por exemplo, uma worktree
+    # concluída aguardando `ft close`). Um continuous apenas pristine não pode
+    # ocultar essa worktree nem ressuscitar o processo default do projeto.
+    for state in wt_states:
+        if _state_represents_runtime(_state_data(state)):
+            return state
+    if continuous.exists() and _state_represents_runtime(_state_data(continuous)):
+        return continuous
+
+    # 4. Compatibilidade interna: callers que criam um ciclo ainda precisam de
+    # um path-destino quando não existe runtime. Comandos de ciclo validam esse
+    # fallback antes de construir o runner.
+    if continuous.exists():
+        return continuous
+    if wt_states:
+        return wt_states[0]
 
     # Sem ciclo existente, comandos de leitura usam o runtime continuous.
     # Criar um cycle-01 vazio aqui faria a chamada seguinte tratá-lo como
     # worktree real, embora ele não tenha o processo versionado do projeto.
     return paths.continuous_state_path(root)
+
+
+def _latest_archived_cycle(root: Path) -> tuple[Path, dict] | None:
+    """Retorna o ciclo fechado mais recente para contexto de leitura."""
+    archive_home = paths.project_cycles_dir(root)
+    if not archive_home.is_dir():
+        return None
+    candidates = [
+        cycle
+        for cycle in archive_home.iterdir()
+        if cycle.is_dir()
+        and _is_cycle_dir(cycle)
+        and (cycle / "cycle.yml").is_file()
+    ]
+    if not candidates:
+        return None
+    latest = max(
+        candidates,
+        key=lambda cycle: (_cycle_num(cycle), cycle.stat().st_mtime),
+    )
+    return latest, _state_data(latest / "cycle.yml")
+
+
+def _print_no_active_cycle(root: Path) -> None:
+    """Saída neutra: não associa um processo default a um ciclo inexistente."""
+    from ft.engine import ui as _ui
+
+    print(_ui.header("Fast Track"))
+    print(_ui.info("Status: nenhum ciclo ativo"))
+    archived = _latest_archived_cycle(root)
+    if archived:
+        cycle, data = archived
+        status = str(data.get("status") or "arquivado")
+        if status in {"done", "completed"}:
+            status = "concluído"
+        print(_ui.info(f"Último ciclo: {cycle.name} ({status})"))
+        print(_ui.dim(f"Histórico: .ft/cycles/{cycle.name}/"))
+    print(_ui.dim("Use `ft runs` para consultar ciclos ativos e arquivados."))
+
+
+def _ensure_runtime_selected(args, runner=None) -> bool:
+    """Impede comandos de ciclo de fabricarem estado a partir do processo default."""
+    if runner is not None:
+        state = runner.state_mgr.load()
+        data = vars(state) if hasattr(state, "__dict__") else {}
+        if _state_represents_runtime(data):
+            return True
+        runner_root = getattr(runner, "project_root", None)
+        root = Path(runner_root) if runner_root else find_project_root()
+        _print_no_active_cycle(root)
+        return False
+    root = find_project_root()
+    explicit_cycle = getattr(args, "cycle", None)
+    if explicit_cycle:
+        explicit_state = (
+            paths.worktrees_home(root)
+            / str(explicit_cycle)
+            / "state"
+            / "engine_state.yml"
+        )
+        # Preserve o erro detalhado de get_runner para ciclo inexistente.
+        if not explicit_state.is_file():
+            return True
+        if _state_represents_runtime(_state_data(explicit_state)):
+            return True
+        _print_no_active_cycle(root)
+        return False
+    state_path = _find_latest_state(root)
+    if state_path.is_file() and _state_represents_runtime(_state_data(state_path)):
+        return True
+    _print_no_active_cycle(root)
+    return False
 
 
 def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
@@ -769,12 +1079,18 @@ def _worktree_root_from_state(state_path: Path) -> Path | None:
     git_file = candidate / ".git"
     if git_file.exists() and git_file.is_file():
         # É um worktree (arquivo .git aponta para o repo original)
-        return candidate if paths.project_process_file(candidate).is_file() else None
+        return candidate if (
+            paths.project_manifest(candidate).is_file()
+            or paths.project_process_file(candidate).is_file()
+        ) else None
     # Pode ser diretório simples (sem git) dentro da raiz de worktrees
     if (
         paths.is_worktree_path(candidate)
         and (candidate / "state").is_dir()
-        and paths.project_process_file(candidate).is_file()
+        and (
+            paths.project_manifest(candidate).is_file()
+            or paths.project_process_file(candidate).is_file()
+        )
     ):
         return candidate
     return None
@@ -803,8 +1119,48 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, llm_mo
         if wt_root:
             effective_root = wt_root
 
-    # O worktree contém o mesmo .ft/process versionado da raiz.
-    if process:
+    pinned_path = None
+    pinned_digest = None
+    pinned_immutable = False
+    if state_path and state_path.is_file():
+        try:
+            state_payload = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"state inválido em {state_path}: {exc}") from exc
+        if isinstance(state_payload, dict):
+            pinned_path = state_payload.get("process_path")
+            pinned_digest = state_payload.get("process_digest")
+            pinned_immutable = bool(state_payload.get("process_immutable", False))
+
+    # Um ciclo novo pode receber override local; retomadas usam sempre o path pinado.
+    if pinned_path:
+        process_path = _resolve_pinned_process(effective_root, str(pinned_path))
+        if process:
+            requested = Path(process)
+            if not requested.is_absolute():
+                requested = effective_root / requested
+            if requested.resolve() != process_path.resolve():
+                raise ValueError(
+                    "o ciclo já está fixado em outro processo local; "
+                    f"use {pinned_path}"
+                )
+        if pinned_digest:
+            payload = yaml.safe_load(process_path.read_text(encoding="utf-8")) or {}
+            execution = payload.get("execution_policy", {}) if isinstance(payload, dict) else {}
+            if (
+                (
+                    pinned_immutable
+                    or (
+                        isinstance(execution, dict)
+                        and execution.get("runtime_source") == "local_only"
+                    )
+                )
+                and process_digest(process_path) != pinned_digest
+            ):
+                raise ValueError(
+                    f"processo local do ciclo divergiu do digest fixado: {pinned_path}"
+                )
+    elif process:
         process_path = Path(process)
         if not process_path.is_absolute():
             process_path = effective_root / process_path
@@ -812,7 +1168,8 @@ def get_runner(process: str | None = None, llm_engine: str | None = None, llm_mo
         process_path = find_process_yaml(effective_root)
         if not process_path:
             print("ERRO: .ft/process/process.yml não encontrado")
-            print("  Projeto novo: ft init --template fast-track-v3")
+            print("  Projeto novo: ft init --template <template>")
+            _print_template_options()
             print("  Projeto antigo: ft migrate-layout .")
             sys.exit(1)
 
@@ -830,6 +1187,14 @@ def cmd_init(args):
     import os
     import shutil
 
+    template = getattr(args, "template", None)
+    if not template:
+        available = available_templates()
+        choices = ", ".join(available) if available else "nenhum"
+        raise ValueError(
+            f"--template é obrigatório no ft init. Templates disponíveis: {choices}"
+        )
+
     # Se nome fornecido, criar/entrar na pasta antes de qualquer coisa
     name = getattr(args, "name", None)
     if name:
@@ -838,10 +1203,13 @@ def cmd_init(args):
         os.chdir(target)
         print(f"  → Projeto: {target}")
 
-    # Copiar template se fornecido e processo não existe.
-    template = getattr(args, "template", None)
+    # Copiar o template informado se o processo ainda não existe.
     root = find_project_root()
     _guard_engine_repo(root)  # revalida após chdir para <nome>
+    if paths.project_manifest(root).is_file():
+        raise ValueError(
+            f"projeto já inicializado em {root}; ft init só pode ser usado uma vez"
+        )
     explicit_process = Path(args.process) if args.process else None
     if explicit_process:
         if not explicit_process.is_absolute():
@@ -854,9 +1222,8 @@ def cmd_init(args):
             canonical.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(explicit_process, canonical)
             print(f"  Processo importado para .ft/process/process.yml")
-    if template:
-        if not find_process_yaml(root):
-            copy_template(template, root)
+    if not find_process_yaml(root):
+        copy_template(template, root)
 
     # Criar somente metadata versionável; ft init nunca cria estado de execução.
     (root / "docs").mkdir(exist_ok=True)
@@ -865,7 +1232,9 @@ def cmd_init(args):
         "llm_engine": resolve_llm_engine(args),
         "llm_model": resolve_llm_model(args),
     }
-    ensure_project_layout(root, template_id=template, defaults=defaults)
+    # copy_template registra a origem quando realmente copia um template. Se o
+    # processo já existia, não atribuímos uma origem que não foi aplicada.
+    ensure_project_layout(root, defaults=defaults)
 
     # Playbook do condutor — todo projeto novo ganha uma cópia
     _copy_agents_md(root)
@@ -878,7 +1247,8 @@ def cmd_init(args):
 
     process_path = find_process_yaml(root)
     if not process_path or not process_path.exists():
-        print("  Estrutura criada sem processo. Use: ft init --template fast-track-v3")
+        print("  Estrutura criada sem processo. Use: ft init --template <template>")
+        _print_template_options()
         return
 
     from ft.engine.graph import load_graph
@@ -894,9 +1264,104 @@ def cmd_init(args):
     print("  Projeto inicializado sem estado de execução.")
 
 
+def cmd_feature(args):
+    """Start one incremental feature in a dedicated external worktree."""
+    import subprocess as _sp
+
+    if getattr(args, "process", None):
+        raise ValueError(
+            "ft feature não aceita --process; use --template para materializar o processo local"
+        )
+    root = find_project_root().resolve()
+    if not paths.project_manifest(root).is_file() or find_process_yaml(root) is None:
+        raise ValueError(
+            "ft feature exige um projeto já inicializado; "
+            "execute ft init <nome> --template <template> primeiro"
+        )
+
+    demand = getattr(args, "demand", None)
+    input_file = getattr(args, "feature_input", None)
+    if demand and input_file:
+        raise ValueError("informe a demanda posicional ou --input FILE, não ambos")
+    if not demand and not input_file:
+        try:
+            demand = input("Descreva a feature: ").strip()
+        except (EOFError, KeyboardInterrupt, OSError):
+            demand = ""
+        if not demand:
+            raise ValueError(
+                "informe uma demanda posicional, --input FILE ou responda ao prompt"
+            )
+    if input_file:
+        source = Path(input_file).expanduser()
+        if not source.is_absolute():
+            source = Path.cwd() / source
+        if not source.is_file():
+            raise FileNotFoundError(f"arquivo de demanda não encontrado: {source}")
+        request_text = source.read_text(encoding="utf-8")
+    else:
+        request_text = str(demand)
+    if not request_text.strip():
+        raise ValueError("a demanda da feature não pode ser vazia")
+
+    inside = _sp.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    head = _sp.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if inside.returncode != 0 or head.returncode != 0:
+        raise RuntimeError("ft feature exige um repositório Git com commit inicial")
+    dirty = _sp.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if dirty.stdout.strip():
+        raise RuntimeError(
+            "commite as mudanças do checkout principal antes de iniciar a feature:\n"
+            + dirty.stdout.strip()
+        )
+
+    active = _check_active_run(root)
+    if active and not getattr(args, "force", False):
+        raise RuntimeError(
+            f"já existe um ciclo ativo: {active}. Use ft continue ou --force"
+        )
+
+    template = str(args.template)
+    local_process = materialize_process_template(
+        template,
+        root,
+        entrypoint="feature",
+    )
+
+    run_args = argparse.Namespace(**vars(args))
+    run_args.project = str(root)
+    run_args.process = local_process.relative_to(root).as_posix()
+    run_args.template = None
+    run_args.from_project = None
+    run_args.hipotese = None
+    run_args.demand_input = None
+    run_args.worktree = None
+    run_args._require_git_worktree = True
+    run_args._request_text = request_text
+    run_args._request_path = "docs/feature-request.md"
+    cmd_run(run_args)
+
+
 def cmd_continue(args):
     import sys
     sys.stdout.reconfigure(line_buffering=True)
+    if not _ensure_runtime_selected(args):
+        return
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
@@ -919,6 +1384,8 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
+    if not _ensure_runtime_selected(args):
+        return
     runner = get_runner(
         args.process,
         llm_engine=resolve_llm_engine(args),
@@ -1304,6 +1771,8 @@ def cmd_log(args):
         llm_model=resolve_llm_model(args),
         cycle=getattr(args, "cycle", None),
     )
+    if not _ensure_runtime_selected(args, runner):
+        return
 
     def _current_log() -> Path | None:
         state = runner.state_mgr.load()
@@ -1655,6 +2124,8 @@ def cmd_runs(args):
 
 def cmd_approve(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    if not _ensure_runtime_selected(args, runner):
+        return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
     message = getattr(args, "message", None)
     runner.approve(message=message)
@@ -1666,7 +2137,18 @@ def cmd_approve(args):
 
 def cmd_reject(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
-    runner.reject(args.reason, retry=not args.no_retry)
+    if not _ensure_runtime_selected(args, runner):
+        return
+    retry = not args.no_retry
+    runner.reject(args.reason, retry=retry)
+    correction_policy = runner.graph.meta.get("correction_policy", {})
+    follow_graph = (
+        isinstance(correction_policy, dict)
+        and correction_policy.get("follow_graph_after_retry") is True
+    )
+    state = runner.state_mgr.load()
+    if retry and follow_graph and state.node_status == "ready":
+        runner.run(mode="mvp")
 
 
 def cmd_explore(args):
@@ -1676,6 +2158,8 @@ def cmd_explore(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         verbose=getattr(args, "verbose", False))
+    if not _ensure_runtime_selected(args, runner):
+        return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     if getattr(args, "finish", False):
@@ -1828,7 +2312,16 @@ def cmd_close(args):
     from ft.engine import ui as _ui
 
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
+    if not _ensure_runtime_selected(args, runner):
+        return
     state = runner.state_mgr.load()
+    graph = getattr(runner, "graph", None)
+    graph_meta = getattr(graph, "meta", {}) if graph is not None else {}
+    if not isinstance(graph_meta, dict):
+        graph_meta = {}
+    close_policy = graph_meta.get("close_policy", {})
+    if not isinstance(close_policy, dict):
+        close_policy = {}
 
     # Verificar se o ciclo terminou
     terminal = {"done", "completed"}
@@ -1840,6 +2333,20 @@ def cmd_close(args):
     # 1. Determinar estratégia de merge
     merge_strategy = getattr(args, "merge", None)
     merge_paths = None
+    declared_merge = close_policy.get("merge")
+    if declared_merge:
+        declared_merge = str(declared_merge)
+        if declared_merge not in {"full", "docs", "selective", "none"}:
+            print(_ui.fail(f"close_policy.merge inválido: {declared_merge}"))
+            return
+        if merge_strategy and merge_strategy != declared_merge and not getattr(args, "force", False):
+            print(_ui.fail(
+                f"Este processo exige merge '{declared_merge}', recebido '{merge_strategy}'."
+            ))
+            print(_ui.info("Use a estratégia declarada ou --force para sobrescrever conscientemente."))
+            return
+        if merge_strategy is None:
+            merge_strategy = declared_merge
 
     if merge_strategy == "selective":
         raw_paths = getattr(args, "merge_paths", None)
@@ -1851,16 +2358,50 @@ def cmd_close(args):
     work = Path(runner.project_root)
     if not getattr(args, "force", False):
         backlog_file = work / "docs" / "PROJECT_BACKLOG.md"
-        if backlog_file.exists():
-            backlog_ok, backlog_detail = backlog_pending_decisions(project_root=str(work))
+        backlog_policy = close_policy.get("backlog", {})
+        if not isinstance(backlog_policy, dict):
+            backlog_policy = {}
+        backlog_mode = backlog_policy.get("mode", "global")
+        if backlog_mode == "referenced" or backlog_file.exists():
+            if backlog_mode == "referenced":
+                references_path = backlog_policy.get("references_path")
+                if not references_path:
+                    backlog_ok, backlog_detail = False, (
+                        "close_policy.backlog.references_path é obrigatório no modo referenced"
+                    )
+                else:
+                    backlog_ok, backlog_detail = backlog_referenced_decisions(
+                        references_path=str(references_path),
+                        backlog_path=str(
+                            backlog_policy.get("backlog_path", "docs/PROJECT_BACKLOG.md")
+                        ),
+                        reference_field=(
+                            str(backlog_policy["reference_field"])
+                            if backlog_policy.get("reference_field")
+                            else None
+                        ),
+                        required_count=(
+                            int(backlog_policy["required_count"])
+                            if backlog_policy.get("required_count") is not None
+                            else None
+                        ),
+                        accepted_statuses=backlog_policy.get("accepted_statuses"),
+                        project_root=str(work),
+                    )
+            elif backlog_mode == "global":
+                backlog_ok, backlog_detail = backlog_pending_decisions(
+                    project_root=str(work)
+                )
+            else:
+                backlog_ok, backlog_detail = False, (
+                    f"close_policy.backlog.mode desconhecido: {backlog_mode}"
+                )
             if not backlog_ok:
-                print(_ui.fail("Backlog do produto tem P0/P1 sem decisão explícita."))
+                print(_ui.fail("Backlog do produto não está pronto para fechar este ciclo."))
                 print(_ui.warn(backlog_detail))
                 print(_ui.info("Atualize docs/PROJECT_BACKLOG.md ou use ft close --force para encerrar conscientemente."))
                 return
 
-        graph = getattr(runner, "graph", None)
-        graph_meta = getattr(graph, "meta", {}) if graph is not None else {}
         artifact_policy = graph_meta.get("artifact_policy", {}) if isinstance(graph_meta, dict) else {}
         canonical = artifact_policy.get("canonical", []) if isinstance(artifact_policy, dict) else []
         requires_features = "docs/FEATURES.md" in {str(item) for item in canonical}
@@ -1955,6 +2496,8 @@ def cmd_close(args):
 
 
 def cmd_graph(args):
+    if not _ensure_runtime_selected(args):
+        return
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), verbose=getattr(args, "verbose", False))
     runner.status(full=True)
 
@@ -2157,6 +2700,8 @@ def cmd_retry(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         verbose=getattr(args, "verbose", False))
+    if not _ensure_runtime_selected(args, runner):
+        return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     state = runner.state_mgr.load()
@@ -2197,6 +2742,8 @@ def cmd_fix(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         verbose=getattr(args, "verbose", False))
+    if not _ensure_runtime_selected(args, runner):
+        return
 
     # Modo 1: pending_fix (on_fail event) — injeta instrução e volta ao goto
     if runner.apply_fix(instruction):
@@ -2679,10 +3226,13 @@ Ao final diga DONE."""
         print(f"  AVISO: hipotese.md ainda fora do formato após correção — o processo vai solicitar reescrita")
 
 
-def _resolve_run_mode(project_root: Path) -> str:
+def _resolve_run_mode(
+    project_root: Path,
+    process_path: str | Path | None = None,
+) -> str:
     """Lê run_mode de environment.yml. Default: isolated."""
     from ft.engine.hooks import load_environment
-    env = load_environment(str(project_root))
+    env = load_environment(str(project_root), process_path=process_path)
     return env.get("run_mode", "isolated")
 
 
@@ -2844,27 +3394,82 @@ def cmd_run(args):
     import sys
     sys.stdout.reconfigure(line_buffering=True)
 
-    project_root = Path(args.project).resolve()
+    source_project_root = Path(args.project).resolve()
+    project_root = source_project_root
     project_root.mkdir(parents=True, exist_ok=True)
     _guard_engine_repo(project_root)
 
     # O processo precisa existir na raiz antes de criar a worktree, pois ele é
     # parte versionada do projeto e deve nascer no snapshot inicial.
     process_override = Path(args.process) if getattr(args, "process", None) else None
+    selected_template = getattr(args, "template", None)
+    if process_override and selected_template:
+        raise ValueError("use --process ou --template, não ambos")
     if process_override and not process_override.is_absolute():
         process_override = project_root / process_override
-    process_path_at_root = process_override or find_process_yaml(project_root)
+    process_path_at_root = process_override
+    if selected_template:
+        process_path_at_root = resolve_project_process(
+            project_root, str(selected_template)
+        )
+        if process_path_at_root is None and find_process_yaml(project_root) is not None:
+            process_path_at_root = materialize_process_template(
+                str(selected_template),
+                project_root,
+                entrypoint="init",
+            )
+    if process_path_at_root is None:
+        process_path_at_root = find_process_yaml(project_root)
     if not process_path_at_root or not process_path_at_root.exists():
-        template = getattr(args, "template", None)
-        if template:
-            process_path_at_root = copy_template(template, project_root)
+        if selected_template:
+            process_path_at_root = copy_template(str(selected_template), project_root)
             _copy_agents_md(project_root)
         else:
             from ft.engine import ui as _ui
             print(_ui.fail(".ft/process/process.yml não encontrado"))
-            print(_ui.info("Projeto novo: ft init --template fast-track-v3"))
+            print(_ui.info("Projeto novo: ft init --template <template>"))
+            _print_template_options()
             print(_ui.info("Projeto antigo: ft migrate-layout ."))
             sys.exit(1)
+
+    process_path_at_root = process_path_at_root.resolve()
+    try:
+        process_relative = process_path_at_root.relative_to(source_project_root)
+    except ValueError:
+        process_relative = None
+
+    process_payload = yaml.safe_load(
+        process_path_at_root.read_text(encoding="utf-8")
+    ) or {}
+    execution_policy = (
+        process_payload.get("execution_policy", {})
+        if isinstance(process_payload, dict)
+        else {}
+    )
+    if (
+        isinstance(execution_policy, dict)
+        and execution_policy.get("runtime_source") == "local_only"
+    ):
+        process_catalog = paths.project_process_dir(source_project_root).resolve()
+        try:
+            process_catalog.relative_to(source_project_root)
+            process_path_at_root.relative_to(process_catalog)
+        except ValueError as exc:
+            raise ValueError(
+                "este processo exige uma cópia local em .ft/process/; "
+                "não execute o template global diretamente"
+            ) from exc
+
+    requires_git_worktree = bool(getattr(args, "_require_git_worktree", False))
+    if requires_git_worktree:
+        if process_relative is None:
+            raise ValueError("ft feature executa somente processos copiados dentro do projeto")
+        try:
+            process_path_at_root.relative_to(
+                paths.project_process_dir(source_project_root).resolve()
+            )
+        except ValueError as exc:
+            raise ValueError("ft feature exige processo local em .ft/process/") from exc
 
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
     (project_root / "src").mkdir(parents=True, exist_ok=True)
@@ -2899,10 +3504,54 @@ def cmd_run(args):
             print(_ui.dim("Para forçar novo ciclo mesmo assim: ft run . --force"))
             sys.exit(1)
 
+    # A materialização e o conhecimento precisam estar no HEAD antes do
+    # worktree nascer; mudanças posteriores na raiz nunca são usadas pelo ciclo.
+    from ft.engine.git_ops import commit_knowledge
+    ok, detail = commit_knowledge(str(source_project_root), label="pré-run snapshot")
+    print(f"  {detail}")
+    if requires_git_worktree and not ok:
+        raise RuntimeError(detail)
+
+    if requires_git_worktree:
+        import subprocess as _sp
+
+        inside = _sp.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=source_project_root,
+            capture_output=True,
+            text=True,
+        )
+        head = _sp.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source_project_root,
+            capture_output=True,
+            text=True,
+        )
+        if inside.returncode != 0 or head.returncode != 0:
+            raise RuntimeError(
+                "ft feature exige um repositório Git com commit inicial"
+            )
+        dirty = _sp.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=source_project_root,
+            capture_output=True,
+            text=True,
+        )
+        if dirty.stdout.strip():
+            raise RuntimeError(
+                "o checkout principal possui mudanças fora do snapshot; "
+                "commite ou descarte-as antes de iniciar a feature:\n"
+                + dirty.stdout.strip()
+            )
+
     if explicit_cycle_name and getattr(args, "worktree", None):
         from ft.engine import ui as _ui
         print(_ui.fail("Use --cycle-name ou --worktree, não ambos."))
         sys.exit(1)
+
+    run_mode = _resolve_run_mode(source_project_root, process_path_at_root)
+    if requires_git_worktree and run_mode != "isolated":
+        raise RuntimeError("ft feature exige run_mode: isolated")
 
     # --worktree: criar worktree git e redirecionar project_root para ele
     # Quando --worktree é usado, o worktree externo já É o ambiente isolado —
@@ -2925,13 +3574,6 @@ def cmd_run(args):
         )
         project_root = _setup_worktree(project_root, wt_name)
         _outer_worktree_used = True
-
-    # Commitar docs/ e .ft/process/ antes de iniciar (snapshot de conhecimento)
-    from ft.engine.git_ops import commit_knowledge
-    ok, detail = commit_knowledge(str(project_root), label="pré-run snapshot")
-    print(f"  {detail}")
-
-    run_mode = _resolve_run_mode(project_root)
 
     if run_mode == "continuous":
         # Continuous: runtime no FT_HOME, sem contaminar o checkout.
@@ -2985,20 +3627,31 @@ def cmd_run(args):
         print(f"  RunMode: isolated → {run_dir}")
 
     # Resolver YAML do processo dentro do ambiente efetivo.
-    if process_override:
-        process_path = process_override
-        if not process_path.is_absolute():
-            candidate = project_root / process_path
-            if candidate.exists():
-                process_path = candidate
-        elif process_path_at_root == process_path and project_root != Path(args.project).resolve():
-            # Um path explícito canônico da raiz precisa apontar para a cópia na worktree.
-            process_path = paths.project_process_file(project_root)
+    if process_relative is not None and project_root != source_project_root:
+        process_path = project_root / process_relative
+    elif process_override:
+        process_path = process_path_at_root
     else:
         process_path = find_process_yaml(project_root)
         if not process_path:
             print("ERRO: worktree sem .ft/process/process.yml; confirme o commit inicial")
             sys.exit(1)
+
+    request_text = getattr(args, "_request_text", None)
+    request_path = getattr(args, "_request_path", None)
+    if request_text is not None:
+        relative_request = Path(request_path or "docs/feature-request.md")
+        if (
+            relative_request.is_absolute()
+            or ".." in relative_request.parts
+            or not relative_request.parts
+            or relative_request.parts[0] != "docs"
+        ):
+            raise ValueError(f"path de demanda inválido: {relative_request}")
+        target = project_root / relative_request
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(request_text).rstrip() + "\n", encoding="utf-8")
+        print(f"  Demanda da feature: {relative_request}")
 
     # Handoff é histórico de ciclo, mas precisa voltar ao contexto transitório
     # durante a execução seguinte. O close o arquiva novamente com a nova versão.
@@ -3026,7 +3679,12 @@ def cmd_run(args):
 
     # Disparar hooks on_env_setup se definidos no environment.yml
     from ft.engine.hooks import run_hooks
-    run_hooks("on_env_setup", str(project_root))
+    run_hooks(
+        "on_env_setup",
+        str(project_root),
+        getattr(runner, "_environment", None),
+        process_path=process_path,
+    )
 
     import shutil
 
@@ -3231,7 +3889,54 @@ def main():
     init = sub.add_parser("init", help="Criar o layout versionado do projeto (sem estado de execução)")
     add_llm_engine_flags(init)
     init.add_argument("name", nargs="?", help="Nome do projeto a criar (opcional — default: diretório atual)")
-    init.add_argument("--template", "-t", help="Template de processo a copiar (ex: fast-track-v2)")
+    init.add_argument(
+        "--template",
+        "-t",
+        required=True,
+        choices=available_templates(),
+        help="Template de processo a copiar",
+    )
+
+    # feature — evolução incremental em projeto já inicializado
+    feature = sub.add_parser(
+        "feature",
+        help="Implementar uma feature em worktree isolada",
+    )
+    add_llm_engine_flags(feature)
+    feature.add_argument(
+        "demand",
+        nargs="?",
+        help="Demanda da feature em texto livre",
+    )
+    feature.add_argument(
+        "--input",
+        metavar="FILE",
+        dest="feature_input",
+        help="Arquivo contendo a demanda da feature",
+    )
+    feature.add_argument(
+        "--template",
+        "-t",
+        required=True,
+        choices=available_templates("feature"),
+        help="Template de processo incremental a materializar",
+    )
+    feature.add_argument(
+        "--force",
+        action="store_true",
+        help="Iniciar mesmo quando outro ciclo estiver ativo",
+    )
+    feature.add_argument(
+        "--cycle-name",
+        metavar="NAME",
+        help="Nome explícito da worktree/ciclo",
+    )
+    feature.add_argument(
+        "--bypass-human-gates",
+        action="store_true",
+        dest="bypass_human_gates",
+        help="Pular human gates explicitamente",
+    )
 
     # resume (alias: continue para backward compat)
     cont = sub.add_parser("resume", aliases=["continue"], help="Retomar o processo")
@@ -3382,8 +4087,8 @@ def main():
     ru.add_argument("--cycle-name", metavar="NAME",
                     help="Nome explícito do ciclo isolado (ex: cycle-11-opencode). "
                          "Falha se o diretório já existir.")
-    ru.add_argument("--template", "-t",
-                    help="Template de processo a copiar (ex: fast-track-v2)")
+    ru.add_argument("--template", "-t", metavar="TEMPLATE",
+                    help="Nome do template de processo presente em templates/")
     ru.add_argument("--worktree", metavar="NAME", nargs="?", const=True,
                     help="Rodar em git worktree isolado (cycle-NN-NAME). "
                          "NAME opcional: default = engine LLM ou 'run'")
@@ -3402,6 +4107,8 @@ def main():
     try:
         if args.command == "init":
             cmd_init(args)
+        elif args.command == "feature":
+            cmd_feature(args)
         elif args.command in ("resume", "continue"):
             cmd_continue(args)
         elif args.command == "status":

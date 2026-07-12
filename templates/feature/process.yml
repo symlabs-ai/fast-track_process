@@ -1,0 +1,404 @@
+# Feature — Evolução Incremental de Produto
+#
+# Este arquivo global nunca é executado diretamente. Na primeira invocação de
+# `ft feature --template feature`, o engine materializa todo o diretório em
+# `.ft/process/feature/` e executa somente a cópia local versionada.
+
+id: feature
+version: "1.0.0"
+title: "Feature — Evolução Incremental"
+
+execution_policy:
+  entrypoint: feature
+  template: feature
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/feature/process.yml
+  merge_command: ft close --merge full
+
+correction_policy:
+  follow_graph_after_retry: true
+  scope_rejection_restarts_at: feature.discovery
+  acceptance_rejection_restarts_at: feature.implement
+  mandatory_after_implementation:
+    - feature.review
+    - feature.acceptance
+
+# O mvp-builder decide todos os P0/P1 no encerramento do MVP. Um ciclo de
+# feature decide apenas o PB selecionado; itens alheios permanecem no backlog.
+close_policy:
+  backlog:
+    mode: referenced
+    references_path: docs/feature.md
+    reference_field: backlog_item
+    required_count: 1
+    accepted_statuses:
+      - done
+      - accepted
+  features_catalog: required
+  merge: full
+
+artifact_policy:
+  canonical:
+    - docs/PRD.md
+    - docs/TECH_STACK.md
+    - docs/tech_stack.md
+    - docs/ui_criteria.md
+    - docs/api_contract.md
+    - docs/test_data.md
+    - docs/PROJECT_BACKLOG.md
+    - docs/FEATURES.md
+  cycle:
+    - docs/feature-request.md
+    - docs/feature-baseline.yml
+    - docs/feature-discovery.md
+    - docs/feature-questions.md
+    - docs/feature.md
+    - docs/feature-plan.md
+    - docs/implementation-report.md
+    - docs/feature-review.md
+    - docs/stakeholder-feedback.md
+    - docs/feature-result.md
+    - docs/screenshots/feature/
+
+nodes:
+  - id: feature.preflight
+    type: gate
+    title: "Preflight do Produto Existente"
+    description: >-
+      Confirma que a demanda está presente, o catálogo e o backlog são
+      consistentes e a baseline do produto passa antes de qualquer alteração.
+      Este gate é somente diagnóstico: uma baseline quebrada deve bloquear, não
+      ser corrigida automaticamente como parte da feature.
+    sprint: feature-01-scope
+    executor: python
+    outputs:
+      - docs/feature-baseline.yml
+    validators:
+      - file_exists: docs/feature-request.md
+      - file_exists: docs/PRD.md
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - file_exists: docs/FEATURES.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py baseline"
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh test"
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh build"
+    next: feature.discovery
+
+  - id: feature.discovery
+    no_pre_seed: true
+    type: discovery
+    title: "Elucidar Demanda e Planejar Feature"
+    description: >-
+      Analisa a demanda contra produto, catálogo, backlog, código e testes.
+      Formula somente perguntas que alterem comportamento, escopo, contrato ou
+      aceite. Quando não houver ambiguidade, fecha a especificação e o plano.
+    sprint: feature-01-scope
+    executor: claude
+    max_turns: 40
+    outputs:
+      - docs/feature-discovery.md
+      - docs/feature-questions.md
+      - docs/feature.md
+      - docs/feature-plan.md
+      - docs/PROJECT_BACKLOG.md
+    write_scope:
+      - docs/feature-discovery.md
+      - docs/feature-questions.md
+      - docs/feature.md
+      - docs/feature-plan.md
+      - docs/PROJECT_BACKLOG.md
+    prompt: |
+      Trabalhe exclusivamente na elucidação de UMA feature para um produto já
+      existente. Não implemente código neste node.
+
+      Leia obrigatoriamente:
+      - docs/feature-request.md (demanda original, imutável);
+      - docs/PRD.md;
+      - docs/TECH_STACK.md ou docs/tech_stack.md;
+      - docs/PROJECT_BACKLOG.md;
+      - docs/FEATURES.md;
+      - docs/ui_criteria.md e docs/api_contract.md, quando existirem;
+      - o diretório indicado por `product_root` em
+        docs/feature-baseline.yml (`project/` ou `src/`) e seus testes;
+      - a mensagem de aprovação/rejeição mais recente, quando houver.
+
+      Determine se a demanda é:
+      - new: uma única capacidade nova;
+      - evolution: ampliação de uma FEAT-* existente;
+      - improvement: melhoria/correção de uma FEAT-* existente.
+
+      Se qualquer decisão alterar comportamento observável, contrato, dados,
+      compatibilidade, critério de aceite ou fora de escopo, marque
+      `clarification_status: required` em docs/feature-discovery.md e escreva
+      perguntas numeradas e objetivas em docs/feature-questions.md. Não invente
+      respostas. Gere feature.md e feature-plan.md como drafts coerentes com o
+      que já é conhecido.
+
+      Quando todas as decisões relevantes estiverem claras, marque exatamente
+      `clarification_status: clear`, escreva em feature-questions.md que não há
+      perguntas pendentes e finalize:
+
+      docs/feature.md com frontmatter:
+        type: new | evolution | improvement
+        target_feature: new | FEAT-NNN
+        backlog_item: PB-NNN
+        priority: P0 | P1 | P2
+        interface: ui | api | internal | mixed
+
+      Se a demanda ainda não possuir PB, crie exatamente um novo PB-* em
+      PROJECT_BACKLOG com status in_progress, origem feature-request e critérios
+      derivados dos AC-*. Se já possuir, preserve o ID e marque-o in_progress.
+      Para evolution/improvement, target_feature deve existir em FEATURES.
+
+      feature.md deve conter Objetivo, Comportamento Esperado, Critérios de
+      Aceite com IDs AC-01, AC-02..., Fora do Escopo e Restrições.
+
+      feature-plan.md deve referenciar o mesmo PB-* e FEAT-*, listar impacto
+      técnico, contratos afetados, tarefas ordenadas, estratégia de testes,
+      compatibilidade/migração, evidências esperadas e riscos.
+
+      feature-discovery.md deve preservar um resumo das perguntas e respostas
+      que levaram ao escopo atual. Não altere código nem FEATURES neste node.
+    validators:
+      - file_exists: docs/feature-discovery.md
+      - file_exists: docs/feature-questions.md
+      - file_exists: docs/feature.md
+      - file_exists: docs/feature-plan.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - task_list_references_backlog:
+          task_path: docs/feature-plan.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_refs: 1
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py discovery"
+    next: feature.discovery_gate
+
+  - id: feature.discovery_gate
+    type: gate
+    title: "Registrar Resultado do Discovery"
+    description: >-
+      Extrai deterministicamente o estado de clarificação para que a decisão
+      seguinte encaminhe perguntas pendentes ou congele o escopo.
+    sprint: feature-01-scope
+    executor: python
+    validators:
+      - read_artifact:
+          path: docs/feature-discovery.md
+          key: clarification_status
+          pattern: "clarification_status:\\s*(required|clear)"
+    next: feature.clarity
+
+  - id: feature.clarity
+    type: decision
+    title: "Demanda Está Clara?"
+    description: "Encaminha perguntas pendentes ao stakeholder ou congela o escopo."
+    sprint: feature-01-scope
+    executor: python
+    condition: clarification_status
+    branches:
+      required: feature.questions
+      clear: feature.scope_gate
+      _default: feature.questions
+
+  - id: feature.questions
+    type: human_gate
+    title: "Perguntas sobre a Feature"
+    description: >-
+      Leia docs/feature-questions.md e responda somente às perguntas pendentes
+      com `ft approve "1. ... 2. ..."`. As respostas voltam ao discovery. Para
+      cancelar sem levar mudanças ao checkout principal, use ft abort.
+    sprint: feature-01-scope
+    executor: python
+    outputs:
+      - docs/feature-questions.md
+      - docs/feature-discovery.md
+    next: feature.discovery
+
+  - id: feature.scope_gate
+    type: human_gate
+    title: "Aprovação do Escopo da Feature"
+    description: >-
+      Revise docs/feature.md e docs/feature-plan.md. Confirme objetivo, AC-*,
+      fora de escopo, PB/FEAT selecionados, impacto e estratégia de testes. Uma
+      rejeição deve explicar objetivamente o que precisa mudar.
+    sprint: feature-01-scope
+    executor: python
+    outputs:
+      - docs/feature.md
+      - docs/feature-plan.md
+    reject_next: feature.discovery
+    next: feature.implement
+
+  - id: feature.implement
+    type: build
+    title: "Implementar Feature e Testes"
+    description: >-
+      Implementa apenas o escopo aprovado, atualiza contratos afetados e cria
+      testes. Toda execução e toda correção precisam terminar com test e build
+      verdes antes de chegar ao aceite.
+    sprint: feature-02-build
+    executor: claude
+    max_turns: 100
+    outputs:
+      - project/
+      - src/
+      - docs/implementation-report.md
+    write_scope:
+      - project
+      - src
+      - docs/api_contract.md
+      - docs/ui_criteria.md
+      - docs/implementation-report.md
+      - docs/screenshots/feature
+    prompt: |
+      Implemente somente a feature aprovada em docs/feature.md e
+      docs/feature-plan.md. Leia o código, os testes e as convenções existentes;
+      preserve comportamentos fora do escopo.
+
+      Regras:
+      1. Crie ou atualize testes para cada AC-* antes de concluir.
+      2. Atualize api_contract/ui_criteria apenas quando o plano exigir.
+      3. Não recrie scaffold, stack, Makefile ou infraestrutura do produto.
+      4. Não atualize FEATURES nem conclua o PB antes do aceite humano.
+      5. Use `.ft/process/feature/scripts/product.sh test` e `build`; o helper
+         resolve deterministicamente `project/` ou `src/` sem recriar layout.
+      6. Gere docs/implementation-report.md com uma linha PASS/FAIL por AC-*,
+         comandos executados, arquivos alterados, compatibilidade e evidências.
+      7. Em uma correção solicitada, considere o feedback mais recente e mantenha
+         todo o restante aprovado funcionando.
+    validators:
+      - file_exists: docs/implementation-report.md
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh test"
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh build"
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py implementation"
+    next: feature.review
+
+  - id: feature.review
+    type: review
+    title: "Revisão Independente da Feature"
+    description: >-
+      Audita diff, testes e evidências contra cada AC-*, procurando regressões,
+      quebra de contrato e expansão de escopo antes do stakeholder.
+    sprint: feature-02-build
+    executor: claude
+    max_turns: 50
+    outputs:
+      - docs/feature-review.md
+    write_scope:
+      - docs/feature-review.md
+    prompt: |
+      Faça uma revisão independente. Leia feature.md, feature-plan.md,
+      implementation-report.md, o diff do ciclo, código e testes.
+
+      Gere docs/feature-review.md contendo exatamente uma linha
+      `Resultado: APPROVED` ou `Resultado: REJECTED`, uma tabela com todos os
+      AC-* e PASS/FAIL, regressões, compatibilidade, scope creep e evidências.
+      REJECTED se qualquer AC falhar, se os testes não comprovarem o comportamento
+      ou se houver alteração material fora do escopo.
+    validators:
+      - file_exists: docs/feature-review.md
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py review"
+    on_fail:
+      human_gate: "A revisão encontrou problemas. Corrija a implementação e rode todos os checks novamente."
+      goto: feature.implement
+    next: feature.acceptance
+
+  - id: feature.acceptance
+    type: human_gate
+    title: "Aceite da Feature"
+    description: >-
+      Valide a capacidade implementada e seus AC-*. UI/API sobe pelo serve.sh;
+      mudanças internas são avaliadas pelos relatórios e testes. Rejeite com um
+      desvio reproduzível. Toda correção volta à implementação e repete test/build.
+    sprint: feature-03-acceptance
+    executor: python
+    env_setup:
+      - bash .ft/process/feature/scripts/serve.sh
+    env_teardown:
+      - bash .ft/process/feature/scripts/serve.sh stop
+    outputs:
+      - docs/stakeholder-feedback.md
+    reject_next: feature.implement
+    next: feature.reconcile
+
+  - id: feature.reconcile
+    no_pre_seed: true
+    type: document
+    title: "Reconciliar Backlog e Catálogo"
+    description: >-
+      Registra somente a capacidade aceita neste ciclo, preservando todos os IDs
+      e itens alheios. Produz o resumo final usado pelo close.
+    sprint: feature-03-acceptance
+    executor: claude
+    max_turns: 40
+    outputs:
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/feature-result.md
+    write_scope:
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/feature-result.md
+    prompt: |
+      O stakeholder aprovou a feature. Reconcilie apenas o PB-* e a FEAT-* de
+      docs/feature.md/docs/feature-plan.md.
+
+      - Marque o PB selecionado como accepted e registre evidências reais.
+      - type=new: crie exatamente o próximo FEAT-* e referencie o PB aceito.
+      - evolution/improvement: preserve a FEAT-* alvo, acrescente o PB, atualize
+        evidência, descrição quando necessário e Última evolução.
+      - Nunca renumere, reutilize ou apague IDs.
+      - Bugs/dívidas/manutenção não criam uma FEAT-* nova.
+      - Não decida, adie ou conclua itens de backlog alheios ao ciclo.
+
+      Gere docs/feature-result.md com escopo entregue, AC-*, testes/build,
+      evidências, PB/FEAT final, arquivos alterados e nenhuma pendência escondida.
+    validators:
+      - file_exists: docs/feature-result.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py reconcile"
+    next: feature.final_gate
+
+  - id: feature.final_gate
+    type: gate
+    title: "Gate Final da Feature"
+    description: >-
+      Confirma novamente código verde e documentos reconciliados antes de
+      declarar a worktree pronta para merge.
+    sprint: feature-03-acceptance
+    executor: python
+    outputs:
+      - docs/feature-result.md
+    validators:
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh test"
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh build"
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py reconcile"
+    next: feature.end
+
+  - id: feature.end
+    type: end
+    title: "Feature Pronta para Merge"
+    description: >-
+      Feature aceita e validada na worktree. Execute `ft close --merge full` para
+      arquivar o ciclo, fazer merge no checkout principal e remover worktree e
+      branch temporária. Use `ft abort` para descartar sem merge.

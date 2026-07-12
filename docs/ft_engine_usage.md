@@ -34,6 +34,7 @@ ft --help
 
 ```bash
 ft init --template base    # Criar layout versionado, sem estado de execução
+ft feature "demanda" --template feature  # Evoluir produto em worktree isolada
 ft migrate-layout . --cycle-id cycle-08  # Migrar process/ e atribuir artefatos soltos
 ft continue                # Avançar 1 step
 ft continue --sprint       # Avançar até fim da sprint atual
@@ -45,6 +46,20 @@ ft reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
 ft reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
 ft lint-process                   # Lint semântico — detecta especificidades de projeto no YAML
 ```
+
+`--template` é obrigatório no `ft init`. O engine não possui template default;
+os nomes compatíveis com o entrypoint `init` são descobertos do catálogo
+instalado e aparecem em `ft init --help`. Templates pertencentes a outros
+comandos não são oferecidos pelo init. Se o projeto já possui `.ft/manifest.yml`,
+o comando falha sem alterar o processo existente.
+
+O layout aceita múltiplos processos. `.ft/manifest.yml` mantém o processo default
+e um registro de processos nomeados; em um projeto já inicializado,
+`ft run . --template <T>` materializa um template de `init` ainda ausente em
+`.ft/process/<T>/`. Entry points especializados, como `ft feature`, fazem o mesmo
+com seu próprio catálogo. A materialização é copy-once, e todos os comandos de um
+ciclo executam exclusivamente o path local fixado no state — nunca o catálogo
+global.
 
 ### Lint de processo
 
@@ -65,7 +80,7 @@ específicas. Retorna PASS (genérico) ou FAIL (com lista de violações e suges
 Por padrão, o engine usa `claude`. Você pode trocar o executor por comando:
 
 ```bash
-ft init --codex
+ft init --template base --codex
 ft continue --codex --sprint
 ft run ~/dev/projects/examples/pokemon --hipotese ~/dev/projects/examples/pokemon.md --codex
 ft run . --opencode
@@ -127,7 +142,7 @@ Também atualiza referências inequívocas nos arquivos atuais. Artefatos já mo
 
 ### Governança de melhorias do processo
 
-No template `fast-track-v3`, `ft.handoff.05.process_evolve` gera o relatório
+No template `mvp-builder`, `ft.handoff.05.process_evolve` gera o relatório
 humano `docs/process-improvements.md` e o contrato estruturado
 `docs/process-improvements.yml`. Todo achado recebe ID `PI-NNN` e uma das
 classificações:
@@ -149,7 +164,7 @@ ft process-candidates
 ft process-candidates PI-001 \
   --status promoted \
   --reason "Aplicado e validado pela suíte do engine" \
-  --reference "commit abc123 templates/fast-track-v3/process.yml"
+  --reference "commit abc123 templates/mvp-builder/process.yml"
 
 ft process-candidates PI-002 --status deferred --reason "Precisa de outro ciclo real"
 ft process-candidates PI-003 --status rejected --reason "Regra específica do produto"
@@ -320,6 +335,7 @@ a especificidade vazou para o processo.
 | `project_backlog_valid` | `project_backlog_valid: {path: docs/PROJECT_BACKLOG.md}` | Backlog tem IDs, prioridade e status válidos |
 | `task_list_references_backlog` | `task_list_references_backlog: {task_path: docs/task_list.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Task list do ciclo referencia itens do backlog |
 | `backlog_pending_decisions` | `backlog_pending_decisions: {path: docs/PROJECT_BACKLOG.md}` | P0/P1 não ficam abertos sem decisão explícita |
+| `backlog_referenced_decisions` | `backlog_referenced_decisions: {references_path: docs/feature.md, reference_field: backlog_item}` | Valida somente os PBs selecionados pelo artefato do ciclo |
 | `features_catalog_valid` | `features_catalog_valid: {path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Catálogo tem schema, IDs, lifecycle, origem entregue e evidência válidos |
 | `implemented_backlog_covered_by_features` | `implemented_backlog_covered_by_features: {features_path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Todo item de feature/US entregue está representado por algum `FEAT-*` |
 
@@ -405,7 +421,7 @@ O engine faz **auto-commit** após PASS em cada fase:
 
 ```bash
 # Rodar sprint por sprint
-ft init
+ft init --template base
 ft continue --sprint    # sprint-01-discovery
 ft approve              # aprovar artefatos pendentes
 ft continue --sprint    # sprint-02-tdd
@@ -429,13 +445,13 @@ Ativa automaticamente para nodes de tipo `discovery` e `document`.
 
 ---
 
-## Processo Fast Track V3
+## Processo MVP Builder
 
-O template recomendado está em `templates/fast-track-v3/process.yml` e é copiado
+O template recomendado está em `templates/mvp-builder/process.yml` e é copiado
 para `.ft/process/process.yml` em projetos novos:
 
 ```bash
-ft init meu-projeto --template fast-track-v3
+ft init meu-projeto --template mvp-builder
 cd meu-projeto
 git init && git add -A && git commit -m "chore: bootstrap fast track"
 ft run . --auto
@@ -443,6 +459,29 @@ ft run . --auto
 
 O processo V2 continua disponível como template histórico, mas projetos atuais usam
 o mesmo path canônico `.ft/process/process.yml` após o `ft init`.
+
+---
+
+## Processo Feature
+
+O template incremental está em `templates/feature/`. Seu contrato é implementar
+uma única capacidade em produto existente, com discovery interativo, worktree
+isolada, testes/build obrigatórios, aceite humano e merge por `ft close`.
+
+O entrypoint é:
+
+```bash
+ft feature "Adicionar busca por telefone" --template feature --claude
+# ou: ft feature --input demanda.md --template feature --codex
+# sem demanda/--input, o comando solicita a descrição no terminal
+```
+
+Na primeira execução, o diretório global é materializado em
+`.ft/process/feature/`; somente essa cópia local pode ser executada. O state fixa
+path e digest dentro da worktree, então `continue`, `approve`, `reject`, `status`
+e `close` retomam o mesmo processo sem redescobrir o default. Rejeições retornam
+ao node de correção e percorrem novamente os gates intermediários. O `close`
+valida apenas o `backlog_item` de `docs/feature.md` e aplica merge full.
 
 ---
 
@@ -465,7 +504,7 @@ ft/
       gates.py        # gate_delivery, gate_smoke, gate_mvp
       review.py       # no_large_files, no_print_statements, ...
   cli/
-    main.py           # argparse CLI — ft init/continue/status/approve/reject
+    main.py           # argparse CLI — ft init/feature/continue/status/approve/reject
 ~/.ft/worktrees/<projeto>/cycle-NN/
   state/
     engine_state.yml  # Estado do ciclo em modo isolated (NUNCA editar manualmente)
@@ -477,10 +516,14 @@ ft/
       process.yml      # Fork local e versionado do processo
       environment.yml
       scripts/
+      feature/
+        process.yml    # Processo incremental materializado copy-once
+        environment.yml
+        scripts/
     cycles/
       cycle-NN/        # Task list, evidências, retro e handoff duráveis
 templates/
-  fast-track-v3/
+  mvp-builder/
     process.yml        # Template recomendado
 ```
 

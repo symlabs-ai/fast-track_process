@@ -41,7 +41,7 @@ class TestGuardViaCLI:
     """Guard global: todo comando (exceto --help) recusa rodar no repo do template."""
 
     @pytest.mark.parametrize("args", [
-        ["init"],
+        ["init", "--template", "base"],
         ["status"],
         ["continue"],
         ["approve"],

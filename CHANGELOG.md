@@ -6,8 +6,32 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+### Processo incremental de features
+- Novo template global `feature`: discovery iterativo com perguntas ao
+  stakeholder, escopo aprovado antes do código, implementação/testes em worktree,
+  review independente, aceite humano e reconciliação cirúrgica de
+  `PROJECT_BACKLOG.md`/`FEATURES.md` antes do merge via `ft close`.
+- O template inclui validador determinístico próprio, exemplo de `feature.md`,
+  ambiente isolated e `serve.sh`; seu contrato runtime usa exclusivamente a
+  cópia local `.ft/process/feature/`, nunca o template global.
+- A descoberta de templates agora respeita `execution_policy.entrypoint`,
+  impedindo que `ft init` ofereça ou copie o template incremental no layout
+  singular legado.
+- Novo comando `ft feature`: aceita demanda posicional, `--input` ou prompt,
+  materializa o template copy-once, exige checkout Git limpo e executa em
+  worktree externa com path/digest do processo persistidos no state.
+- Retomadas carregam o processo fixado no ciclo; environment e hooks são
+  resolvidos ao lado dele. Rejeições percorrem novamente todo o grafo, e o
+  `close_policy` valida somente o PB selecionado e exige merge full.
+- O manifesto passa a registrar múltiplos processos locais. Materialização é
+  copy-once, o digest fixado cobre grafo, ambiente, scripts e permissões, hooks
+  não podem escapar do diretório selecionado e o close recusa branch diferente
+  daquela registrada ao criar a worktree.
+- `ft init` falha quando `.ft/manifest.yml` já existe, em vez de tratar uma
+  segunda inicialização como operação idempotente.
+
 ### Catálogo de produto
-- O template `fast-track-v3` passa a manter `docs/FEATURES.md` como fonte de
+- O template `mvp-builder` passa a manter `docs/FEATURES.md` como fonte de
   verdade das capacidades entregues, separada do `PROJECT_BACKLOG` de mudanças
   desejadas e histórico.
 - IDs `FEAT-*`, lifecycle e referências a itens `PB-*` concluídos são verificados
@@ -18,7 +42,7 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   declara o catálogo como artefato canônico.
 
 ### Governança de processo
-- O template `fast-track-v3` v1.1.0 passa a gerar
+- O template `mvp-builder` v1.1.0 passa a gerar
   `docs/process-improvements.yml`, classificando cada achado como `local`,
   `global_candidate` ou `rejected` por uma régua explícita de generalidade,
   parametrização, evidência e compatibilidade.
@@ -34,6 +58,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   sobrescritos ou transições de recuperação quebradas cheguem à execução.
 
 ### Arquitetura
+- O template `fast-track-v3` foi substituído por `mvp-builder`, preservando o
+  mesmo grafo, e o nome antigo deixou de ser aceito em novos projetos.
+- `ft init` agora exige `--template` e lista dinamicamente os nomes disponíveis;
+  o CLI e o runner não escolhem um processo concreto como fallback.
+- Wheels passam a incluir `templates/` e `AGENTS.md`, permitindo inicialização
+  fora de checkouts editáveis do engine.
 - Processo local movido para `.ft/process/process.yml`, sem fallback automático para `process/`.
 - `ft init` agora cria apenas metadados versionáveis e nunca cria estado de execução.
 - Runtime continuous movido para `$FT_HOME/runtime/<projeto>/`; worktrees continuam em `$FT_HOME/worktrees/`.
@@ -54,6 +84,9 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   do ciclo; source, configuração e documentos canônicos não são mais apagados entre nodes.
 - Comandos executados dentro de uma worktree preservam a identidade do projeto e
   usam o state do ciclo atual; `ft status --full` não procura mais um ciclo aninhado inexistente.
+- `ft status`, `graph` e comandos de ciclo ignoram runtime `continuous` vazio;
+  após o close exibem “nenhum ciclo ativo” em vez de ressuscitar o processo
+  default, enquanto worktrees concluídas continuam selecionáveis para `ft close`.
 - Delegações não podem encerrar ou reiniciar listeners/processos que não tenham
   sido iniciados pelo próprio turno; conflitos de porta devem usar isolamento ou bloquear.
 

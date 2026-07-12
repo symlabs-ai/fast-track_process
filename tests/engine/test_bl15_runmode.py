@@ -82,18 +82,118 @@ class TestFindLatestStateContinuous:
         # Create both continuous and isolated state
         cont = paths.continuous_state_path(tmp_path)
         cont.parent.mkdir(parents=True)
-        cont.write_text("continuous")
+        cont.write_text(
+            "current_node: continuous.start\n"
+            "node_status: blocked\n"
+            "blocked_reason: aguardando usuário\n"
+        )
         iso = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
         iso.parent.mkdir(parents=True)
-        iso.write_text("isolated")
+        iso.write_text(
+            "current_node: isolated.start\n"
+            "node_status: blocked\n"
+            "blocked_reason: aguardando usuário\n"
+        )
         assert _find_latest_state(tmp_path) == cont
 
     def test_falls_back_to_isolated_when_no_continuous(self, tmp_path):
         from ft.cli.main import _find_latest_state
         iso = paths.worktrees_home(tmp_path) / "cycle-01" / "state" / "engine_state.yml"
         iso.parent.mkdir(parents=True)
-        iso.write_text("isolated")
+        iso.write_text(
+            "current_node: isolated.start\n"
+            "node_status: blocked\n"
+            "blocked_reason: aguardando usuário\n"
+        )
         assert _find_latest_state(tmp_path) == iso
+
+    def test_active_isolated_wins_over_inactive_continuous(self, tmp_path):
+        from ft.cli.main import _find_latest_state
+
+        cont = paths.continuous_state_path(tmp_path)
+        cont.parent.mkdir(parents=True)
+        cont.write_text("current_node: null\nnode_status: ready\n")
+        iso = paths.worktrees_home(tmp_path) / "cycle-10" / "state" / "engine_state.yml"
+        iso.parent.mkdir(parents=True)
+        iso.write_text(
+            "current_node: feature.discovery\n"
+            "node_status: blocked\n"
+            "completed_nodes: []\n"
+        )
+
+        assert _find_latest_state(tmp_path) == iso
+
+    def test_completed_isolated_wins_over_pristine_continuous(
+        self, tmp_path, monkeypatch
+    ):
+        """Um state vazio legado não pode ocultar o ciclo pronto para close."""
+        from ft.cli.main import _find_latest_state
+
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        continuous = paths.continuous_state_path(project)
+        continuous.parent.mkdir(parents=True)
+        continuous.write_text(
+            "process_id: removed_process\n"
+            "current_node: null\n"
+            "node_status: ready\n"
+            "completed_nodes: []\n"
+            "metrics:\n"
+            "  steps_completed: 0\n"
+            "  steps_total: 54\n"
+        )
+        completed = (
+            paths.worktrees_home(project)
+            / "cycle-10"
+            / "state"
+            / "engine_state.yml"
+        )
+        completed.parent.mkdir(parents=True)
+        completed.write_text(
+            "process_id: feature\n"
+            "current_node: null\n"
+            "node_status: done\n"
+            "completed_nodes: [feature.end]\n"
+            "metrics:\n"
+            "  steps_completed: 11\n"
+            "  steps_total: 11\n"
+        )
+
+        assert _find_latest_state(project) == completed
+
+    def test_completed_worktree_wins_over_terminal_continuous(
+        self, tmp_path, monkeypatch
+    ):
+        """Close deve priorizar a worktree que ainda precisa de merge."""
+        from ft.cli.main import _find_latest_state
+
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        continuous = paths.continuous_state_path(project)
+        continuous.parent.mkdir(parents=True)
+        continuous.write_text(
+            "process_id: old_continuous\n"
+            "current_node: null\n"
+            "node_status: done\n"
+            "completed_nodes: [old.end]\n"
+        )
+        completed = (
+            paths.worktrees_home(project)
+            / "cycle-10"
+            / "state"
+            / "engine_state.yml"
+        )
+        completed.parent.mkdir(parents=True)
+        completed.write_text(
+            "process_id: feature\n"
+            "current_node: null\n"
+            "node_status: done\n"
+            "completed_nodes: [feature.end]\n"
+        )
+
+        assert _find_latest_state(project) == completed
 
 
 # ---------------------------------------------------------------------------

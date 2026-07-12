@@ -1007,6 +1007,90 @@ def backlog_pending_decisions(
     return True, "backlog_pending_decisions: nenhum P0/P1 aberto sem decisao"
 
 
+def backlog_referenced_decisions(
+    references_path: str,
+    backlog_path: str = "docs/PROJECT_BACKLOG.md",
+    reference_field: str | None = None,
+    required_count: int | None = None,
+    accepted_statuses: list[str] | tuple[str, ...] | set[str] | None = None,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate only backlog items selected by one cycle artifact."""
+    root = Path(project_root)
+    relative = Path(references_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        return False, f"backlog_referenced_decisions FAIL: path inseguro: {references_path}"
+    reference_file = root / relative
+    backlog_file = root / backlog_path
+    try:
+        reference_file.resolve().relative_to(root.resolve())
+        backlog_file.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False, "backlog_referenced_decisions FAIL: artefato escapa da raiz do projeto"
+    if not reference_file.is_file():
+        return False, (
+            "backlog_referenced_decisions FAIL: "
+            f"{references_path} nao encontrado"
+        )
+    if not backlog_file.is_file():
+        return False, f"backlog_referenced_decisions FAIL: {backlog_path} nao encontrado"
+
+    reference_text = reference_file.read_text(encoding="utf-8", errors="ignore")
+    if reference_field:
+        match = re.search(
+            rf"(?im)^\s*{re.escape(reference_field)}\s*:\s*[\"']?"
+            rf"({_FEATURE_BACKLOG_ID_RE.pattern})[\"']?\s*$",
+            reference_text,
+        )
+        referenced = [match.group(1).upper()] if match else []
+    else:
+        referenced = sorted(
+            {match.group(0).upper() for match in _FEATURE_BACKLOG_ID_RE.finditer(reference_text)}
+        )
+    if not referenced:
+        field_hint = f" no campo {reference_field}" if reference_field else ""
+        return False, (
+            "backlog_referenced_decisions FAIL: nenhuma referencia PB-*"
+            f"{field_hint} em {references_path}"
+        )
+    if required_count is not None and len(referenced) != int(required_count):
+        return False, (
+            "backlog_referenced_decisions FAIL: "
+            f"esperado {required_count} PB(s), encontrado {len(referenced)}"
+        )
+
+    rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+    by_id = {str(row["_id"]): row for row in rows}
+    unknown = sorted(set(referenced) - set(by_id))
+    if unknown:
+        return False, (
+            "backlog_referenced_decisions FAIL: PBs desconhecidos: "
+            + ", ".join(unknown)
+        )
+    raw_statuses = accepted_statuses or {"done", "accepted"}
+    if isinstance(raw_statuses, str):
+        raw_statuses = [raw_statuses]
+    allowed = {
+        _normalize(str(status)).replace("-", "_")
+        for status in raw_statuses
+    }
+    unfinished = sorted(
+        backlog_id
+        for backlog_id in referenced
+        if str(by_id[backlog_id].get("_status", "")) not in allowed
+    )
+    if unfinished:
+        return False, (
+            "backlog_referenced_decisions FAIL: PBs selecionados nao concluidos: "
+            + ", ".join(unfinished)
+        )
+    return True, (
+        "backlog_referenced_decisions: "
+        + ", ".join(referenced)
+        + " concluido(s)"
+    )
+
+
 _FEATURE_ID_RE = re.compile(r"\bFEAT-\d{3}\b", re.IGNORECASE)
 _FEATURE_BACKLOG_ID_RE = re.compile(r"\bPB-\d+[A-Z]?\b", re.IGNORECASE)
 _FEATURE_STATUSES = {"active", "deprecated", "removed"}

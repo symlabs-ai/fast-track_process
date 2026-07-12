@@ -1,6 +1,5 @@
-# Fast Track V3 — Processo Completo de MVP
-# Incorpora aprendizados dos ciclos SM1-SM13 e ft-studio ciclos 1-5.
-# Uso: ft run . --template fast-track-v3 [--claude|--codex|--gemini|--opencode]
+# MVP Builder — Processo Completo de MVP
+# Uso: ft run . --template mvp-builder [--claude|--codex|--gemini|--opencode]
 #
 # Estrutura de diretórios:
 #   docs/        — fontes de verdade humanas (PRD, tech stack, UI, backlog e features)
@@ -8,18 +7,17 @@
 #   .ft/cycles/  — histórico durável criado por ft close
 #   project/  — todo código-fonte (frontend/, backend/, tests/, Makefile, etc.)
 #
-# REGRA: todo código vai dentro de project/. Nunca criar frontend/, backend/
+# REGRA: todo código vai dentro de src/. Nunca criar frontend/, backend/
 #        ou tests/ na raiz.
 
-id: fast_track_v3
+id: mvp_builder
 version: "1.2.0"
-title: "Fast Track V3 — MVP Completo"
+title: "MVP Builder — MVP Completo"
 
 artifact_policy:
   canonical:
     - docs/PRD.md
     - docs/TECH_STACK.md
-    - docs/tech_stack.md
     - docs/ui_criteria.md
     - docs/PROJECT_BACKLOG.md
     - docs/FEATURES.md

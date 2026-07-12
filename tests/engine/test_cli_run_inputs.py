@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from ft.cli import main as cli_main
 from ft.engine.delegate import DelegateResult
 from ft.engine.runner import StepRunner, ValidationResult
@@ -190,7 +192,7 @@ nodes:
         )
 
         with patch("ft.cli.main.StepRunner", FakeRunner):
-            cli_main.cmd_run(_args(project, opencode=True))
+            cli_main.cmd_run(_args(project, opencode=True, template=None))
 
         run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01-opencode"
         assert FakeRunner.instances[-1].project_root == run_dir
@@ -220,7 +222,14 @@ nodes:
         )
 
         with patch("ft.cli.main.StepRunner", FakeRunner):
-            cli_main.cmd_run(_args(project, opencode=True, cycle_name="cycle-11-opencode"))
+            cli_main.cmd_run(
+                _args(
+                    project,
+                    opencode=True,
+                    cycle_name="cycle-11-opencode",
+                    template=None,
+                )
+            )
 
         run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
         assert FakeRunner.instances[-1].project_root == run_dir
@@ -248,7 +257,14 @@ nodes:
 
         with patch("ft.cli.main.StepRunner", FakeRunner):
             try:
-                cli_main.cmd_run(_args(project, opencode=True, cycle_name="cycle-11-opencode"))
+                cli_main.cmd_run(
+                    _args(
+                        project,
+                        opencode=True,
+                        cycle_name="cycle-11-opencode",
+                        template=None,
+                    )
+                )
             except SystemExit as exc:
                 assert exc.code == 1
             else:
@@ -347,7 +363,7 @@ class TestActiveRunDetection:
         completed_nodes = "- ft.start.route\n" if completed else ""
         steps_completed = 1 if completed else 0
         state_file.write_text(
-            "process_id: fast_track_v3\n"
+            "process_id: test_process\n"
             "version: 1.0.0\n"
             "llm_engine: claude\n"
             "llm_model: null\n"
@@ -460,7 +476,7 @@ class TestAbort:
         state = cycle / "state" / "engine_state.yml"
         state.parent.mkdir(parents=True)
         state.write_text(
-            "process_id: fast_track_v3\n"
+            "process_id: test_process\n"
             "current_node: ft.plan.03.api_contract\n"
             "node_status: blocked\n"
         )
@@ -484,6 +500,65 @@ class TestAbort:
 
 
 class TestClose:
+    @pytest.mark.parametrize(
+        "state",
+        [
+            {"node_status": "blocked"},
+            {
+                "node_status": "running",
+                "current_node": None,
+                "metrics": {"steps_completed": 0, "steps_total": 54},
+            },
+        ],
+    )
+    def test_truncated_state_is_not_a_runtime(self, state):
+        assert cli_main._state_represents_runtime(state) is False
+
+    def test_close_ignores_pristine_runtime_without_current_node(
+        self, tmp_path, capsys
+    ):
+        state = SimpleNamespace(
+            node_status="ready",
+            current_node=None,
+            completed_nodes=[],
+            metrics={"steps_completed": 0, "steps_total": 54},
+        )
+
+        class _StateMgr:
+            def load(self):
+                return state
+
+        class _Runner:
+            project_root = tmp_path
+            state_mgr = _StateMgr()
+            merge_called = False
+
+            def merge_on_close(self, *_args, **_kwargs):
+                self.merge_called = True
+                return True
+
+        runner = _Runner()
+        args = Namespace(
+            process=None,
+            force=False,
+            merge="full",
+            merge_paths=None,
+            keep_worktree=False,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+        )
+
+        with patch("ft.cli.main.get_runner", return_value=runner):
+            cli_main.cmd_close(args)
+
+        output = capsys.readouterr().out
+        assert "nenhum ciclo ativo" in output.lower()
+        assert "1/54" not in output
+        assert runner.merge_called is False
+
     def test_close_blocks_merge_when_backlog_has_undecided_p0(self, tmp_path):
         work = tmp_path / "cycle"
         docs = work / "docs"
@@ -585,7 +660,7 @@ class TestCancel:
         state = cycle / "state" / "engine_state.yml"
         state.parent.mkdir(parents=True)
         state.write_text(
-            "process_id: fast_track_v3\n"
+            "process_id: test_process\n"
             "current_node: ft.plan.01.task_list\n"
             "node_status: ready\n"
             "completed_nodes:\n"

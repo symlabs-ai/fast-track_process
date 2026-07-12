@@ -18,6 +18,12 @@ import yaml
 class EngineState:
     """Estado do motor. Serializado em ft_state.yml."""
     process_id: str = ""
+    process_path: str | None = None
+    process_digest: str | None = None
+    process_immutable: bool = False
+    template_id: str | None = None
+    base_commit: str | None = None
+    worktree_branch: str | None = None
     version: str = "0.1.0"
     llm_engine: str = "claude"
     llm_model: str | None = None
@@ -87,6 +93,12 @@ class StateManager:
                 self._check_lock(raw)
             self._state = EngineState(
                 process_id=raw.get("process_id", ""),
+                process_path=raw.get("process_path"),
+                process_digest=raw.get("process_digest"),
+                process_immutable=bool(raw.get("process_immutable", False)),
+                template_id=raw.get("template_id"),
+                base_commit=raw.get("base_commit"),
+                worktree_branch=raw.get("worktree_branch"),
                 version=raw.get("version", "0.1.0"),
                 llm_engine=raw.get("llm_engine", "claude"),
                 llm_model=raw.get("llm_model"),
@@ -126,6 +138,12 @@ class StateManager:
 
         data = {
             "process_id": self._state.process_id,
+            "process_path": self._state.process_path,
+            "process_digest": self._state.process_digest,
+            "process_immutable": self._state.process_immutable,
+            "template_id": self._state.template_id,
+            "base_commit": self._state.base_commit,
+            "worktree_branch": self._state.worktree_branch,
             "version": self._state.version,
             "llm_engine": self._state.llm_engine,
             "llm_model": self._state.llm_model,
@@ -165,10 +183,22 @@ class StateManager:
         total_steps: int,
         llm_engine: str = "claude",
         current_cycle: str = "cycle-01",
+        process_path: str | None = None,
+        process_digest: str | None = None,
+        process_immutable: bool = False,
+        template_id: str | None = None,
+        base_commit: str | None = None,
+        worktree_branch: str | None = None,
     ):
         """Inicializa estado a partir de um grafo de processo."""
         self._state = EngineState(
             process_id=graph_meta.get("id", "unknown"),
+            process_path=process_path,
+            process_digest=process_digest,
+            process_immutable=process_immutable,
+            template_id=template_id,
+            base_commit=base_commit,
+            worktree_branch=worktree_branch,
             version=graph_meta.get("version", "0.1.0"),
             llm_engine=llm_engine,
             current_cycle=current_cycle,
@@ -190,7 +220,8 @@ class StateManager:
         s = self.state
         if s.node_status == "blocked":
             raise RuntimeError(f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance().")
-        s.completed_nodes.append(completed_node)
+        if completed_node not in s.completed_nodes:
+            s.completed_nodes.append(completed_node)
         s.gate_log[completed_node] = gate_result
         s.current_node = next_node
         s.node_status = "ready" if next_node else "done"
@@ -206,7 +237,8 @@ class StateManager:
         s = self.state
         if s.node_status == "blocked":
             raise RuntimeError(f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance_guarded().")
-        s.completed_nodes.append(completed_node)
+        if completed_node not in s.completed_nodes:
+            s.completed_nodes.append(completed_node)
         s.gate_log[completed_node] = gate_result
         s.current_node = next_node
         s.node_status = "ready" if next_node else "done"

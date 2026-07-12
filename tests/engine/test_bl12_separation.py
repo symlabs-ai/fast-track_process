@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -82,6 +83,18 @@ class TestFindProcessYaml:
 # ---------------------------------------------------------------------------
 
 class TestCopyTemplate:
+    def test_available_templates_are_dynamic_and_sorted(self):
+        from ft.cli.main import available_templates
+
+        templates = available_templates()
+        all_templates = available_templates(entrypoint=None)
+
+        assert templates == sorted(templates)
+        assert "mvp-builder" in templates
+        assert "feature" not in templates
+        assert "fast-track-v3" not in templates
+        assert "feature" in all_templates
+
     def test_copies_template_to_hidden_process_dir(self, tmp_path):
         from ft.cli.main import copy_template
         result = copy_template("fast-track-v2", tmp_path)
@@ -106,15 +119,34 @@ class TestCopyTemplate:
         assert "data-ui-criteria" in content
         assert "ServiceMate" not in content
 
-    def test_fast_track_v3_template_does_not_preseed_ui_criteria(self, tmp_path):
+    def test_mvp_builder_template_does_not_preseed_ui_criteria(self, tmp_path):
         from ft.cli.main import copy_template
-        copy_template("fast-track-v3", tmp_path)
+        copy_template("mvp-builder", tmp_path)
         assert not (tmp_path / "docs" / "ui_criteria.md").exists()
+        manifest = yaml.safe_load((tmp_path / ".ft" / "manifest.yml").read_text())
+        assert manifest["template"]["id"] == "mvp-builder"
+
+    def test_template_process_yml_takes_precedence_over_environment_yml(self, tmp_path):
+        from ft.cli.main import copy_template
+
+        process = copy_template("symgateway", tmp_path)
+        data = yaml.safe_load(process.read_text(encoding="utf-8"))
+
+        assert data["id"] == "base_process"
+        assert "nodes" in data
 
     def test_nonexistent_template_exits(self, tmp_path):
         from ft.cli.main import copy_template
         with pytest.raises(SystemExit):
             copy_template("nonexistent-template", tmp_path)
+
+    def test_feature_entrypoint_is_not_materialized_by_init_copy(self, tmp_path):
+        from ft.cli.main import copy_template
+
+        with pytest.raises(SystemExit):
+            copy_template("feature", tmp_path)
+
+        assert not (tmp_path / ".ft").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -129,11 +161,23 @@ class TestInitTemplate:
         assert not (tmp_path / "state").exists()
         assert not (tmp_path / ".ft" / "runtime").exists()
 
-    def test_init_without_process_gives_guidance(self, tmp_path):
+    def test_init_without_template_fails_and_lists_available_templates(self, tmp_path):
         result = run_ft(["init"], cwd=tmp_path)
-        assert result.returncode == 0
-        assert "ft init --template" in result.stdout
-        assert (tmp_path / ".ft" / "manifest.yml").exists()
+        assert result.returncode == 2
+        output = result.stdout + result.stderr
+        assert "--template" in output
+        assert "base" in output
+        assert "mvp-builder" in output
+        assert not (tmp_path / ".ft").exists()
+
+    def test_cmd_init_raises_before_side_effects_without_template(self, tmp_path, monkeypatch):
+        from ft.cli.main import cmd_init
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError, match="Templates disponíveis:.*mvp-builder"):
+            cmd_init(SimpleNamespace(template=None))
+
+        assert list(tmp_path.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +211,8 @@ class TestValidateCLI:
         assert result.returncode == 1
 
     def test_validate_real_process(self, monkeypatch):
-        """Validate the actual V3 template with an explicit path."""
-        process = Path(__file__).parent.parent.parent / "templates" / "fast-track-v3" / "process.yml"
+        """Validate the actual MVP Builder template with an explicit path."""
+        process = Path(__file__).parent.parent.parent / "templates" / "mvp-builder" / "process.yml"
         # Roda dentro do repo do template (dev do engine) — precisa do override do guard
         monkeypatch.setenv("FT_ALLOW_ENGINE_REPO", "1")
         result = run_ft(["-p", str(process), "validate"], cwd=process.parent.parent.parent)

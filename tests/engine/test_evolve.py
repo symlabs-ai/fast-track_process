@@ -33,15 +33,12 @@ def project(tmp_path):
     """Projeto inicializado com fork local .ft/process/ e docs de ciclo."""
     root = tmp_path / "proj"
     process_dir = root / ".ft" / "process"
-    process_dir.mkdir(parents=True)
-    shutil.copy2(
-        REPO_ROOT / "templates" / "base" / "process.yml",
-        process_dir / "process.yml",
-    )
+    shutil.copytree(REPO_ROOT / "templates" / "feature", process_dir / "feature")
     (root / ".ft" / "manifest.yml").write_text(
         yaml.safe_dump(
             {
-                "process": ".ft/process/process.yml",
+                "schema_version": 2,
+                "default_process": "feature",
                 "processes": {
                     "feature": {
                         "path": ".ft/process/feature/process.yml",
@@ -109,8 +106,9 @@ def test_resolve_targets_global_via_manifesto(project, fake_engine):
 
 def test_resolve_targets_global_sem_manifesto(tmp_path, fake_engine):
     root = tmp_path / "solto"
-    (root / ".ft" / "process").mkdir(parents=True)
-    (root / ".ft" / "process" / "process.yml").write_text("id: x\n", encoding="utf-8")
+    process = root / ".ft" / "process" / "local" / "process.yml"
+    process.parent.mkdir(parents=True)
+    process.write_text("id: x\n", encoding="utf-8")
     with pytest.raises(evolve.EvolveError, match="template global registrado"):
         evolve.resolve_targets(
             root, include_project=False, include_global=True, engine_root=fake_engine
@@ -185,7 +183,7 @@ def test_prepare_workspace_monta_staging_e_contexto(ft_home, project, fake_engin
     assert not ws.root.is_relative_to(paths.worktrees_root())
 
     assert ws.process_file.is_file()
-    assert (ws.staged_project_dir / "process.yml").is_file()
+    assert (ws.staged_project_dir / "feature" / "process.yml").is_file()
     assert (ws.staged_global_dir("feature") / "process.yml").is_file()
     assert (ws.context_dir / "cycle" / "docs" / "retro.md").is_file()
     assert (ws.context_dir / "cycle_state.yml").is_file()
@@ -222,14 +220,16 @@ def test_workspace_nao_e_detectado_como_ciclo_ativo(ft_home, project, fake_engin
 
 def test_validate_staged_detecta_yaml_quebrado(ft_home, project, fake_engine):
     ws = _workspace(project, fake_engine, ft_home, include_global=False)
-    (ws.staged_project_dir / "process.yml").write_text("nodes: [", encoding="utf-8")
+    (ws.staged_project_dir / "feature" / "process.yml").write_text(
+        "nodes: [", encoding="utf-8"
+    )
     errors = evolve.validate_staged(ws)
     assert errors and "project" in errors[0]
 
 
 def test_validate_staged_exige_process_yml(ft_home, project, fake_engine):
     ws = _workspace(project, fake_engine, ft_home, include_global=False)
-    (ws.staged_project_dir / "process.yml").unlink()
+    (ws.staged_project_dir / "feature" / "process.yml").unlink()
     errors = evolve.validate_staged(ws)
     assert any("nenhum process.yml" in error for error in errors)
 
@@ -249,27 +249,28 @@ def test_validate_staged_passa_sem_mudancas(ft_home, project, fake_engine):
 def test_diff_e_apply_espelham_staging(ft_home, project, fake_engine):
     ws = _workspace(project, fake_engine, ft_home)
 
-    staged_process = ws.staged_project_dir / "process.yml"
+    staged_process = ws.staged_project_dir / "feature" / "process.yml"
     staged_process.write_text(
         staged_process.read_text(encoding="utf-8") + "\n# melhoria EV-01\n",
         encoding="utf-8",
     )
-    (ws.staged_project_dir / "scripts").mkdir(exist_ok=True)
-    (ws.staged_project_dir / "scripts" / "novo.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (ws.staged_project_dir / "feature" / "scripts" / "novo.sh").write_text(
+        "#!/bin/sh\n", encoding="utf-8"
+    )
     staged_readme = ws.staged_global_dir("feature") / "README.md"
     staged_readme.unlink()
 
     changes = evolve.diff_staged(ws)
     summary = {(change.target, change.status, change.relative) for change in changes}
-    assert ("project", "modified", "process.yml") in summary
-    assert ("project", "added", "scripts/novo.sh") in summary
+    assert ("project", "modified", "feature/process.yml") in summary
+    assert ("project", "added", "feature/scripts/novo.sh") in summary
     assert ("global:feature", "removed", "README.md") in summary
     assert len(changes) == 3
 
     evolve.apply_staged(ws, changes)
-    real_process = project / ".ft" / "process" / "process.yml"
+    real_process = project / ".ft" / "process" / "feature" / "process.yml"
     assert "# melhoria EV-01" in real_process.read_text(encoding="utf-8")
-    assert (project / ".ft" / "process" / "scripts" / "novo.sh").is_file()
+    assert (project / ".ft" / "process" / "feature" / "scripts" / "novo.sh").is_file()
     assert not (fake_engine / "templates" / "feature" / "README.md").exists()
     # Staging e alvos idênticos após o apply.
     assert evolve.diff_staged(ws) == []
@@ -321,7 +322,7 @@ class _FakeRunner:
 
     def run(self, mode):
         assert mode == "mvp"
-        staged = self.workspace / "targets" / "project" / "process.yml"
+        staged = self.workspace / "targets" / "project" / "feature" / "process.yml"
         staged.write_text(
             staged.read_text(encoding="utf-8") + "\n# EV-01 aplicado\n",
             encoding="utf-8",
@@ -343,7 +344,7 @@ def test_cmd_evolve_aplica_no_projeto(ft_home, project, fake_engine, cli_engine,
     monkeypatch.chdir(project)
     cli_main.cmd_evolve(_evolve_args())
     out = capsys.readouterr().out
-    assert "EV-01 aplicado" in (project / ".ft" / "process" / "process.yml").read_text(
+    assert "EV-01 aplicado" in (project / ".ft" / "process" / "feature" / "process.yml").read_text(
         encoding="utf-8"
     )
     assert "aplicado(s)" in out
@@ -353,11 +354,11 @@ def test_cmd_evolve_aplica_no_projeto(ft_home, project, fake_engine, cli_engine,
 
 def test_cmd_evolve_dry_run_nao_aplica(ft_home, project, fake_engine, cli_engine, monkeypatch, capsys):
     monkeypatch.chdir(project)
-    before = (project / ".ft" / "process" / "process.yml").read_text(encoding="utf-8")
+    before = (project / ".ft" / "process" / "feature" / "process.yml").read_text(encoding="utf-8")
     cli_main.cmd_evolve(_evolve_args(dry_run=True))
     out = capsys.readouterr().out
     assert "--dry-run" in out
-    assert (project / ".ft" / "process" / "process.yml").read_text(encoding="utf-8") == before
+    assert (project / ".ft" / "process" / "feature" / "process.yml").read_text(encoding="utf-8") == before
 
 
 def test_cmd_evolve_exige_alvo(ft_home, project, fake_engine, cli_engine, monkeypatch, capsys):

@@ -40,6 +40,24 @@ def _create_process_yaml(path: Path, num_nodes: int = 2) -> Path:
     return path
 
 
+def _create_registered_process(root: Path, name: str = "test") -> Path:
+    from ft.engine.layout import ensure_project_layout, register_project_process
+
+    ensure_project_layout(root)
+    process = _create_process_yaml(
+        root / ".ft" / "process" / name / "process.yml"
+    )
+    register_project_process(
+        root,
+        process_name=name,
+        process_path=process,
+        template_id=name,
+        entrypoint="init",
+        set_default=True,
+    )
+    return process
+
+
 def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     # Use PYTHONPATH to ensure worktree code is used, not installed package
     repo_root = str(Path(__file__).resolve().parent.parent.parent)
@@ -57,7 +75,7 @@ def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProc
 class TestFindProcessYaml:
     def test_finds_canonical_project_process(self, tmp_path):
         from ft.cli.main import find_process_yaml
-        expected = _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        expected = _create_registered_process(tmp_path)
         result = find_process_yaml(tmp_path)
         assert result == expected
 
@@ -66,10 +84,13 @@ class TestFindProcessYaml:
         _create_process_yaml(tmp_path / ".ft" / "process" / "custom.yml")
         assert find_process_yaml(tmp_path) is None
 
-    def test_does_not_fallback_to_old_process_directory(self, tmp_path):
+    def test_old_process_directory_requires_explicit_migration(self, tmp_path):
         from ft.cli.main import find_process_yaml
+        from ft.engine.layout import LayoutMigrationRequired
+
         _create_process_yaml(tmp_path / "process" / "FAST_TRACK_PROCESS.yml")
-        assert find_process_yaml(tmp_path) is None
+        with pytest.raises(LayoutMigrationRequired, match="ft migrate-layout"):
+            find_process_yaml(tmp_path)
 
     def test_returns_none_when_no_process(self, tmp_path):
         """Returns None when no YAML found anywhere."""
@@ -100,8 +121,14 @@ class TestCopyTemplate:
         result = copy_template("fast-track-v2", tmp_path)
         assert result.exists()
         assert result.name == "process.yml"
-        assert (tmp_path / ".ft" / "process" / "process.yml").exists()
+        assert (tmp_path / ".ft" / "process" / "fast-track-v2" / "process.yml").exists()
         assert (tmp_path / ".ft" / "manifest.yml").exists()
+        manifest = yaml.safe_load((tmp_path / ".ft" / "manifest.yml").read_text())
+        assert manifest["schema_version"] == 2
+        assert manifest["default_process"] == "fast-track-v2"
+        assert manifest["processes"]["fast-track-v2"]["path"] == (
+            ".ft/process/fast-track-v2/process.yml"
+        )
 
     def test_template_is_valid_yaml(self, tmp_path):
         from ft.cli.main import copy_template
@@ -118,13 +145,21 @@ class TestCopyTemplate:
         assert "C01:" in content
         assert "data-ui-criteria" in content
         assert "ServiceMate" not in content
+        assert not (tmp_path / ".ft" / "process" / "base" / "docs").exists()
+        assert not (tmp_path / ".ft" / "process" / "base" / "src").exists()
 
     def test_mvp_builder_template_does_not_preseed_ui_criteria(self, tmp_path):
         from ft.cli.main import copy_template
         copy_template("mvp-builder", tmp_path)
         assert not (tmp_path / "docs" / "ui_criteria.md").exists()
         manifest = yaml.safe_load((tmp_path / ".ft" / "manifest.yml").read_text())
-        assert manifest["template"]["id"] == "mvp-builder"
+        assert manifest["schema_version"] == 2
+        assert manifest["default_process"] == "mvp-builder"
+        assert "process" not in manifest
+        assert "template" not in manifest
+        assert manifest["processes"]["mvp-builder"]["path"] == (
+            ".ft/process/mvp-builder/process.yml"
+        )
 
     def test_template_process_yml_takes_precedence_over_environment_yml(self, tmp_path):
         from ft.cli.main import copy_template
@@ -157,7 +192,7 @@ class TestInitTemplate:
     def test_init_with_template_creates_process(self, tmp_path):
         result = run_ft(["init", "--template", "base"], cwd=tmp_path)
         assert result.returncode == 0
-        assert (tmp_path / ".ft" / "process" / "process.yml").exists()
+        assert (tmp_path / ".ft" / "process" / "base" / "process.yml").exists()
         assert not (tmp_path / "state").exists()
         assert not (tmp_path / ".ft" / "runtime").exists()
 
@@ -169,6 +204,40 @@ class TestInitTemplate:
         assert "base" in output
         assert "mvp-builder" in output
         assert not (tmp_path / ".ft").exists()
+
+    def test_init_refuses_legacy_root_process_without_creating_v2_alongside(self, tmp_path):
+        legacy = _create_process_yaml(tmp_path / "process" / "process.yml")
+
+        result = run_ft(["init", "--template", "base"], cwd=tmp_path)
+
+        assert result.returncode != 0
+        assert "migrate-layout" in (result.stdout + result.stderr)
+        assert legacy.exists()
+        assert not (tmp_path / ".ft" / "process" / "base").exists()
+
+    @pytest.mark.parametrize("linked_path", ["manifest", "cycles"])
+    def test_init_rejects_layout_symlink_before_any_local_or_external_write(
+        self,
+        tmp_path,
+        linked_path,
+    ):
+        ft_dir = tmp_path / ".ft"
+        ft_dir.mkdir()
+        external = tmp_path / "external"
+        external.mkdir()
+        if linked_path == "manifest":
+            target = external / "manifest.yml"
+            (ft_dir / "manifest.yml").symlink_to(target)
+        else:
+            target = external
+            (ft_dir / "cycles").symlink_to(target, target_is_directory=True)
+
+        result = run_ft(["init", "--template", "base"], cwd=tmp_path)
+
+        assert result.returncode != 0
+        assert "simbólico" in (result.stdout + result.stderr)
+        assert not (tmp_path / ".ft/process/base").exists()
+        assert list(external.iterdir()) == []
 
     def test_cmd_init_raises_before_side_effects_without_template(self, tmp_path, monkeypatch):
         from ft.cli.main import cmd_init
@@ -194,14 +263,14 @@ class TestValidateCLI:
 
     def test_validate_valid_process(self, tmp_path):
         self._base_project(tmp_path)
-        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        _create_registered_process(tmp_path)
         result = run_ft(["validate"], cwd=tmp_path)
         assert result.returncode == 0
         assert "PASS" in result.stdout
 
     def test_validate_with_explicit_process(self, tmp_path):
         self._base_project(tmp_path)
-        yaml_path = _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        yaml_path = _create_registered_process(tmp_path)
         result = run_ft(["-p", str(yaml_path), "validate"], cwd=tmp_path)
         assert result.returncode == 0
 

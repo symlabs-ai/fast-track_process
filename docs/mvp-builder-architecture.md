@@ -29,9 +29,14 @@ produto/
 │   ├── manifest.yml
 │   ├── .gitignore
 │   ├── process/
-│   │   ├── process.yml
-│   │   ├── environment.yml
-│   │   └── scripts/
+│   │   ├── mvp-builder/
+│   │   │   ├── process.yml
+│   │   │   ├── environment.yml
+│   │   │   └── scripts/
+│   │   └── feature/
+│   │       ├── process.yml
+│   │       ├── environment.yml
+│   │       └── scripts/
 │   └── cycles/
 │       └── cycle-01/
 │           ├── cycle.yml
@@ -66,11 +71,13 @@ revisá-lo ou mantê-lo como fonte de verdade. Isso inclui:
 projeção das capacidades efetivamente entregues: IDs `FEAT-*` permanecem estáveis,
 referenciam itens `PB-*` concluídos e conservam evolução, depreciação ou remoção.
 
-### `.ft/process/`: processo local
+### `.ft/process/<nome>/`: processos locais
 
-`process.yml` é uma cópia versionada do template e passa a pertencer ao projeto. Ele
-pode evoluir para capturar nuances daquele domínio. O engine nunca o substitui
-automaticamente por uma versão global.
+Cada `process.yml` é uma cópia versionada do template e passa a pertencer ao
+projeto. Ele pode evoluir para capturar nuances daquele domínio. O engine nunca o
+substitui automaticamente por uma versão global. `default_process` escolhe o
+processo usado sem flag; processos especializados, como `feature`, convivem no
+mesmo catálogo.
 
 `environment.yml` e `scripts/` acompanham o processo porque são mecanismos de
 orquestração, não código do produto.
@@ -116,18 +123,28 @@ para a branch principal.
 `.ft/manifest.yml` identifica o contrato do layout:
 
 ```yaml
-schema_version: 1
-process: .ft/process/process.yml
-template:
-  id: mvp-builder
-  base_digest: sha256:...
+schema_version: 2
+default_process: mvp-builder
+processes:
+  mvp-builder:
+    path: .ft/process/mvp-builder/process.yml
+    template: mvp-builder
+    entrypoint: init
+    source_digest: sha256:...
+    base_digest: sha256:...
+  feature:
+    path: .ft/process/feature/process.yml
+    template: feature
+    entrypoint: feature
 defaults:
   llm_engine: opencode
   llm_model: pgx/zai-org_glm-4.7-flash
 ```
 
-O digest registra a base que originou o fork local e viabiliza uma futura atualização
-de template por merge em três vias: base original, processo local e template novo.
+O schema canônico é `2`; as chaves top-level `process`, `template` e
+`origin_template` são legadas. O digest cobre `process.yml`, `environment.yml` e
+arquivos semânticos em `scripts/`, incluindo path e modo de permissão. Apenas
+caches inequivocamente gerados são ignorados.
 
 ## Política de Artefatos
 
@@ -156,7 +173,8 @@ ciclo. Se um path aparecer nas duas listas, a classificação canônica prevalec
 ```text
 ft init --template <template>
   -> cria docs/, src/ e .ft/ versionável
-  -> copia template para .ft/process/process.yml
+  -> copia template para .ft/process/<template>/process.yml
+  -> registra processes.<template> e default_process no manifest v2
   -> NÃO cria engine_state.yml
 
 ft run
@@ -175,6 +193,9 @@ ft close
 
 `--merge none` descarta o ciclo e não cria histórico. Merge `selective` inclui o
 registro do ciclo, mesmo quando apenas alguns paths de produto são escolhidos.
+Nos modos por cópia (`docs`, `selective` e fallback sem Git), o manifesto do
+checkout principal nunca é substituído pelo snapshot da worktree; defaults LLM e
+sua revisão permanecem vivos.
 
 ## Run Modes
 
@@ -186,7 +207,8 @@ Nenhum modo cria `state/` ou `runs/` no repositório.
 
 ## Migração
 
-O CLI não possui fallback automático para o layout anterior. A migração é explícita:
+O CLI detecta o layout anterior, mas nunca o executa nem cria v2 ao lado dele. A
+migração é explícita e deve ocorrer sem ciclo/runtime ativo:
 
 ```bash
 ft migrate-layout . --dry-run
@@ -195,15 +217,19 @@ ft migrate-layout . --cycle-id cycle-08-claude
 
 Ela:
 
-1. move `process/` para `.ft/process/`;
-2. normaliza o YAML principal para `.ft/process/process.yml`;
-3. atualiza referências a scripts e ao processo;
-4. cria manifest e política de ignore;
-5. importa `docs/archive/<ciclo>/` para `.ft/cycles/<ciclo>/`;
-6. arquiva relatórios soltos em `.ft/cycles/<cycle-id>/`;
-7. atualiza referências inequívocas ao processo nos arquivos atuais do projeto, sem
+1. valida o grafo legado, o manifesto v2 candidato, contenção, symlinks e todas as
+   colisões sem alterar o projeto;
+2. move `process/` ou o bundle flat `.ft/process/process.yml` para
+   `.ft/process/<nome>/`;
+3. normaliza o YAML principal para `.ft/process/<nome>/process.yml`;
+4. atualiza referências a scripts e ao processo;
+5. cria o manifesto schema v2 e a política de ignore;
+6. importa `docs/archive/<ciclo>/` para `.ft/cycles/<ciclo>/` sem sobrescrever
+   histórico durável;
+7. arquiva relatórios soltos em `.ft/cycles/<cycle-id>/`;
+8. atualiza referências inequívocas ao processo nos arquivos atuais do projeto, sem
    reescrever o conteúdo histórico em `.ft/cycles/`;
-8. move `state/`, `runs/` e marcadores de servidor legados para um backup inativo em
+9. move `state/`, `runs/` e marcadores de servidor legados para um backup inativo em
    `$FT_HOME/migrations/<projeto>/<timestamp>/`, fora do repositório.
 
 Depois da migração, `process/` deixa de ser reconhecido pela CLI.
@@ -213,7 +239,10 @@ Depois da migração, `process/` deixa de ser reconhecido pela CLI.
 - `ft init` nunca cria runtime.
 - Templates não podem conter `state`, `engine_state.yml`, `llm_logs`, `runs` ou
   diretórios `cycle-*`.
-- O processo canônico é exclusivamente `.ft/process/process.yml`.
+- Todo processo executável usa `.ft/process/<nome>/process.yml`, está registrado no
+  manifesto e não atravessa symlinks.
+- A engine sempre executa o fork local; o catálogo global só materializa a primeira
+  cópia.
 - O PRD nunca fica oculto.
 - `ft close` não mergeia estado ou logs brutos.
 - O histórico de ciclo é versionado e auditável depois da remoção da worktree.

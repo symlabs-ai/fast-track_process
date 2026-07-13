@@ -152,7 +152,12 @@ def test_atomic_layout_update_preserves_unrelated_keys_and_mode(
 def test_atomic_layout_update_rejects_invalid_manifest_without_replacing(tmp_path: Path):
     manifest_path = tmp_path / ".ft" / "manifest.yml"
     manifest_path.parent.mkdir(parents=True)
-    original = "defaults: [not, a, mapping]\nkeep: true\n"
+    original = (
+        "schema_version: 2\n"
+        "processes: {}\n"
+        "defaults: [not, a, mapping]\n"
+        "keep: true\n"
+    )
     manifest_path.write_text(original, encoding="utf-8")
 
     with pytest.raises(ValueError, match="defaults deve ser mapping"):
@@ -164,6 +169,22 @@ def test_atomic_layout_update_rejects_invalid_manifest_without_replacing(tmp_pat
         )
 
     assert manifest_path.read_text(encoding="utf-8") == original
+
+
+def test_atomic_layout_update_rejects_blank_existing_manifest(tmp_path: Path):
+    manifest_path = tmp_path / ".ft" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="arquivo vazio"):
+        update_manifest_llm_defaults(
+            tmp_path,
+            llm_engine="codex",
+            llm_model="gpt-5.6-sol",
+            llm_effort="max",
+        )
+
+    assert manifest_path.read_text(encoding="utf-8") == ""
 
 
 def test_layout_never_persists_default_effort_sentinel(tmp_path: Path):

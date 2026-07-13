@@ -13,22 +13,25 @@ from typing import Any
 
 import yaml
 
-from ft.engine import paths
-
-
 def _selected_process_dir(
     project_root: str | Path,
     process_path: str | Path | None = None,
     process_dir: str | Path | None = None,
 ) -> Path:
-    """Resolve o diretório do processo, preservando o layout legado como default."""
+    """Resolve the selected v2 process directory."""
     root = Path(project_root)
     if process_dir is not None:
         selected = Path(process_dir)
     elif process_path is not None:
         selected = Path(process_path).parent
     else:
-        return paths.project_process_dir(root)
+        # Local import avoids making layout import hooks through runner startup.
+        from ft.engine.layout import resolve_project_process
+
+        default_process = resolve_project_process(root)
+        if default_process is None:
+            raise ValueError("processo default local não encontrado no manifesto")
+        selected = default_process.parent
 
     return selected if selected.is_absolute() else root / selected
 
@@ -39,7 +42,13 @@ def load_environment(
     process_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Carrega environment.yml ao lado do processo selecionado."""
-    env_path = _selected_process_dir(project_root, process_path, process_dir) / "environment.yml"
+    try:
+        selected = _selected_process_dir(project_root, process_path, process_dir)
+    except ValueError:
+        if process_path is None and process_dir is None:
+            return {}
+        raise
+    env_path = selected / "environment.yml"
     if not env_path.exists():
         return {}
     with open(env_path) as f:

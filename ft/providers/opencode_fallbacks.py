@@ -107,7 +107,10 @@ _OPENCODE_DIRECT_COMPACT_NODES = {
     "ft.acceptance.01.cli",
 }
 
-def _opencode_compact_bundle_prompt(node: Node) -> str | None:
+def _opencode_compact_bundle_prompt(
+    node: Node,
+    process_path: str | None,
+) -> str | None:
     """Prompts pequenos para OpenCode gerar bundles sem corromper artefatos."""
     if node.id == "ft.frontend.01.scaffold":
         return """Retorne somente os blocos XML abaixo, sem explicacoes e sem markdown.
@@ -218,7 +221,12 @@ Resultado: PASS
 </ft_file>
 """
     if node.id == "ft.delivery.03.makefile":
-        return """Retorne somente os blocos XML abaixo, sem explicacoes e sem markdown.
+        if process_path is None:
+            # A process-owned serve script cannot be placed safely when a
+            # low-level harness keeps its YAML outside the project checkout.
+            return None
+        serve_path = (Path(process_path).parent / "scripts" / "serve.sh").as_posix()
+        payload = """Retorne somente os blocos XML abaixo, sem explicacoes e sem markdown.
 Use exatamente estes paths e conteudos.
 
 <ft_file path="project/Makefile">
@@ -236,15 +244,16 @@ run:
 url:
 	@echo $(URL)
 </ft_file>
-<ft_file path=".ft/process/scripts/serve.sh">
+<ft_file path="__FT_SERVE_PATH__">
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../../../project"
+cd "$(dirname "$0")/../../../../project"
 PORT="${PORT:-8021}"
 echo "http://127.0.0.1:${PORT}" > .serve_url
 exec env PORT="$PORT" python backend/main.py
 </ft_file>
 """
+        return payload.replace("__FT_SERVE_PATH__", serve_path)
     if node.id == "ft.smoke.01.run":
         return """Retorne somente os blocos XML abaixo, sem explicacoes e sem markdown.
 Use exatamente estes paths e conteudos.
@@ -283,6 +292,30 @@ Resultado: PASS
 
 
 class OpenCodeDomainFallbackMixin:
+    def _selected_process_serve_script(self, root: Path) -> Path | None:
+        """Return the selected process-owned serve script for a named bundle.
+
+        Production runners are manifest-validated before reaching this mixin.
+        Returning ``None`` keeps manifest-less unit harnesses safe when their
+        fixture process lives outside the checkout instead of guessing a
+        global/default process name.
+        """
+        checkout = root.resolve()
+        process_path = Path(self.process_path).resolve()
+        try:
+            relative = process_path.relative_to(checkout)
+        except ValueError:
+            return None
+        parts = relative.parts
+        if (
+            len(parts) != 4
+            or parts[0:2] != (".ft", "process")
+            or not parts[2]
+            or parts[3] != "process.yml"
+        ):
+            return None
+        return process_path.parent / "scripts" / "serve.sh"
+
     def _is_opencode_game_product(self, root: Path) -> bool:
         """Detecta produtos de jogo/arena para evitar templates administrativos."""
         chunks: list[str] = []
@@ -2900,13 +2933,15 @@ dev run test build url:
 """,
             encoding="utf-8",
         )
-        serve_script = root / ".ft" / "process" / "scripts" / "serve.sh"
+        serve_script = self._selected_process_serve_script(root)
+        if serve_script is None:
+            return
         serve_script.parent.mkdir(parents=True, exist_ok=True)
         serve_script.write_text(
             """#!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$ROOT"
 
 BASE_PORT="${PORT:-8021}"
@@ -3019,13 +3054,15 @@ dev run test build url:
 """,
             encoding="utf-8",
         )
-        serve_script = root / ".ft" / "process" / "scripts" / "serve.sh"
+        serve_script = self._selected_process_serve_script(root)
+        if serve_script is None:
+            return
         serve_script.parent.mkdir(parents=True, exist_ok=True)
         serve_script.write_text(
             """#!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$ROOT"
 
 BASE_PORT="${PORT:-${SERVICE_MATE_PORT:-8021}}"
@@ -4222,13 +4259,18 @@ def test_primary_navigation_create_flows_and_screenshots():
         )
 
     def _ensure_cycle_server(self, root: Path) -> str:
-        serve_script = root / ".ft" / "process" / "scripts" / "serve.sh"
+        serve_script = self._selected_process_serve_script(root)
+        if serve_script is None:
+            raise RuntimeError(
+                "processo selecionado não possui bundle local nomeado para serve.sh"
+            )
+        serve_relative = serve_script.relative_to(root.resolve()).as_posix()
         if not serve_script.exists() or not self._has_e2e_capable_stack(root):
             self._write_opencode_frontend_implementation(root / "project" / "frontend")
             self._write_opencode_delivery_stack(root)
         try:
             result = subprocess.run(
-                ["bash", ".ft/process/scripts/serve.sh"],
+                ["bash", serve_relative],
                 cwd=root,
                 capture_output=True,
                 text=True,
@@ -4237,7 +4279,7 @@ def test_primary_navigation_create_flows_and_screenshots():
         except subprocess.TimeoutExpired:
             self._write_opencode_delivery_stack(root)
             result = subprocess.run(
-                ["bash", ".ft/process/scripts/serve.sh"],
+                ["bash", serve_relative],
                 cwd=root,
                 capture_output=True,
                 text=True,
@@ -4571,7 +4613,6 @@ Veredicto: APPROVED WITH NOTES
 
         if node.id == "ft.handoff.05.process_evolve":
             print(ui.info("OpenCode fallback: gerando melhorias de processo determinísticas"))
-            self._ensure_worktree_process_yml(root)
             self._write_doc(
                 "docs/process-improvements.md",
                 "# Process Improvements\n\n## Sem achados classificáveis\n\n"

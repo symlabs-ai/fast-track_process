@@ -9,6 +9,7 @@ import pytest
 
 from ft.cli import main as cli_main
 from ft.engine.delegate import DelegateResult
+from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import EngineState
 
@@ -93,7 +94,46 @@ def _valid_hypothesis() -> str:
     ])
 
 
+def _write_local_process(
+    project: Path,
+    content: str,
+    *,
+    name: str = "plain-project",
+    defaults: dict | None = None,
+) -> Path:
+    ensure_project_layout(project, defaults=defaults)
+    process = project / ".ft" / "process" / name / "process.yml"
+    process.parent.mkdir(parents=True, exist_ok=True)
+    process.write_text(content)
+    register_project_process(
+        project,
+        process_name=name,
+        process_path=process,
+        template_id=name,
+        entrypoint="init",
+        set_default=True,
+    )
+    return process
+
+
 class TestRunInputs:
+    def test_run_rejects_process_outside_local_named_catalog(self, tmp_path):
+        project = tmp_path / "project"
+        _write_local_process(
+            project,
+            "id: local\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n",
+        )
+        external = tmp_path / "global-template" / "process.yml"
+        external.parent.mkdir()
+        external.write_text(
+            "id: external\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n"
+        )
+
+        with pytest.raises(ValueError, match="deve estar dentro de .ft/process"):
+            cli_main.cmd_run(
+                _args(project, process=str(external), template=None)
+            )
+
     def test_run_input_uses_effective_llm_engine(self, tmp_path):
         FakeRunner.instances = []
         project = tmp_path / "project"
@@ -163,9 +203,8 @@ class TestRunInputs:
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / ".ft" / "process" / "process.yml"
-        process.parent.mkdir(parents=True)
-        process.write_text(
+        _write_local_process(
+            project,
             """
 id: plain_project
 version: "1.0.0"
@@ -173,11 +212,7 @@ nodes:
   - id: start
     type: end
     title: End
-"""
-        )
-        from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(
-            project,
+""",
             defaults={"llm_engine": "opencode", "llm_effort": "high"},
         )
 
@@ -192,9 +227,8 @@ nodes:
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / ".ft" / "process" / "process.yml"
-        process.parent.mkdir(parents=True)
-        process.write_text(
+        _write_local_process(
+            project,
             """
 id: plain_project
 version: "1.0.0"
@@ -207,7 +241,7 @@ nodes:
   - id: end
     type: end
     title: End
-"""
+""",
         )
 
         with patch("ft.cli.main.StepRunner", FakeRunner):
@@ -215,16 +249,17 @@ nodes:
 
         run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01-opencode"
         assert FakeRunner.instances[-1].project_root == run_dir
-        assert FakeRunner.instances[-1].process_path == run_dir / ".ft" / "process" / "process.yml"
-        assert (run_dir / ".ft" / "process" / "process.yml").exists()
+        assert FakeRunner.instances[-1].process_path == (
+            run_dir / ".ft" / "process" / "plain-project" / "process.yml"
+        )
+        assert (run_dir / ".ft" / "process" / "plain-project" / "process.yml").exists()
 
     def test_run_without_git_accepts_explicit_cycle_name(self, tmp_path, monkeypatch):
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / ".ft" / "process" / "process.yml"
-        process.parent.mkdir(parents=True)
-        process.write_text(
+        _write_local_process(
+            project,
             """
 id: plain_project
 version: "1.0.0"
@@ -237,7 +272,7 @@ nodes:
   - id: end
     type: end
     title: End
-"""
+""",
         )
 
         with patch("ft.cli.main.StepRunner", FakeRunner):
@@ -252,16 +287,15 @@ nodes:
 
         run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
         assert FakeRunner.instances[-1].project_root == run_dir
-        assert (run_dir / ".ft" / "process" / "process.yml").exists()
+        assert (run_dir / ".ft" / "process" / "plain-project" / "process.yml").exists()
         assert (tmp_path / "ft-home" / "worktrees" / "project" / ".cycles").read_text() == "11\n"
 
     def test_run_rejects_existing_explicit_cycle_name(self, tmp_path, monkeypatch):
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        process = project / ".ft" / "process" / "process.yml"
-        process.parent.mkdir(parents=True)
-        process.write_text(
+        _write_local_process(
+            project,
             """
 id: plain_project
 version: "1.0.0"
@@ -269,7 +303,7 @@ nodes:
   - id: start
     type: end
     title: End
-"""
+""",
         )
         existing = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
         existing.mkdir(parents=True)
@@ -349,8 +383,13 @@ nodes:
 class TestSetupEnv:
     def test_setup_env_runs_project_script(self, tmp_path, monkeypatch):
         project = tmp_path / "project"
-        scripts = project / ".ft" / "process" / "scripts"
-        scripts.mkdir(parents=True)
+        process = _write_local_process(
+            project,
+            "id: setup\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n",
+            name="setup",
+        )
+        scripts = process.parent / "scripts"
+        scripts.mkdir()
         marker = project / "configured.txt"
         script = scripts / "register_gateway.sh"
         script.write_text(f"#!/usr/bin/env bash\nset -e\ntouch {marker}\n")
@@ -363,8 +402,13 @@ class TestSetupEnv:
 
     def test_setup_env_runs_relative_project_script_from_parent_cwd(self, tmp_path, monkeypatch):
         project = tmp_path / "project"
-        scripts = project / ".ft" / "process" / "scripts"
-        scripts.mkdir(parents=True)
+        process = _write_local_process(
+            project,
+            "id: setup\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n",
+            name="setup",
+        )
+        scripts = process.parent / "scripts"
+        scripts.mkdir()
         script = scripts / "register_gateway.sh"
         script.write_text("#!/usr/bin/env bash\nset -e\ntouch configured-from-cwd.txt\n")
         script.chmod(0o755)

@@ -121,20 +121,19 @@ def test_run_hooks_resolves_scripts_next_to_selected_process(tmp_path):
     assert results == [("./scripts/selected.sh", True, "feature")]
 
 
-def test_run_hooks_preserves_legacy_process_directory_default(tmp_path):
+def test_run_hooks_rejects_legacy_flat_process_directory_default(tmp_path):
     scripts_dir = tmp_path / ".ft" / "process" / "scripts"
     scripts_dir.mkdir(parents=True)
     script = scripts_dir / "legacy.sh"
     script.write_text("#!/bin/sh\nprintf legacy\n")
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
-    results = run_hooks(
-        "on_init",
-        tmp_path,
-        environment={"hooks": {"on_init": ["./scripts/legacy.sh"]}},
-    )
-
-    assert results == [("./scripts/legacy.sh", True, "legacy")]
+    with pytest.raises(ValueError, match="processo default local"):
+        run_hooks(
+            "on_init",
+            tmp_path,
+            environment={"hooks": {"on_init": ["./scripts/legacy.sh"]}},
+        )
 
 
 def test_process_digest_covers_environment_scripts_and_executable_mode(tmp_path):

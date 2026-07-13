@@ -28,6 +28,18 @@ from ft.engine.runner import StepRunner
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROCESS_NAME = "base"
+
+
+def _process_file(project_dir: Path) -> Path:
+    return paths.project_named_process_file(project_dir, PROCESS_NAME)
+
+
+def _write_process(project_dir: Path, content: str) -> Path:
+    process_file = _process_file(project_dir)
+    process_file.parent.mkdir(parents=True, exist_ok=True)
+    process_file.write_text(content)
+    return process_file
 
 
 def _state_file(project_dir: Path) -> Path:
@@ -40,7 +52,7 @@ def _initialize_state(project_dir: Path) -> None:
 
     state = _state_file(project_dir)
     runner = StepRunner(
-        process_path=paths.project_process_file(project_dir),
+        process_path=_process_file(project_dir),
         state_path=state,
         project_root=project_dir,
     )
@@ -129,8 +141,7 @@ APPROVAL_PROCESS = textwrap.dedent("""\
 @pytest.fixture
 def ft_project(tmp_path: Path) -> Path:
     """Minimal ft project with a gate-only process (no LLM calls)."""
-    paths.project_process_dir(tmp_path).mkdir(parents=True)
-    paths.project_process_file(tmp_path).write_text(GATE_ONLY_PROCESS)
+    _write_process(tmp_path, GATE_ONLY_PROCESS)
     return tmp_path
 
 
@@ -146,8 +157,7 @@ def ft_project_initialized(ft_project: Path) -> Path:
 @pytest.fixture
 def ft_project_approval(tmp_path: Path) -> Path:
     """ft project using the approval process (LLM step with requires_approval)."""
-    paths.project_process_dir(tmp_path).mkdir(parents=True)
-    paths.project_process_file(tmp_path).write_text(APPROVAL_PROCESS)
+    _write_process(tmp_path, APPROVAL_PROCESS)
     run_ft(["init", "--template", "base"], cwd=tmp_path)
     _initialize_state(tmp_path)
     return tmp_path
@@ -270,7 +280,7 @@ class TestInit:
         assert result.returncode == 0
         assert (ft_project / "AGENTS.md").read_text() == custom
 
-    def test_explicit_process_flag(self, tmp_path):
+    def test_explicit_process_flag_is_rejected(self, tmp_path):
         (tmp_path / "project" / "state").mkdir(parents=True)
         process_file = tmp_path / "custom.yml"
         process_file.write_text(GATE_ONLY_PROCESS)
@@ -278,8 +288,9 @@ class TestInit:
             ["--process", str(process_file), "init", "--template", "base"],
             cwd=tmp_path,
         )
-        assert result.returncode == 0
-        assert paths.project_process_file(tmp_path).read_text() == GATE_ONLY_PROCESS
+        assert result.returncode != 0
+        assert "não aceita --process" in (result.stdout + result.stderr)
+        assert not paths.project_manifest(tmp_path).exists()
         assert not _state_file(tmp_path).exists()
 
     def test_missing_template_lists_available_names(self, tmp_path):

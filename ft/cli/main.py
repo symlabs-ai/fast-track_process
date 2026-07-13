@@ -34,9 +34,11 @@ from ft.engine.layout import (
     manifest_llm_defaults,
     migrate_legacy_layout,
     process_digest,
+    read_manifest,
     register_project_process,
     resolve_project_process,
     update_manifest_llm_defaults,
+    validate_local_process_path,
     validate_template_is_pristine,
 )
 from ft.engine.llm_capabilities import discover_llm_capabilities
@@ -205,6 +207,7 @@ def materialize_process_template(
     project_root: Path,
     *,
     entrypoint: str,
+    set_default: bool = False,
 ) -> Path:
     """Copy one global template into a named local process exactly once.
 
@@ -214,6 +217,16 @@ def materialize_process_template(
     import shutil
 
     root = project_root.resolve()
+    for guarded in (
+        paths.project_ft_dir(root),
+        paths.project_manifest(root),
+        paths.project_process_dir(root),
+        paths.project_cycles_dir(root),
+    ):
+        if guarded.is_symlink():
+            raise ValueError(
+                f"layout local não pode conter link simbólico: {guarded}"
+            )
     process_catalog = paths.project_process_dir(root).resolve()
     try:
         process_catalog.relative_to(root)
@@ -235,18 +248,67 @@ def materialize_process_template(
 
     destination = paths.project_named_process_dir(root, template_name)
     local_process = paths.project_named_process_file(root, template_name)
+    if destination.is_symlink():
+        raise ValueError(
+            f"processo local não pode ser link simbólico: {destination.relative_to(root)}"
+        )
     if destination.exists():
         if not local_process.is_file():
             raise ValueError(
                 f"processo local parcial em {destination.relative_to(root)}; "
                 "remova ou corrija o diretório antes de tentar novamente"
             )
+        if local_process.is_symlink():
+            raise ValueError(
+                f"processo local não pode ser link simbólico: {local_process.relative_to(root)}"
+            )
+        local_entrypoint = _template_entrypoint(destination)
+        try:
+            local_payload = yaml.safe_load(local_process.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"processo local inválido em {local_process}: {exc}") from exc
+        local_policy = (
+            local_payload.get("execution_policy", {})
+            if isinstance(local_payload, dict)
+            else {}
+        )
+        declared_template = (
+            local_policy.get("template") if isinstance(local_policy, dict) else None
+        )
+        if local_entrypoint != entrypoint or (
+            declared_template is not None and str(declared_template) != template_name
+        ):
+            raise ValueError(
+                f"fork local incompatível em {local_process.relative_to(root)}: "
+                f"esperado template={template_name}, entrypoint={entrypoint}"
+            )
+        register_project_process(
+            root,
+            process_name=template_name,
+            process_path=local_process,
+            template_id=template_name,
+            entrypoint=entrypoint,
+            source_digest=process_digest(source_process),
+            set_default=set_default,
+        )
         print(f"  Processo local preservado: {local_process.relative_to(root)}")
         return local_process
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(source, destination)
+        destination.mkdir()
+        shutil.copy2(source_process, local_process)
+        for child in source.iterdir():
+            # docs/ and src/ are product seeds, not part of the process bundle.
+            if child == source_process or child.name in {"docs", "src"}:
+                continue
+            if child.is_symlink():
+                raise ValueError(f"template contém link simbólico não permitido: {child}")
+            target = destination / child.name
+            if child.is_dir():
+                shutil.copytree(child, target)
+            else:
+                shutil.copy2(child, target)
     except Exception:
         if destination.exists():
             shutil.rmtree(destination)
@@ -271,6 +333,26 @@ def materialize_process_template(
         ).replace(
             ".ft/process/process.yml", named_process
         )
+        if file_path.is_relative_to(destination / "scripts"):
+            rewritten = rewritten.replace(
+                '$(dirname "${BASH_SOURCE[0]}")/../../../..',
+                "__FT_NAMED_BASH_ROOT__",
+            ).replace(
+                '$(dirname "${BASH_SOURCE[0]}")/../../..',
+                "__FT_NAMED_BASH_ROOT__",
+            ).replace(
+                "__FT_NAMED_BASH_ROOT__",
+                '$(dirname "${BASH_SOURCE[0]}")/../../../..',
+            ).replace(
+                '$(dirname "$0")/../../../../project',
+                "__FT_NAMED_PROJECT_ROOT__",
+            ).replace(
+                '$(dirname "$0")/../../../project',
+                "__FT_NAMED_PROJECT_ROOT__",
+            ).replace(
+                "__FT_NAMED_PROJECT_ROOT__",
+                '$(dirname "$0")/../../../../project',
+            )
         if rewritten != content:
             file_path.write_text(rewritten, encoding="utf-8")
 
@@ -281,6 +363,7 @@ def materialize_process_template(
         template_id=template_name,
         entrypoint=entrypoint,
         source_digest=process_digest(source_process),
+        set_default=set_default,
     )
     print(f"  Template '{template_name}' materializado em {local_process.relative_to(root)}")
     return local_process
@@ -303,10 +386,7 @@ def _guard_engine_repo(root: Path) -> None:
 
 
 def copy_template(template_name: str, project_root: Path) -> Path:
-    """Copia um template de processo para o projeto.
-
-    Retorna o path do YAML copiado.
-    """
+    """Materialize an init template as the named default process."""
     import shutil
 
     available = available_templates()
@@ -322,43 +402,23 @@ def copy_template(template_name: str, project_root: Path) -> Path:
         print(f"ERRO: {exc}")
         sys.exit(1)
 
-    # Encontrar o YAML de processo sem selecionar arquivos de ambiente.
-    source_process = _template_process_file(src_dir)
-    if source_process is None:
-        print(f"ERRO: template '{template_name}' não contém nenhum arquivo .yml")
-        sys.exit(1)
-
-    dest_dir = paths.project_process_dir(project_root)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = paths.project_process_file(project_root)
-    shutil.copy(source_process, dest)
-    print(f"  Template '{template_name}' copiado para .ft/process/process.yml")
+    dest = materialize_process_template(
+        template_name,
+        project_root,
+        entrypoint="init",
+        set_default=True,
+    )
 
     # Copiar subdirs do template (docs/, src/, scripts/)
     for subdir in ("docs", "src", "scripts"):
         template_sub = src_dir / subdir
         if template_sub.is_dir():
-            dest_sub = paths.project_scripts_dir(project_root) if subdir == "scripts" else (project_root / subdir)
+            if subdir == "scripts":
+                # Scripts belong to the named process bundle copied above.
+                continue
+            dest_sub = project_root / subdir
             dest_sub.mkdir(parents=True, exist_ok=True)
             shutil.copytree(template_sub, dest_sub, dirs_exist_ok=True)
-
-    # Copiar environment.yml para .ft/process/
-    env_yml = src_dir / "environment.yml"
-    if env_yml.exists():
-        dest_env = paths.project_environment_file(project_root)
-        if not dest_env.exists():
-            shutil.copy(env_yml, dest_env)
-
-    ensure_project_layout(project_root, template_id=template_name)
-    register_project_process(
-        project_root,
-        process_name=template_name,
-        process_path=dest,
-        template_id=template_name,
-        entrypoint="init",
-        source_digest=process_digest(source_process),
-        set_default=True,
-    )
 
     return dest
 
@@ -375,11 +435,14 @@ def _copy_agents_md(project_root: Path) -> None:
 
 
 def _run_environment_script(project_root: Path, script: str) -> bool:
-    """Executa um script opcional de .ft/process/scripts."""
+    """Run an optional script adjacent to the default local process."""
     import subprocess
 
     project_root = project_root.resolve()
-    script_path = paths.project_scripts_dir(project_root) / script
+    process_path = find_process_yaml(project_root)
+    if process_path is None:
+        return False
+    script_path = process_path.parent / "scripts" / script
     if not script_path.exists():
         return False
 
@@ -394,7 +457,10 @@ def _run_environment_script(project_root: Path, script: str) -> bool:
     if output:
         print(output)
     if result.returncode != 0:
-        print(f"  ERRO: .ft/process/scripts/{script} falhou com exit code {result.returncode}")
+        print(
+            f"  ERRO: {script_path.relative_to(project_root)} falhou "
+            f"com exit code {result.returncode}"
+        )
         sys.exit(result.returncode)
     return True
 
@@ -403,7 +469,7 @@ def find_project_root() -> Path:
     """Encontra a raiz do projeto subindo até o layout .ft versionado."""
     current = Path.cwd()
     for parent in [current, *current.parents]:
-        if paths.project_manifest(parent).is_file() or paths.project_process_file(parent).is_file():
+        if paths.project_manifest(parent).is_file() or (parent / "process").is_dir():
             return parent
     return current
 
@@ -670,20 +736,14 @@ def _resolve_pinned_process(root: Path, raw_path: str) -> Path:
     relative = Path(raw_path)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"process_path inválido no state: {raw_path}")
-    candidate = (root / relative).resolve()
-    process_catalog = paths.project_process_dir(root).resolve()
     try:
-        process_catalog.relative_to(root.resolve())
-        candidate.relative_to(process_catalog)
-    except ValueError as exc:
-        raise ValueError(
-            f"process_path do ciclo escapa de .ft/process/: {raw_path}"
-        ) from exc
-    if not candidate.is_file():
+        return validate_local_process_path(root, relative, require_registered=True)
+    except FileNotFoundError as exc:
         raise FileNotFoundError(
             f"processo local fixado no ciclo não existe: {raw_path}"
-        )
-    return candidate
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(f"process_path inválido no ciclo: {raw_path}: {exc}") from exc
 
 
 def _is_cycle_dir(d: Path) -> bool:
@@ -1355,17 +1415,13 @@ def _worktree_root_from_state(state_path: Path) -> Path | None:
     git_file = candidate / ".git"
     if git_file.exists() and git_file.is_file():
         # É um worktree (arquivo .git aponta para o repo original)
-        return candidate if (
-            paths.project_manifest(candidate).is_file()
-            or paths.project_process_file(candidate).is_file()
-        ) else None
+        return candidate if paths.project_manifest(candidate).is_file() else None
     # Pode ser diretório simples (sem git) dentro da raiz de worktrees
     if (
         paths.is_worktree_path(candidate)
         and (candidate / "state").is_dir()
         and (
             paths.project_manifest(candidate).is_file()
-            or paths.project_process_file(candidate).is_file()
         )
     ):
         return candidate
@@ -1444,13 +1500,15 @@ def get_runner(
                     f"processo local do ciclo divergiu do digest fixado: {pinned_path}"
                 )
     elif process:
-        process_path = Path(process)
-        if not process_path.is_absolute():
-            process_path = effective_root / process_path
+        process_path = validate_local_process_path(
+            effective_root,
+            process,
+            require_registered=True,
+        )
     else:
         process_path = find_process_yaml(effective_root)
         if not process_path:
-            print("ERRO: .ft/process/process.yml não encontrado")
+            print("ERRO: processo default local não encontrado no manifesto")
             print("  Projeto novo: ft init --template <template>")
             _print_template_options()
             print("  Projeto antigo: ft migrate-layout .")
@@ -1470,7 +1528,6 @@ def get_runner(
 
 def cmd_init(args):
     import os
-    import shutil
 
     template = getattr(args, "template", None)
     if not template:
@@ -1491,22 +1548,24 @@ def cmd_init(args):
     # Copiar o template informado se o processo ainda não existe.
     root = find_project_root()
     _guard_engine_repo(root)  # revalida após chdir para <nome>
-    if paths.project_manifest(root).is_file():
+    guarded_layout_paths = (
+        paths.project_ft_dir(root),
+        paths.project_manifest(root),
+        paths.project_process_dir(root),
+        paths.project_cycles_dir(root),
+    )
+    symbolic = next((path for path in guarded_layout_paths if path.is_symlink()), None)
+    if symbolic is not None:
+        raise ValueError(f"layout local não pode conter link simbólico: {symbolic}")
+    if paths.project_manifest(root).exists() or paths.project_manifest(root).is_symlink():
         raise ValueError(
             f"projeto já inicializado em {root}; ft init só pode ser usado uma vez"
         )
-    explicit_process = Path(args.process) if args.process else None
-    if explicit_process:
-        if not explicit_process.is_absolute():
-            explicit_process = (root / explicit_process).resolve()
-        if not explicit_process.is_file():
-            print(f"ERRO: processo não encontrado: {explicit_process}")
-            sys.exit(1)
-        canonical = paths.project_process_file(root)
-        if explicit_process.resolve() != canonical.resolve():
-            canonical.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(explicit_process, canonical)
-            print(f"  Processo importado para .ft/process/process.yml")
+    if getattr(args, "process", None):
+        raise ValueError(
+            "ft init não aceita --process; use --template para materializar "
+            "um processo local versionado"
+        )
     if not find_process_yaml(root):
         copy_template(template, root)
 
@@ -1518,8 +1577,6 @@ def cmd_init(args):
         "llm_model": resolve_llm_model(args),
         "llm_effort": resolve_llm_effort(args),
     }
-    # copy_template registra a origem quando realmente copia um template. Se o
-    # processo já existia, não atribuímos uma origem que não foi aplicada.
     ensure_project_layout(root, defaults=defaults)
 
     # Playbook do condutor — todo projeto novo ganha uma cópia
@@ -1527,9 +1584,9 @@ def cmd_init(args):
 
     if os.environ.get("SYM_GATEWAY_PROJECT_KEY"):
         if _run_environment_script(root, "register_gateway.sh"):
-            print("  Ambiente externo provisionado por .ft/process/scripts/register_gateway.sh")
+            print("  Ambiente externo provisionado pelo processo default local")
         else:
-            print("  SYM_GATEWAY_PROJECT_KEY definida, mas .ft/process/scripts/register_gateway.sh não existe")
+            print("  SYM_GATEWAY_PROJECT_KEY definida, mas register_gateway.sh não existe no processo default")
 
     process_path = find_process_yaml(root)
     if not process_path or not process_path.exists():
@@ -2964,10 +3021,26 @@ def _validate_project_structure(root: Path) -> tuple[list[str], list[str]]:
         if not (root / d).is_dir():
             errors.append(f"diretório '{d}/' ausente")
 
-    if not paths.project_process_file(root).is_file():
-        errors.append("arquivo '.ft/process/process.yml' ausente")
-    if not paths.project_manifest(root).is_file():
+    manifest_path = paths.project_manifest(root)
+    if not manifest_path.is_file():
         errors.append("arquivo '.ft/manifest.yml' ausente")
+    else:
+        try:
+            manifest = read_manifest(root)
+            default_name = manifest.get("default_process")
+            if not isinstance(default_name, str) or not default_name:
+                errors.append("default_process ausente no manifesto v2")
+            processes = manifest.get("processes", {})
+            if isinstance(processes, dict):
+                for process_name in processes:
+                    if resolve_project_process(root, str(process_name)) is None:
+                        errors.append(
+                            f"processo '{process_name}' ausente ou fora do path canônico"
+                        )
+            if find_process_yaml(root) is None:
+                errors.append("processo default registrado não existe")
+        except ValueError as exc:
+            errors.append(str(exc))
 
     # Warnings para docs opcionais mas esperados
     for doc in ["docs/PRD.md", "docs/TECH_STACK.md"]:
@@ -3009,7 +3082,7 @@ def cmd_validate(args):
     else:
         process_path = find_process_yaml(root)
         if not process_path:
-            print("ERRO: .ft/process/process.yml não encontrado")
+            print("ERRO: processo default local não encontrado no manifesto")
             sys.exit(1)
 
     rel = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
@@ -3042,7 +3115,7 @@ def cmd_lint_process(args):
     else:
         process_path = find_process_yaml(root)
         if not process_path:
-            print("ERRO: .ft/process/process.yml não encontrado")
+            print("ERRO: processo default local não encontrado no manifesto")
             sys.exit(1)
 
     yaml_content = process_path.read_text()
@@ -3598,7 +3671,7 @@ def cmd_setup_env(args):
         sys.exit(1)
     project_root = Path(args.project).resolve() if args.project else find_project_root()
     if not _run_environment_script(project_root, "register_gateway.sh"):
-        print("  ✗ .ft/process/scripts/register_gateway.sh não encontrado")
+        print("  ✗ register_gateway.sh não encontrado ao lado do processo default")
         print("    Use um template de ambiente, por exemplo: ft init --template symgateway")
         sys.exit(1)
     print(f"  Projeto: {project_root}")
@@ -3874,8 +3947,12 @@ def cmd_run(args):
     selected_template = getattr(args, "template", None)
     if process_override and selected_template:
         raise ValueError("use --process ou --template, não ambos")
-    if process_override and not process_override.is_absolute():
-        process_override = project_root / process_override
+    if process_override:
+        process_override = validate_local_process_path(
+            project_root,
+            process_override,
+            require_registered=True,
+        )
     process_path_at_root = process_override
     if selected_template:
         process_path_at_root = resolve_project_process(
@@ -3895,7 +3972,7 @@ def cmd_run(args):
             _copy_agents_md(project_root)
         else:
             from ft.engine import ui as _ui
-            print(_ui.fail(".ft/process/process.yml não encontrado"))
+            print(_ui.fail("processo default local não encontrado no manifesto"))
             print(_ui.info("Projeto novo: ft init --template <template>"))
             _print_template_options()
             print(_ui.info("Projeto antigo: ft migrate-layout ."))
@@ -4103,7 +4180,7 @@ def cmd_run(args):
     else:
         process_path = find_process_yaml(project_root)
         if not process_path:
-            print("ERRO: worktree sem .ft/process/process.yml; confirme o commit inicial")
+            print("ERRO: worktree sem processo default v2; confirme o commit inicial")
             sys.exit(1)
 
     request_text = getattr(args, "_request_text", None)
@@ -4641,10 +4718,16 @@ def main():
     ca.add_argument("reason", help="Motivo do cancelamento (entre aspas)")
 
     # setup-env
-    se = sub.add_parser("setup-env", help="Executar .ft/process/scripts/register_gateway.sh do projeto")
+    se = sub.add_parser(
+        "setup-env",
+        help="Executar register_gateway.sh ao lado do processo default",
+    )
     se.add_argument("--project", help="Diretório do projeto (default: CWD ou raiz detectada)")
 
-    migrate = sub.add_parser("migrate-layout", help="Migrar process/ legado para .ft/process/")
+    migrate = sub.add_parser(
+        "migrate-layout",
+        help="Migrar layout v1 para .ft/process/<template>/",
+    )
     migrate.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
     migrate.add_argument("--dry-run", action="store_true", help="Mostrar mudanças sem mover arquivos")
     migrate.add_argument(
@@ -4657,7 +4740,10 @@ def main():
     ru = sub.add_parser("run", help="Bootstrap completo de um novo projeto até MVP")
     add_llm_engine_flags(ru)
     ru.add_argument("project", help="Caminho do diretório do projeto (criado se não existir)")
-    ru.add_argument("--process", help="YAML do processo (default: .ft/process/process.yml)")
+    ru.add_argument(
+        "--process",
+        help="YAML de um processo local registrado em .ft/process/<template>/",
+    )
     ru.add_argument("--from-project", metavar="PATH",
                     help="Copiar plano_de_voo.md do ciclo anterior (para retomada de ciclo)")
     ru.add_argument("--hipotese", metavar="FILE",

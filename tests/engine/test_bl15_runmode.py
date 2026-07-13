@@ -37,9 +37,31 @@ def _create_process_yaml(path: Path) -> Path:
     return path
 
 
+def _create_registered_process(project: Path) -> Path:
+    from ft.engine.layout import ensure_project_layout, register_project_process
+
+    ensure_project_layout(project)
+    process = _create_process_yaml(
+        project / ".ft" / "process" / "test-process" / "process.yml"
+    )
+    register_project_process(
+        project,
+        process_name="test-process",
+        process_path=process,
+        template_id="test-process",
+        entrypoint="init",
+        set_default=True,
+    )
+    return process
+
+
 def _create_environment_yml(project: Path, run_mode: str = "isolated") -> None:
-    env_file = project / ".ft" / "process" / "environment.yml"
-    env_file.parent.mkdir(parents=True, exist_ok=True)
+    from ft.engine.layout import resolve_project_process
+
+    process = resolve_project_process(project)
+    if process is None:
+        process = _create_registered_process(project)
+    env_file = process.parent / "environment.yml"
     env_file.write_text(f"run_mode: {run_mode}\n")
 
 
@@ -203,17 +225,13 @@ class TestFindLatestStateContinuous:
 class TestRunIsolated:
     def test_creates_external_worktree(self, tmp_path):
         """BL-20: isolated mode creates cycle in ~/.ft/worktrees/, not runs/."""
-        _create_process_yaml(paths.project_process_file(tmp_path))
-        from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         wt_home = paths.worktrees_home(tmp_path)
         assert wt_home.is_dir() and any(wt_home.iterdir())
 
     def test_output_shows_isolated(self, tmp_path):
-        _create_process_yaml(paths.project_process_file(tmp_path))
-        from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         result = run_ft(["run", str(tmp_path)], cwd=tmp_path)
         output = result.stdout + result.stderr
         assert "isolated" in output.lower()
@@ -225,18 +243,14 @@ class TestRunIsolated:
 
 class TestRunContinuous:
     def test_creates_state_outside_project_root(self, tmp_path):
-        _create_process_yaml(paths.project_process_file(tmp_path))
-        from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         assert paths.continuous_state_path(tmp_path).exists()
         assert not (tmp_path / "state").exists()
 
     def test_does_not_create_runs_dir_entries(self, tmp_path):
-        _create_process_yaml(paths.project_process_file(tmp_path))
-        from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         runs_dir = tmp_path / "runs"
@@ -245,9 +259,7 @@ class TestRunContinuous:
             assert len(run_dirs) == 0
 
     def test_output_shows_continuous(self, tmp_path):
-        _create_process_yaml(paths.project_process_file(tmp_path))
-        from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         result = run_ft(["run", str(tmp_path)], cwd=tmp_path)
         output = result.stdout + result.stderr
@@ -260,9 +272,7 @@ class TestRunContinuous:
 
 class TestCycleManagerAdvance:
     def test_second_run_advances_cycle(self, tmp_path):
-        _create_process_yaml(paths.project_process_file(tmp_path))
-        from ft.engine.layout import ensure_project_layout
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         _create_environment_yml(tmp_path, "continuous")
         # First run
         run_ft(["run", str(tmp_path)], cwd=tmp_path)

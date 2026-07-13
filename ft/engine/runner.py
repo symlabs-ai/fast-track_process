@@ -16,7 +16,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import yaml
 
 from ft.engine import paths
 from ft.engine.graph import Node, load_graph
@@ -40,7 +39,12 @@ from ft.engine.validators import check_paths as cp_val
 from ft.engine.git_ops import auto_commit, commit_knowledge
 from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
 from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
-from ft.engine.layout import archive_cycle_artifacts, is_cycle_artifact, process_digest
+from ft.engine.layout import (
+    archive_cycle_artifacts,
+    is_cycle_artifact,
+    process_digest,
+    validate_local_process_path,
+)
 from ft.engine.llm_defaults import LLMSelection, LiveLLMSettings, normalize_llm_effort
 from ft.engine import ui
 from ft.providers.opencode_fallbacks import (
@@ -769,6 +773,66 @@ Validadores que precisam passar:
 MAX_RETRIES = 3
 
 
+def _lexical_absolute(path: str | Path) -> Path:
+    return Path(os.path.abspath(path))
+
+
+def _first_unprotected_symlink(
+    source: Path,
+    *,
+    root: Path,
+    protected: Path,
+) -> Path | None:
+    project = root.resolve()
+    lexical = _lexical_absolute(source)
+    if lexical == protected:
+        return None
+    try:
+        relative = lexical.relative_to(project)
+    except ValueError:
+        return lexical
+    current = project
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return current
+    try:
+        lexical.resolve(strict=False).relative_to(project)
+    except ValueError:
+        return lexical
+    if not source.is_dir():
+        return None
+    for candidate in source.rglob("*"):
+        if _lexical_absolute(candidate) == protected:
+            continue
+        if candidate.is_symlink():
+            return candidate
+    return None
+
+
+def _destination_symlink_or_escape(root: Path, destination: Path) -> Path | None:
+    project = root.resolve()
+    lexical = _lexical_absolute(destination)
+    try:
+        relative = lexical.relative_to(project)
+    except ValueError:
+        return lexical
+    current = project
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return current
+    if lexical.is_dir():
+        for candidate in lexical.rglob("*"):
+            if candidate.is_symlink():
+                return candidate
+    try:
+        lexical.resolve(strict=False).relative_to(project)
+    except ValueError:
+        return lexical
+    return None
+
+
 @dataclass
 class OpenCodeOptions:
     deny_read_paths: list[str] = field(default_factory=list)
@@ -801,6 +865,12 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if not selected_process.is_absolute():
             selected_process = Path(self.project_root) / selected_process
         selected_process = selected_process.resolve()
+        if paths.project_manifest(self.project_root).is_file():
+            selected_process = validate_local_process_path(
+                self.project_root,
+                selected_process,
+                require_registered=True,
+            )
         self.graph = load_graph(selected_process)
         self.process_path = str(selected_process)
         execution_policy = self.graph.meta.get("execution_policy", {})
@@ -980,6 +1050,21 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if options.capture_output_path:
             delegate_kwargs["opencode_capture_output_path"] = options.capture_output_path
 
+    def _project_relative_process_path(self) -> str | None:
+        """Return the selected process path when it belongs to this checkout.
+
+        Real project runs are guarded by the v2 manifest in ``__init__``.  A
+        few low-level unit harnesses intentionally build a runner without a
+        manifest and keep their fixture YAML outside ``project_root``; those
+        harnesses must not manufacture a local process path for prompts.
+        """
+        try:
+            return Path(self.process_path).resolve().relative_to(
+                Path(self.project_root).resolve()
+            ).as_posix()
+        except ValueError:
+            return None
+
     def _try_opencode_compact_bundle_node(
         self,
         node: Node,
@@ -991,7 +1076,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """Materializa bundles compactos OpenCode em chamadas pequenas por arquivo."""
         if effective_engine != "opencode":
             return False
-        compact = _opencode_compact_bundle_prompt(node)
+        process_relative = self._project_relative_process_path()
+        compact = _opencode_compact_bundle_prompt(node, process_relative)
         if not compact:
             return False
         files = [
@@ -1535,37 +1621,6 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
 
 
-
-    def _is_valid_yaml_file(self, path: Path) -> bool:
-        if not path.exists() or path.stat().st_size == 0:
-            return False
-        try:
-            yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception:
-            return False
-        return True
-
-    def _ensure_worktree_process_yml(self, root: Path) -> None:
-        target = paths.project_process_file(root)
-        if self._is_valid_yaml_file(target):
-            return
-
-        candidates = [
-            Path(self.process_path),
-            paths.project_process_file(self.project_root),
-        ]
-        for source in candidates:
-            source = source.resolve()
-            if source == target.resolve() or not self._is_valid_yaml_file(source):
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            return
-
-        raise RuntimeError(
-            ".ft/process/process.yml ausente ou inválido; "
-            "o engine não escolhe um template de recuperação automaticamente"
-        )
 
     def _finish_opencode_fallback_node(self, node: Node, summary: str, result: str = "PASS") -> bool:
         validation = run_validators(
@@ -2273,15 +2328,52 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             return True
 
         count = 0
+        protected_manifest = _lexical_absolute(work / ".ft" / "manifest.yml")
+        for p in copy_paths:
+            candidate = work / p
+            destination = original_root / p
+            lexical = _lexical_absolute(candidate)
+            if lexical == protected_manifest:
+                continue
+            source_symlink = _first_unprotected_symlink(
+                candidate,
+                root=work,
+                protected=protected_manifest,
+            )
+            if source_symlink is not None:
+                print(ui.fail(f"Merge: origem simbólica recusada — {source_symlink}"))
+                return False
+            destination_issue = _destination_symlink_or_escape(
+                original_root,
+                destination,
+            )
+            if destination_issue is not None:
+                print(ui.fail(f"Merge: destino inseguro recusado — {destination_issue}"))
+                return False
         for p in copy_paths:
             src = work / p
             dst = original_root / p
+            lexical_src = _lexical_absolute(src)
+            if lexical_src == protected_manifest:
+                print(ui.dim("  Skip: .ft/manifest.yml (defaults vivem no checkout principal)"))
+                continue
             if not src.exists():
                 print(ui.dim(f"  Skip: {p} (não existe)"))
                 continue
             if src.is_dir():
                 dst.mkdir(parents=True, exist_ok=True)
-                _shutil.copytree(src, dst, dirs_exist_ok=True)
+                def preserve_main_manifest(directory, names):
+                    current = _lexical_absolute(directory)
+                    if current == protected_manifest.parent:
+                        return ["manifest.yml"]
+                    return []
+
+                _shutil.copytree(
+                    src,
+                    dst,
+                    dirs_exist_ok=True,
+                    ignore=preserve_main_manifest,
+                )
                 count += 1
             elif src.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
@@ -2314,7 +2406,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if root == work or _paths.is_worktree_path(root):
             print(ui.fail("Merge: rode o ft close a partir da raiz do projeto (cwd atual é o próprio ciclo)"))
             return False
-        if not ((root / ".git").exists() or _paths.project_process_file(root).is_file()):
+        if not ((root / ".git").exists() or _paths.project_manifest(root).is_file()):
             print(ui.fail(f"Merge: {root} não parece a raiz de um projeto ft — merge manual necessário"))
             return False
         cycle = work.name  # ex.: cycle-01
@@ -2322,31 +2414,71 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "*.pyc"
         )
         copied: list[str] = []
+        protected_manifest = _lexical_absolute(work / ".ft" / "manifest.yml")
 
         def _copy(src: Path, dst: Path, label: str) -> None:
+            lexical_src = _lexical_absolute(src)
+            if lexical_src == protected_manifest:
+                print(ui.dim("  Skip: .ft/manifest.yml (defaults vivem no checkout principal)"))
+                return
             if not src.exists():
                 print(ui.dim(f"  Skip: {label} (não existe no ciclo)"))
                 return
             if src.is_dir():
                 dst.mkdir(parents=True, exist_ok=True)
-                _shutil.copytree(src, dst, dirs_exist_ok=True, ignore=ignore)
+                def preserve_main_manifest(directory, names):
+                    ignored = set(ignore(directory, names))
+                    current = _lexical_absolute(directory)
+                    if current == protected_manifest.parent:
+                        ignored.add("manifest.yml")
+                    return sorted(ignored)
+
+                _shutil.copytree(
+                    src,
+                    dst,
+                    dirs_exist_ok=True,
+                    ignore=preserve_main_manifest,
+                )
             else:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 _shutil.copy2(src, dst)
             copied.append(label)
 
+        copy_items: list[tuple[Path, Path, str]] = []
         if strategy == "selective" and paths:
             selected = list(paths)
             cycle_path = f".ft/cycles/{cycle}/"
             if not any(str(path).rstrip("/") == cycle_path.rstrip("/") for path in selected):
                 selected.append(cycle_path)
             for p in selected:
-                _copy(work / p, root / p, p)
+                copy_items.append((work / p, root / p, p))
         else:
-            _copy(work / "docs", root / "docs", "docs/")
-            _copy(work / ".ft", root / ".ft", ".ft/")
+            copy_items.extend(
+                [
+                    (work / "docs", root / "docs", "docs/"),
+                    (work / ".ft", root / ".ft", ".ft/"),
+                ]
+            )
             if strategy == "full":
-                _copy(work / "project", root / "project", "project/")
+                copy_items.append((work / "project", root / "project", "project/"))
+
+        for src, dst, label in copy_items:
+            if _lexical_absolute(src) == protected_manifest:
+                continue
+            source_symlink = _first_unprotected_symlink(
+                src,
+                root=work,
+                protected=protected_manifest,
+            )
+            if source_symlink is not None:
+                print(ui.fail(f"Merge por cópia: origem simbólica recusada — {source_symlink}"))
+                return False
+            destination_issue = _destination_symlink_or_escape(root, dst)
+            if destination_issue is not None:
+                print(ui.fail(f"Merge por cópia: destino inseguro recusado — {destination_issue}"))
+                return False
+        for src, dst, label in copy_items:
+            _copy(src, dst, label)
 
         if copied:
             print(ui.success(f"Merge por cópia ({strategy}): {len(copied)} item(ns) → {root.name}/"))
@@ -2903,8 +3035,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """Build provider-specific prompt context for one delegated attempt."""
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
+        process_relative = self._project_relative_process_path()
         compact_bundle = (
-            _opencode_compact_bundle_prompt(node)
+            _opencode_compact_bundle_prompt(node, process_relative)
             if (
                 allow_compact
                 and selection.engine == "opencode"

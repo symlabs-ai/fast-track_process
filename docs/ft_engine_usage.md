@@ -65,6 +65,19 @@ com seu próprio catálogo. A materialização é copy-once, e todos os comandos
 ciclo executam exclusivamente o path local fixado no state — nunca o catálogo
 global.
 
+```yaml
+schema_version: 2
+default_process: mvp-builder
+processes:
+  mvp-builder:
+    path: .ft/process/mvp-builder/process.yml
+    template: mvp-builder
+    entrypoint: init
+```
+
+As chaves top-level `process`, `template` e `origin_template` pertencem ao schema
+v1 e não são gravadas por create/migrate no layout atual.
+
 ### Lint de processo
 
 O `ft lint-process` usa LLM para verificar se o YAML de processo está genérico — sem
@@ -72,7 +85,7 @@ referências a projeto específico (nomes de produto, tech stack hardcoded, spec
 
 ```bash
 ft lint-process                                    # YAML auto-detectado
-ft lint-process --process .ft/process/process.yml    # YAML explícito
+ft lint-process --process .ft/process/base/process.yml  # YAML local registrado
 ft lint-process --gemini                            # usar Gemini como engine
 ```
 
@@ -117,18 +130,23 @@ o provider escolher seu nível nativo.
 
 ### Opção `--process`
 
-Especificar YAML de processo manualmente:
+Selecionar explicitamente um YAML local já registrado:
 
 ```bash
-ft --process .ft/process/process.yml continue --sprint
+ft --process .ft/process/mvp-builder/process.yml continue --sprint
 ```
 
-Sem `--process`, o engine usa exclusivamente `.ft/process/process.yml`. Não existe
-fallback automático para nomes ou diretórios antigos; use `ft migrate-layout .`.
+Sem `--process`, o engine resolve `default_process` no manifesto. Mesmo com a flag,
+o YAML precisa usar `.ft/process/<nome>/process.yml` e constar em
+`processes.<nome>.path`; processos globais ou externos ao catálogo local são
+recusados. Não existe fallback para `process/` nem `.ft/process/process.yml`; use
+`ft migrate-layout .`.
 O migrador importa históricos de `docs/archive/` e preserva runtime legado fora do
 repositório, em `$FT_HOME/migrations/`, sem torná-lo um ciclo ativo.
 Também atualiza referências inequívocas nos arquivos atuais. Artefatos já movidos para
-`.ft/cycles/` não são reescritos.
+`.ft/cycles/` não são reescritos nem sobrescritos. Execute sem ciclo/runtime ativo;
+o preflight valida o grafo, o manifesto candidato, colisões e symlinks antes de
+mover qualquer fonte.
 
 ### Variáveis de ambiente
 
@@ -161,7 +179,7 @@ humano `docs/process-improvements.md` e o contrato estruturado
 `docs/process-improvements.yml`. Todo achado recebe ID `PI-NNN` e uma das
 classificações:
 
-- `local`: pertence ao fork `.ft/process/process.yml` daquele projeto;
+- `local`: pertence ao fork `.ft/process/mvp-builder/process.yml` daquele projeto;
 - `global_candidate`: deve ser revisado para promoção no engine/template;
 - `rejected`: foi analisado e não deve ser aplicado.
 
@@ -504,7 +522,7 @@ Ativa automaticamente para nodes de tipo `discovery` e `document`.
 ## Processo MVP Builder
 
 O template recomendado está em `templates/mvp-builder/process.yml` e é copiado
-para `.ft/process/process.yml` em projetos novos:
+para `.ft/process/mvp-builder/process.yml` em projetos novos:
 
 ```bash
 ft init meu-projeto --template mvp-builder
@@ -513,8 +531,8 @@ git init && git add -A && git commit -m "chore: bootstrap fast track"
 ft run . --auto
 ```
 
-O processo V2 continua disponível como template histórico, mas projetos atuais usam
-o mesmo path canônico `.ft/process/process.yml` após o `ft init`.
+O processo V2 continua disponível como template histórico e, quando escolhido,
+usa seu próprio bundle `.ft/process/fast-track-v2/process.yml`.
 
 ---
 
@@ -613,9 +631,10 @@ ft/
   .ft/
     manifest.yml
     process/
-      process.yml      # Fork local e versionado do processo
-      environment.yml
-      scripts/
+      mvp-builder/
+        process.yml    # Processo default deste exemplo
+        environment.yml
+        scripts/
       feature/
         process.yml    # Processo incremental materializado copy-once
         environment.yml

@@ -493,3 +493,67 @@ def test_setup_feature_cycle_cria_ciclo_sem_executar(tmp_path, monkeypatch):
     fp._setup_feature_cycle(batch, features[1], Namespace(verbose=False))
     assert features[1].cycle_name != features[0].cycle_name
     assert (paths.worktrees_home(root) / features[1].cycle_name).is_dir()
+
+
+def test_primeiro_batch_planeja_sem_sujar_checkout_e_materializa_no_setup(
+    tmp_path,
+    monkeypatch,
+):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    root = _git_project(tmp_path)
+    monkeypatch.chdir(root)
+
+    plan = {
+        "schema_version": fb.PLAN_SCHEMA_VERSION,
+        "features": [
+            {"id": "F-01", "areas": ["src/search/"], "depends_on": []},
+            {"id": "F-02", "areas": ["src/theme/"], "depends_on": []},
+        ],
+    }
+    monkeypatch.setattr(fp, "_run_planner", lambda *args, **kwargs: plan)
+    args = Namespace(
+        demand=["Busca por telefone", "Dark mode"],
+        feature_input=None,
+        engines=None,
+        template="feature",
+        max_parallel=2,
+        yes=True,
+        force=False,
+        verbose=False,
+        bypass_human_gates=False,
+        claude=None,
+        codex=None,
+        gemini=None,
+        opencode=None,
+        effort=None,
+    )
+
+    batch = fp._plan_batch(args, root)
+
+    assert batch is not None
+    assert not paths.project_named_process_file(root, "feature").exists()
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == ""
+
+    first = batch.feature("F-01")
+    fp._setup_feature_cycle(batch, first, args)
+
+    assert first.status == "setup"
+    assert paths.project_named_process_file(root, "feature").is_file()
+    assert first.cycle_name is not None
+    worktree = paths.worktrees_home(root) / first.cycle_name
+    assert paths.project_named_process_file(worktree, "feature").is_file()
+    assert subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == ""

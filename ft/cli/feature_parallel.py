@@ -250,7 +250,13 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
     _preflight(root, args)
 
     template = str(getattr(args, "template", None) or "feature")
-    cli.materialize_process_template(template, root, entrypoint="feature")
+    available = cli.available_templates("feature")
+    if template not in available:
+        choices = ", ".join(available) if available else "nenhum"
+        raise ValueError(
+            f"template '{template}' não pertence ao entrypoint feature. "
+            f"Templates disponíveis: {choices}"
+        )
 
     batch_id = fb.new_batch_id(root)
     batch_directory = fb.batch_dir(root, batch_id)

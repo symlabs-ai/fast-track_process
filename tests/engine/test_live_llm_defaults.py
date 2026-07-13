@@ -16,6 +16,7 @@ from ft.engine.graph import Node
 from ft.engine.layout import (
     canonical_project_root,
     ensure_project_layout,
+    register_project_process,
     update_manifest_llm_defaults,
 )
 from ft.engine.parallel import WorktreeResult
@@ -42,6 +43,21 @@ nodes:
     type: end
     title: End
 """
+
+
+def _write_registered_process(root: Path, name: str = "test") -> Path:
+    process = root / ".ft" / "process" / name / "process.yml"
+    process.parent.mkdir(parents=True, exist_ok=True)
+    process.write_text(_TWO_CALL_PROCESS, encoding="utf-8")
+    register_project_process(
+        root,
+        process_name=name,
+        process_path=process,
+        template_id=name,
+        entrypoint="test",
+        set_default=True,
+    )
+    return process
 
 
 def _runner(
@@ -71,8 +87,7 @@ def _runner(
             "llm_effort": "high",
         },
     )
-    process = cycle / "process.yml"
-    process.write_text(_TWO_CALL_PROCESS, encoding="utf-8")
+    process = _write_registered_process(cycle)
     runner = StepRunner(
         process_path=process,
         state_path=cycle / "state" / "engine_state.yml",
@@ -157,7 +172,7 @@ def test_command_override_wins_without_consuming_a_new_manifest_revision(
     assert state.llm_defaults_digest == original_digest
 
     resumed = StepRunner(
-        process_path=cycle / "process.yml",
+        process_path=cycle / ".ft/process/test/process.yml",
         state_path=cycle / "state" / "engine_state.yml",
         project_root=cycle,
         llm_defaults_root=owner,
@@ -380,8 +395,7 @@ def test_legacy_continuous_state_uses_persisted_tuple_as_manifest_baseline(
             "llm_effort": "high",
         },
     )
-    process = root / "process.yml"
-    process.write_text(_TWO_CALL_PROCESS, encoding="utf-8")
+    process = _write_registered_process(root)
     runner = StepRunner(
         process_path=process,
         state_path=root / "state" / "engine_state.yml",

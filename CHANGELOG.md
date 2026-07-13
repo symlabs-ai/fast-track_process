@@ -6,6 +6,26 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+### Layout uniforme de processos — manifest schema v2
+
+- Todos os processos locais agora vivem em bundles nomeados
+  `.ft/process/<template>/`; o manifesto canônico usa `schema_version: 2`,
+  `default_process` e `processes.<nome>.path`, sem as chaves top-level legadas
+  `process`, `template` ou `origin_template`.
+- `ft init` e entrypoints especializados materializam templates copy-once e a
+  engine só executa o fork local registrado. Processos externos, paths flat e
+  symlinks no catálogo são recusados.
+- `ft migrate-layout` converte `process/` e `.ft/process/process.yml` para o
+  catálogo nomeado. Antes de qualquer move, valida grafo, manifesto candidato,
+  colisões, histórico durável, runtime ativo e contenção de symlinks; a operação
+  é idempotente no v2 e preserva defaults e processos já nomeados.
+- O digest do processo cobre grafo, ambiente, scripts, paths e permissões,
+  ignorando apenas caches gerados. Diretórios semânticos chamados `runtime`,
+  `state`, `logs` ou `runs` continuam participando do hash.
+- Merges por cópia (`docs`, `selective` e fallback sem Git) preservam
+  `.ft/manifest.yml` do checkout principal, inclusive defaults/revisão LLM, e
+  recusam origens ou destinos que atravessem symlinks.
+
 ## [v0.13.4] - 2026-07-13
 
 ### ft feature --parallel — batch de features em waves paralelas

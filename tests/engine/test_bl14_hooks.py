@@ -25,6 +25,28 @@ from ft.engine.hooks import (
 )
 
 
+def _register_default_process(root: Path, name: str = "test-hooks") -> Path:
+    from ft.engine.layout import ensure_project_layout, register_project_process
+
+    ensure_project_layout(root)
+    process_dir = root / ".ft" / "process" / name
+    process_dir.mkdir(parents=True, exist_ok=True)
+    process = process_dir / "process.yml"
+    if not process.exists():
+        process.write_text(
+            "id: test\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n"
+        )
+    register_project_process(
+        root,
+        process_name=name,
+        process_path=process,
+        template_id=name,
+        entrypoint="init",
+        set_default=True,
+    )
+    return process_dir
+
+
 # ---------------------------------------------------------------------------
 # load_environment
 # ---------------------------------------------------------------------------
@@ -35,23 +57,20 @@ class TestLoadEnvironment:
         assert result == {}
 
     def test_loads_yaml(self, tmp_path):
-        env_file = tmp_path / ".ft" / "process" / "environment.yml"
-        env_file.parent.mkdir(parents=True)
+        env_file = _register_default_process(tmp_path) / "environment.yml"
         env_file.write_text("hooks:\n  on_init:\n    - ./scripts/setup.sh\n")
         result = load_environment(str(tmp_path))
         assert "hooks" in result
         assert result["hooks"]["on_init"] == ["./scripts/setup.sh"]
 
     def test_returns_empty_for_invalid_yaml(self, tmp_path):
-        env_file = tmp_path / ".ft" / "process" / "environment.yml"
-        env_file.parent.mkdir(parents=True)
+        env_file = _register_default_process(tmp_path) / "environment.yml"
         env_file.write_text("just a string")
         result = load_environment(str(tmp_path))
         assert result == {}
 
     def test_returns_empty_for_null_yaml(self, tmp_path):
-        env_file = tmp_path / ".ft" / "process" / "environment.yml"
-        env_file.parent.mkdir(parents=True)
+        env_file = _register_default_process(tmp_path) / "environment.yml"
         env_file.write_text("")
         result = load_environment(str(tmp_path))
         assert result == {}
@@ -92,7 +111,7 @@ class TestRunHooks:
 
     def test_runs_successful_script(self, tmp_path):
         # Create environment.yml with hook
-        env_dir = tmp_path / ".ft" / "process"
+        env_dir = tmp_path / ".ft" / "process" / "unit"
         env_dir.mkdir(parents=True)
         scripts_dir = env_dir / "scripts"
         scripts_dir.mkdir()
@@ -102,14 +121,16 @@ class TestRunHooks:
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
         env = {"hooks": {"on_init": ["./scripts/ok.sh"]}}
-        results = run_hooks("on_init", str(tmp_path), environment=env)
+        results = run_hooks(
+            "on_init", str(tmp_path), environment=env, process_dir=env_dir
+        )
 
         assert len(results) == 1
         assert results[0][0] == "./scripts/ok.sh"
         assert results[0][1] is True  # success
 
     def test_detects_failed_script(self, tmp_path):
-        env_dir = tmp_path / ".ft" / "process"
+        env_dir = tmp_path / ".ft" / "process" / "unit"
         env_dir.mkdir(parents=True)
         scripts_dir = env_dir / "scripts"
         scripts_dir.mkdir()
@@ -119,22 +140,28 @@ class TestRunHooks:
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
         env = {"hooks": {"on_init": ["./scripts/fail.sh"]}}
-        results = run_hooks("on_init", str(tmp_path), environment=env)
+        results = run_hooks(
+            "on_init", str(tmp_path), environment=env, process_dir=env_dir
+        )
 
         assert len(results) == 1
         assert results[0][1] is False  # failed
 
     def test_handles_missing_script(self, tmp_path):
-        (tmp_path / ".ft" / "process").mkdir(parents=True)
+        env_dir = tmp_path / ".ft" / "process" / "unit"
+        env_dir.mkdir(parents=True)
         env = {"hooks": {"on_init": ["./scripts/nonexistent.sh"]}}
-        results = run_hooks("on_init", str(tmp_path), environment=env)
+        results = run_hooks(
+            "on_init", str(tmp_path), environment=env, process_dir=env_dir
+        )
 
         assert len(results) == 1
         assert results[0][1] is False
         assert "não encontrado" in results[0][2]
 
     def test_runs_multiple_scripts(self, tmp_path):
-        env_dir = tmp_path / ".ft" / "process" / "scripts"
+        process_dir = tmp_path / ".ft" / "process" / "unit"
+        env_dir = process_dir / "scripts"
         env_dir.mkdir(parents=True)
 
         for name in ("a.sh", "b.sh"):
@@ -143,7 +170,9 @@ class TestRunHooks:
             s.chmod(s.stat().st_mode | stat.S_IEXEC)
 
         env = {"hooks": {"on_init": ["./scripts/a.sh", "./scripts/b.sh"]}}
-        results = run_hooks("on_init", str(tmp_path), environment=env)
+        results = run_hooks(
+            "on_init", str(tmp_path), environment=env, process_dir=process_dir
+        )
 
         assert len(results) == 2
         assert all(r[1] for r in results)
@@ -176,7 +205,7 @@ class TestHooksAllPassed:
 class TestRunnerHooksIntegration:
     def _make_project(self, tmp_path):
         """Create minimal project with environment.yml and a simple process."""
-        (tmp_path / ".ft" / "process").mkdir(parents=True)
+        process_dir = _register_default_process(tmp_path)
         (tmp_path / "docs").mkdir()
         (tmp_path / "runtime" / "state").mkdir(parents=True)
 
@@ -191,7 +220,7 @@ class TestRunnerHooksIntegration:
                 {"id": "end", "type": "end", "title": "End"},
             ],
         }
-        (tmp_path / ".ft" / "process" / "process.yml").write_text(
+        (process_dir / "process.yml").write_text(
             yaml.dump(process, default_flow_style=False)
         )
         return tmp_path
@@ -200,11 +229,11 @@ class TestRunnerHooksIntegration:
         from ft.engine.runner import StepRunner
         project = self._make_project(tmp_path)
 
-        env_file = project / ".ft" / "process" / "environment.yml"
+        env_file = project / ".ft" / "process" / "test-hooks" / "environment.yml"
         env_file.write_text("hooks:\n  on_init:\n    - ./scripts/test.sh\n")
 
         runner = StepRunner(
-            process_path=project / ".ft" / "process" / "process.yml",
+            process_path=project / ".ft" / "process" / "test-hooks" / "process.yml",
             state_path=project / "runtime" / "state" / "engine_state.yml",
             project_root=project,
         )
@@ -214,7 +243,7 @@ class TestRunnerHooksIntegration:
         from ft.engine.runner import StepRunner
         project = self._make_project(tmp_path)
         runner = StepRunner(
-            process_path=project / ".ft" / "process" / "process.yml",
+            process_path=project / ".ft" / "process" / "test-hooks" / "process.yml",
             state_path=project / "runtime" / "state" / "engine_state.yml",
             project_root=project,
         )
@@ -225,17 +254,17 @@ class TestRunnerHooksIntegration:
         project = self._make_project(tmp_path)
 
         # Create a hook that writes a marker file
-        scripts_dir = project / ".ft" / "process" / "scripts"
+        scripts_dir = project / ".ft" / "process" / "test-hooks" / "scripts"
         scripts_dir.mkdir()
         script = scripts_dir / "marker.sh"
         script.write_text(f"#!/bin/bash\ntouch {tmp_path}/hook_fired\n")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
-        env_file = project / ".ft" / "process" / "environment.yml"
+        env_file = project / ".ft" / "process" / "test-hooks" / "environment.yml"
         env_file.write_text("hooks:\n  on_init:\n    - ./scripts/marker.sh\n")
 
         runner = StepRunner(
-            process_path=project / ".ft" / "process" / "process.yml",
+            process_path=project / ".ft" / "process" / "test-hooks" / "process.yml",
             state_path=project / "runtime" / "state" / "engine_state.yml",
             project_root=project,
         )
@@ -251,17 +280,17 @@ class TestRunnerHooksIntegration:
         (project / "docs" / "test.md").write_text("content")
 
         # Create hook
-        scripts_dir = project / ".ft" / "process" / "scripts"
+        scripts_dir = project / ".ft" / "process" / "test-hooks" / "scripts"
         scripts_dir.mkdir()
         script = scripts_dir / "gate_pass.sh"
         script.write_text(f"#!/bin/bash\ntouch {tmp_path}/gate_pass_fired\n")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
-        env_file = project / ".ft" / "process" / "environment.yml"
+        env_file = project / ".ft" / "process" / "test-hooks" / "environment.yml"
         env_file.write_text("hooks:\n  on_gate_pass:\n    - ./scripts/gate_pass.sh\n")
 
         runner = StepRunner(
-            process_path=project / ".ft" / "process" / "process.yml",
+            process_path=project / ".ft" / "process" / "test-hooks" / "process.yml",
             state_path=project / "runtime" / "state" / "engine_state.yml",
             project_root=project,
         )
@@ -278,17 +307,17 @@ class TestRunnerHooksIntegration:
         (project / "docs" / "test.md").write_text("content")
 
         # Create hook
-        scripts_dir = project / ".ft" / "process" / "scripts"
+        scripts_dir = project / ".ft" / "process" / "test-hooks" / "scripts"
         scripts_dir.mkdir()
         script = scripts_dir / "deliver.sh"
         script.write_text(f"#!/bin/bash\ntouch {tmp_path}/deliver_fired\n")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
-        env_file = project / ".ft" / "process" / "environment.yml"
+        env_file = project / ".ft" / "process" / "test-hooks" / "environment.yml"
         env_file.write_text("hooks:\n  on_deliver:\n    - ./scripts/deliver.sh\n")
 
         runner = StepRunner(
-            process_path=project / ".ft" / "process" / "process.yml",
+            process_path=project / ".ft" / "process" / "test-hooks" / "process.yml",
             state_path=project / "runtime" / "state" / "engine_state.yml",
             project_root=project,
         )

@@ -40,9 +40,19 @@ Se `.ft/manifest.yml` já existir, uma nova chamada a `ft init` falha.
 
 Um projeto pode manter vários processos locais. O manifesto registra o default e
 os processos nomeados; quando um entrypoint recebe `--template`, a primeira
-invocação materializa o template aplicável sob `.ft/process/` e as seguintes
+invocação materializa o template aplicável sob `.ft/process/<template>/` e as seguintes
 preservam a cópia versionada. O runtime nunca executa arquivos de `templates/`
 diretamente.
+
+```yaml
+schema_version: 2
+default_process: mvp-builder
+processes:
+  mvp-builder:
+    path: .ft/process/mvp-builder/process.yml
+    template: mvp-builder
+    entrypoint: init
+```
 
 ## Evoluir uma feature
 
@@ -114,7 +124,7 @@ worktree fica read-only e apenas outputs/write_scope do node são writable
 
 | Template | Uso |
 |----------|-----|
-| `base` | Estrutura mínima com `.ft/process/process.yml`, `docs/` e `src/` |
+| `base` | Estrutura mínima com `.ft/process/base/process.yml`, `docs/` e `src/` |
 | `feature` | Evolução incremental de uma única feature em produto FT existente |
 | `mvp-builder` | Processo completo recomendado para construir um MVP do zero |
 | `fast-track-v2` | Processo V2 legado |
@@ -122,10 +132,11 @@ worktree fica read-only e apenas outputs/write_scope do node são writable
 | `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
 
 Integrações externas pertencem ao projeto/template de ambiente. O engine chama
-scripts ao lado do processo selecionado (`.ft/process/scripts/` no layout
-default ou `.ft/process/<nome>/scripts/` em processos nomeados).
+scripts exclusivamente ao lado do processo selecionado,
+`.ft/process/<nome>/scripts/`.
 
-Projetos do layout anterior devem ser migrados explicitamente:
+Projetos do layout anterior (`process/` ou `.ft/process/process.yml`) devem ser
+migrados explicitamente, sem ciclo/runtime ativo:
 
 ```bash
 ft migrate-layout . --dry-run
@@ -136,9 +147,11 @@ Use `--cycle-id <id>` para atribuir os relatórios soltos ao último ciclo conhe
 O migrador também importa `docs/archive/<ciclo>/` e retira runtime legado do repo,
 preservando-o como backup inativo em `$FT_HOME/migrations/`.
 Referências atuais ao processo são atualizadas; o conteúdo arquivado dos ciclos é
-preservado byte a byte.
+preservado byte a byte. O preflight recusa colisões, manifestos inválidos e
+symlinks antes de mover qualquer fonte.
 
-O CLI não procura automaticamente processos em `process/`.
+O CLI detecta processos legados apenas para exigir `ft migrate-layout`; nunca os
+executa nem cria o layout v2 em paralelo.
 
 ## Documentação
 

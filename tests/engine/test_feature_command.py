@@ -105,6 +105,10 @@ def test_materialize_feature_template_is_complete_and_copy_once(tmp_path):
     original_mode = script.stat().st_mode
     local_fork = process.read_text(encoding="utf-8") + "\n# fork local\n"
     process.write_text(local_fork, encoding="utf-8")
+    manifest_path = paths.project_manifest(root)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["processes"].pop("feature")
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
 
     second = cli_main.materialize_process_template(
         "feature", root, entrypoint="feature"
@@ -118,7 +122,9 @@ def test_materialize_feature_template_is_complete_and_copy_once(tmp_path):
     assert original_mode & stat.S_IEXEC
     assert script.stat().st_mode & stat.S_IEXEC
     manifest = yaml.safe_load(paths.project_manifest(root).read_text(encoding="utf-8"))
-    assert manifest["process"] == ".ft/process/process.yml"
+    assert manifest["schema_version"] == 2
+    assert manifest["default_process"] == "base"
+    assert manifest["processes"]["base"]["path"] == ".ft/process/base/process.yml"
     assert manifest["processes"]["feature"]["path"] == (
         ".ft/process/feature/process.yml"
     )
@@ -134,6 +140,28 @@ def test_materialize_rejects_partial_or_wrong_entrypoint(tmp_path):
         cli_main.materialize_process_template("feature", root, entrypoint="feature")
     with pytest.raises(ValueError, match="não pertence ao entrypoint init"):
         cli_main.materialize_process_template("feature", root, entrypoint="init")
+
+
+def test_materialize_rejects_existing_fork_with_incompatible_policy(tmp_path):
+    root = _initialized_project(tmp_path / "project", git=False)
+    local = paths.project_named_process_file(root, "feature")
+    local.parent.mkdir(parents=True)
+    local.write_text(
+        """id: wrong
+version: '1.0'
+execution_policy:
+  entrypoint: init
+  template: other
+nodes:
+  - id: end
+    type: end
+    title: End
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="fork local incompatível"):
+        cli_main.materialize_process_template("feature", root, entrypoint="feature")
 
 
 def test_feature_requires_initialized_git_project_without_materializing(tmp_path, monkeypatch):

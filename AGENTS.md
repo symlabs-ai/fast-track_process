@@ -42,7 +42,7 @@ produzidas pelo próprio processo são integradas pelo `ft close`.
 ## 0. Criar o projeto
 
 ```bash
-ft init meu-projeto --template mvp-builder     # cria .ft/process/, docs/ e src/, sem runtime
+ft init meu-projeto --template mvp-builder     # cria .ft/process/mvp-builder/, docs/ e src/
 cd meu-projeto
 git init && git add -A && git commit -m "chore: bootstrap fast track"
 ```
@@ -56,18 +56,29 @@ nomeados em `.ft/process/<template>/`. Quando um comando recebe `--template`, el
 materializa a cópia aplicável na primeira vez e preserva o fork local depois; o
 engine nunca executa diretamente o catálogo global `templates/`.
 
+```yaml
+schema_version: 2
+default_process: mvp-builder
+processes:
+  mvp-builder:
+    path: .ft/process/mvp-builder/process.yml
+    template: mvp-builder
+    entrypoint: init
+```
+
 Templates disponíveis (`templates/` no repo do engine):
 
 | Template | Uso |
 |----------|-----|
-| `base` | Estrutura mínima com `.ft/process/process.yml`, docs seed e `src/` |
+| `base` | Estrutura mínima com `.ft/process/base/process.yml`, docs seed e `src/` |
 | `feature` | Evolução incremental de uma única feature em produto já entregue; destinado ao comando `ft feature` |
 | `mvp-builder` | Processo completo de MVP (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
 | `fast-track-v2` | Processo V2 legado |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
 
-Projetos anteriores que ainda possuem `process/` precisam de migração explícita:
+Projetos anteriores que ainda possuem `process/` ou o bundle flat
+`.ft/process/process.yml` precisam de migração explícita:
 
 ```bash
 ft migrate-layout . --dry-run
@@ -81,10 +92,13 @@ preservado sob `$FT_HOME/migrations/` apenas como backup inativo.
 Referências inequívocas nos arquivos atuais são atualizadas para `.ft/process/`; os
 arquivos históricos em `.ft/cycles/` nunca são reescritos.
 
-O CLI atual não faz descoberta automática do layout antigo.
+O CLI detecta o layout antigo apenas para exigir a migração; nunca o executa nem
+cria um layout v2 ao lado dele. Migre sem ciclo/runtime ativo. O preflight recusa
+colisões e symlinks sem mover parcialmente as fontes.
 
-Integrações externas são opt-in via scripts em `.ft/process/scripts/`. Para SymGateway,
-use um template de ambiente que forneça `.ft/process/scripts/register_gateway.sh` e rode
+Integrações externas são opt-in via scripts ao lado do processo selecionado. Para
+SymGateway, use um template de ambiente que forneça
+`.ft/process/symgateway/scripts/register_gateway.sh` e rode
 `ft setup-env` com `SYM_GATEWAY_PROJECT_KEY` definida. Precisa da key? Peça ao
 DevOps — nunca ao usuário.
 
@@ -259,14 +273,14 @@ Depois do close:
 | `FT_OPENCODE_SCRIPT_MODE` | Opt-in para modo script Bash em nodes de código OpenCode |
 | `FT_OPENCODE_DEBUG` | Ativa logs detalhados do OpenCode (`--print-logs --log-level DEBUG`) |
 | `FT_OPENCODE_THINKING` | Exibe reasoning do OpenCode (`--thinking`); use só para diagnóstico, pois pode aumentar latência |
-| `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `.ft/process/scripts/register_gateway.sh` |
+| `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Usadas por scripts de ambiente opt-in, como `.ft/process/symgateway/scripts/register_gateway.sh` |
 
 ## Referências
 
 No projeto:
 
-- Processo default versionado: `.ft/process/process.yml`
-- Processos nomeados materializados: `.ft/process/<template>/process.yml`
+- Processo default: `default_process` em `.ft/manifest.yml`
+- Processos versionados: `.ft/process/<template>/process.yml`
 - Histórico versionado dos ciclos: `.ft/cycles/<cycle>/`
 - Conhecimento seed: `docs/PRD.md`, `docs/TECH_STACK.md`, `docs/PROJECT_BACKLOG.md`,
   `docs/FEATURES.md`

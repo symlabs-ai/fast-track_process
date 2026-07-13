@@ -226,9 +226,6 @@ def resolve_targets(
             for record in processes.values():
                 if isinstance(record, dict) and record.get("template"):
                     names.add(str(record["template"]))
-        origin = manifest.get("template") or manifest.get("origin_template")
-        if isinstance(origin, str) and origin.strip():
-            names.add(origin.strip())
         if not names:
             raise EvolveError(
                 "não há template global registrado no manifesto deste projeto; "

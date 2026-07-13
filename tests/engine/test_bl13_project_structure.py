@@ -39,6 +39,24 @@ def _create_process_yaml(path: Path, num_nodes: int = 2) -> Path:
     return path
 
 
+def _create_registered_process(root: Path, name: str = "test-process") -> Path:
+    from ft.engine.layout import ensure_project_layout, register_project_process
+
+    ensure_project_layout(root)
+    process = _create_process_yaml(
+        root / ".ft" / "process" / name / "process.yml"
+    )
+    register_project_process(
+        root,
+        process_name=name,
+        process_path=process,
+        template_id=name,
+        entrypoint="init",
+        set_default=True,
+    )
+    return process
+
+
 def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     repo_root = str(Path(__file__).resolve().parent.parent.parent)
     env = {**os.environ, "PYTHONPATH": repo_root, "FT_SKIP_HEALTH_CHECK": "1"}
@@ -55,13 +73,13 @@ def run_ft(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProc
 class TestFindProjectRoot:
     def test_detects_by_hidden_process(self, tmp_path, monkeypatch):
         from ft.cli.main import find_project_root
-        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        _create_registered_process(tmp_path)
         monkeypatch.chdir(tmp_path)
         assert find_project_root() == tmp_path
 
     def test_walks_up_to_find_process(self, tmp_path, monkeypatch):
         from ft.cli.main import find_project_root
-        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
+        _create_registered_process(tmp_path)
         sub = tmp_path / "sub" / "deep"
         sub.mkdir(parents=True)
         monkeypatch.chdir(sub)
@@ -91,7 +109,7 @@ class TestFindLatestState:
         project = tmp_path / "ft_ui"
         worktree_home = paths.worktrees_home(project)
         worktree = worktree_home / "cycle-09-codex"
-        _create_process_yaml(worktree / ".ft" / "process" / "process.yml")
+        _create_registered_process(worktree)
         state = worktree / "state" / "engine_state.yml"
         state.parent.mkdir(parents=True)
         state.write_text("current_node: start\n")
@@ -135,7 +153,7 @@ class TestFindLatestState:
 
         assert _worktree_root_from_state(state) is None
 
-        _create_process_yaml(paths.project_process_file(candidate))
+        _create_registered_process(candidate)
         assert _worktree_root_from_state(state) == candidate
 
 # ---------------------------------------------------------------------------
@@ -218,9 +236,7 @@ class TestInitCreatesStructure:
 class TestRunCreatesRunSubdir:
     def test_run_creates_external_worktree(self, tmp_path):
         """BL-20: ft run creates cycle in ~/.ft/worktrees/, not runs/."""
-        from ft.engine.layout import ensure_project_layout
-        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         (tmp_path / "docs").mkdir()
         (tmp_path / "src").mkdir()
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
@@ -230,9 +246,7 @@ class TestRunCreatesRunSubdir:
         assert len(cycles) >= 1
 
     def test_run_creates_docs(self, tmp_path):
-        from ft.engine.layout import ensure_project_layout
-        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         assert (tmp_path / "docs").is_dir()
 
@@ -252,9 +266,7 @@ class TestRunIncrementsRunNumber:
 
     def test_second_ft_run_creates_second_cycle_e2e(self, tmp_path):
         """Two ft run calls should create cycle-01 and cycle-02 in worktrees."""
-        from ft.engine.layout import ensure_project_layout
-        _create_process_yaml(tmp_path / ".ft" / "process" / "process.yml")
-        ensure_project_layout(tmp_path)
+        _create_registered_process(tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         run_ft(["run", str(tmp_path)], cwd=tmp_path)
         wt_home = paths.worktrees_home(tmp_path)

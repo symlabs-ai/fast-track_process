@@ -1759,7 +1759,8 @@ nodes:
         frontend.mkdir(parents=True)
         (frontend / "index.html").write_text("<!doctype html><html><body>app</body></html>", encoding="utf-8")
 
-        process_path = tmp_path / "process.yml"
+        process_path = project_root / ".ft/process/mvp-builder/process.yml"
+        process_path.parent.mkdir(parents=True)
         process_path.write_text(
             """
 id: test_process
@@ -1779,11 +1780,11 @@ nodes:
     executor: claude
     outputs:
       - project/Makefile
-      - .ft/process/scripts/serve.sh
+      - .ft/process/mvp-builder/scripts/serve.sh
     validators:
       - file_exists: project/Makefile
-      - file_exists: .ft/process/scripts/serve.sh
-      - command_succeeds: "bash -n .ft/process/scripts/serve.sh"
+      - file_exists: .ft/process/mvp-builder/scripts/serve.sh
+      - command_succeeds: "bash -n .ft/process/mvp-builder/scripts/serve.sh"
       - command_succeeds: "make --dry-run dev 2>&1 | head -3"
       - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \\"$(make -s url)\\""
     next: ft.end
@@ -1811,7 +1812,7 @@ nodes:
 
             runner._run_llm_step(runner.graph.get_node("ft.delivery.03.makefile"))
             assert (project_root / "project/Makefile").exists()
-            assert (project_root / ".ft/process/scripts/serve.sh").exists()
+            assert (project_root / ".ft/process/mvp-builder/scripts/serve.sh").exists()
 
             spec = importlib.util.spec_from_file_location(
                 "generated_backend_main",
@@ -1860,7 +1861,8 @@ nodes:
         )
         (frontend / "index.html").write_text("<!doctype html><html><body>Neon Stack</body></html>", encoding="utf-8")
 
-        process_path = tmp_path / "process.yml"
+        process_path = project_root / ".ft/process/mvp-builder/process.yml"
+        process_path.parent.mkdir(parents=True)
         process_path.write_text(
             """
 id: test_process
@@ -1883,7 +1885,9 @@ nodes:
         runner._write_opencode_delivery_stack(project_root)
 
         backend_text = (project_root / "project/backend/main.py").read_text(encoding="utf-8")
-        serve_text = (project_root / ".ft/process/scripts/serve.sh").read_text(encoding="utf-8")
+        serve_text = (
+            project_root / ".ft/process/mvp-builder/scripts/serve.sh"
+        ).read_text(encoding="utf-8")
         assert "NeonStackHandler" in backend_text
         assert "/api/daily-seed" in backend_text
         assert "/api/game-sessions" in backend_text
@@ -1943,16 +1947,18 @@ nodes:
         assert "outerHTML" not in test_text
         assert 'data-testid="arena-board"' not in test_text
 
-    def test_opencode_process_evolve_restores_process_yml_in_worktree(self, tmp_path):
+    def test_opencode_process_evolve_preserves_named_process_in_worktree(self, tmp_path):
         project_root = tmp_path / "project"
         work_dir = tmp_path / "worktrees" / "sample" / "cycle-01-opencode"
         state_dir = project_root / "state"
-        (project_root / ".ft" / "process").mkdir(parents=True)
+        (project_root / ".ft" / "process" / "mvp-builder").mkdir(parents=True)
         (work_dir / "docs").mkdir(parents=True)
-        (work_dir / ".ft" / "process").mkdir(parents=True)
+        (work_dir / ".ft" / "process" / "mvp-builder").mkdir(parents=True)
         state_dir.mkdir(parents=True)
 
-        process_path = project_root / ".ft" / "process" / "process.yml"
+        process_path = (
+            project_root / ".ft" / "process" / "mvp-builder" / "process.yml"
+        )
         process_path.write_text(
             """
 id: test_process
@@ -1965,15 +1971,22 @@ nodes:
     executor: claude
     outputs:
       - docs/process-improvements.md
-      - .ft/process/process.yml
+      - .ft/process/mvp-builder/process.yml
     validators:
       - file_exists: docs/process-improvements.md
-      - command_succeeds: "python3 -c \\"import yaml; yaml.safe_load(open('.ft/process/process.yml'))\\""
+      - file_exists: .ft/process/mvp-builder/process.yml
     next: ft.end
   - id: ft.end
     type: end
     title: End
 """,
+            encoding="utf-8",
+        )
+        worktree_process = (
+            work_dir / ".ft" / "process" / "mvp-builder" / "process.yml"
+        )
+        worktree_process.write_text(
+            process_path.read_text(encoding="utf-8"),
             encoding="utf-8",
         )
 
@@ -1992,7 +2005,7 @@ nodes:
         ):
             runner._run_llm_step(runner.graph.get_node("ft.handoff.05.process_evolve"))
 
-        restored = work_dir / ".ft" / "process" / "process.yml"
+        restored = work_dir / ".ft" / "process" / "mvp-builder" / "process.yml"
         assert restored.exists()
         assert restored.stat().st_size > 0
         assert runner.state_mgr.load().current_node == "ft.end"
@@ -3766,7 +3779,9 @@ class TestBuildTaskPrompt:
             title="Scaffold Frontend",
         )
 
-        prompt = _opencode_compact_bundle_prompt(node)
+        prompt = _opencode_compact_bundle_prompt(
+            node, ".ft/process/mvp-builder/process.yml"
+        )
 
         assert prompt is not None
         for path in (
@@ -3784,15 +3799,23 @@ class TestBuildTaskPrompt:
             title="Implementar Frontend",
         )
 
-        prompt = _opencode_compact_bundle_prompt(node)
+        prompt = _opencode_compact_bundle_prompt(
+            node, ".ft/process/mvp-builder/process.yml"
+        )
 
         assert prompt is None
 
     def test_opencode_compact_tdd_prompts_have_backend_contract(self):
         from ft.engine.graph import Node
 
-        red = _opencode_compact_bundle_prompt(Node(id="ft.tdd.01.red", type="test_red", title="Red"))
-        green = _opencode_compact_bundle_prompt(Node(id="ft.tdd.02.green", type="test_green", title="Green"))
+        red = _opencode_compact_bundle_prompt(
+            Node(id="ft.tdd.01.red", type="test_red", title="Red"),
+            ".ft/process/mvp-builder/process.yml",
+        )
+        green = _opencode_compact_bundle_prompt(
+            Node(id="ft.tdd.02.green", type="test_green", title="Green"),
+            ".ft/process/mvp-builder/process.yml",
+        )
 
         assert red is not None
         assert "project/tests/test_backend.py" in red
@@ -3813,9 +3836,23 @@ class TestBuildTaskPrompt:
     def test_opencode_compact_e2e_prompt_is_not_hardcoded(self):
         from ft.engine.graph import Node
 
-        prompt = _opencode_compact_bundle_prompt(Node(id="ft.e2e.01.browser", type="build", title="E2E"))
+        prompt = _opencode_compact_bundle_prompt(
+            Node(id="ft.e2e.01.browser", type="build", title="E2E"),
+            ".ft/process/mvp-builder/process.yml",
+        )
 
         assert prompt is None
+
+    def test_opencode_delivery_bundle_uses_selected_named_process_scripts(self):
+        from ft.engine.graph import Node
+
+        prompt = _opencode_compact_bundle_prompt(
+            Node(id="ft.delivery.03.makefile", type="build", title="Delivery"),
+            ".ft/process/custom/process.yml",
+        )
+
+        assert '<ft_file path=".ft/process/custom/scripts/serve.sh">' in prompt
+        assert '$(dirname "$0")/../../../../project' in prompt
 
     def test_review_prompt_includes_description_outputs_and_validators(self):
         from ft.engine.graph import Node

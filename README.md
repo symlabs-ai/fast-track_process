@@ -3,7 +3,7 @@
 Motor determinístico de processos para solo dev + AI. O pacote se chama
 `ft-engine`, mas o comando instalado é `ft`.
 
-Versão atual: **0.13.3**.
+Versão atual: **0.13.4**.
 
 ## O que é
 

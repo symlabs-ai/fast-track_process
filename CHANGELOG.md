@@ -6,6 +6,8 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+## [v0.13.4] - 2026-07-13
+
 ### ft feature --parallel — batch de features em waves paralelas
 - `ft feature --parallel "d1" "d2" ... | --input FILE`: N demandas viram um
   batch de ciclos `feature`, cada um em worktree próprio, orquestrados para

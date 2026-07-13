@@ -518,6 +518,159 @@ class TestActiveRunDetection:
         assert cli_main._find_latest_state(project) == active / "state" / "engine_state.yml"
 
 
+class TestStatusMultipleCycles:
+    @staticmethod
+    def _write_open_state(project: Path, cycle_name: str) -> None:
+        state = (
+            cli_main.paths.worktrees_home(project)
+            / cycle_name
+            / "state"
+            / "engine_state.yml"
+        )
+        state.parent.mkdir(parents=True)
+        state.write_text(
+            "process_id: feature\n"
+            "current_node: feature.discovery\n"
+            "node_status: delegated\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _args(*, cycle=None, full=False, report=False) -> Namespace:
+        return Namespace(
+            process=None,
+            cycle=cycle,
+            full=full,
+            report=report,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            effort=None,
+            verbose=False,
+        )
+
+    @staticmethod
+    def _fake_runner_factory(calls: list[dict]):
+        class Runner:
+            def __init__(self, cycle):
+                self.cycle = cycle
+
+            def status(self, full=False):
+                calls.append({"cycle": self.cycle, "method": "status", "full": full})
+                print(f"status:{self.cycle or 'auto'}")
+
+            def status_report(self):
+                calls.append({"cycle": self.cycle, "method": "report"})
+                print(f"report:{self.cycle or 'auto'}")
+
+        def factory(*args, **kwargs):
+            return Runner(kwargs.get("cycle"))
+
+        return factory
+
+    def test_status_without_cycle_renders_every_open_runtime(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        self._write_open_state(project, "cycle-14-f-03")
+        self._write_open_state(project, "cycle-13-f-01")
+        calls: list[dict] = []
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
+        ):
+            cli_main.cmd_status(self._args(full=True))
+
+        output = capsys.readouterr().out
+        assert "Ciclo: cycle-13-f-01" in output
+        assert "Ciclo: cycle-14-f-03" in output
+        assert calls == [
+            {"cycle": "cycle-13-f-01", "method": "status", "full": True},
+            {"cycle": "cycle-14-f-03", "method": "status", "full": True},
+        ]
+
+    def test_status_report_is_propagated_to_every_open_runtime(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        self._write_open_state(project, "cycle-13-f-01")
+        self._write_open_state(project, "cycle-14-f-03")
+        calls: list[dict] = []
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
+        ):
+            cli_main.cmd_status(self._args(report=True))
+
+        assert calls == [
+            {"cycle": "cycle-13-f-01", "method": "report"},
+            {"cycle": "cycle-14-f-03", "method": "report"},
+        ]
+
+    def test_status_explicit_cycle_remains_single(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        self._write_open_state(project, "cycle-13-f-01")
+        self._write_open_state(project, "cycle-14-f-03")
+        calls: list[dict] = []
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
+        ):
+            cli_main.cmd_status(self._args(cycle="cycle-13-f-01"))
+
+        output = capsys.readouterr().out
+        assert "Ciclo:" not in output
+        assert calls == [
+            {"cycle": "cycle-13-f-01", "method": "status", "full": False}
+        ]
+
+    def test_status_single_runtime_preserves_unlabelled_output(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        self._write_open_state(project, "cycle-13-f-01")
+        calls: list[dict] = []
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
+        ):
+            cli_main.cmd_status(self._args())
+
+        output = capsys.readouterr().out
+        assert "Ciclo:" not in output
+        assert calls == [{"cycle": None, "method": "status", "full": False}]
+
+    def test_status_without_runtime_preserves_no_active_output(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(cli_main, "get_runner") as get_runner,
+        ):
+            cli_main.cmd_status(self._args())
+
+        output = capsys.readouterr().out
+        assert "Status: nenhum ciclo ativo" in output
+        get_runner.assert_not_called()
+
+
 class TestApiHealthCheck:
     def test_opencode_skips_anthropic_health_check(self, tmp_path, monkeypatch):
         monkeypatch.delenv("FT_SKIP_HEALTH_CHECK", raising=False)

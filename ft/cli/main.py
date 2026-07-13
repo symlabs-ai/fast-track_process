@@ -832,6 +832,39 @@ def _state_data(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _open_status_targets(root: Path) -> list[tuple[str, str | None]]:
+    """Return open runtimes that ``ft status`` should render together.
+
+    The local runtime remains authoritative when the command is executed from
+    inside a worktree.  From the owning checkout, continuous mode (when it
+    represents a real cycle) and every real external worktree runtime are
+    returned in stable order.
+    The second tuple item is the value accepted by ``get_runner(cycle=...)``;
+    ``None`` identifies continuous mode.
+    """
+    if paths.is_worktree_path(root):
+        return []
+
+    targets: list[tuple[str, str | None]] = []
+    continuous = paths.continuous_state_path(root)
+    if continuous.is_file() and _state_represents_runtime(_state_data(continuous)):
+        targets.append(("continuous", None))
+
+    wt_home = paths.worktrees_home(root)
+    if not wt_home.is_dir():
+        return targets
+
+    worktrees = sorted(
+        [entry for entry in wt_home.iterdir() if entry.is_dir() and _is_cycle_dir(entry)],
+        key=_cycle_num,
+    )
+    for worktree in worktrees:
+        state_path = worktree / "state" / "engine_state.yml"
+        if state_path.is_file() and _state_represents_runtime(_state_data(state_path)):
+            targets.append((worktree.name, worktree.name))
+    return targets
+
+
 def _find_latest_state(root: Path) -> Path:
     """Encontra o state mais recente.
 
@@ -1718,18 +1751,36 @@ def cmd_continue(args):
 def cmd_status(args):
     if not _ensure_runtime_selected(args):
         return
-    runner = get_runner(
-        args.process,
-        llm_engine=resolve_llm_engine(args),
-        llm_model=resolve_llm_model(args),
-        llm_effort=resolve_llm_effort(args),
-        verbose=getattr(args, "verbose", False),
-        cycle=getattr(args, "cycle", None),
-    )
-    if getattr(args, "report", False):
-        runner.status_report()
-    else:
-        runner.status(full=args.full)
+
+    def _runner_for(cycle: str | None):
+        return get_runner(
+            args.process,
+            llm_engine=resolve_llm_engine(args),
+            llm_model=resolve_llm_model(args),
+            llm_effort=resolve_llm_effort(args),
+            verbose=getattr(args, "verbose", False),
+            cycle=cycle,
+        )
+
+    def _print_status(runner) -> None:
+        if getattr(args, "report", False):
+            runner.status_report()
+        else:
+            runner.status(full=getattr(args, "full", False))
+
+    explicit_cycle = getattr(args, "cycle", None)
+    targets = [] if explicit_cycle else _open_status_targets(find_project_root())
+    if len(targets) > 1:
+        from ft.engine import ui as _ui
+
+        for index, (label, cycle) in enumerate(targets):
+            if index:
+                print()
+            print(_ui.header(f"Ciclo: {label}"))
+            _print_status(_runner_for(cycle))
+        return
+
+    _print_status(_runner_for(explicit_cycle))
 
 
 def _truncate_visible(s: str, width: int, reset: str = "") -> str:

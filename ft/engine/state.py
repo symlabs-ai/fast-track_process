@@ -140,7 +140,36 @@ class StateManager:
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
-        data = {
+        self._write_raw(self._serialize_state())
+
+    def release_lock(self) -> None:
+        """Libera o lock persistido sem alterar os demais campos do estado.
+
+        O método nunca remove o lock vivo de outro processo. A leitura e a
+        escrita usam o payload do disco para preservar inclusive campos que
+        uma versão mais nova do engine possa ter acrescentado.
+        """
+        if not self.path.exists():
+            if self._state is not None:
+                self._state._lock = None
+            return
+
+        with open(self.path) as f:
+            raw = yaml.safe_load(f) or {}
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"State invalido em {self.path}")
+        self._check_lock(raw)
+        raw["_lock"] = None
+        self._write_raw(raw)
+        if self._state is not None:
+            self._state._lock = None
+
+    def _serialize_state(self) -> dict[str, Any]:
+        """Serializa o estado carregado sem decidir a política de lock."""
+        if self._state is None:
+            raise RuntimeError("State nao carregado. Chame load() primeiro.")
+
+        return {
             "process_id": self._state.process_id,
             "process_path": self._state.process_path,
             "process_digest": self._state.process_digest,
@@ -172,9 +201,13 @@ class StateManager:
             "_lock": self._state._lock,
         }
 
+    def _write_raw(self, data: dict[str, Any]) -> None:
+        """Persiste um payload de estado já serializado."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(
+                data, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+            )
 
     @property
     def state(self) -> EngineState:

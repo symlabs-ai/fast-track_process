@@ -1,10 +1,11 @@
 """Unit tests for ft.engine.state."""
 
+import os
 import pytest
-import tempfile
-from pathlib import Path
 
-from ft.engine.state import StateManager, EngineState
+import yaml
+
+from ft.engine.state import StateManager
 
 
 @pytest.fixture
@@ -74,6 +75,37 @@ class TestStateManager:
         state = initialized_state.load()
         assert state._lock is not None
         assert state._lock["owner"] == "ft_engine"
+
+    def test_release_lock_preserves_state_and_unknown_fields(self, initialized_state):
+        state = initialized_state.state
+        state.last_approval_message = "preservar"
+        initialized_state.save()
+        raw = yaml.safe_load(initialized_state.path.read_text(encoding="utf-8"))
+        raw["future_field"] = {"value": 42}
+        initialized_state.path.write_text(
+            yaml.safe_dump(raw, sort_keys=False), encoding="utf-8"
+        )
+
+        initialized_state.release_lock()
+
+        persisted = yaml.safe_load(initialized_state.path.read_text(encoding="utf-8"))
+        assert persisted["_lock"] is None
+        assert persisted["last_approval_message"] == "preservar"
+        assert persisted["future_field"] == {"value": 42}
+        reloaded = StateManager(initialized_state.path).load(check_lock=True)
+        assert reloaded.current_node == "node.01"
+        assert reloaded.last_approval_message == "preservar"
+
+    def test_save_after_release_reacquires_lock(self, initialized_state):
+        initialized_state.release_lock()
+        initialized_state.state.node_status = "delegated"
+
+        initialized_state.save()
+
+        persisted = yaml.safe_load(initialized_state.path.read_text(encoding="utf-8"))
+        assert persisted["node_status"] == "delegated"
+        assert persisted["_lock"]["owner"] == "ft_engine"
+        assert persisted["_lock"]["pid"] == os.getpid()
 
     def test_advance_moves_current_node(self, initialized_state):
         initialized_state.advance("node.01", "node.02")

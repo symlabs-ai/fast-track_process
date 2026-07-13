@@ -4826,6 +4826,7 @@ def cmd_run(args):
     else:
         runner.init_state()
     if setup_only:
+        runner.state_mgr.release_lock()
         print(f"  Ciclo preparado (setup-only): {project_root}")
         return
     runner.run(mode="mvp")

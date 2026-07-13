@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -856,6 +858,24 @@ def test_setup_feature_cycle_cria_ciclo_sem_executar(tmp_path, monkeypatch):
     # Ciclo preparado no primeiro node, sem nenhum step executado.
     assert state["current_node"]
     assert not state.get("completed_nodes")
+    assert state["_lock"] is None
+    env = os.environ.copy()
+    package_root = str(Path(cli_main.__file__).resolve().parents[2])
+    env["PYTHONPATH"] = package_root + os.pathsep + env.get("PYTHONPATH", "")
+    lock_probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from ft.engine.state import StateManager; "
+            "StateManager(sys.argv[1]).load(check_lock=True)",
+            str(state_file),
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert lock_probe.returncode == 0, lock_probe.stderr
     assert (worktree / "docs" / "feature-request.md").read_text(encoding="utf-8") == (
         "---\nreserved_backlog_item: PB-019\n---\n\nBusca por telefone\n"
     )
@@ -866,6 +886,10 @@ def test_setup_feature_cycle_cria_ciclo_sem_executar(tmp_path, monkeypatch):
     assert features[1].cycle_name != features[0].cycle_name
     second_worktree = paths.worktrees_home(root) / features[1].cycle_name
     assert second_worktree.is_dir()
+    second_state = yaml.safe_load(
+        (second_worktree / "state" / "engine_state.yml").read_text(encoding="utf-8")
+    )
+    assert second_state["_lock"] is None
     assert (second_worktree / "docs" / "feature-request.md").read_text(
         encoding="utf-8"
     ) == "Dark mode\n"

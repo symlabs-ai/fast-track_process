@@ -8,14 +8,12 @@
 
 | Skill | Comando | Descrição |
 |-------|---------|-----------|
-| Feature | `/feature <descrição>` | Implementar nova feature (lê SPEC.md; atualiza SPEC.md + CHANGELOG.md) |
 | Backlog | `/backlog <descrição>` | Registrar ideia futura no BACKLOG.md |
 
 ## Instalação
 
 ```bash
 # Copiar skills para o diretório de comandos do Claude Code
-cp process/skills/feature.md ~/.claude/commands/feature.md
 cp process/skills/backlog.md ~/.claude/commands/backlog.md
 ```
 
@@ -26,12 +24,6 @@ cp process/skills/backlog.md ~/.claude/commands/backlog.md
     |
     v
 /backlog list                  # Revisar backlog
-    |
-    v
-/feature <descrição do item>   # Implementar (lê SPEC.md + BACKLOG.md)
-    |
-    v
-/feature done                  # Finalizar (atualiza SPEC.md + CHANGELOG.md)
     |
     v
 /backlog done <B-XX>           # Fechar item no backlog

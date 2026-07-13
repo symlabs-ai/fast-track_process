@@ -1700,23 +1700,36 @@ def bash_passes(script: str, project_root: str = ".") -> tuple[bool, str]:
     return False, f"bash_passes FAIL: {script} saiu com código {result.returncode}\n{preview}"
 
 
-def command_succeeds(command: str, project_root: str = ".") -> tuple[bool, str]:
+def command_succeeds(
+    command: str,
+    project_root: str = ".",
+    timeout: int | float = 120,
+) -> tuple[bool, str]:
     """Executa um comando shell e verifica se sai com código 0.
 
     Diferente de bash_passes, recebe um comando direto (string) em vez de um
     path para script. O comando é executado via bash com pipefail para que
     pipelines como `pytest | tail` nao mascarem falhas do comando principal.
     """
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or timeout <= 0
+    ):
+        return False, "command_succeeds FAIL: timeout deve ser um número positivo"
+
     try:
         result = subprocess.run(
             ["bash", "-o", "pipefail", "-c", command],
             cwd=project_root,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return False, f"command_succeeds FAIL: comando excedeu 120s: {command[:60]}"
+        return False, (
+            f"command_succeeds FAIL: comando excedeu {timeout:g}s: {command[:60]}"
+        )
     except Exception as e:
         return False, f"command_succeeds FAIL: erro ao executar: {e}"
 

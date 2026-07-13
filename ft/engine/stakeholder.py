@@ -10,23 +10,78 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_HYPER_MODE_FULL_DOCS = (
+    "plano_de_voo.md",
+    "hipotese.md",
+    "handoff.md",
+)
+DEFAULT_HYPER_MODE_PREVIEW_LINES = 60
+DEFAULT_HYPER_MODE_FULL_MAX_LINES = 600
+
+
+def _normalize_doc_reference(value: str) -> str | None:
+    """Normaliza um path relativo ao ``docs/`` para uso no Hyper-mode."""
+    text = str(value or "").strip().replace("\\", "/")
+    if not text:
+        return None
+    path = Path(text)
+    if path.is_absolute():
+        return None
+    parts = list(path.parts)
+    if parts and parts[0] == "docs":
+        parts = parts[1:]
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    relative = Path(*parts)
+    if relative.suffix.lower() != ".md":
+        return None
+    return relative.as_posix()
+
+
 # ---------------------------------------------------------------------------
 # Hyper-mode
 # ---------------------------------------------------------------------------
 
-def scan_existing_docs(project_root: str) -> dict[str, str]:
+def scan_existing_docs(
+    project_root: str,
+    allowlist: list[str] | None = None,
+) -> dict[str, str]:
     """
     Scans docs/ para docs existentes.
-    Retorna {filename: content} dos docs encontrados.
+    Retorna ``{path_relativo_a_docs: content}`` dos docs encontrados.
+
+    ``allowlist=None`` preserva o comportamento historico: todos os ``*.md``
+    diretamente em ``docs/``. Uma lista (inclusive vazia) seleciona somente os
+    documentos explicitamente declarados pelo node e pode apontar para
+    subdiretorios de ``docs/``.
     """
     docs_dir = Path(project_root) / "docs"
     if not docs_dir.exists():
         return {}
 
-    docs = {}
-    for f in docs_dir.glob("*.md"):
+    candidates: list[tuple[str, Path]] = []
+    if allowlist is None:
+        candidates = [(f.name, f) for f in docs_dir.glob("*.md")]
+    else:
+        seen: set[str] = set()
+        docs_root = docs_dir.resolve()
+        for value in allowlist:
+            relative = _normalize_doc_reference(value)
+            if relative is None or relative in seen:
+                continue
+            candidate = docs_dir / relative
+            try:
+                candidate.resolve().relative_to(docs_root)
+            except (OSError, ValueError):
+                continue
+            seen.add(relative)
+            candidates.append((relative, candidate))
+
+    docs: dict[str, str] = {}
+    for name, path in candidates:
         try:
-            docs[f.name] = f.read_text()
+            if path.is_file():
+                docs[name] = path.read_text()
         except OSError:
             pass
     return docs
@@ -55,8 +110,10 @@ def should_skip_node(node_id: str, existing_docs: dict[str, str]) -> bool:
 def hyper_mode_prompt(
     existing_docs: dict[str, str],
     original_prompt: str,
-    preview_lines: int = 60,
+    preview_lines: int = DEFAULT_HYPER_MODE_PREVIEW_LINES,
     allow_followup_reads: bool = True,
+    full_docs: list[str] | tuple[str, ...] | None = None,
+    full_max_lines: int = DEFAULT_HYPER_MODE_FULL_MAX_LINES,
 ) -> str:
     """
     Gera prompt enriquecido com contexto dos docs existentes.
@@ -67,8 +124,15 @@ def hyper_mode_prompt(
 
     # Docs de direcao entram INTEIROS (sao o contexto destilado do ciclo);
     # os demais entram como preview — o worker le o resto do disco se precisar.
-    FULL_DOCS = ("plano_de_voo.md", "hipotese.md", "handoff.md")
-    FULL_MAX_LINES = 600
+    effective_full_docs = {
+        normalized
+        for value in (
+            DEFAULT_HYPER_MODE_FULL_DOCS if full_docs is None else full_docs
+        )
+        if (normalized := _normalize_doc_reference(value)) is not None
+    }
+    preview_limit = max(0, int(preview_lines))
+    full_limit = max(0, int(full_max_lines))
     read_hint = (
         "leia apenas trechos relevantes se precisar de detalhe especifico"
         if allow_followup_reads
@@ -78,19 +142,19 @@ def hyper_mode_prompt(
     context_parts = ["CONTEXTO EXISTENTE (documentos ja produzidos):"]
     for fname, content in existing_docs.items():
         lines = content.splitlines()
-        if fname in FULL_DOCS:
-            body = "\n".join(lines[:FULL_MAX_LINES])
+        if fname in effective_full_docs:
+            body = "\n".join(lines[:full_limit])
             suffix = (
                 ""
-                if len(lines) <= FULL_MAX_LINES
+                if len(lines) <= full_limit
                 else f"\n... (truncado; {read_hint})"
             )
             context_parts.append(f"\n### {fname} (INTEGRAL)\n{body}{suffix}")
         else:
-            preview = "\n".join(lines[:preview_lines])
+            preview = "\n".join(lines[:preview_limit])
             suffix = (
                 ""
-                if len(lines) <= preview_lines
+                if len(lines) <= preview_limit
                 else f"\n... (preview; {read_hint})"
             )
             context_parts.append(f"\n### {fname}\n{preview}{suffix}")

@@ -14,10 +14,10 @@ from ft.cli import main as cli_main
 from ft.engine import feature_batch as fb
 from ft.engine import paths
 
-
 # ---------------------------------------------------------------------------
 # EngineSpec
 # ---------------------------------------------------------------------------
+
 
 def test_parse_engine_spec_completo():
     spec = fb.parse_engine_spec("codex:gpt-5.3@high")
@@ -45,6 +45,7 @@ def test_parse_engine_list():
 # ---------------------------------------------------------------------------
 # Demandas
 # ---------------------------------------------------------------------------
+
 
 def test_split_input_demands_por_secoes():
     text = """## Busca por telefone
@@ -82,9 +83,9 @@ def test_build_features_round_robin_e_prioridade():
     specs = [fb.EngineSpec("claude", "opus"), fb.EngineSpec("codex", "gpt-5.3")]
     features = fb.build_features(demands, specs)
     assert [feature.feature_id for feature in features] == ["F-01", "F-02", "F-03"]
-    assert features[0].engine_spec == specs[0]        # round-robin
+    assert features[0].engine_spec == specs[0]  # round-robin
     assert features[1].engine_spec.engine == "gemini"  # spec própria vence
-    assert features[2].engine_spec == specs[0]         # índice 2 % 2 == 0
+    assert features[2].engine_spec == specs[0]  # índice 2 % 2 == 0
 
 
 def test_build_features_exige_duas_demandas():
@@ -97,9 +98,22 @@ def test_slugify():
     assert fb.slugify("###") == "feature"
 
 
+def test_backlog_items_normaliza_e_demanda_explicita_precisa_ser_inequivoca():
+    assert fb.backlog_items("PB-2, pb-010 e PB-010A") == [
+        "PB-002",
+        "PB-010",
+        "PB-010A",
+    ]
+    assert fb.explicit_backlog_item("Evoluir o PB-7") == "PB-007"
+    assert fb.explicit_backlog_item("Feature sem item") is None
+    with pytest.raises(fb.FeatureBatchError, match="mais de um PB"):
+        fb.explicit_backlog_item("Unir PB-001 e PB-002")
+
+
 # ---------------------------------------------------------------------------
 # Plano
 # ---------------------------------------------------------------------------
+
 
 def _features(n: int = 3) -> list[fb.BatchFeature]:
     return fb.build_features([(f"demanda {i}", None) for i in range(1, n + 1)])
@@ -111,18 +125,22 @@ def _plan(entries: list[dict]) -> dict:
 
 def test_validate_plan_ok():
     features = _features(2)
-    plan = _plan([
-        {"id": "F-01", "areas": ["src/a/"], "depends_on": []},
-        {"id": "F-02", "areas": ["src/b/"], "depends_on": ["F-01"]},
-    ])
+    plan = _plan(
+        [
+            {"id": "F-01", "areas": ["src/a/"], "depends_on": []},
+            {"id": "F-02", "areas": ["src/b/"], "depends_on": ["F-01"]},
+        ]
+    )
     assert fb.validate_plan(plan, features) == []
 
 
 def test_validate_plan_erros():
     features = _features(2)
-    plan = _plan([
-        {"id": "F-01", "areas": [], "depends_on": ["F-09", "F-01"]},
-    ])
+    plan = _plan(
+        [
+            {"id": "F-01", "areas": [], "depends_on": ["F-09", "F-01"]},
+        ]
+    )
     errors = fb.validate_plan(plan, features)
     text = "; ".join(errors)
     assert "areas" in text
@@ -133,10 +151,12 @@ def test_validate_plan_erros():
 
 def test_validate_plan_area_absoluta():
     features = _features(2)
-    plan = _plan([
-        {"id": "F-01", "areas": ["/etc"], "depends_on": []},
-        {"id": "F-02", "areas": ["../fora"], "depends_on": []},
-    ])
+    plan = _plan(
+        [
+            {"id": "F-01", "areas": ["/etc"], "depends_on": []},
+            {"id": "F-02", "areas": ["../fora"], "depends_on": []},
+        ]
+    )
     errors = fb.validate_plan(plan, features)
     assert any("F-01" in error for error in errors)
     assert any("F-02" in error for error in errors)
@@ -146,44 +166,55 @@ def test_validate_plan_area_absoluta():
 # Waves
 # ---------------------------------------------------------------------------
 
-def _feature(fid: str, areas: list[str], deps: list[str] | None = None) -> fb.BatchFeature:
+
+def _feature(
+    fid: str, areas: list[str], deps: list[str] | None = None
+) -> fb.BatchFeature:
     return fb.BatchFeature(
         feature_id=fid, demand=fid, areas=areas, depends_on=deps or []
     )
 
 
 def test_compute_waves_independentes_juntas():
-    waves = fb.compute_waves([
-        _feature("F-01", ["src/a/"]),
-        _feature("F-02", ["src/b/"]),
-    ])
+    waves = fb.compute_waves(
+        [
+            _feature("F-01", ["src/a/"]),
+            _feature("F-02", ["src/b/"]),
+        ]
+    )
     assert waves == [["F-01", "F-02"]]
 
 
 def test_compute_waves_dependencia_sequencia():
-    waves = fb.compute_waves([
-        _feature("F-01", ["src/a/"]),
-        _feature("F-02", ["src/b/"], deps=["F-01"]),
-        _feature("F-03", ["src/c/"], deps=["F-01"]),
-    ])
+    waves = fb.compute_waves(
+        [
+            _feature("F-01", ["src/a/"]),
+            _feature("F-02", ["src/b/"], deps=["F-01"]),
+            _feature("F-03", ["src/c/"], deps=["F-01"]),
+        ]
+    )
     assert waves == [["F-01"], ["F-02", "F-03"]]
 
 
 def test_compute_waves_overlap_de_area_separa():
-    waves = fb.compute_waves([
-        _feature("F-01", ["src/api/"]),
-        _feature("F-02", ["src/api/users/"]),  # prefixo → conflito
-        _feature("F-03", ["src/ui/"]),
-    ])
+    waves = fb.compute_waves(
+        [
+            _feature("F-01", ["src/api/"]),
+            _feature("F-02", ["src/api/users/"]),  # prefixo → conflito
+            _feature("F-03", ["src/ui/"]),
+        ]
+    )
     assert waves == [["F-01", "F-03"], ["F-02"]]
 
 
 def test_compute_waves_ciclo_detectado():
     with pytest.raises(fb.FeatureBatchError, match="cíclica"):
-        fb.compute_waves([
-            _feature("F-01", ["src/a/"], deps=["F-02"]),
-            _feature("F-02", ["src/b/"], deps=["F-01"]),
-        ])
+        fb.compute_waves(
+            [
+                _feature("F-01", ["src/a/"], deps=["F-02"]),
+                _feature("F-02", ["src/b/"], deps=["F-01"]),
+            ]
+        )
 
 
 def test_areas_overlap():
@@ -197,11 +228,13 @@ def test_areas_overlap():
 # Estado do batch
 # ---------------------------------------------------------------------------
 
+
 def test_batch_roundtrip(tmp_path):
     features = _features(2)
     features[0].engine_spec = fb.EngineSpec("codex", "gpt-5.3", "high")
     features[0].cycle_name = "cycle-05-f-01-demanda-1"
     features[0].status = "merged"
+    features[1].reserved_backlog_item = "PB-019"
     batch = fb.FeatureBatch(
         batch_id="batch-01",
         project_root=str(tmp_path / "proj"),
@@ -215,6 +248,25 @@ def test_batch_roundtrip(tmp_path):
     loaded = fb.load_batch(tmp_path / "proj", "batch-01")
     assert loaded.to_dict() == batch.to_dict()
     assert loaded.feature("F-01").engine_spec.label.startswith("codex/gpt-5.3")
+
+
+def test_batch_roundtrip_legado_sem_reserva(tmp_path):
+    batch = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(tmp_path / "proj"),
+        template="feature",
+        features=_features(2),
+        waves=[["F-01", "F-02"]],
+    )
+    legacy = batch.to_dict()
+
+    loaded = fb.FeatureBatch.from_dict(legacy)
+
+    assert [feature.reserved_backlog_item for feature in loaded.features] == [
+        None,
+        None,
+    ]
+    assert loaded.to_dict() == legacy
 
 
 def test_new_batch_id_incrementa(tmp_path):
@@ -245,6 +297,7 @@ def test_batch_fora_de_worktrees(tmp_path):
 # Orquestrador — unidades
 # ---------------------------------------------------------------------------
 
+
 def _batch(tmp_path, features, waves) -> fb.FeatureBatch:
     return fb.FeatureBatch(
         batch_id="batch-01",
@@ -273,8 +326,92 @@ def test_engine_cli_flags():
     assert fp._engine_cli_flags(None) == []
     assert fp._engine_cli_flags(fb.EngineSpec("claude")) == ["--claude"]
     assert fp._engine_cli_flags(fb.EngineSpec("codex", "gpt-5.3", "high")) == [
-        "--codex", "gpt-5.3", "--effort", "high",
+        "--codex",
+        "gpt-5.3",
+        "--effort",
+        "high",
     ]
+
+
+def test_reserva_pbs_da_wave_a_partir_do_backlog_atual(tmp_path):
+    features = [
+        _feature("F-01", ["src/a/"]),
+        _feature("F-02", ["src/b/"]),
+        _feature("F-03", ["src/c/"]),
+        _feature("F-04", ["src/d/"]),
+    ]
+    features[1].demand = "Implementar a demanda já registrada como PB-007"
+    features[2].status = "setup"  # ciclo legado: não recebe reserva retroativa
+    features[3].demand = "A wave futura já referencia PB-019"
+    batch = _batch(tmp_path, features, [["F-01", "F-02", "F-03"], ["F-04"]])
+    root = Path(batch.project_root)
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "PROJECT_BACKLOG.md").write_text(
+        "# Backlog\n\n| ID | Título |\n|---|---|\n"
+        "| PB-002 | antiga |\n| PB-018 | atual |\n",
+        encoding="utf-8",
+    )
+
+    fp._reserve_wave_backlog_items(batch, batch.waves[0])
+
+    # PB-019 foi explicitamente destinado à wave futura, então a alocação
+    # nova desta wave o pula sem reservar prematuramente a própria F-04.
+    assert features[0].reserved_backlog_item == "PB-020"
+    assert features[1].reserved_backlog_item == "PB-007"
+    assert features[2].reserved_backlog_item is None
+    assert features[3].reserved_backlog_item is None
+
+
+def test_reserva_da_wave_seguinte_rele_o_backlog_e_e_idempotente(tmp_path):
+    features = [
+        _feature("F-01", ["src/a/"]),
+        _feature("F-02", ["src/b/"]),
+        _feature("F-03", ["src/c/"]),
+    ]
+    batch = _batch(tmp_path, features, [["F-01", "F-02"], ["F-03"]])
+    root = Path(batch.project_root)
+    (root / "docs").mkdir(parents=True)
+    backlog = root / "docs" / "PROJECT_BACKLOG.md"
+    backlog.write_text("| PB-009 | existente |\n", encoding="utf-8")
+
+    fp._reserve_wave_backlog_items(batch, batch.waves[0])
+    assert [feature.reserved_backlog_item for feature in features] == [
+        "PB-010",
+        "PB-011",
+        None,
+    ]
+
+    # Uma retomada da mesma wave preserva as reservas. Antes da wave seguinte,
+    # um merge/push avançou o backlog e precisa definir o novo ponto de partida.
+    fp._reserve_wave_backlog_items(batch, batch.waves[0])
+    backlog.write_text("| PB-025 | vindo de merge/push |\n", encoding="utf-8")
+    features[0].status = features[1].status = "merged"
+    fp._reserve_wave_backlog_items(batch, batch.waves[1])
+    assert features[2].reserved_backlog_item == "PB-026"
+
+
+def test_execute_persiste_reserva_antes_do_primeiro_setup(tmp_path, monkeypatch):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    feature = _feature("F-01", ["src/a/"])
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    root = Path(batch.project_root)
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "PROJECT_BACKLOG.md").write_text(
+        "| PB-004 | existente |\n", encoding="utf-8"
+    )
+    fb.save_batch(batch)
+
+    def interrupted_setup(*args, **kwargs):
+        raise RuntimeError("setup interrompido")
+
+    monkeypatch.setattr(fp, "_setup_feature_cycle", interrupted_setup)
+
+    with pytest.raises(RuntimeError, match="setup interrompido"):
+        fp._execute_batch(batch, Namespace(verbose=False))
+
+    persisted = fb.load_batch(root, batch.batch_id)
+    assert persisted.feature("F-01").status == "planned"
+    assert persisted.feature("F-01").reserved_backlog_item == "PB-005"
 
 
 def test_skip_orphans(tmp_path):
@@ -296,7 +433,10 @@ def test_close_wave_sucesso_e_falha(tmp_path, monkeypatch):
     features = [_feature("F-01", ["src/a/"]), _feature("F-02", ["src/b/"])]
     batch = _batch(tmp_path, features, [["F-01", "F-02"]])
     root = Path(batch.project_root)
-    for feature, name in ((features[0], "cycle-02-f-01-a"), (features[1], "cycle-03-f-02-b")):
+    for feature, name in (
+        (features[0], "cycle-02-f-01-a"),
+        (features[1], "cycle-03-f-02-b"),
+    ):
         feature.status = "done"
         feature.cycle_name = name
     fb.save_batch(batch)
@@ -370,10 +510,12 @@ def test_run_wave_gate_aprovado_inline(tmp_path, monkeypatch):
     batch = _batch(tmp_path, features, [["F-01"]])
     fb.save_batch(batch)
 
-    states = iter([
-        ("feature.scope_gate", "awaiting_approval"),  # primeiro run para no gate
-        ("feature.end", "done"),                      # após approve, conclui
-    ])
+    states = iter(
+        [
+            ("feature.scope_gate", "awaiting_approval"),  # primeiro run para no gate
+            ("feature.end", "done"),  # após approve, conclui
+        ]
+    )
     current = {"value": ("feature.scope_gate", "awaiting_approval")}
 
     def fake_cycle_state(root, name):
@@ -398,6 +540,83 @@ def test_run_wave_gate_aprovado_inline(tmp_path, monkeypatch):
     assert spawned_commands[1][:2] == ["approve", "--auto"]
 
 
+def test_questions_gate_exige_mensagem_e_encaminha_no_approve(tmp_path, monkeypatch):
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "gate"
+    feature.cycle_name = "c-f01"
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    spawned_commands: list[list[str]] = []
+    answers = iter(["a", "", "a", "  1. streaming; 2. histórico na sessão  "])
+
+    monkeypatch.setattr(
+        fp,
+        "_cycle_state",
+        lambda root, name: ("feature.questions", "awaiting_approval"),
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(
+        fp,
+        "_spawn",
+        lambda batch_arg, feature_arg, args, *, command: (
+            spawned_commands.append(command) or _DoneProc()
+        ),
+    )
+
+    proc = fp._handle_gate(
+        batch, feature, Namespace(verbose=False, bypass_human_gates=False)
+    )
+
+    assert isinstance(proc, _DoneProc)
+    assert spawned_commands == [
+        [
+            "approve",
+            "1. streaming; 2. histórico na sessão",
+            "--auto",
+            "--cycle",
+            "c-f01",
+        ]
+    ]
+    assert feature.status == "running"
+
+
+def test_questions_gate_cancelado_nao_avanca(tmp_path, monkeypatch):
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "gate"
+    feature.cycle_name = "c-f01"
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    calls = iter(["a", KeyboardInterrupt(), "d"])
+    spawned_commands: list[list[str]] = []
+
+    def fake_input(prompt=""):
+        value = next(calls)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr(
+        fp,
+        "_cycle_state",
+        lambda root, name: ("feature.questions", "awaiting_approval"),
+    )
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(
+        fp,
+        "_spawn",
+        lambda batch_arg, feature_arg, args, *, command: (
+            spawned_commands.append(command) or _DoneProc()
+        ),
+    )
+
+    assert (
+        fp._handle_gate(
+            batch, feature, Namespace(verbose=False, bypass_human_gates=False)
+        )
+        is None
+    )
+    assert spawned_commands == []
+    assert feature.status == "gate"
+
+
 def test_run_wave_pausa_termina_subprocessos(tmp_path, monkeypatch):
     features = [_feature("F-01", ["src/a/"])]
     features[0].status = "blocked"
@@ -416,10 +635,16 @@ def test_run_wave_pausa_termina_subprocessos(tmp_path, monkeypatch):
 # Integração CLI
 # ---------------------------------------------------------------------------
 
+
 def test_cmd_feature_multiplas_demandas_sem_parallel():
     args = Namespace(
-        command="feature", process=None, demand=["a", "b"], feature_input=None,
-        parallel=False, resume=None, template="feature",
+        command="feature",
+        process=None,
+        demand=["a", "b"],
+        feature_input=None,
+        parallel=False,
+        resume=None,
+        template="feature",
     )
     with pytest.raises(ValueError, match="--parallel"):
         cli_main.cmd_feature(args)
@@ -431,9 +656,7 @@ def test_cmd_feature_parallel_roteia_para_orquestrador(monkeypatch):
     def fake_run(args):
         called["args"] = args
 
-    monkeypatch.setattr(
-        "ft.cli.feature_parallel.run_parallel_batch", fake_run
-    )
+    monkeypatch.setattr("ft.cli.feature_parallel.run_parallel_batch", fake_run)
     args = Namespace(command="feature", process=None, parallel=True, resume=None)
     cli_main.cmd_feature(args)
     assert called["args"] is args
@@ -465,6 +688,7 @@ def test_setup_feature_cycle_cria_ciclo_sem_executar(tmp_path, monkeypatch):
 
     features = fb.build_features([("Busca por telefone", None), ("Dark mode", None)])
     features[0].engine_spec = fb.EngineSpec("codex", "gpt-5.3")
+    features[0].reserved_backlog_item = "PB-019"
     batch = fb.FeatureBatch(
         batch_id="batch-01",
         project_root=str(root),
@@ -485,14 +709,19 @@ def test_setup_feature_cycle_cria_ciclo_sem_executar(tmp_path, monkeypatch):
     # Ciclo preparado no primeiro node, sem nenhum step executado.
     assert state["current_node"]
     assert not state.get("completed_nodes")
-    assert (worktree / "docs" / "feature-request.md").read_text(
-        encoding="utf-8"
-    ).startswith("Busca por telefone")
+    assert (worktree / "docs" / "feature-request.md").read_text(encoding="utf-8") == (
+        "---\nreserved_backlog_item: PB-019\n---\n\nBusca por telefone\n"
+    )
+    assert features[0].demand == "Busca por telefone"
 
     # Segundo setup coexiste com o primeiro (force interno do batch).
     fp._setup_feature_cycle(batch, features[1], Namespace(verbose=False))
     assert features[1].cycle_name != features[0].cycle_name
-    assert (paths.worktrees_home(root) / features[1].cycle_name).is_dir()
+    second_worktree = paths.worktrees_home(root) / features[1].cycle_name
+    assert second_worktree.is_dir()
+    assert (second_worktree / "docs" / "feature-request.md").read_text(
+        encoding="utf-8"
+    ) == "Dark mode\n"
 
 
 def test_primeiro_batch_planeja_sem_sujar_checkout_e_materializa_no_setup(
@@ -550,10 +779,13 @@ def test_primeiro_batch_planeja_sem_sujar_checkout_e_materializa_no_setup(
     assert first.cycle_name is not None
     worktree = paths.worktrees_home(root) / first.cycle_name
     assert paths.project_named_process_file(worktree, "feature").is_file()
-    assert subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout == ""
+    assert (
+        subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        == ""
+    )

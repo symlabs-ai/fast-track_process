@@ -230,13 +230,13 @@ def test_merge_conflict_keeps_diff3_markers(project, fake_engine):
     global_process = fake_engine / "templates" / "feature" / "process.yml"
     local_process.write_text(
         local_process.read_text(encoding="utf-8").replace(
-            'version: "1.0.0"', 'version: "1.5.0-fork"'
+            'version: "1.1.0"', 'version: "1.5.0-fork"'
         ),
         encoding="utf-8",
     )
     global_process.write_text(
         global_process.read_text(encoding="utf-8").replace(
-            'version: "1.0.0"', 'version: "2.0.0"'
+            'version: "1.1.0"', 'version: "2.0.0"'
         ),
         encoding="utf-8",
     )

@@ -3250,6 +3250,53 @@ nodes:
         assert not screenshots_dir.exists()
         assert not marker.exists()
 
+    def test_no_pre_seed_can_preserve_cycle_outputs_for_reentry(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        docs_dir = project_root / "docs"
+        docs_dir.mkdir(parents=True)
+        state_dir.mkdir()
+        draft = docs_dir / "feature.md"
+        draft.write_text("# Draft preservado\n")
+
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: test_process
+version: "0.1.0"
+title: "Test"
+artifact_policy:
+  cycle:
+    - docs/feature.md
+nodes:
+  - id: feature.discovery
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: Discovery
+    outputs:
+      - docs/feature.md
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        runner._clear_no_pre_seed_outputs(
+            runner.graph.get_node("feature.discovery")
+        )
+
+        assert draft.read_text() == "# Draft preservado\n"
+
     def test_no_pre_seed_output_is_removed_before_document_delegation(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"
@@ -3684,6 +3731,28 @@ class TestRunValidators:
         assert len(result.items) == 2
         assert result.items[0].passed
         assert not result.items[1].passed
+
+    def test_command_succeeds_accepts_per_validator_timeout(self, tmp_path):
+        from ft.engine.graph import Node
+
+        node = Node(
+            id="x",
+            type="gate",
+            title="X",
+            validators=[
+                {
+                    "command_succeeds": {
+                        "command": "python -c 'import time; time.sleep(0.1)'",
+                        "timeout": 0.01,
+                    }
+                }
+            ],
+        )
+
+        result = run_validators(node, str(tmp_path))
+
+        assert not result.passed
+        assert "0.01s" in result.feedback
 
     def test_retryable_when_llm_executor(self, tmp_path):
         from ft.engine.graph import Node

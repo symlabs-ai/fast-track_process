@@ -70,8 +70,43 @@ def test_summarize_codex_usage_with_default_model(tmp_path):
     )
 
     assert summary["totals"]["total_all_tokens"] == 12
+    assert summary["totals"]["total_without_cache_read_tokens"] == 10
     assert summary["by_model"]["codex/gpt-5.5"]["cached_input_tokens"] == 2
     assert summary["by_model"]["codex/gpt-5.5"]["reasoning_output_tokens"] == 3
+
+
+def test_codex_cached_input_is_subset_not_additive_cache_read(tmp_path):
+    logs = tmp_path / "state" / "llm_logs"
+    logs.mkdir(parents=True)
+    (logs / "20260710-010101__node__run.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 80,
+                    "input_tokens_details": {"cached_tokens": 80},
+                    "output_tokens": 10,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize_llm_usage(
+        logs,
+        default_engine="codex",
+        default_model="gpt-5.6-sol",
+    )
+    totals = summary["totals"]
+
+    assert totals["cached_input_tokens"] == 80
+    assert totals["cache_read_input_tokens"] == 0
+    assert totals["total_all_tokens"] == 110
+    assert totals["total_without_cache_read_tokens"] == 30
+    assert "30 sem cache" in format_llm_usage_lines(summary)[0]
+    assert "cached_input 80" in format_llm_usage_lines(summary)[1]
 
 
 def test_format_lines_are_explicit_about_missing_usage(tmp_path):

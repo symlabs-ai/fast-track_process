@@ -32,24 +32,26 @@ BATCH_FILENAME = "batch.yml"
 
 # Ciclo de vida de uma feature dentro do batch.
 FEATURE_STATUSES = {
-    "planned",     # aguardando a wave
-    "setup",       # ciclo criado, ainda não executando
-    "running",     # subprocess `ft continue --auto` em andamento
-    "gate",        # pausada em human_gate aguardando o stakeholder
-    "blocked",     # ciclo bloqueou (validators/retries esgotados)
-    "done",        # ciclo terminou, aguardando close
-    "merged",      # close + merge concluídos
-    "failed",      # abandonada pelo stakeholder
-    "skipped",     # dependência falhou — nunca executou
+    "planned",  # aguardando a wave
+    "setup",  # ciclo criado, ainda não executando
+    "running",  # subprocess `ft continue --auto` em andamento
+    "gate",  # pausada em human_gate aguardando o stakeholder
+    "blocked",  # ciclo bloqueou (validators/retries esgotados)
+    "done",  # ciclo terminou, aguardando close
+    "merged",  # close + merge concluídos
+    "failed",  # abandonada pelo stakeholder
+    "skipped",  # dependência falhou — nunca executou
 }
 
 _FEATURE_ID_RE = re.compile(r"^F-[0-9]{2,}$")
 _ENGINES = {"claude", "codex", "gemini", "opencode"}
+_BACKLOG_ITEM_RE = re.compile(r"\bPB-(\d+)([A-Z]?)\b", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
 # Engines por feature
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class EngineSpec:
@@ -115,6 +117,7 @@ def parse_engine_list(raw: str) -> list[EngineSpec]:
 # Demandas
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class BatchFeature:
     feature_id: str
@@ -125,6 +128,7 @@ class BatchFeature:
     cycle_name: str | None = None
     status: str = "planned"
     detail: str = ""
+    reserved_backlog_item: str | None = None
 
     @property
     def slug(self) -> str:
@@ -136,7 +140,7 @@ class BatchFeature:
         return first_line[:72]
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "id": self.feature_id,
             "demand": self.demand,
             "engine": self.engine_spec.to_dict() if self.engine_spec else None,
@@ -146,6 +150,9 @@ class BatchFeature:
             "status": self.status,
             "detail": self.detail,
         }
+        if self.reserved_backlog_item:
+            data["reserved_backlog_item"] = self.reserved_backlog_item
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> "BatchFeature":
@@ -158,7 +165,36 @@ class BatchFeature:
             cycle_name=data.get("cycle_name") or None,
             status=str(data.get("status") or "planned"),
             detail=str(data.get("detail") or ""),
+            reserved_backlog_item=(
+                str(data["reserved_backlog_item"]).upper()
+                if data.get("reserved_backlog_item")
+                else None
+            ),
         )
+
+
+def backlog_items(text: str) -> list[str]:
+    """Retorna PBs normalizados na ordem em que aparecem em ``text``."""
+    return [
+        f"PB-{int(match.group(1)):03d}{match.group(2).upper()}"
+        for match in _BACKLOG_ITEM_RE.finditer(text)
+    ]
+
+
+def explicit_backlog_item(demand: str) -> str | None:
+    """PB explicitamente citado por uma demanda, quando inequívoco.
+
+    Uma demanda que cita mais de um PB não identifica qual deles é seu item
+    canônico. Nesse caso o batch falha antes do setup em vez de escolher um ID
+    silenciosamente e orientar o discovery para o item errado.
+    """
+    unique = list(dict.fromkeys(backlog_items(demand)))
+    if len(unique) > 1:
+        raise FeatureBatchError(
+            "demanda referencia mais de um PB; informe um único backlog item: "
+            + ", ".join(unique)
+        )
+    return unique[0] if unique else None
 
 
 def slugify(text: str, max_length: int = 24) -> str:
@@ -245,6 +281,7 @@ def build_features(
 # Plano (LLM declara, engine valida)
 # ---------------------------------------------------------------------------
 
+
 def build_planner_task(features: list[BatchFeature]) -> str:
     """Prompt do planner: declarar áreas e dependências — nunca as waves."""
     demands_block = "\n\n".join(
@@ -317,10 +354,16 @@ def validate_plan(data: object, features: list[BatchFeature]) -> list[str]:
         seen.add(feature_id)
 
         areas = entry.get("areas")
-        if not isinstance(areas, list) or not areas or not all(
-            isinstance(area, str) and area.strip() and not Path(area).is_absolute()
-            and ".." not in Path(area).parts
-            for area in areas
+        if (
+            not isinstance(areas, list)
+            or not areas
+            or not all(
+                isinstance(area, str)
+                and area.strip()
+                and not Path(area).is_absolute()
+                and ".." not in Path(area).parts
+                for area in areas
+            )
         ):
             errors.append(f"{feature_id}.areas exige paths relativos não-vazios")
 
@@ -354,6 +397,7 @@ def apply_plan(data: dict, features: list[BatchFeature]) -> None:
 # ---------------------------------------------------------------------------
 # Waves — determinístico, responsabilidade do engine
 # ---------------------------------------------------------------------------
+
 
 def _areas_overlap(a: str, b: str) -> bool:
     """Duas áreas conflitam quando uma é prefixo da outra (ou iguais)."""
@@ -420,6 +464,7 @@ def compute_waves(features: list[BatchFeature]) -> list[list[str]]:
 # Estado do batch
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class FeatureBatch:
     batch_id: str
@@ -483,7 +528,7 @@ def new_batch_id(project_root: str | Path) -> str:
     if home.is_dir():
         for item in home.iterdir():
             if item.is_dir() and item.name.startswith("batch-"):
-                suffix = item.name[len("batch-"):]
+                suffix = item.name[len("batch-") :]
                 if suffix.isdigit():
                     existing.append(int(suffix))
     return f"batch-{(max(existing) + 1 if existing else 1):02d}"

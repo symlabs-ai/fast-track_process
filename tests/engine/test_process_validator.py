@@ -30,8 +30,15 @@ def _make_graph(nodes_raw: list[dict], meta: dict | None = None) -> ProcessGraph
             branches=n.get("branches"),
             condition=n.get("condition"),
             max_turns=n.get("max_turns"),
+            preserve_outputs_on_reentry=n.get(
+                "preserve_outputs_on_reentry", False
+            ),
             reject_next=n.get("reject_next"),
             on_fail=n.get("on_fail"),
+            hyper_mode_docs=n.get("hyper_mode_docs"),
+            hyper_mode_full_docs=n.get("hyper_mode_full_docs"),
+            hyper_mode_preview_lines=n.get("hyper_mode_preview_lines"),
+            hyper_mode_full_max_lines=n.get("hyper_mode_full_max_lines"),
         ))
     return ProcessGraph(nodes, meta or {"id": "test", "version": "1.0.0"})
 
@@ -61,6 +68,44 @@ class TestStructure:
         ])
         report = validate_process(graph)
         assert any("executor 'llm_designer'" in e.message for e in report.errors)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("hyper_mode_docs", "docs/PRD.md"),
+            ("hyper_mode_full_docs", [""]),
+            ("hyper_mode_preview_lines", -1),
+            ("hyper_mode_full_max_lines", True),
+        ],
+    )
+    def test_invalid_hyper_mode_schema_is_rejected(self, field, value):
+        graph = _make_graph([
+            {"id": "start", "type": "document", "title": "Start", field: value, "next": "end"},
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+
+        report = validate_process(graph)
+
+        assert any(field in error.message for error in report.errors)
+
+    def test_preserve_outputs_on_reentry_must_be_boolean(self):
+        graph = _make_graph([
+            {
+                "id": "start",
+                "type": "document",
+                "title": "Start",
+                "preserve_outputs_on_reentry": "yes",
+                "next": "end",
+            },
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+
+        report = validate_process(graph)
+
+        assert any(
+            "preserve_outputs_on_reentry deve ser booleano" in error.message
+            for error in report.errors
+        )
 
 
 class TestGraphIntegrity:

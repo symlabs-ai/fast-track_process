@@ -5,7 +5,7 @@
 # `.ft/process/feature/` e executa somente a cópia local versionada.
 
 id: feature
-version: "1.0.0"
+version: "1.1.0"
 title: "Feature — Evolução Incremental"
 
 execution_policy:
@@ -59,6 +59,7 @@ artifact_policy:
     - docs/feature.md
     - docs/feature-plan.md
     - docs/implementation-report.md
+    - docs/feature-validation.json
     - docs/feature-review.md
     - docs/stakeholder-feedback.md
     - docs/feature-result.md
@@ -98,6 +99,26 @@ nodes:
 
   - id: feature.discovery
     no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    hyper_mode_docs:
+      - feature-request.md
+      - feature-discovery.md
+      - feature-questions.md
+      - feature.md
+      - feature-plan.md
+      - PRD.md
+      - TECH_STACK.md
+      - tech_stack.md
+      - PROJECT_BACKLOG.md
+      - FEATURES.md
+      - ui_criteria.md
+      - api_contract.md
+    hyper_mode_full_docs:
+      - feature-request.md
+      - feature-discovery.md
+      - feature-questions.md
+    hyper_mode_preview_lines: 40
+    hyper_mode_full_max_lines: 300
     type: discovery
     title: "Elucidar Demanda e Planejar Feature"
     description: >-
@@ -133,6 +154,11 @@ nodes:
       - o diretório indicado por `product_root` em
         docs/feature-baseline.yml (`project/` ou `src/`) e seus testes;
       - a mensagem de aprovação/rejeição mais recente, quando houver.
+
+      Quando feature-request.md contiver metadata do batch com
+      `reserved_backlog_item: PB-NNN`, use exatamente esse ID para esta demanda.
+      A reserva é determinística e evita que features da mesma wave criem o
+      mesmo PB; não a substitua nem crie outro PB.
 
       Determine se a demanda é:
       - new: uma única capacidade nova;
@@ -246,11 +272,29 @@ nodes:
 
   - id: feature.implement
     type: build
+    hyper_mode_docs:
+      - feature-request.md
+      - feature.md
+      - feature-plan.md
+      - TECH_STACK.md
+      - tech_stack.md
+      - ui_criteria.md
+      - api_contract.md
+      - implementation-report.md
+      - feature-review.md
+      - stakeholder-feedback.md
+    hyper_mode_full_docs:
+      - feature.md
+      - feature-plan.md
+      - stakeholder-feedback.md
+    hyper_mode_preview_lines: 40
+    hyper_mode_full_max_lines: 400
     title: "Implementar Feature e Testes"
     description: >-
       Implementa apenas o escopo aprovado, atualiza contratos afetados e cria
-      testes. Toda execução e toda correção precisam terminar com test e build
-      verdes antes de chegar ao aceite.
+      testes. O agente itera com testes focais; o gate determinístico executa
+      uma única validação completa pós-implementação e grava seu receipt antes
+      de seguir para a revisão.
     sprint: feature-02-build
     executor: claude
     max_turns: 100
@@ -275,21 +319,41 @@ nodes:
       2. Atualize api_contract/ui_criteria apenas quando o plano exigir.
       3. Não recrie scaffold, stack, Makefile ou infraestrutura do produto.
       4. Não atualize FEATURES nem conclua o PB antes do aceite humano.
-      5. Use `.ft/process/feature/scripts/product.sh test` e `build`; o helper
-         resolve deterministicamente `project/` ou `src/` sem recriar layout.
+      5. Durante a implementação, rode somente os testes focais necessários com
+         `.ft/process/feature/scripts/product.sh focal -- <comando> [args...]`.
+         Não repita a suíte completa: após sua entrega, o gate determinístico
+         executará `full --record docs/feature-validation.json`, cobrindo test e
+         build e vinculando o resultado ao snapshot executável do produto.
       6. Gere docs/implementation-report.md com uma linha PASS/FAIL por AC-*,
          comandos executados, arquivos alterados, compatibilidade e evidências.
       7. Em uma correção solicitada, considere o feedback mais recente e mantenha
          todo o restante aprovado funcionando.
     validators:
       - file_exists: docs/implementation-report.md
-      - command_succeeds: "bash .ft/process/feature/scripts/product.sh test"
-      - command_succeeds: "bash .ft/process/feature/scripts/product.sh build"
-      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py implementation"
+      - command_succeeds:
+          command: >-
+            python .ft/process/feature/scripts/validate_feature.py implementation
+            && bash .ft/process/feature/scripts/product.sh full --record
+            docs/feature-validation.json
+          timeout: 300
     next: feature.review
 
   - id: feature.review
     type: review
+    hyper_mode_docs:
+      - feature.md
+      - feature-plan.md
+      - implementation-report.md
+      - TECH_STACK.md
+      - tech_stack.md
+      - ui_criteria.md
+      - api_contract.md
+    hyper_mode_full_docs:
+      - feature.md
+      - feature-plan.md
+      - implementation-report.md
+    hyper_mode_preview_lines: 40
+    hyper_mode_full_max_lines: 400
     title: "Revisão Independente da Feature"
     description: >-
       Audita diff, testes e evidências contra cada AC-*, procurando regressões,
@@ -303,7 +367,14 @@ nodes:
       - docs/feature-review.md
     prompt: |
       Faça uma revisão independente. Leia feature.md, feature-plan.md,
-      implementation-report.md, o diff do ciclo, código e testes.
+      implementation-report.md, feature-validation.json, o diff do ciclo,
+      código e testes. Confirme o receipt com
+      `.ft/process/feature/scripts/product.sh verify docs/feature-validation.json`.
+
+      Não repita a suíte completa nem o build já atestados pelo receipt. Quando
+      precisar desafiar uma hipótese ou um AC-*, execute somente sondas/testes
+      focais com `product.sh focal -- <comando> [args...]`. Qualquer alteração no
+      produto invalida deterministicamente o receipt e exige nova implementação.
 
       Gere docs/feature-review.md contendo exatamente uma linha
       `Resultado: APPROVED` ou `Resultado: REJECTED`, uma tabela com todos os
@@ -312,6 +383,7 @@ nodes:
       ou se houver alteração material fora do escopo.
     validators:
       - file_exists: docs/feature-review.md
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
       - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py review"
     on_fail:
       human_gate: "A revisão encontrou problemas. Corrija a implementação e rode todos os checks novamente."
@@ -324,7 +396,8 @@ nodes:
     description: >-
       Valide a capacidade implementada e seus AC-*. UI/API sobe pelo serve.sh;
       mudanças internas são avaliadas pelos relatórios e testes. Rejeite com um
-      desvio reproduzível. Toda correção volta à implementação e repete test/build.
+      desvio reproduzível. Toda correção volta à implementação e produz um novo
+      receipt após uma validação completa do estado corrigido.
     sprint: feature-03-acceptance
     executor: python
     env_setup:
@@ -339,6 +412,29 @@ nodes:
   - id: feature.reconcile
     no_pre_seed: true
     type: document
+    hyper_mode_docs:
+      - feature-request.md
+      - feature.md
+      - feature-plan.md
+      - implementation-report.md
+      - feature-review.md
+      - stakeholder-feedback.md
+      - PRD.md
+      - TECH_STACK.md
+      - tech_stack.md
+      - ui_criteria.md
+      - api_contract.md
+      - test_data.md
+      - PROJECT_BACKLOG.md
+      - FEATURES.md
+    hyper_mode_full_docs:
+      - feature.md
+      - feature-plan.md
+      - implementation-report.md
+      - feature-review.md
+      - stakeholder-feedback.md
+    hyper_mode_preview_lines: 40
+    hyper_mode_full_max_lines: 400
     title: "Reconciliar Backlog e Catálogo"
     description: >-
       Registra somente a capacidade aceita neste ciclo, preservando todos os IDs
@@ -381,9 +477,9 @@ nodes:
       - Bugs/dívidas/manutenção não criam uma FEAT-* nova.
       - Não decida, adie ou conclua itens de backlog alheios ao ciclo.
       - Releia feature-plan, implementation-report, feature-review, o feedback
-        do stakeholder e o diff. Atualize somente a documentação canônica
-        realmente afetada pelo comportamento, contrato, configuração ou uso da
-        feature; não faça churn em documentos alheios.
+        do stakeholder, feature-validation.json e o diff. Atualize somente a
+        documentação canônica realmente afetada pelo comportamento, contrato,
+        configuração ou uso da feature; não faça churn em documentos alheios.
       - Crie ou atualize sempre CHANGELOG.md na raiz, preservando o formato já
         adotado pelo projeto. Registre de forma humana o PB/FEAT, a mudança
         entregue e qualquer compatibilidade ou migração relevante.
@@ -412,15 +508,16 @@ nodes:
     type: gate
     title: "Gate Final da Feature"
     description: >-
-      Confirma novamente código verde e documentos reconciliados antes de
-      declarar a worktree pronta para merge.
+      Confirma que o código ainda corresponde ao snapshot do receipt completo
+      pós-implementação e valida os documentos reconciliados antes de declarar
+      a worktree pronta para merge. Se qualquer arquivo, lockfile, script,
+      ferramenta ou comando mudou, o receipt falha e a suíte deve ser refeita.
     sprint: feature-03-acceptance
     executor: python
     outputs:
       - docs/feature-result.md
     validators:
-      - command_succeeds: "bash .ft/process/feature/scripts/product.sh test"
-      - command_succeeds: "bash .ft/process/feature/scripts/product.sh build"
+      - command_succeeds: "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
       - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py reconcile"
     next: feature.end
 

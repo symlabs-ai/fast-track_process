@@ -37,6 +37,24 @@ class TestScanExistingDocs:
         docs = scan_existing_docs(str(docs_dir))
         assert len(docs["hipotese.md"].splitlines()) == 15
 
+    def test_allowlist_selects_exact_docs_and_supports_docs_prefix(self, tmp_path):
+        docs_dir = tmp_path / "docs"
+        nested = docs_dir / "contracts"
+        nested.mkdir(parents=True)
+        (docs_dir / "keep.md").write_text("keep")
+        (docs_dir / "omit.md").write_text("omit")
+        (nested / "api.md").write_text("api")
+
+        docs = scan_existing_docs(
+            str(tmp_path),
+            allowlist=["docs/keep.md", "contracts/api.md", "../escape.md"],
+        )
+
+        assert docs == {"keep.md": "keep", "contracts/api.md": "api"}
+
+    def test_empty_allowlist_disables_context(self, docs_dir):
+        assert scan_existing_docs(str(docs_dir), allowlist=[]) == {}
+
 
 class TestShouldSkipNode:
     def test_skip_hipotese_when_exists(self):
@@ -76,6 +94,27 @@ class TestHyperModePrompt:
         assert "linha 1" in result
         assert "linha 2" not in result
         assert "NAO releia este arquivo inteiro" in result
+
+    def test_configures_full_docs_and_independent_line_limits(self):
+        docs = {
+            "preview.md": "\n".join(f"preview {i}" for i in range(4)),
+            "detail.md": "\n".join(f"detail {i}" for i in range(4)),
+            "handoff.md": "\n".join(f"handoff {i}" for i in range(4)),
+        }
+
+        result = hyper_mode_prompt(
+            docs,
+            "Tarefa original",
+            preview_lines=1,
+            full_docs=["docs/detail.md"],
+            full_max_lines=2,
+        )
+
+        assert "preview 0" in result and "preview 1" not in result
+        assert "detail 0" in result and "detail 1" in result
+        assert "detail 2" not in result
+        assert "### detail.md (INTEGRAL)" in result
+        assert "### handoff.md (INTEGRAL)" not in result
 
 
 class TestBuildRejectionPrompt:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -16,12 +17,12 @@ from ft.engine.layout import validate_template_is_pristine
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import VALIDATOR_REGISTRY, run_validators
 
-
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "templates" / "feature"
 PROCESS = TEMPLATE / "process.yml"
 VALIDATOR = TEMPLATE / "scripts" / "validate_feature.py"
 PRODUCT_HELPER = TEMPLATE / "scripts" / "product.sh"
+PRODUCT_RECEIPT = TEMPLATE / "scripts" / "product_receipt.py"
 
 
 BACKLOG = """# PROJECT_BACKLOG
@@ -78,7 +79,9 @@ def _write(root: Path, relative: str, content: str) -> None:
 
 
 def _base_project(tmp_path: Path, product_dir: str = "project") -> Path:
-    _write(tmp_path, "CHANGELOG.md", "# Changelog\n\n## Histórico\n\n- PB-001 entregue.\n")
+    _write(
+        tmp_path, "CHANGELOG.md", "# Changelog\n\n## Histórico\n\n- PB-001 entregue.\n"
+    )
     _write(tmp_path, "docs/feature-request.md", "Adicionar busca por telefone.\n")
     _write(tmp_path, "docs/PRD.md", "# PRD\n\nProduto existente.\n")
     _write(tmp_path, "docs/PROJECT_BACKLOG.md", BACKLOG)
@@ -116,6 +119,54 @@ def _snapshot_baseline(root: Path) -> None:
     result = _run_validator(root, "baseline")
     assert result.returncode == 0, result.stderr
     assert (root / "docs" / "feature-baseline.yml").is_file()
+
+
+def _receipt_project(tmp_path: Path) -> Path:
+    root = _base_project(tmp_path)
+    scripts = root / ".ft" / "process" / "feature" / "scripts"
+    scripts.mkdir(parents=True)
+    _write(root, ".ft/manifest.yml", "schema_version: 2\ndefault_process: feature\n")
+    shutil.copy2(PRODUCT_HELPER, scripts / "product.sh")
+    shutil.copy2(PRODUCT_RECEIPT, scripts / "product_receipt.py")
+    _write(root, "project/app.py", "VALUE = 1\n")
+    _write(root, "requirements.txt", "example==1\n")
+    _write(
+        root,
+        "project/Makefile",
+        "test:\n\t@printf 'test\\n' >> ../validation-calls.log\n\n"
+        "build:\n\t@printf 'build\\n' >> ../validation-calls.log\n\n"
+        "run:\n\t@true\n\n"
+        "url:\n\t@echo http://127.0.0.1:8021\n",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=root,
+        check=True,
+    )
+    return root
+
+
+def _run_product_helper(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(root / ".ft/process/feature/scripts/product.sh"), *args],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
 
 
 def _free_port() -> int:
@@ -208,9 +259,40 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert "product.sh build" in raw
     assert "cd project" not in raw
     assert nodes["feature.implement"].write_scope[:2] == ["project", "src"]
+    assert nodes["feature.implement"].validators == [
+        {"file_exists": "docs/implementation-report.md"},
+        {
+            "command_succeeds": {
+                "command": (
+                    "python .ft/process/feature/scripts/validate_feature.py "
+                    "implementation && bash .ft/process/feature/scripts/product.sh "
+                    "full --record docs/feature-validation.json"
+                ),
+                "timeout": 300,
+            }
+        },
+    ]
+    assert nodes["feature.review"].validators == [
+        {"file_exists": "docs/feature-review.md"},
+        {
+            "command_succeeds": "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
+        },
+        {
+            "command_succeeds": "python .ft/process/feature/scripts/validate_feature.py review"
+        },
+    ]
+    assert nodes["feature.final_gate"].validators == [
+        {
+            "command_succeeds": "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
+        },
+        {
+            "command_succeeds": "python .ft/process/feature/scripts/validate_feature.py reconcile"
+        },
+    ]
 
     policy = graph.meta["artifact_policy"]
     assert "CHANGELOG.md" in policy["canonical"]
+    assert "docs/feature-validation.json" in policy["cycle"]
     assert not (set(policy["canonical"]) & set(policy["cycle"]))
     environment = yaml.safe_load((TEMPLATE / "environment.yml").read_text())
     assert environment == {
@@ -229,6 +311,204 @@ def test_feature_validator_baseline_and_clear_discovery_pass(tmp_path):
 
     assert baseline.returncode == 0, baseline.stderr
     assert discovery.returncode == 0, discovery.stderr
+
+
+def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
+    root = _receipt_project(tmp_path)
+    receipt_path = root / "docs" / "feature-validation.json"
+
+    full = _run_product_helper(root, "full", "--record", "docs/feature-validation.json")
+
+    assert full.returncode == 0, full.stderr
+    assert (root / "validation-calls.log").read_text(
+        encoding="utf-8"
+    ) == "test\nbuild\n"
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["kind"] == "ft.feature.product-validation"
+    assert payload["result"] == "pass"
+    assert payload["fingerprint"].startswith("sha256:")
+    assert payload["commands"] == [
+        [
+            "env",
+            "-u",
+            "MAKEFLAGS",
+            "-u",
+            "MFLAGS",
+            "-u",
+            "GNUMAKEFLAGS",
+            "make",
+            "-C",
+            "project",
+            "test",
+        ],
+        [
+            "env",
+            "-u",
+            "MAKEFLAGS",
+            "-u",
+            "MFLAGS",
+            "-u",
+            "GNUMAKEFLAGS",
+            "make",
+            "-C",
+            "project",
+            "build",
+        ],
+    ]
+    assert set(payload["tools"]) == {"bash", "git", "make", "node", "npm", "python"}
+    recorded_paths = {item["path"] for item in payload["files"]}
+    assert "project/app.py" in recorded_paths
+    assert "requirements.txt" in recorded_paths
+    assert ".ft/process/feature/scripts/product.sh" in recorded_paths
+    assert ".ft/process/feature/scripts/product_receipt.py" in recorded_paths
+
+    verified = _run_product_helper(root, "verify", "docs/feature-validation.json")
+
+    assert verified.returncode == 0, verified.stderr
+    assert "VERIFIED" in verified.stdout
+    assert (root / "validation-calls.log").read_text(
+        encoding="utf-8"
+    ) == "test\nbuild\n"
+
+
+def test_feature_implementation_validation_fails_before_full_suite(tmp_path):
+    root = _receipt_project(tmp_path)
+    _clear_discovery(root)
+    _snapshot_baseline(root)
+    # Há mudança de produto/teste potencial, mas o relatório estrutural exigido
+    # está ausente. O comando composto deve parar antes de make test/build.
+    _write(root, "project/test_app.py", "def test_value():\n    assert True\n")
+    node = load_graph(PROCESS).nodes["feature.implement"]
+
+    result = run_validators(node, str(root), work_dir=str(root))
+
+    assert not result.passed
+    assert not (root / "validation-calls.log").exists()
+    assert not (root / "docs" / "feature-validation.json").exists()
+
+
+def test_feature_product_verify_rejects_source_lockfile_and_receipt_tampering(tmp_path):
+    root = _receipt_project(tmp_path)
+    receipt = "docs/feature-validation.json"
+    product_script = root / ".ft/process/feature/scripts/product.sh"
+    original_product_script = product_script.read_text(encoding="utf-8")
+    full = _run_product_helper(root, "full", "--record", receipt)
+    assert full.returncode == 0, full.stderr
+
+    _write(root, "project/app.py", "VALUE = 2\n")
+    changed_source = _run_product_helper(root, "verify", receipt)
+    assert changed_source.returncode == 1
+    assert "project/app.py" in changed_source.stderr
+
+    _write(root, "project/app.py", "VALUE = 1\n")
+    _write(root, "requirements.txt", "example==2\n")
+    changed_lockfile = _run_product_helper(root, "verify", receipt)
+    assert changed_lockfile.returncode == 1
+    assert "requirements.txt" in changed_lockfile.stderr
+
+    _write(root, "requirements.txt", "example==1\n")
+    product_script.write_text(
+        original_product_script + "\n# changed\n", encoding="utf-8"
+    )
+    changed_script = _run_product_helper(root, "verify", receipt)
+    assert changed_script.returncode == 1
+    assert ".ft/process/feature/scripts/product.sh" in changed_script.stderr
+
+    product_script.write_text(original_product_script, encoding="utf-8")
+    receipt_path = root / receipt
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["commands"][0][-1] = "test-fast"
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+    tampered = _run_product_helper(root, "verify", receipt)
+    assert tampered.returncode == 1
+    assert "fingerprint interno" in tampered.stderr
+
+
+def test_feature_product_failed_full_invalidates_old_receipt(tmp_path):
+    root = _receipt_project(tmp_path)
+    receipt_path = root / "docs/feature-validation.json"
+    passed = _run_product_helper(
+        root, "full", "--record", "docs/feature-validation.json"
+    )
+    assert passed.returncode == 0, passed.stderr
+    assert receipt_path.is_file()
+    _write(
+        root,
+        "project/Makefile",
+        "test:\n\t@false\n\nbuild:\n\t@true\n\nrun:\n\t@true\n\nurl:\n\t@echo http://127.0.0.1:8021\n",
+    )
+
+    failed = _run_product_helper(
+        root, "full", "--record", "docs/feature-validation.json"
+    )
+
+    assert failed.returncode != 0
+    assert "receipt não foi gravado" in failed.stderr
+    assert not receipt_path.exists()
+
+
+def test_feature_product_receipt_symlink_never_deletes_target(tmp_path):
+    root = _receipt_project(tmp_path)
+    target = root / "CHANGELOG.md"
+    expected = target.read_text(encoding="utf-8")
+    receipt_path = root / "docs" / "feature-validation.json"
+    receipt_path.symlink_to("../CHANGELOG.md")
+
+    result = _run_product_helper(
+        root, "full", "--record", "docs/feature-validation.json"
+    )
+
+    assert result.returncode != 0
+    assert "symlink" in result.stderr
+    assert target.read_text(encoding="utf-8") == expected
+    assert receipt_path.is_symlink()
+
+
+def test_feature_product_full_neutralizes_makeflags(tmp_path, monkeypatch):
+    root = _receipt_project(tmp_path)
+    monkeypatch.setenv("MAKEFLAGS", "-n -i")
+    monkeypatch.setenv("MFLAGS", "-n")
+    monkeypatch.setenv("GNUMAKEFLAGS", "-n")
+
+    result = _run_product_helper(
+        root, "full", "--record", "docs/feature-validation.json"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (root / "validation-calls.log").read_text(
+        encoding="utf-8"
+    ) == "test\nbuild\n"
+
+
+def test_feature_product_tracks_root_inputs_but_not_reconcile_docs(tmp_path):
+    root = _receipt_project(tmp_path)
+    receipt = "docs/feature-validation.json"
+    _write(root, "shared.mk", "VALUE := one\n")
+    full = _run_product_helper(root, "full", "--record", receipt)
+    assert full.returncode == 0, full.stderr
+
+    _write(root, "docs/PRD.md", "# PRD\n\nReconciliado.\n")
+    docs_only = _run_product_helper(root, "verify", receipt)
+    assert docs_only.returncode == 0, docs_only.stderr
+
+    _write(root, "shared.mk", "VALUE := two\n")
+    changed_input = _run_product_helper(root, "verify", receipt)
+    assert changed_input.returncode == 1
+    assert "shared.mk" in changed_input.stderr
+
+
+def test_feature_product_focal_executes_argv_directly_from_product_root(tmp_path):
+    root = _receipt_project(tmp_path)
+    script = (
+        "from pathlib import Path; Path('../focal.out').write_text('ok;not-a-shell')"
+    )
+
+    focal = _run_product_helper(root, "focal", "--", sys.executable, "-c", script)
+
+    assert focal.returncode == 0, focal.stderr
+    assert (root / "focal.out").read_text(encoding="utf-8") == "ok;not-a-shell"
+    assert not (root / "validation-calls.log").exists()
 
 
 def test_feature_validator_detects_src_product_root(tmp_path):
@@ -269,7 +549,9 @@ def test_feature_discovery_gate_exports_clarification_status(tmp_path):
     assert validation.artifacts == {"clarification_status": "clear"}
 
 
-def test_feature_validator_requires_real_questions_when_clarification_is_required(tmp_path):
+def test_feature_validator_requires_real_questions_when_clarification_is_required(
+    tmp_path,
+):
     root = _base_project(tmp_path)
     _clear_discovery(root)
     _write(root, "docs/feature-discovery.md", "clarification_status: required\n")
@@ -305,13 +587,24 @@ def test_feature_validator_implementation_review_and_reconcile_pass(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(
-        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline"],
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
         cwd=root,
         check=True,
     )
     _write(root, "project/app.py", "VALUE = 2\n")
     _write(root, "project/tests/test_app.py", "def test_value():\n    assert 2 == 2\n")
-    _write(root, "docs/implementation-report.md", "| AC-01 | PASS |\n| AC-02 | PASS |\n")
+    _write(
+        root, "docs/implementation-report.md", "| AC-01 | PASS |\n| AC-02 | PASS |\n"
+    )
     _write(
         root,
         "docs/feature-review.md",
@@ -430,7 +723,9 @@ def test_feature_validator_review_accepts_rejected_with_failed_ac(tmp_path):
     assert review.returncode == 0, review.stderr
 
 
-def test_feature_validator_review_accepts_rejected_with_all_ac_pass_for_scope_regression(tmp_path):
+def test_feature_validator_review_accepts_rejected_with_all_ac_pass_for_scope_regression(
+    tmp_path,
+):
     root = _base_project(tmp_path)
     _clear_discovery(root)
     _write(
@@ -449,7 +744,9 @@ def test_feature_validator_review_accepts_rejected_with_all_ac_pass_for_scope_re
     assert review.returncode == 0, review.stderr
 
 
-def test_feature_validator_review_does_not_treat_technical_fail_kind_as_ac_failure(tmp_path):
+def test_feature_validator_review_does_not_treat_technical_fail_kind_as_ac_failure(
+    tmp_path,
+):
     root = _base_project(tmp_path)
     _clear_discovery(root)
     _write(
@@ -467,7 +764,9 @@ def test_feature_validator_review_does_not_treat_technical_fail_kind_as_ac_failu
     assert review.returncode == 0, review.stderr
 
 
-def test_feature_validator_review_rejects_approved_with_failed_or_ambiguous_ac(tmp_path):
+def test_feature_validator_review_rejects_approved_with_failed_or_ambiguous_ac(
+    tmp_path,
+):
     root = _base_project(tmp_path)
     _clear_discovery(root)
     _write(
@@ -538,7 +837,9 @@ def test_feature_validator_accepts_implementation_under_src(tmp_path):
     )
     _write(root, "src/app.py", "VALUE = 2\n")
     _write(root, "src/tests/test_app.py", "def test_value():\n    assert 2 == 2\n")
-    _write(root, "docs/implementation-report.md", "| AC-01 | PASS |\n| AC-02 | PASS |\n")
+    _write(
+        root, "docs/implementation-report.md", "| AC-01 | PASS |\n| AC-02 | PASS |\n"
+    )
 
     implementation = _run_validator(root, "implementation")
 

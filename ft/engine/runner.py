@@ -56,6 +56,7 @@ from ft.providers.opencode_fallbacks import (
 )
 from ft.engine.parallel import ParallelRunner
 from ft.engine.stakeholder import (
+    DEFAULT_HYPER_MODE_FULL_MAX_LINES,
     scan_existing_docs, hyper_mode_prompt,
     scan_kb_lessons, kb_lessons_prompt,
 )
@@ -2061,7 +2062,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
     def _clear_no_pre_seed_outputs(self, node: Node) -> None:
         """Remove only disposable cycle outputs before forced regeneration."""
-        if not getattr(node, "no_pre_seed", False):
+        if (
+            not getattr(node, "no_pre_seed", False)
+            or getattr(node, "preserve_outputs_on_reentry", False)
+        ):
             return
         root = Path(self.project_root).resolve()
         for output in node.outputs:
@@ -2105,6 +2109,42 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if not excluded:
             return docs
         return {name: content for name, content in docs.items() if name not in excluded}
+
+    def _scan_hyper_mode_docs(self, node: Node) -> dict[str, str]:
+        """Carrega o conjunto de docs configurado para o node atual."""
+        return scan_existing_docs(
+            self.project_root,
+            allowlist=node.hyper_mode_docs,
+        )
+
+    @staticmethod
+    def _hyper_mode_prompt_for_node(
+        node: Node,
+        existing_docs: dict[str, str],
+        original_prompt: str,
+        *,
+        default_preview_lines: int,
+        allow_followup_reads: bool,
+    ) -> str:
+        """Aplica limites opcionais do node sem alterar defaults legados."""
+        preview_lines = (
+            default_preview_lines
+            if node.hyper_mode_preview_lines is None
+            else node.hyper_mode_preview_lines
+        )
+        full_max_lines = (
+            DEFAULT_HYPER_MODE_FULL_MAX_LINES
+            if node.hyper_mode_full_max_lines is None
+            else node.hyper_mode_full_max_lines
+        )
+        return hyper_mode_prompt(
+            existing_docs,
+            original_prompt,
+            preview_lines=preview_lines,
+            allow_followup_reads=allow_followup_reads,
+            full_docs=node.hyper_mode_full_docs,
+            full_max_lines=full_max_lines,
+        )
 
     def _start_llm_log(
         self,
@@ -3065,14 +3105,15 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if node.type in ("discovery", "document", "retro") or opencode_code_node:
             existing = self._filter_no_pre_seed_docs(
                 node,
-                scan_existing_docs(self.project_root),
+                self._scan_hyper_mode_docs(node),
             )
             if existing:
                 is_opencode = selection.engine == "opencode"
-                task_prompt = hyper_mode_prompt(
+                task_prompt = self._hyper_mode_prompt_for_node(
+                    node,
                     existing,
                     task_prompt,
-                    preview_lines=30 if is_opencode else 60,
+                    default_preview_lines=30 if is_opencode else 60,
                     allow_followup_reads=opencode_code_node or not is_opencode,
                 )
                 label = "Hyper-mode code" if opencode_code_node else "Hyper-mode"
@@ -3490,14 +3531,15 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if node.type in ("discovery", "document", "retro") or opencode_code_node:
             existing = self._filter_no_pre_seed_docs(
                 node,
-                scan_existing_docs(self.project_root),
+                self._scan_hyper_mode_docs(node),
             )
             if existing:
                 is_opencode = effective_engine == "opencode"
-                original_task = hyper_mode_prompt(
+                original_task = self._hyper_mode_prompt_for_node(
+                    node,
                     existing,
                     original_task,
-                    preview_lines=30 if is_opencode else 60,
+                    default_preview_lines=30 if is_opencode else 60,
                     allow_followup_reads=opencode_code_node or not is_opencode,
                 )
         if opencode_options.capture_output_path:
@@ -4001,14 +4043,15 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         }
         existing = {
             name: content
-            for name, content in scan_existing_docs(self.project_root).items()
+            for name, content in self._scan_hyper_mode_docs(node).items()
             if name not in output_doc_names
         }
         if existing:
-            task_prompt = hyper_mode_prompt(
+            task_prompt = self._hyper_mode_prompt_for_node(
+                node,
                 existing,
                 task_prompt,
-                preview_lines=25,
+                default_preview_lines=25,
                 allow_followup_reads=False,
             )
             deny_read_paths.extend(f"docs/{name}" for name in existing)

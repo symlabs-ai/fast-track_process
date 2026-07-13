@@ -51,6 +51,7 @@ def _ui():
 # Entrada
 # ---------------------------------------------------------------------------
 
+
 def run_parallel_batch(args) -> None:
     """Entry point chamado por cmd_feature quando --parallel está presente."""
     cli = _cli()
@@ -69,7 +70,11 @@ def run_parallel_batch(args) -> None:
         if batch.status == "done":
             print(ui.warn(f"Batch {batch.batch_id} já concluído."))
             return
-        print(ui.header(f"Retomando batch {batch.batch_id} (wave {batch.current_wave + 1}/{len(batch.waves)})"))
+        print(
+            ui.header(
+                f"Retomando batch {batch.batch_id} (wave {batch.current_wave + 1}/{len(batch.waves)})"
+            )
+        )
     else:
         batch = _plan_batch(args, root)
         if batch is None:
@@ -83,6 +88,7 @@ def run_parallel_batch(args) -> None:
 # ---------------------------------------------------------------------------
 # Planejamento
 # ---------------------------------------------------------------------------
+
 
 def _collect_demands(args) -> list[tuple[str, fb.EngineSpec | None]]:
     positional = [d for d in (getattr(args, "demand", None) or []) if str(d).strip()]
@@ -103,7 +109,10 @@ def _preflight(root: Path, args) -> None:
     """Mesmas garantias do ft feature avulso, mais exclusividade do batch."""
     cli = _cli()
 
-    if not paths.project_manifest(root).is_file() or cli.find_process_yaml(root) is None:
+    if (
+        not paths.project_manifest(root).is_file()
+        or cli.find_process_yaml(root) is None
+    ):
         raise ValueError(
             "ft feature --parallel exige um projeto já inicializado; "
             "execute ft init <nome> --template <template> primeiro"
@@ -111,17 +120,25 @@ def _preflight(root: Path, args) -> None:
     cli._warn_process_drift(root, str(getattr(args, "template", None) or "feature"))
     inside = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
-        cwd=root, capture_output=True, text=True,
+        cwd=root,
+        capture_output=True,
+        text=True,
     )
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=root, capture_output=True, text=True,
+        cwd=root,
+        capture_output=True,
+        text=True,
     )
     if inside.returncode != 0 or head.returncode != 0:
-        raise RuntimeError("ft feature --parallel exige um repositório Git com commit inicial")
+        raise RuntimeError(
+            "ft feature --parallel exige um repositório Git com commit inicial"
+        )
     dirty = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=root, capture_output=True, text=True,
+        cwd=root,
+        capture_output=True,
+        text=True,
     )
     if dirty.stdout.strip():
         raise RuntimeError(
@@ -136,7 +153,9 @@ def _preflight(root: Path, args) -> None:
         )
 
 
-def _write_planner_context(root: Path, batch_directory: Path, features: list[fb.BatchFeature]) -> None:
+def _write_planner_context(
+    root: Path, batch_directory: Path, features: list[fb.BatchFeature]
+) -> None:
     """Contexto hermético para o planner — ele não navega o repositório."""
     context = batch_directory / "context"
     context.mkdir(parents=True, exist_ok=True)
@@ -155,7 +174,9 @@ def _write_planner_context(root: Path, batch_directory: Path, features: list[fb.
 
     tree = subprocess.run(
         ["git", "ls-files"],
-        cwd=root, capture_output=True, text=True,
+        cwd=root,
+        capture_output=True,
+        text=True,
     )
     if tree.returncode == 0:
         lines = tree.stdout.strip().splitlines()[:600]
@@ -216,7 +237,9 @@ def _run_planner(
         errors = fb.validate_plan(data, features)
         if not errors:
             return data
-        feedback = "\n\nO plan.yml anterior falhou na validação:\n- " + "\n- ".join(errors)
+        feedback = "\n\nO plan.yml anterior falhou na validação:\n- " + "\n- ".join(
+            errors
+        )
     raise fb.FeatureBatchError(
         "planner não produziu um plan.yml válido após 2 tentativas; "
         f"inspecione {batch_directory / 'logs'}"
@@ -226,7 +249,11 @@ def _run_planner(
 def _print_plan(batch: fb.FeatureBatch) -> None:
     ui = _ui()
     print()
-    print(ui.header(f"Plano do batch {batch.batch_id} — {len(batch.features)} features, {len(batch.waves)} wave(s)"))
+    print(
+        ui.header(
+            f"Plano do batch {batch.batch_id} — {len(batch.features)} features, {len(batch.waves)} wave(s)"
+        )
+    )
     for wave_index, wave in enumerate(batch.waves, start=1):
         print(f"\n  Wave {wave_index}:")
         for feature_id in wave:
@@ -308,6 +335,7 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
 # Execução
 # ---------------------------------------------------------------------------
 
+
 def _engine_cli_flags(spec: fb.EngineSpec | None) -> list[str]:
     if spec is None:
         return []
@@ -331,7 +359,75 @@ def _cycle_state(root: Path, cycle_name: str) -> tuple[str, str]:
     return str(data.get("current_node") or "?"), str(data.get("node_status") or "?")
 
 
-def _setup_feature_cycle(batch: fb.FeatureBatch, feature: fb.BatchFeature, args) -> None:
+def _reserve_wave_backlog_items(
+    batch: fb.FeatureBatch,
+    wave_ids: list[str],
+) -> None:
+    """Reserva PBs da wave atual sem alterar o checkout do produto.
+
+    A leitura acontece imediatamente antes do setup da wave. Assim, cada wave
+    parte do PROJECT_BACKLOG já atualizado pelos merges (ou pushes) anteriores,
+    enquanto uma retomada reaproveita as reservas persistidas no batch.yml.
+    Features legadas que já saíram de ``planned`` nunca são alteradas.
+    """
+    root = Path(batch.project_root)
+    backlog_path = root / "docs" / "PROJECT_BACKLOG.md"
+    backlog_text = (
+        backlog_path.read_text(encoding="utf-8") if backlog_path.is_file() else ""
+    )
+    backlog_ids = fb.backlog_items(backlog_text)
+    backlog_numbers = [
+        int(item.removeprefix("PB-").rstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+        for item in backlog_ids
+    ]
+    next_number = max(backlog_numbers, default=0) + 1
+
+    # IDs explícitos de qualquer wave e reservas já persistidas não podem ser
+    # escolhidos para uma demanda nova desta wave.
+    used = set(backlog_ids)
+    for feature in batch.features:
+        if feature.reserved_backlog_item:
+            used.add(feature.reserved_backlog_item.upper())
+        # Só fazemos a atribuição na wave atual, mas qualquer PB citado por
+        # outra demanda do batch já está indisponível para alocação automática.
+        # Isso também protege ciclos legados sem lhes acrescentar metadata.
+        used.update(fb.backlog_items(feature.demand))
+
+    planned = [
+        batch.feature(feature_id)
+        for feature_id in wave_ids
+        if batch.feature(feature_id).status == "planned"
+    ]
+    for feature in planned:
+        if feature.reserved_backlog_item:
+            continue
+        explicit = fb.explicit_backlog_item(feature.demand)
+        if explicit:
+            feature.reserved_backlog_item = explicit
+            continue
+        while f"PB-{next_number:03d}" in used:
+            next_number += 1
+        reservation = f"PB-{next_number:03d}"
+        feature.reserved_backlog_item = reservation
+        used.add(reservation)
+        next_number += 1
+
+
+def _feature_request_text(feature: fb.BatchFeature) -> str:
+    """Demanda original com metadata de reserva exclusiva do batch."""
+    if not feature.reserved_backlog_item:
+        return feature.demand
+    return (
+        "---\n"
+        f"reserved_backlog_item: {feature.reserved_backlog_item}\n"
+        "---\n\n"
+        f"{feature.demand}"
+    )
+
+
+def _setup_feature_cycle(
+    batch: fb.FeatureBatch, feature: fb.BatchFeature, args
+) -> None:
     """Cria o ciclo da feature agora (worktree + state), sem executar nodes."""
     cli = _cli()
     root = Path(batch.project_root)
@@ -343,7 +439,7 @@ def _setup_feature_cycle(batch: fb.FeatureBatch, feature: fb.BatchFeature, args)
         command="feature",
         process=None,
         verbose=bool(getattr(args, "verbose", False)),
-        demand=feature.demand,
+        demand=_feature_request_text(feature),
         feature_input=None,
         template=batch.template,
         force=True,  # ciclos do batch coexistem por design
@@ -357,7 +453,9 @@ def _setup_feature_cycle(batch: fb.FeatureBatch, feature: fb.BatchFeature, args)
         _setup_only=True,
     )
     if feature.engine_spec is not None:
-        setattr(namespace, feature.engine_spec.engine, feature.engine_spec.model or True)
+        setattr(
+            namespace, feature.engine_spec.engine, feature.engine_spec.model or True
+        )
         namespace.effort = feature.engine_spec.effort
 
     cli.cmd_feature(namespace)
@@ -366,7 +464,9 @@ def _setup_feature_cycle(batch: fb.FeatureBatch, feature: fb.BatchFeature, args)
     feature.detail = ""
 
 
-def _spawn(batch: fb.FeatureBatch, feature: fb.BatchFeature, args, *, command: list[str]) -> subprocess.Popen:
+def _spawn(
+    batch: fb.FeatureBatch, feature: fb.BatchFeature, args, *, command: list[str]
+) -> subprocess.Popen:
     root = Path(batch.project_root)
     log_dir = fb.batch_dir(root, batch.batch_id) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -384,7 +484,9 @@ def _spawn(batch: fb.FeatureBatch, feature: fb.BatchFeature, args, *, command: l
     )
 
 
-def _spawn_continue(batch: fb.FeatureBatch, feature: fb.BatchFeature, args) -> subprocess.Popen:
+def _spawn_continue(
+    batch: fb.FeatureBatch, feature: fb.BatchFeature, args
+) -> subprocess.Popen:
     command = ["continue", "--auto", "--cycle", str(feature.cycle_name)]
     command += _engine_cli_flags(feature.engine_spec)
     if getattr(args, "bypass_human_gates", False):
@@ -396,9 +498,11 @@ def _print_board(batch: fb.FeatureBatch, wave_ids: list[str]) -> None:
     ui = _ui()
     root = Path(batch.project_root)
     print()
-    print(ui.header(
-        f"[{batch.batch_id}] wave {batch.current_wave + 1}/{len(batch.waves)}"
-    ))
+    print(
+        ui.header(
+            f"[{batch.batch_id}] wave {batch.current_wave + 1}/{len(batch.waves)}"
+        )
+    )
     for feature_id in wave_ids:
         feature = batch.feature(feature_id)
         engine = feature.engine_spec.label if feature.engine_spec else "default"
@@ -406,15 +510,25 @@ def _print_board(batch: fb.FeatureBatch, wave_ids: list[str]) -> None:
         if feature.cycle_name:
             node, _ = _cycle_state(root, feature.cycle_name)
         marker = {
-            "running": "▶", "gate": "⏸", "blocked": "✗", "done": "✓",
-            "merged": "✓✓", "failed": "☠", "skipped": "→", "setup": "…",
+            "running": "▶",
+            "gate": "⏸",
+            "blocked": "✗",
+            "done": "✓",
+            "merged": "✓✓",
+            "failed": "☠",
+            "skipped": "→",
+            "setup": "…",
         }.get(feature.status, "·")
         detail = f" — {feature.detail}" if feature.detail else ""
-        print(f"  {marker} {feature.feature_id} [{engine}] {feature.cycle_name or '(sem ciclo)'} "
-              f"{node} {feature.status}{detail}")
+        print(
+            f"  {marker} {feature.feature_id} [{engine}] {feature.cycle_name or '(sem ciclo)'} "
+            f"{node} {feature.status}{detail}"
+        )
 
 
-def _handle_gate(batch: fb.FeatureBatch, feature: fb.BatchFeature, args) -> subprocess.Popen | None:
+def _handle_gate(
+    batch: fb.FeatureBatch, feature: fb.BatchFeature, args
+) -> subprocess.Popen | None:
     """Gate inline: aprova/rejeita no terminal do orquestrador."""
     ui = _ui()
     root = Path(batch.project_root)
@@ -426,15 +540,31 @@ def _handle_gate(batch: fb.FeatureBatch, feature: fb.BatchFeature, args) -> subp
     print(f"  Ciclo: {feature.cycle_name}")
     print(f"  Node:  {node}")
     print(f"  Worktree: {worktree}")
-    print(f"  Log: {fb.batch_dir(root, batch.batch_id) / 'logs' / (feature.feature_id + '.log')}")
+    print(
+        f"  Log: {fb.batch_dir(root, batch.batch_id) / 'logs' / (feature.feature_id + '.log')}"
+    )
 
     while True:
         try:
-            answer = input("  [a]provar / [r]ejeitar / [d]epois / [p]ausar batch: ").strip().lower()
+            answer = (
+                input("  [a]provar / [r]ejeitar / [d]epois / [p]ausar batch: ")
+                .strip()
+                .lower()
+            )
         except (EOFError, KeyboardInterrupt, OSError):
             answer = "p"
         if answer in {"a", "aprovar", "approve"}:
-            command = ["approve", "--auto", "--cycle", str(feature.cycle_name)]
+            command = ["approve"]
+            if node == "feature.questions":
+                try:
+                    message = input("  Respostas/decisões para o discovery: ").strip()
+                except (EOFError, KeyboardInterrupt, OSError):
+                    message = ""
+                if not message:
+                    print(ui.warn("  Respostas/decisões obrigatórias neste gate."))
+                    continue
+                command.append(message)
+            command += ["--auto", "--cycle", str(feature.cycle_name)]
             command += _engine_cli_flags(feature.engine_spec)
             feature.status = "running"
             feature.detail = ""
@@ -459,15 +589,23 @@ def _handle_gate(batch: fb.FeatureBatch, feature: fb.BatchFeature, args) -> subp
         print(ui.warn("  Opção inválida."))
 
 
-def _handle_blocked(batch: fb.FeatureBatch, feature: fb.BatchFeature, args) -> subprocess.Popen | None:
+def _handle_blocked(
+    batch: fb.FeatureBatch, feature: fb.BatchFeature, args
+) -> subprocess.Popen | None:
     ui = _ui()
     root = Path(batch.project_root)
     print()
     print(ui.fail(f"{feature.feature_id} bloqueou — ciclo {feature.cycle_name}"))
-    print(f"  Log: {fb.batch_dir(root, batch.batch_id) / 'logs' / (feature.feature_id + '.log')}")
+    print(
+        f"  Log: {fb.batch_dir(root, batch.batch_id) / 'logs' / (feature.feature_id + '.log')}"
+    )
     while True:
         try:
-            answer = input("  [r]etentar / [f]alhar feature / [p]ausar batch: ").strip().lower()
+            answer = (
+                input("  [r]etentar / [f]alhar feature / [p]ausar batch: ")
+                .strip()
+                .lower()
+            )
         except (EOFError, KeyboardInterrupt, OSError):
             answer = "p"
         if answer in {"r", "retentar", "retry"}:
@@ -496,7 +634,8 @@ def _skip_orphans(batch: fb.FeatureBatch, wave_ids: list[str]) -> None:
         if feature.status in _TERMINAL:
             continue
         broken = [
-            dep for dep in feature.depends_on
+            dep
+            for dep in feature.depends_on
             if batch.feature(dep).status in {"failed", "skipped"}
         ]
         if broken:
@@ -548,8 +687,12 @@ def _run_wave(batch: fb.FeatureBatch, args) -> None:
                         feature.detail = "rate limit persistente"
                     else:
                         feature.status = "setup"
-                        feature.detail = f"rate limit — respawn {count}/{MAX_RATE_LIMIT_RESPAWNS}"
-                        next_spawn_at[feature_id] = time.monotonic() + RATE_LIMIT_RETRY_SECONDS
+                        feature.detail = (
+                            f"rate limit — respawn {count}/{MAX_RATE_LIMIT_RESPAWNS}"
+                        )
+                        next_spawn_at[feature_id] = (
+                            time.monotonic() + RATE_LIMIT_RETRY_SECONDS
+                        )
                 else:
                     feature.status = "blocked"
                     feature.detail = f"estado inesperado: {status}"
@@ -615,13 +758,17 @@ def _close_wave(batch: fb.FeatureBatch, args) -> bool:
         feature = batch.feature(feature_id)
         if feature.status != "done":
             continue
-        print(ui.info(f"Fechando {feature.feature_id} ({feature.cycle_name}) com merge full…"))
+        print(
+            ui.info(
+                f"Fechando {feature.feature_id} ({feature.cycle_name}) com merge full…"
+            )
+        )
         namespace = argparse.Namespace(
             command="close",
             process=None,
             verbose=bool(getattr(args, "verbose", False)),
             cycle=feature.cycle_name,
-            merge=None,          # close_policy do template decide (feature: full)
+            merge=None,  # close_policy do template decide (feature: full)
             merge_paths=None,
             keep_worktree=False,
             force=False,
@@ -639,13 +786,17 @@ def _close_wave(batch: fb.FeatureBatch, args) -> bool:
         if worktree.exists():
             feature.detail = "close/merge pendente — resolva e rode --resume"
             fb.save_batch(batch)
-            print(ui.fail(
-                f"{feature.feature_id}: close não concluiu (worktree preservado)."
-            ))
-            print(ui.info(
-                f"Resolva (ex.: conflito de merge) e rode: ft close --cycle {feature.cycle_name} "
-                f"--merge full; depois ft feature --parallel --resume {batch.batch_id}"
-            ))
+            print(
+                ui.fail(
+                    f"{feature.feature_id}: close não concluiu (worktree preservado)."
+                )
+            )
+            print(
+                ui.info(
+                    f"Resolva (ex.: conflito de merge) e rode: ft close --cycle {feature.cycle_name} "
+                    f"--merge full; depois ft feature --parallel --resume {batch.batch_id}"
+                )
+            )
             return False
         feature.status = "merged"
         feature.detail = ""
@@ -660,7 +811,8 @@ def _execute_batch(batch: fb.FeatureBatch, args) -> None:
         wave_ids = batch.waves[batch.current_wave]
         _skip_orphans(batch, wave_ids)
         pending = [
-            batch.feature(fid) for fid in wave_ids
+            batch.feature(fid)
+            for fid in wave_ids
             if batch.feature(fid).status not in _TERMINAL
         ]
         if not pending:
@@ -669,12 +821,17 @@ def _execute_batch(batch: fb.FeatureBatch, args) -> None:
             continue
 
         print()
-        print(ui.header(
-            f"Wave {batch.current_wave + 1}/{len(batch.waves)} — "
-            f"{len(pending)} feature(s), max {batch.max_parallel} em paralelo"
-        ))
+        print(
+            ui.header(
+                f"Wave {batch.current_wave + 1}/{len(batch.waves)} — "
+                f"{len(pending)} feature(s), max {batch.max_parallel} em paralelo"
+            )
+        )
 
         # Setup sequencial (git não aceita corrida na criação de worktrees).
+        _reserve_wave_backlog_items(batch, wave_ids)
+        # A reserva precisa sobreviver mesmo se um setup for interrompido.
+        fb.save_batch(batch)
         for feature in pending:
             if feature.status == "planned":
                 _setup_feature_cycle(batch, feature, args)
@@ -685,9 +842,11 @@ def _execute_batch(batch: fb.FeatureBatch, args) -> None:
         except _PauseBatch:
             batch.status = "paused"
             fb.save_batch(batch)
-            print(ui.warn(
-                f"Batch pausado. Retome com: ft feature --parallel --resume {batch.batch_id}"
-            ))
+            print(
+                ui.warn(
+                    f"Batch pausado. Retome com: ft feature --parallel --resume {batch.batch_id}"
+                )
+            )
             return
 
         # Um "done" que regrediu para failed/skipped não bloqueia o close dos demais.
@@ -707,4 +866,6 @@ def _execute_batch(batch: fb.FeatureBatch, args) -> None:
     for feature in batch.features:
         marker = "✓" if feature.status == "merged" else "✗"
         detail = f" — {feature.detail}" if feature.detail else ""
-        print(f"  {marker} {feature.feature_id} {feature.title}: {feature.status}{detail}")
+        print(
+            f"  {marker} {feature.feature_id} {feature.title}: {feature.status}{detail}"
+        )

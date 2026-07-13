@@ -82,6 +82,34 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
             report.add_error(node.id, f"type '{node.type}' inválido (válidos: {', '.join(sorted(VALID_NODE_TYPES))})")
         if node.type != "end" and node.executor and node.executor not in VALID_EXECUTORS:
             report.add_error(node.id, f"executor '{node.executor}' não reconhecido (válidos: {', '.join(sorted(VALID_EXECUTORS))})")
+        if not isinstance(node.preserve_outputs_on_reentry, bool):
+            report.add_error(
+                node.id,
+                "preserve_outputs_on_reentry deve ser booleano",
+            )
+        for field_name in ("hyper_mode_docs", "hyper_mode_full_docs"):
+            value = getattr(node, field_name)
+            if value is None:
+                continue
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) or not item.strip() for item in value
+            ):
+                report.add_error(
+                    node.id,
+                    f"{field_name} deve ser uma lista de paths markdown não vazios",
+                )
+        for field_name in (
+            "hyper_mode_preview_lines",
+            "hyper_mode_full_max_lines",
+        ):
+            value = getattr(node, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                report.add_error(
+                    node.id,
+                    f"{field_name} deve ser um inteiro maior ou igual a zero",
+                )
 
 
 def _check_graph_integrity(graph: ProcessGraph, report: ValidationReport) -> None:

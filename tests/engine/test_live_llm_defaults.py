@@ -294,6 +294,32 @@ def test_provider_specific_context_is_rebuilt_and_compact_xml_is_initial_only(
     assert codex_deny_paths == []
 
 
+def test_node_hyper_mode_context_config_is_applied_by_runner(tmp_path: Path) -> None:
+    runner, _owner, cycle = _runner(tmp_path)
+    docs = cycle / "docs"
+    docs.mkdir(exist_ok=True)
+    (docs / "preview.md").write_text("preview 0\npreview 1\npreview 2\n")
+    (docs / "detail.md").write_text("detail 0\ndetail 1\ndetail 2\n")
+    (docs / "omit.md").write_text("must not appear\n")
+    node = runner.graph.get_node("first")
+    node.hyper_mode_docs = ["docs/preview.md", "docs/detail.md"]
+    node.hyper_mode_full_docs = ["docs/detail.md"]
+    node.hyper_mode_preview_lines = 1
+    node.hyper_mode_full_max_lines = 2
+
+    prompt, _compact, _deny = runner._build_llm_task_context(
+        node,
+        runner.state_mgr.load(),
+        LLMSelection("codex", "gpt/model", "max"),
+    )
+
+    assert "preview 0" in prompt and "preview 1" not in prompt
+    assert "detail 0" in prompt and "detail 1" in prompt
+    assert "detail 2" not in prompt
+    assert "must not appear" not in prompt
+    assert "### detail.md (INTEGRAL)" in prompt
+
+
 def test_log_suffix_uses_the_attempt_snapshot_not_a_fresh_resolution(
     tmp_path: Path,
 ) -> None:

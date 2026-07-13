@@ -62,7 +62,13 @@ def _normalize_usage(usage: dict[str, Any]) -> dict[str, int]:
 
     details = usage.get("input_tokens_details")
     if isinstance(details, dict):
-        out["cached_input_tokens"] += _safe_int(details.get("cached_tokens", 0))
+        # OpenAI/Codex reporta cached_input como subconjunto de input_tokens.
+        # Algumas versões usam o campo top-level, outras o details; se ambos
+        # vierem presentes, representam a mesma grandeza e não devem somar.
+        out["cached_input_tokens"] = max(
+            out["cached_input_tokens"],
+            _safe_int(details.get("cached_tokens", 0)),
+        )
     details = usage.get("output_tokens_details")
     if isinstance(details, dict):
         out["reasoning_output_tokens"] += _safe_int(details.get("reasoning_tokens", 0))
@@ -81,8 +87,14 @@ def _total_all(tokens: dict[str, int]) -> int:
 
 
 def _total_without_cache_read(tokens: dict[str, int]) -> int:
+    input_tokens = tokens.get("input_tokens", 0)
+    cached_input_tokens = min(
+        input_tokens,
+        max(0, tokens.get("cached_input_tokens", 0)),
+    )
     additive = (
-        tokens.get("input_tokens", 0)
+        input_tokens
+        - cached_input_tokens
         + tokens.get("cache_creation_input_tokens", 0)
         + tokens.get("output_tokens", 0)
     )
@@ -221,7 +233,7 @@ def format_llm_usage_lines(summary: dict[str, Any], indent: str = "  ") -> list[
         (
             f"{indent}Tokens LLM delegado: "
             f"{_fmt_int(totals.get('total_all_tokens', 0))} total bruto; "
-            f"{_fmt_int(totals.get('total_without_cache_read_tokens', 0))} sem cache_read"
+            f"{_fmt_int(totals.get('total_without_cache_read_tokens', 0))} sem cache"
         )
     ]
     for label, data in sorted((summary.get("by_model") or {}).items()):
@@ -230,6 +242,7 @@ def format_llm_usage_lines(summary: dict[str, Any], indent: str = "  ") -> list[
             f"in {_fmt_int(data.get('input_tokens', 0))} | "
             f"cache_write {_fmt_int(data.get('cache_creation_input_tokens', 0))} | "
             f"cache_read {_fmt_int(data.get('cache_read_input_tokens', 0))} | "
+            f"cached_input {_fmt_int(data.get('cached_input_tokens', 0))} | "
             f"out {_fmt_int(data.get('output_tokens', 0))}"
         )
     return lines

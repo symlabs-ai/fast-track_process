@@ -2536,35 +2536,185 @@ def cmd_reject(args):
         runner.run(mode="mvp")
 
 
+def _active_exploration_runtime(root: Path) -> bool:
+    """True somente para o modo legado atualmente parado num node exploration."""
+
+    state_path = _find_latest_state(root)
+    if not state_path.is_file():
+        return False
+    state = _state_data(state_path)
+    return str(state.get("node_status") or "") == "exploring"
+
+
+def _explicit_explore_selection(args) -> tuple[str | None, str | None]:
+    """Compatibiliza --agent/--model com os flags históricos --codex etc."""
+
+    legacy_agent = resolve_llm_engine(args)
+    requested_agent = getattr(args, "agent", None)
+    agent = str(requested_agent).strip().lower() if requested_agent else legacy_agent
+    if requested_agent and legacy_agent and agent != legacy_agent:
+        raise ValueError("use --agent ou o flag histórico do provider, não ambos")
+
+    legacy_model = resolve_llm_model(args)
+    requested_model = getattr(args, "model", None)
+    model = str(requested_model).strip() if requested_model else legacy_model
+    if requested_model and legacy_model and model != legacy_model:
+        raise ValueError("use --model ou o modelo junto ao flag do provider, não ambos")
+    return agent, model
+
+
+def _standalone_explore_selection(
+    args,
+    root: Path,
+) -> tuple[str, str | None, str | None]:
+    explicit_agent, explicit_model = _explicit_explore_selection(args)
+    manifest_agent, manifest_model, manifest_effort = manifest_llm_defaults(root)
+    agent = (
+        explicit_agent
+        or manifest_agent
+        or os.environ.get("FT_LLM_ENGINE", "").strip().lower()
+        or "claude"
+    )
+    same_as_manifest = bool(manifest_agent and agent == manifest_agent)
+    model = explicit_model or (manifest_model if same_as_manifest else None)
+
+    requested_effort = getattr(args, "effort", None)
+    if requested_effort is None:
+        effort = manifest_effort if same_as_manifest else None
+    else:
+        effort = str(requested_effort).strip() or None
+        if effort and effort.lower() == "default":
+            effort = None
+    return agent, model, effort
+
+
+def _print_explore_json(payload: dict[str, object]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), flush=True)
+
+
 def cmd_explore(args):
-    """Modo de exploração livre — acumula pedidos e gera relatório ao finalizar."""
+    """Exploração legada no node ou consulta standalone read-only sem ciclo."""
     from ft.engine import ui as _ui
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
-                        llm_model=resolve_llm_model(args),
-                        llm_effort=resolve_llm_effort(args),
-                        verbose=getattr(args, "verbose", False))
-    if not _ensure_runtime_selected(args, runner):
-        return
-    runner._bypass_human_gates = resolve_bypass_human_gates(args)
-
-    if getattr(args, "finish", False):
-        runner.explore_finish()
-    elif getattr(args, "skip", False):
-        runner.explore_skip()
-    else:
-        request = getattr(args, "request", None)
-        if not request:
-            # Sem argumento: mostrar estado atual de exploração
-            state = runner.state_mgr.load()
-            if state.node_status != "exploring":
-                print(_ui.warn("Ciclo não está em modo exploração."))
-                print(_ui.info("Aguarde o processo chegar num node type: exploration"))
-            else:
+    root = canonical_project_root(find_project_root())
+    stream_json = bool(getattr(args, "stream_json", False))
+    force_standalone = bool(getattr(args, "standalone", False) or stream_json)
+    if not force_standalone and _active_exploration_runtime(root):
+        # Compatibilidade integral: quando o grafo possui uma exploração ativa,
+        # request/finish/skip continuam usando estado, logs e worktree históricos.
+        explicit_agent, explicit_model = _explicit_explore_selection(args)
+        runner = get_runner(
+            args.process,
+            llm_engine=explicit_agent,
+            llm_model=explicit_model,
+            llm_effort=resolve_llm_effort(args),
+            verbose=getattr(args, "verbose", False),
+        )
+        runner._bypass_human_gates = resolve_bypass_human_gates(args)
+        if getattr(args, "finish", False):
+            runner.explore_finish()
+        elif getattr(args, "skip", False):
+            runner.explore_skip()
+        else:
+            request = getattr(args, "request", None)
+            if not request:
+                state = runner.state_mgr.load()
                 log = state.exploration_log or []
                 print(_ui.exploration_start("Exploração Livre", len(log)))
-            return
-        runner.explore_request(request)
+                return
+            runner.explore_request(request)
+        return
+
+    if getattr(args, "finish", False) or getattr(args, "skip", False):
+        message = "--finish/--skip exigem um node exploration ativo"
+        if stream_json:
+            _print_explore_json({"type": "error", "code": "legacy_node_required", "message": message, "exit_code": 2})
+        else:
+            print(_ui.fail(message), file=sys.stderr)
+        raise SystemExit(2)
+
+    request = str(getattr(args, "request", None) or "").strip()
+    if not request:
+        message = "Informe um prompt: ft explore \"sua pergunta\""
+        if stream_json:
+            _print_explore_json({"type": "error", "code": "prompt_required", "message": message, "exit_code": 2})
+        else:
+            print(_ui.fail(message), file=sys.stderr)
+        raise SystemExit(2)
+
+    from ft.engine.read_only_explore import (
+        ExploreConfigurationError,
+        run_read_only_explore,
+    )
+
+    try:
+        agent, model, effort = _standalone_explore_selection(args, root)
+        if stream_json:
+            _print_explore_json({
+                "type": "start",
+                "agent": agent,
+                "model": model,
+                "effort": effort,
+                "mode": "standalone",
+                "read_only": True,
+            })
+
+        sequence = 0
+
+        def on_chunk(text: str) -> None:
+            nonlocal sequence
+            sequence += 1
+            if stream_json:
+                _print_explore_json({"type": "chunk", "seq": sequence, "text": text})
+            else:
+                print(text, end="", flush=True)
+
+        result = run_read_only_explore(
+            request=request,
+            project_root=root,
+            agent=agent,
+            model=model,
+            effort=effort,
+            on_chunk=on_chunk,
+        )
+    except (ExploreConfigurationError, ValueError) as exc:
+        if stream_json:
+            _print_explore_json({
+                "type": "error",
+                "code": "invalid_configuration",
+                "message": str(exc),
+                "exit_code": 2,
+            })
+        else:
+            print(_ui.fail(str(exc)), file=sys.stderr)
+        raise SystemExit(2)
+
+    if result.returncode == 0:
+        if stream_json:
+            _print_explore_json({
+                "type": "result",
+                "ok": True,
+                "text": result.text,
+                "exit_code": 0,
+            })
+        elif result.text and not result.text.endswith("\n"):
+            print()
+        return
+
+    message = result.error or f"executor saiu com código {result.returncode}"
+    if stream_json:
+        _print_explore_json({
+            "type": "error",
+            "code": "executor_failed",
+            "message": message,
+            "text": result.text,
+            "exit_code": result.returncode,
+        })
+    else:
+        if result.text and not result.text.endswith("\n"):
+            print()
+        print(_ui.fail(message), file=sys.stderr)
+    raise SystemExit(result.returncode)
 
 
 def cmd_evolve(args):
@@ -4872,9 +5022,32 @@ def main():
     add_llm_engine_flags(lp)
 
     # explore
-    ex = sub.add_parser("explore", help="Modo exploração livre — pedidos ao LLM sem avançar o processo")
+    ex = sub.add_parser(
+        "explore",
+        help="Pergunta read-only ao LLM; preserva o modo legado em node exploration",
+    )
     add_llm_engine_flags(ex)
-    ex.add_argument("request", nargs="?", help="Pedido ao LLM (entre aspas). Omitir para ver status.")
+    ex.add_argument("request", nargs="?", help="Prompt ao LLM (entre aspas)")
+    ex.add_argument(
+        "--agent",
+        choices=["claude", "codex", "gemini", "opencode"],
+        help="Provider standalone (alternativa a --claude/--codex/--gemini/--opencode)",
+    )
+    ex.add_argument(
+        "--model",
+        metavar="MODEL",
+        help="Modelo standalone (alternativa ao modelo junto ao flag do provider)",
+    )
+    ex.add_argument(
+        "--stream-json",
+        action="store_true",
+        help="Forçar standalone e emitir NDJSON progressivo: start, chunk, result/error",
+    )
+    ex.add_argument(
+        "--standalone",
+        action="store_true",
+        help="Forçar consulta read-only independente, mesmo com node exploration ativo",
+    )
     ex.add_argument("--finish", action="store_true", help="Encerrar exploração e gerar relatório")
     ex.add_argument("--skip", action="store_true", help="Pular o node de exploração sem gerar relatório")
 

@@ -41,6 +41,9 @@ class Node:
     llm_model: str | None = None
     # Desabilita o pre-seed check — node sempre roda mesmo se outputs já existem
     no_pre_seed: bool = False
+    # Em nodes no_pre_seed reentrantes, preserva outputs existentes para que o
+    # LLM refine drafts após perguntas/gates em vez de recriá-los do zero.
+    preserve_outputs_on_reentry: bool = False
     # Nó de destino quando human_gate é rejeitado (override do predecessor padrão)
     reject_next: str | None = None
     # Descrição amigável exibida ao usuário quando o step inicia
@@ -52,6 +55,12 @@ class Node:
     optional: bool = False
     # Override provider-specific de reasoning effort para este node
     llm_effort: str | None = None
+    # Hyper-mode por node. None preserva os defaults historicos do engine;
+    # lista vazia desabilita a carga de docs para aquele node.
+    hyper_mode_docs: list[str] | None = None
+    hyper_mode_full_docs: list[str] | None = None
+    hyper_mode_preview_lines: int | None = None
+    hyper_mode_full_max_lines: int | None = None
 
 
 class ProcessGraph:
@@ -234,10 +243,17 @@ def load_graph(path: str | Path) -> ProcessGraph:
             llm_model=node_raw.get("llm_model"),
             llm_effort=node_raw.get("llm_effort"),
             no_pre_seed=node_raw.get("no_pre_seed", False),
+            preserve_outputs_on_reentry=node_raw.get(
+                "preserve_outputs_on_reentry", False
+            ),
             description=node_raw.get("description"),
             reject_next=node_raw.get("reject_next"),
             on_fail=node_raw.get("on_fail"),
             optional=node_raw.get("optional", False),
+            hyper_mode_docs=node_raw.get("hyper_mode_docs"),
+            hyper_mode_full_docs=node_raw.get("hyper_mode_full_docs"),
+            hyper_mode_preview_lines=node_raw.get("hyper_mode_preview_lines"),
+            hyper_mode_full_max_lines=node_raw.get("hyper_mode_full_max_lines"),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

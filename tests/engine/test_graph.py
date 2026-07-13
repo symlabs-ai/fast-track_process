@@ -196,6 +196,31 @@ class TestLoadGraph:
         assert len(g.get_sprints()) == 2
         assert "sprint-01-discovery" in g.get_sprints()
 
+    def test_loads_optional_hyper_mode_context_fields(self, tmp_path):
+        p = tmp_path / "process.yml"
+        p.write_text(
+            "id: context_process\nversion: '1.0.0'\ntitle: Context\nnodes:\n"
+            "  - id: context\n"
+            "    type: document\n"
+            "    title: Context\n"
+            "    hyper_mode_docs: [docs/PRD.md, docs/FEATURES.md]\n"
+            "    hyper_mode_full_docs: [docs/FEATURES.md]\n"
+            "    hyper_mode_preview_lines: 12\n"
+            "    hyper_mode_full_max_lines: 80\n"
+            "    preserve_outputs_on_reentry: true\n"
+            "    next: end\n"
+            "  - {id: end, type: end, title: End}\n",
+            encoding="utf-8",
+        )
+
+        node = load_graph(p).get_node("context")
+
+        assert node.hyper_mode_docs == ["docs/PRD.md", "docs/FEATURES.md"]
+        assert node.hyper_mode_full_docs == ["docs/FEATURES.md"]
+        assert node.hyper_mode_preview_lines == 12
+        assert node.hyper_mode_full_max_lines == 80
+        assert node.preserve_outputs_on_reentry is True
+
     def test_load_fast_track_v2(self):
         g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
         assert len(g.nodes) >= 42  # May grow as process evolves

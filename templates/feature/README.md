@@ -41,12 +41,38 @@ O helper local `scripts/product.sh` detecta exatamente um desses diretórios pel
 Makefile. A presença simultânea dos dois é tratada como ambígua e bloqueia o
 preflight, evitando que o processo altere o produto errado.
 
+Durante a implementação, testes rápidos e sondas são executados sem shell
+intermediário com:
+
+```bash
+.ft/process/feature/scripts/product.sh focal -- python -m pytest tests/test_busca.py -q
+```
+
+Ao concluir cada implementação ou correção, o gate determinístico executa uma
+única validação completa e grava seu receipt no caminho canônico:
+
+```bash
+.ft/process/feature/scripts/product.sh full --record docs/feature-validation.json
+```
+
+O receipt registra os comandos com flags externas de Make neutralizadas, versões
+das ferramentas e hashes dos inputs executáveis versionados/não ignorados do
+projeto e dos scripts do processo. Documentos e CHANGELOG reconciliados depois do
+aceite não entram nesse snapshot. Review e gate final usam `verify` para
+reaproveitar a evidência apenas enquanto esses inputs permanecerem idênticos;
+qualquer mudança relevante exige outro `full`.
+
+Em batches paralelos, o orquestrador pode prefixar a demanda com
+`reserved_backlog_item: PB-NNN`. O discovery deve preservar essa reserva para
+que duas features da mesma wave não disputem o mesmo ID.
+
 ## Contrato
 
 - uma demanda e uma feature alvo por ciclo;
 - perguntas iterativas antes de congelar o escopo;
 - nenhum código antes do human gate de escopo;
-- `make test` e `make build` obrigatórios em cada implementação/correção;
+- uma validação completa `make test` + `make build`, com receipt determinístico,
+  obrigatória após cada implementação/correção;
 - aceite humano antes de atualizar backlog e catálogo;
 - reconciliação final obrigatória de `docs/PROJECT_BACKLOG.md`,
   `docs/FEATURES.md`, documentação canônica afetada e `CHANGELOG.md`;

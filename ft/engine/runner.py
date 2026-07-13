@@ -2809,6 +2809,82 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         )
         self._fire_hooks("on_init")
 
+    def recover_orphaned_delegation(self, mode: str = "step") -> bool:
+        """Finalize an interrupted LLM node when its validators already pass.
+
+        A delegated node can outlive the orchestrator process when the CLI is
+        interrupted after the LLM wrote valid artifacts but before the normal
+        commit/advance tail ran. Retrying that state by delegating again wastes
+        a full LLM turn and can overwrite a valid fix. Recovery is deliberately
+        strict: it only applies to a ``delegated`` state whose lock PID is no
+        longer alive, and it uses the node's ordinary validators before making
+        any progress decision.
+
+        Returns True when the orphan was finalized. A failed validation resets
+        the node to ``ready`` and returns False so the caller can execute the
+        normal delegation path.
+        """
+        state = self.state_mgr.load()
+        if state.node_status != "delegated" or not state.current_node:
+            return False
+
+        lock = state._lock if isinstance(state._lock, dict) else {}
+        pid = lock.get("pid")
+        if pid:
+            try:
+                if self.state_mgr._is_pid_alive(int(pid)):
+                    return False
+            except (TypeError, ValueError):
+                return False
+
+        node_id = state.current_node
+        if node_id not in self.graph.nodes:
+            return False
+        node = self.graph.get_node(node_id)
+        self._auto_approve = mode == "mvp"
+
+        print(ui.warn(
+            f"Delegação órfã detectada em {node_id} — validando artefatos existentes antes de redelegar"
+        ))
+        state.active_llm_log = None
+        self.state_mgr.save()
+
+        validation = run_validators(
+            node,
+            self.project_root,
+            state_dir=str(self.state_mgr.path.parent),
+            work_dir=self._run_dir,
+        )
+        self._print_validation(validation)
+        if not validation.passed:
+            state = self.state_mgr.load()
+            state.node_status = "ready"
+            state.active_llm_log = None
+            state.blocked_reason = None
+            self.state_mgr.save()
+            print(ui.warn("Artefatos órfãos ainda falham — retomando delegação normal"))
+            return False
+
+        for output_path in node.outputs:
+            self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+        self._maybe_auto_commit(node)
+        self._record_node_summary(
+            node,
+            "NODE_SUMMARY:\n"
+            "- fiz: recuperação de delegação interrompida\n"
+            "- verificado: validators do node passaram sem nova chamada LLM",
+        )
+
+        if node.requires_approval and not self._auto_approve:
+            print(ui.awaiting_approval(auto=False))
+            self.state_mgr.set_pending_approval(node.id)
+            return True
+
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id)
+        print(ui.step_pass(next_id, "PASS (artefatos órfãos recuperados)"))
+        return True
+
     def run(self, mode: str = "step"):
         """
         Loop principal.

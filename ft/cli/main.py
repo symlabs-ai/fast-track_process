@@ -1745,7 +1745,17 @@ def cmd_continue(args):
     if state.current_node is None:
         runner.init_state()
 
-    runner.run(mode=resolve_run_mode(args))
+    mode = resolve_run_mode(args)
+    recovered = runner.recover_orphaned_delegation(mode=mode)
+    if recovered:
+        recovered_state = runner.state_mgr.load()
+        if (
+            mode == "step"
+            or recovered_state.node_status == "awaiting_approval"
+            or recovered_state.current_node is None
+        ):
+            return
+    runner.run(mode=mode)
 
 
 def cmd_status(args):

@@ -245,6 +245,74 @@ nodes:
         assert not stale_snapshot.exists()
 
 
+class TestRecoverOrphanedDelegation:
+    @staticmethod
+    def _orphan_build(runner):
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.current_node = "step.03.implementacao"
+        state.node_status = "delegated"
+        state._lock = {"pid": 999999}
+        runner.state_mgr.save()
+        return state
+
+    def test_pass_finalizes_existing_artifacts_without_llm(self, runner_v2):
+        self._orphan_build(runner_v2)
+
+        with (
+            patch.object(runner_v2.state_mgr, "_is_pid_alive", return_value=False),
+            patch("ft.engine.runner.run_validators") as validators,
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+            patch.object(runner_v2, "_record_node_summary") as record_summary,
+            patch("ft.engine.runner.delegate_to_llm") as delegate,
+        ):
+            validators.return_value = ValidationResult(True, False, None, [])
+
+            recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
+
+        assert recovered is True
+        delegate.assert_not_called()
+        auto_commit.assert_called_once()
+        record_summary.assert_called_once()
+        state = runner_v2.state_mgr.load()
+        assert state.current_node == "gate.02.delivery"
+        assert state.node_status == "ready"
+        assert "step.03.implementacao" in state.completed_nodes
+        assert state.artifacts["main"] == "src/main.py"
+
+    def test_failed_validation_resets_ready_for_normal_delegation(self, runner_v2):
+        self._orphan_build(runner_v2)
+
+        with (
+            patch.object(runner_v2.state_mgr, "_is_pid_alive", return_value=False),
+            patch("ft.engine.runner.run_validators") as validators,
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+        ):
+            validators.return_value = ValidationResult(False, True, "still red", [])
+
+            recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
+
+        assert recovered is False
+        auto_commit.assert_not_called()
+        state = runner_v2.state_mgr.load()
+        assert state.current_node == "step.03.implementacao"
+        assert state.node_status == "ready"
+        assert state.active_llm_log is None
+
+    def test_live_delegation_is_left_untouched(self, runner_v2):
+        self._orphan_build(runner_v2)
+
+        with (
+            patch.object(runner_v2.state_mgr, "_is_pid_alive", return_value=True),
+            patch("ft.engine.runner.run_validators") as validators,
+        ):
+            recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
+
+        assert recovered is False
+        validators.assert_not_called()
+        assert runner_v2.state_mgr.load().node_status == "delegated"
+
+
 # ---------------------------------------------------------------------------
 # approve / reject
 # ---------------------------------------------------------------------------

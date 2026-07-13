@@ -32,6 +32,9 @@ PROJECT_GITIGNORE = """# Runtime data never belongs to the project history.
 /tmp/
 /logs/
 *.pid
+# Áreas transientes do ft process update (staging e backup dos forks locais).
+/process/.staging/
+/process/.backup/
 """
 
 # Product sources of truth remain visible under docs/. Everything below is a

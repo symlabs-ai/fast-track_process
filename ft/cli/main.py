@@ -254,25 +254,13 @@ def materialize_process_template(
 
     # Templates de init legados usam o path flat. Ao materializá-los como um
     # processo nomeado, torne todas as referências runtime locais ao fork.
-    text_suffixes = {
-        ".md", ".py", ".sh", ".toml", ".txt", ".yaml", ".yml"
-    }
-    named_scripts = f".ft/process/{template_name}/scripts"
-    named_process = f".ft/process/{template_name}/process.yml"
-    for file_path in destination.rglob("*"):
-        if not file_path.is_file() or file_path.suffix.lower() not in text_suffixes:
-            continue
-        try:
-            content = file_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        rewritten = content.replace(
-            ".ft/process/scripts", named_scripts
-        ).replace(
-            ".ft/process/process.yml", named_process
-        )
-        if rewritten != content:
-            file_path.write_text(rewritten, encoding="utf-8")
+    from ft.engine import process_update as _process_update
+
+    _process_update.rewrite_local_refs(destination, template_name)
+
+    # Ancestral dos merges futuros de `ft process update`: o estado global
+    # recém-integrado, em coordenadas locais.
+    _process_update.write_base_snapshot(destination)
 
     register_project_process(
         root,
@@ -1578,6 +1566,7 @@ def cmd_feature(args):
             "ft feature exige um projeto já inicializado; "
             "execute ft init <nome> --template <template> primeiro"
         )
+    _warn_process_drift(root, str(getattr(args, "template", None) or "feature"))
 
     input_file = getattr(args, "feature_input", None)
     if demand and input_file:
@@ -2755,6 +2744,228 @@ def cmd_process_candidates(args):
             print(_ui.dim(f"      {item.reason}"))
         if item.reference:
             print(_ui.dim(f"      referência: {item.reference}"))
+
+
+_DRIFT_STATE_LABELS = {
+    "in_sync": "em sincronia",
+    "fast_forward": "fast-forward disponível",
+    "local_fork": "fork local (global não mudou)",
+    "diverged": "divergente (fork local + global evoluiu)",
+    "diverged_no_base": "divergente sem ancestral (merge 3-way indisponível)",
+    "template_missing": "template global ausente",
+    "legacy_flat": "layout flat legado (ft migrate-layout habilita o update)",
+    "broken": "registro quebrado",
+}
+
+
+def _drift_scan(root: Path, process_name: str | None = None):
+    from ft.engine import process_update as pu
+
+    return pu.scan_processes(
+        root, engine_root() / "templates", process_name=process_name
+    )
+
+
+def _warn_process_drift(root: Path, process_name: str) -> None:
+    """Aviso não-bloqueante quando o template global do processo evoluiu.
+
+    Preflight informativo: nunca escreve nada e nunca levanta exceção — um
+    drift jamais deve impedir um ciclo de começar.
+    """
+    from ft.engine import ui as _ui
+
+    try:
+        from ft.engine import process_update as pu
+
+        for state in _drift_scan(root, process_name):
+            if state.state in pu.ACTIONABLE_STATES:
+                print(_ui.info(
+                    f"template global '{state.template_id}' evoluiu desde a "
+                    f"materialização ({_DRIFT_STATE_LABELS[state.state]}). "
+                    f"Sincronize com: ft process update {state.name}"
+                ))
+    except Exception:
+        pass
+
+
+def _validate_staged_process(staged_dir: Path) -> tuple[bool, str]:
+    """Valida o grafo do bundle em staging antes de qualquer apply."""
+    from ft.engine import process_update as pu
+    from ft.engine.graph import load_graph
+    from ft.engine.process_validator import format_report, validate_process
+    from ft.engine.runner import VALIDATOR_REGISTRY
+
+    process_file = pu.template_process_file(staged_dir)
+    if process_file is None:
+        return False, "staging não contém process.yml"
+    try:
+        graph = load_graph(process_file)
+    except (ValueError, FileNotFoundError) as exc:
+        return False, f"YAML inválido: {exc}"
+    report = validate_process(graph, VALIDATOR_REGISTRY)
+    if not report.passed:
+        return False, format_report(report, len(graph.nodes))
+    return True, ""
+
+
+def _print_staged_diff(local_dir: Path, staging_dir: Path, changed: list[str]) -> None:
+    """Mostra o diff arquivo a arquivo entre o fork local e o staging."""
+    import subprocess as _sp
+
+    for entry in changed:
+        action, _, relative = entry.partition(": ")
+        if action != "atualizado":
+            print(f"    {entry}")
+            continue
+        print(f"    {entry}")
+        sys.stdout.flush()
+        _sp.run(
+            [
+                "git", "diff", "--no-index", "--color",
+                str(local_dir / relative), str(staging_dir / relative),
+            ],
+            check=False,
+        )
+
+
+def _confirm(prompt: str) -> bool:
+    try:
+        return input(f"{prompt} [s/N]: ").strip().lower() in {"s", "sim", "y", "yes"}
+    except (EOFError, KeyboardInterrupt, OSError):
+        return False
+
+
+def cmd_process_update(args):
+    """Sincroniza processos locais com os templates globais do engine."""
+    import shutil
+
+    from ft.engine import process_update as pu
+    from ft.engine import ui as _ui
+
+    root = find_project_root().resolve()
+    if not paths.project_manifest(root).is_file():
+        raise ValueError(
+            "ft process update exige um projeto inicializado (.ft/manifest.yml)"
+        )
+    if paths.is_worktree_path(root):
+        raise RuntimeError(
+            "rode ft process update no checkout principal, não na worktree de um ciclo"
+        )
+
+    name = getattr(args, "name", None)
+    states = _drift_scan(root, name)
+    if not states:
+        if name:
+            print(_ui.fail(f"processo '{name}' não está registrado no manifest"))
+            sys.exit(1)
+        print(_ui.info("nenhum processo local registrado no manifest"))
+        return
+
+    print(_ui.header("Processos Locais × Templates Globais"))
+    for state in states:
+        if state.state in {"in_sync", "local_fork"}:
+            marker = "✓"
+        elif state.state == "legacy_flat":
+            marker = "-"
+        else:
+            marker = "!"
+        label = _DRIFT_STATE_LABELS.get(state.state, state.state)
+        print(f"  {marker} {state.name:<16} {label}")
+        if state.detail:
+            print(_ui.dim(f"      {state.detail}"))
+
+    actionable = [s for s in states if s.state in pu.ACTIONABLE_STATES]
+    if getattr(args, "check", False):
+        sys.exit(1 if actionable else 0)
+    if not actionable:
+        print(_ui.success("nada a atualizar"))
+        return
+
+    active = _check_active_run(root)
+    if active:
+        raise RuntimeError(
+            f"já existe um ciclo ativo: {active}. Encerre-o (ft close/abort) "
+            "antes de atualizar processos — o digest do bundle fixa a "
+            "semântica de execução do ciclo"
+        )
+
+    fast_forwards = [s for s in actionable if s.state == "fast_forward"]
+    diverged = [s for s in actionable if s.state == "diverged"]
+    orphaned = [s for s in actionable if s.state == "diverged_no_base"]
+    pending = 0
+
+    for state in orphaned:
+        pending += 1
+        print(_ui.fail(
+            f"{state.name}: local e global divergem e o ancestral se perdeu "
+            "(materializado antes do snapshot base). Porte o diff manualmente "
+            "ou remova o fork e rematerialize."
+        ))
+
+    if fast_forwards:
+        print()
+        print(_ui.info(
+            f"{len(fast_forwards)} fast-forward(s) seguro(s): "
+            + ", ".join(s.name for s in fast_forwards)
+        ))
+        if getattr(args, "yes", False) or _confirm("Aplicar fast-forward(s)?"):
+            for state in fast_forwards:
+                staging, changed = pu.prepare_fast_forward(root, state)
+                ok, why = _validate_staged_process(staging)
+                if not ok:
+                    pending += 1
+                    print(_ui.fail(f"{state.name}: template global inválido — {why}"))
+                    shutil.rmtree(staging, ignore_errors=True)
+                    continue
+                backup = pu.apply_update(root, state, staging)
+                print(_ui.success(f"{state.name}: atualizado ({len(changed)} arquivo(s))"))
+                for entry in changed:
+                    print(_ui.dim(f"    {entry}"))
+                print(_ui.dim(f"    backup do fork anterior: {backup.relative_to(root)}"))
+        else:
+            pending += len(fast_forwards)
+            print(_ui.info("fast-forwards não aplicados"))
+
+    for state in diverged:
+        print()
+        print(_ui.header(f"Merge 3-way: {state.name}"))
+        pu.ensure_base_snapshot(state)
+        staging = pu.staging_dir_for(root, state.name)
+        result = pu.build_merge_staging(state, staging)
+
+        if not result.clean:
+            pending += 1
+            print(_ui.fail(
+                f"{state.name}: {len(result.conflicts)} conflito(s) — "
+                + ", ".join(result.conflicts)
+            ))
+            print(_ui.info(
+                "staging preservado com marcadores diff3 em "
+                f"{staging.relative_to(root)} — resolva manualmente e copie "
+                "para o fork, ou descarte o diretório"
+            ))
+            continue
+
+        ok, why = _validate_staged_process(staging)
+        if not ok:
+            pending += 1
+            print(_ui.fail(f"{state.name}: merge textualmente limpo, mas inválido — {why}"))
+            shutil.rmtree(staging, ignore_errors=True)
+            continue
+
+        print(_ui.info(f"merge limpo ({len(result.changed)} mudança(s)):"))
+        _print_staged_diff(state.local_dir, staging, result.changed)
+        if _confirm(f"Aplicar update em '{state.name}'?"):
+            backup = pu.apply_update(root, state, staging)
+            print(_ui.success(f"{state.name}: atualizado"))
+            print(_ui.dim(f"    backup do fork anterior: {backup.relative_to(root)}"))
+        else:
+            pending += 1
+            shutil.rmtree(staging, ignore_errors=True)
+            print(_ui.info(f"{state.name}: mantido como está"))
+
+    if pending:
+        sys.exit(1)
 
 
 def cmd_close(args):
@@ -4630,6 +4841,36 @@ def main():
         help="Commit/path que comprova promoção (obrigatório para promoted)",
     )
 
+    # process (gestão dos processos locais frente aos templates globais)
+    proc = sub.add_parser(
+        "process",
+        help="Gerenciar processos locais materializados",
+    )
+    proc_sub = proc.add_subparsers(dest="process_command", required=True)
+    proc_update = proc_sub.add_parser(
+        "update",
+        help="Sincronizar processos locais com os templates globais",
+        description=(
+            "Sem nome: varre todos os processos do manifest. Fork intocado com "
+            "global evoluído é fast-forward; fork customizado com global "
+            "evoluído passa por merge 3-way (git merge-file) com aprovação. "
+            "Nada é aplicado sem staging, validação e backup."
+        ),
+    )
+    proc_update.add_argument(
+        "name", nargs="?", help="Processo específico (default: todos)"
+    )
+    proc_update.add_argument(
+        "--check",
+        action="store_true",
+        help="Só relatório, sem escrever nada (exit 1 se houver drift acionável)",
+    )
+    proc_update.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Aplicar fast-forwards sem confirmação (merges sempre confirmam)",
+    )
+
     # abort
     ab = sub.add_parser("abort", help="Abortar ciclo: descarta worktree e branch sem merge")
     add_llm_engine_flags(ab)
@@ -4721,6 +4962,9 @@ def main():
             cmd_close(args)
         elif args.command == "process-candidates":
             cmd_process_candidates(args)
+        elif args.command == "process":
+            if args.process_command == "update":
+                cmd_process_update(args)
         elif args.command == "abort":
             cmd_abort(args)
         elif args.command == "cancel":

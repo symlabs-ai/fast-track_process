@@ -1773,11 +1773,19 @@ def cmd_status(args):
     if len(targets) > 1:
         from ft.engine import ui as _ui
 
-        for index, (label, cycle) in enumerate(targets):
-            if index:
-                print()
+        def _print_labeled_target(target: tuple[str, str | None]) -> None:
+            label, cycle = target
             print(_ui.header(f"Ciclo: {label}"))
             _print_status(_runner_for(cycle))
+
+        # O primeiro bloco também é rotulado. Mantê-lo fora do loop dos
+        # separadores evita que a condição visual entre blocos controle, por
+        # acidente, a presença do primeiro cabeçalho.
+        first, *remaining = targets
+        _print_labeled_target(first)
+        for target in remaining:
+            print()
+            _print_labeled_target(target)
         return
 
     _print_status(_runner_for(explicit_cycle))

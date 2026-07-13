@@ -586,8 +586,12 @@ class TestStatusMultipleCycles:
             cli_main.cmd_status(self._args(full=True))
 
         output = capsys.readouterr().out
-        assert "Ciclo: cycle-13-f-01" in output
-        assert "Ciclo: cycle-14-f-03" in output
+        first_header = output.index("Ciclo: cycle-13-f-01")
+        first_status = output.index("status:cycle-13-f-01")
+        second_header = output.index("Ciclo: cycle-14-f-03")
+        second_status = output.index("status:cycle-14-f-03")
+        assert first_header < first_status < second_header < second_status
+        assert output.count("Ciclo:") == 2
         assert calls == [
             {"cycle": "cycle-13-f-01", "method": "status", "full": True},
             {"cycle": "cycle-14-f-03", "method": "status", "full": True},

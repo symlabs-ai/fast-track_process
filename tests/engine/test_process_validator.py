@@ -39,6 +39,7 @@ def _make_graph(nodes_raw: list[dict], meta: dict | None = None) -> ProcessGraph
             hyper_mode_full_docs=n.get("hyper_mode_full_docs"),
             hyper_mode_preview_lines=n.get("hyper_mode_preview_lines"),
             hyper_mode_full_max_lines=n.get("hyper_mode_full_max_lines"),
+            context_profile=n.get("context_profile"),
         ))
     return ProcessGraph(nodes, meta or {"id": "test", "version": "1.0.0"})
 
@@ -106,6 +107,49 @@ class TestStructure:
             "preserve_outputs_on_reentry deve ser booleano" in error.message
             for error in report.errors
         )
+
+    @pytest.mark.parametrize("value", ["", True, "feature_delta.unknown"])
+    def test_invalid_context_profile_is_rejected(self, value):
+        graph = _make_graph([
+            {
+                "id": "start",
+                "type": "document",
+                "title": "Start",
+                "context_profile": value,
+                "next": "end",
+            },
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+
+        report = validate_process(graph)
+
+        assert any("context_profile" in error.message for error in report.errors)
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("hyper_mode_docs", []),
+            ("hyper_mode_full_docs", ["docs/PRD.md"]),
+            ("hyper_mode_preview_lines", 0),
+            ("hyper_mode_full_max_lines", 10),
+        ],
+    )
+    def test_context_profile_cannot_mix_with_hyper_mode(self, field, value):
+        graph = _make_graph([
+            {
+                "id": "start",
+                "type": "document",
+                "title": "Start",
+                "context_profile": "feature_delta.reconcile",
+                field: value,
+                "next": "end",
+            },
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+
+        report = validate_process(graph)
+
+        assert any("não pode ser combinado" in error.message for error in report.errors)
 
 
 class TestGraphIntegrity:

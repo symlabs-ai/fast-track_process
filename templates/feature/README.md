@@ -55,12 +55,14 @@ Ao concluir cada implementação ou correção, o gate determinístico executa u
 .ft/process/feature/scripts/product.sh full --record docs/feature-validation.json
 ```
 
-O receipt registra os comandos com flags externas de Make neutralizadas, versões
-das ferramentas e hashes dos inputs executáveis versionados/não ignorados do
-projeto e dos scripts do processo. Documentos e CHANGELOG reconciliados depois do
-aceite não entram nesse snapshot. Review e gate final usam `verify` para
-reaproveitar a evidência apenas enquanto esses inputs permanecerem idênticos;
-qualquer mudança relevante exige outro `full`.
+O receipt compacto persiste resultado, fingerprint, instante, product root,
+comandos e contagem de arquivos; ele não serializa a lista de arquivos/hashes.
+O fingerprint continua ligado às versões das ferramentas e aos hashes dos inputs
+executáveis versionados/não ignorados do projeto e dos scripts do processo.
+Documentos e CHANGELOG reconciliados depois do aceite não entram nesse snapshot.
+Review usa `verify` para reaproveitar a evidência antes do aceite. Depois da
+reconciliação documental, o gate final faz uma única verificação do receipt e
+dos documentos reconciliados; qualquer mudança material exige outro `full`.
 
 Em batches paralelos, o orquestrador pode prefixar a demanda com
 `reserved_backlog_item: PB-NNN`. O discovery deve preservar essa reserva para
@@ -71,7 +73,7 @@ que duas features da mesma wave não disputem o mesmo ID.
 - uma demanda e uma feature alvo por ciclo;
 - perguntas iterativas antes de congelar o escopo;
 - nenhum código antes do human gate de escopo;
-- uma validação completa `make test` + `make build`, com receipt determinístico,
+- uma validação completa `make build` + `make test`, com receipt determinístico,
   obrigatória após cada implementação/correção;
 - aceite humano antes de atualizar backlog e catálogo;
 - reconciliação final obrigatória de `docs/PROJECT_BACKLOG.md`,
@@ -86,5 +88,10 @@ Este template pertence ao entrypoint `feature` e não pode ser passado ao
 digest no estado, segue novamente o grafo após rejeições e aplica o
 `close_policy` restrito ao PB selecionado. O processo global é apenas fonte de
 materialização e nunca é executado.
+
+Os quatro nodes LLM usam perfis `feature_delta.*` próprios do processo incremental
+em vez de herdar HyperMode do `mvp-builder`. O engine compõe apenas demanda,
+contratos, feedback, diff e recortes focais aplicáveis a discovery, implementação,
+review ou reconcile.
 
 Consulte `examples/feature.md` para o formato produzido ao final do discovery.

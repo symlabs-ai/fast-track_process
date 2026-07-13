@@ -5,7 +5,7 @@
 # `.ft/process/feature/` e executa somente a cópia local versionada.
 
 id: feature
-version: "1.1.0"
+version: "1.2.0"
 title: "Feature — Evolução Incremental"
 
 execution_policy:
@@ -93,32 +93,18 @@ nodes:
           features_path: docs/FEATURES.md
           backlog_path: docs/PROJECT_BACKLOG.md
       - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py baseline"
-      - command_succeeds: "bash .ft/process/feature/scripts/product.sh test"
-      - command_succeeds: "bash .ft/process/feature/scripts/product.sh build"
+      - command_succeeds:
+          command: "bash .ft/process/feature/scripts/product.sh build"
+          timeout: 300
+      - command_succeeds:
+          command: "bash .ft/process/feature/scripts/product.sh test"
+          timeout: 300
     next: feature.discovery
 
   - id: feature.discovery
     no_pre_seed: true
     preserve_outputs_on_reentry: true
-    hyper_mode_docs:
-      - feature-request.md
-      - feature-discovery.md
-      - feature-questions.md
-      - feature.md
-      - feature-plan.md
-      - PRD.md
-      - TECH_STACK.md
-      - tech_stack.md
-      - PROJECT_BACKLOG.md
-      - FEATURES.md
-      - ui_criteria.md
-      - api_contract.md
-    hyper_mode_full_docs:
-      - feature-request.md
-      - feature-discovery.md
-      - feature-questions.md
-    hyper_mode_preview_lines: 40
-    hyper_mode_full_max_lines: 300
+    context_profile: feature_delta.discovery
     type: discovery
     title: "Elucidar Demanda e Planejar Feature"
     description: >-
@@ -144,16 +130,10 @@ nodes:
       Trabalhe exclusivamente na elucidação de UMA feature para um produto já
       existente. Não implemente código neste node.
 
-      Leia obrigatoriamente:
-      - docs/feature-request.md (demanda original, imutável);
-      - docs/PRD.md;
-      - docs/TECH_STACK.md ou docs/tech_stack.md;
-      - docs/PROJECT_BACKLOG.md;
-      - docs/FEATURES.md;
-      - docs/ui_criteria.md e docs/api_contract.md, quando existirem;
-      - o diretório indicado por `product_root` em
-        docs/feature-baseline.yml (`project/` ou `src/`) e seus testes;
-      - a mensagem de aprovação/rejeição mais recente, quando houver.
+      Use o contexto delta fornecido pelo perfil `feature_delta.discovery`: ele
+      já reúne a demanda imutável, o estado atual dos drafts, as fontes
+      canônicas relevantes, a baseline e recortes do produto/testes. Abra
+      arquivos adicionais somente quando uma decisão concreta exigir evidência.
 
       Quando feature-request.md contiver metadata do batch com
       `reserved_backlog_item: PB-NNN`, use exatamente esse ID para esta demanda.
@@ -272,23 +252,7 @@ nodes:
 
   - id: feature.implement
     type: build
-    hyper_mode_docs:
-      - feature-request.md
-      - feature.md
-      - feature-plan.md
-      - TECH_STACK.md
-      - tech_stack.md
-      - ui_criteria.md
-      - api_contract.md
-      - implementation-report.md
-      - feature-review.md
-      - stakeholder-feedback.md
-    hyper_mode_full_docs:
-      - feature.md
-      - feature-plan.md
-      - stakeholder-feedback.md
-    hyper_mode_preview_lines: 40
-    hyper_mode_full_max_lines: 400
+    context_profile: feature_delta.implement
     title: "Implementar Feature e Testes"
     description: >-
       Implementa apenas o escopo aprovado, atualiza contratos afetados e cria
@@ -310,9 +274,10 @@ nodes:
       - docs/implementation-report.md
       - docs/screenshots/feature
     prompt: |
-      Implemente somente a feature aprovada em docs/feature.md e
-      docs/feature-plan.md. Leia o código, os testes e as convenções existentes;
-      preserve comportamentos fora do escopo.
+      Implemente somente a feature aprovada. O perfil
+      `feature_delta.implement` já fornece escopo, plano, feedback atual, diff e
+      recortes relevantes do produto. Inspecione arquivos adicionais apenas
+      para confirmar a mudança focal e preserve comportamentos fora do escopo.
 
       Regras:
       1. Crie ou atualize testes para cada AC-* antes de concluir.
@@ -322,8 +287,9 @@ nodes:
       5. Durante a implementação, rode somente os testes focais necessários com
          `.ft/process/feature/scripts/product.sh focal -- <comando> [args...]`.
          Não repita a suíte completa: após sua entrega, o gate determinístico
-         executará `full --record docs/feature-validation.json`, cobrindo test e
-         build e vinculando o resultado ao snapshot executável do produto.
+         executará `full --record docs/feature-validation.json`, cobrindo build
+         e test nessa ordem e vinculando o resultado ao snapshot executável do
+         produto.
       6. Gere docs/implementation-report.md com uma linha PASS/FAIL por AC-*,
          comandos executados, arquivos alterados, compatibilidade e evidências.
       7. Em uma correção solicitada, considere o feedback mais recente e mantenha
@@ -335,25 +301,16 @@ nodes:
             python .ft/process/feature/scripts/validate_feature.py implementation
             && bash .ft/process/feature/scripts/product.sh full --record
             docs/feature-validation.json
+          resume_command: >-
+            python .ft/process/feature/scripts/validate_feature.py implementation
+            && bash .ft/process/feature/scripts/product.sh verify
+            docs/feature-validation.json
           timeout: 300
     next: feature.review
 
   - id: feature.review
     type: review
-    hyper_mode_docs:
-      - feature.md
-      - feature-plan.md
-      - implementation-report.md
-      - TECH_STACK.md
-      - tech_stack.md
-      - ui_criteria.md
-      - api_contract.md
-    hyper_mode_full_docs:
-      - feature.md
-      - feature-plan.md
-      - implementation-report.md
-    hyper_mode_preview_lines: 40
-    hyper_mode_full_max_lines: 400
+    context_profile: feature_delta.review
     title: "Revisão Independente da Feature"
     description: >-
       Audita diff, testes e evidências contra cada AC-*, procurando regressões,
@@ -366,10 +323,10 @@ nodes:
     write_scope:
       - docs/feature-review.md
     prompt: |
-      Faça uma revisão independente. Leia feature.md, feature-plan.md,
-      implementation-report.md, feature-validation.json, o diff do ciclo,
-      código e testes. Confirme o receipt com
-      `.ft/process/feature/scripts/product.sh verify docs/feature-validation.json`.
+      Faça uma revisão independente usando o contexto focal fornecido por
+      `feature_delta.review`: contrato, plano, relatório, diff, código/testes
+      alterados e resumo do receipt. O validator determinístico deste node
+      confirma o receipt; não o reexecute por conta própria.
 
       Não repita a suíte completa nem o build já atestados pelo receipt. Quando
       precisar desafiar uma hipótese ou um AC-*, execute somente sondas/testes
@@ -412,29 +369,7 @@ nodes:
   - id: feature.reconcile
     no_pre_seed: true
     type: document
-    hyper_mode_docs:
-      - feature-request.md
-      - feature.md
-      - feature-plan.md
-      - implementation-report.md
-      - feature-review.md
-      - stakeholder-feedback.md
-      - PRD.md
-      - TECH_STACK.md
-      - tech_stack.md
-      - ui_criteria.md
-      - api_contract.md
-      - test_data.md
-      - PROJECT_BACKLOG.md
-      - FEATURES.md
-    hyper_mode_full_docs:
-      - feature.md
-      - feature-plan.md
-      - implementation-report.md
-      - feature-review.md
-      - stakeholder-feedback.md
-    hyper_mode_preview_lines: 40
-    hyper_mode_full_max_lines: 400
+    context_profile: feature_delta.reconcile
     title: "Reconciliar Backlog e Catálogo"
     description: >-
       Registra somente a capacidade aceita neste ciclo, preservando todos os IDs
@@ -466,8 +401,9 @@ nodes:
       - docs/FEATURES.md
       - docs/feature-result.md
     prompt: |
-      O stakeholder aprovou a feature. Reconcilie apenas o PB-* e a FEAT-* de
-      docs/feature.md/docs/feature-plan.md.
+      O stakeholder aprovou a feature. O perfil `feature_delta.reconcile` já
+      fornece o contrato aceito, evidências, feedback, diff documental e as
+      fontes canônicas aplicáveis. Reconcilie apenas o PB-* e a FEAT-* do ciclo.
 
       - Marque o PB selecionado como accepted e registre evidências reais.
       - type=new: crie exatamente o próximo FEAT-* e referencie o PB aceito.
@@ -476,10 +412,9 @@ nodes:
       - Nunca renumere, reutilize ou apague IDs.
       - Bugs/dívidas/manutenção não criam uma FEAT-* nova.
       - Não decida, adie ou conclua itens de backlog alheios ao ciclo.
-      - Releia feature-plan, implementation-report, feature-review, o feedback
-        do stakeholder, feature-validation.json e o diff. Atualize somente a
-        documentação canônica realmente afetada pelo comportamento, contrato,
-        configuração ou uso da feature; não faça churn em documentos alheios.
+      - Atualize somente a documentação canônica realmente afetada pelo
+        comportamento, contrato, configuração ou uso da feature; não faça churn
+        em documentos alheios.
       - Crie ou atualize sempre CHANGELOG.md na raiz, preservando o formato já
         adotado pelo projeto. Registre de forma humana o PB/FEAT, a mudança
         entregue e qualquer compatibilidade ou migração relevante.
@@ -501,7 +436,6 @@ nodes:
       - implemented_backlog_covered_by_features:
           features_path: docs/FEATURES.md
           backlog_path: docs/PROJECT_BACKLOG.md
-      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py reconcile"
     next: feature.final_gate
 
   - id: feature.final_gate

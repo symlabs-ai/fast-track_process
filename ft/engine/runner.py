@@ -19,6 +19,7 @@ from typing import Any
 
 from ft.engine import paths
 from ft.engine.graph import Node, load_graph
+from ft.engine.context_profiles import compose_context_profile
 from ft.engine.state import StateManager
 from ft.engine.delegate import (
     delegate_to_llm,
@@ -301,8 +302,21 @@ def _resolve_validator_root(path: str, project_root: str, work_dir: str | None) 
     return work_dir
 
 
-def run_validators(node: Node, project_root: str, state_dir: str | None = None, work_dir: str | None = None) -> ValidationResult:
-    """Roda todos os validadores de um node. Retorna resultado agregado."""
+def run_validators(
+    node: Node,
+    project_root: str,
+    state_dir: str | None = None,
+    work_dir: str | None = None,
+    *,
+    resume: bool = False,
+) -> ValidationResult:
+    """Roda todos os validadores de um node. Retorna resultado agregado.
+
+    ``command_succeeds`` pode declarar ``resume_command`` junto de ``command``.
+    O comando alternativo só é selecionado por uma retomada explícita; execuções
+    normais continuam usando ``command``. Isso permite que uma retomada valide um
+    receipt determinístico sem repetir o comando caro que o produziu.
+    """
     items = []
     extra_artifacts: dict[str, str] = {}
 
@@ -349,15 +363,31 @@ def run_validators(node: Node, project_root: str, state_dir: str | None = None, 
                 else:
                     passed, detail = fn(project_root=gate_root)
             elif isinstance(args, dict):
+                resolved_args = dict(args)
+                if name == "command_succeeds":
+                    resume_command = resolved_args.pop("resume_command", None)
+                    if resume and resume_command is not None:
+                        if (
+                            not isinstance(resume_command, str)
+                            or not resume_command.strip()
+                        ):
+                            passed, detail = (
+                                False,
+                                "command_succeeds FAIL: resume_command deve ser uma string não vazia",
+                            )
+                            items.append(
+                                ValidationItem(name=name, passed=passed, detail=detail)
+                            )
+                            continue
+                        resolved_args["command"] = resume_command
                 # sections_unchanged: resolve snapshot_path relativo ao state_dir
                 if name == "sections_unchanged" and state_dir and "snapshot_path" in args:
-                    resolved_args = dict(args)
                     resolved_args["snapshot_path"] = str(
                         Path(state_dir) / args["snapshot_path"]
                     )
                     passed, detail = fn(**resolved_args, project_root=_eff_root(args.get("path", "")))
                 else:
-                    passed, detail = fn(**args, project_root=_eff_root())
+                    passed, detail = fn(**resolved_args, project_root=_eff_root())
             # Validadores simples
             elif isinstance(args, bool) and args is True:
                 # Prefer work_dir (worktree) when available — LLM escreve lá
@@ -2146,6 +2176,36 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             full_max_lines=full_max_lines,
         )
 
+    def _compose_profile_context(
+        self,
+        node: Node,
+        original_prompt: str,
+        state: Any,
+        selection: LLMSelection,
+    ) -> tuple[str, list[str]]:
+        """Apply the node profile once, independently of provider/attempt kind."""
+        if not node.context_profile:
+            return original_prompt, []
+        result = compose_context_profile(
+            node.context_profile,
+            self._work_dir,
+            original_prompt,
+            last_approval_message=getattr(state, "last_approval_message", None),
+            base_commit=getattr(state, "base_commit", None),
+        )
+        print(
+            ui.dim(
+                f"  Context profile {node.context_profile}: "
+                f"{len(result.loaded_paths)} recortes, {len(result.context)} chars"
+            )
+        )
+        deny_paths = (
+            list(result.deny_read_paths)
+            if selection.engine == "opencode"
+            else []
+        )
+        return result.prompt, deny_paths
+
     def _start_llm_log(
         self,
         state: Any,
@@ -2854,7 +2914,25 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             self.project_root,
             state_dir=str(self.state_mgr.path.parent),
             work_dir=self._run_dir,
+            resume=True,
         )
+        has_resume_command = any(
+            isinstance(spec.get("command_succeeds"), dict)
+            and "resume_command" in spec["command_succeeds"]
+            for spec in node.validators
+        )
+        if not validation.passed and has_resume_command:
+            self._print_validation(validation)
+            print(ui.warn(
+                "Validação leve de retomada falhou — executando a validação "
+                "normal uma única vez antes de redelegar"
+            ))
+            validation = run_validators(
+                node,
+                self.project_root,
+                state_dir=str(self.state_mgr.path.parent),
+                work_dir=self._run_dir,
+            )
         self._print_validation(validation)
         if not validation.passed:
             state = self.state_mgr.load()
@@ -3165,6 +3243,16 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             task_prompt = compact_bundle
             print(ui.dim("  OpenCode: prompt compacto de file bundle"))
 
+        if node.context_profile:
+            task_prompt, deny_paths = self._compose_profile_context(
+                node,
+                task_prompt,
+                state,
+                selection,
+            )
+            # Context profiles replace HyperMode, process KB and cycle memory.
+            return task_prompt, compact_bundle, deny_paths
+
         approval_msg = self.state_mgr.state.last_approval_message
         if approval_msg:
             task_prompt = (
@@ -3178,7 +3266,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             selection.engine == "opencode"
             and node.type in {"build", "test_red", "test_green", "refactor"}
         )
-        if node.type in ("discovery", "document", "retro") or opencode_code_node:
+        if (
+            not node.context_profile
+            and (node.type in ("discovery", "document", "retro") or opencode_code_node)
+        ):
             existing = self._filter_no_pre_seed_docs(
                 node,
                 self._scan_hyper_mode_docs(node),
@@ -3604,7 +3695,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             effective_engine == "opencode"
             and node.type in {"build", "test_red", "test_green", "refactor"}
         )
-        if node.type in ("discovery", "document", "retro") or opencode_code_node:
+        if (
+            not node.context_profile
+            and (node.type in ("discovery", "document", "retro") or opencode_code_node)
+        ):
             existing = self._filter_no_pre_seed_docs(
                 node,
                 self._scan_hyper_mode_docs(node),
@@ -3639,6 +3733,19 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             f"{history_block}"
             f"{fix_instruction}"
         )
+        profile_deny_paths: list[str] = []
+        if node.context_profile:
+            prompt, profile_deny_paths = self._compose_profile_context(
+                node,
+                prompt,
+                state,
+                llm_selection,
+            )
+            opencode_options = self._opencode_options_for_node(
+                node,
+                effective_engine,
+                deny_read_paths=profile_deny_paths,
+            )
 
         log_path = self._start_llm_log(
             state,
@@ -3756,8 +3863,21 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     node,
                     f"gate-fix-{attempt}",
                 )
+                gate_fix_options: OpenCodeOptions | None = None
+                if node.context_profile:
+                    fix_prompt, gate_deny_paths = self._compose_profile_context(
+                        node,
+                        fix_prompt,
+                        state,
+                        gate_fix_selection,
+                    )
+                    gate_fix_options = self._opencode_options_for_node(
+                        node,
+                        gate_fix_selection.engine,
+                        deny_read_paths=gate_deny_paths,
+                    )
                 try:
-                    delegate_to_llm(
+                    gate_fix_kwargs: dict = dict(
                         task=fix_prompt,
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(["src/", "tests/", "docs/", "main.py", "app.py", "server.py", "frontend/"]),
@@ -3767,6 +3887,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         log_path=log_path,
                         stream_prefix=self._stream_prefix(gate_fix_selection.engine),
                     )
+                    if gate_fix_options is not None:
+                        self._apply_opencode_options(gate_fix_kwargs, gate_fix_options)
+                    delegate_to_llm(**gate_fix_kwargs)
                 finally:
                     self._clear_active_llm_log(state)
 
@@ -4109,29 +4232,38 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """Build review prompt and read restrictions for one provider attempt."""
         task_prompt = build_task_prompt(node, {})
         deny_read_paths: list[str] = []
-        if selection.engine != "opencode":
-            return task_prompt, deny_read_paths
-
-        output_doc_names = {
-            Path(output).name
-            for output in node.outputs
-            if Path(output).parts and Path(output).parts[0] == "docs"
-        }
-        existing = {
-            name: content
-            for name, content in self._scan_hyper_mode_docs(node).items()
-            if name not in output_doc_names
-        }
-        if existing:
-            task_prompt = self._hyper_mode_prompt_for_node(
+        if node.context_profile:
+            task_prompt, deny_read_paths = self._compose_profile_context(
                 node,
-                existing,
                 task_prompt,
-                default_preview_lines=25,
-                allow_followup_reads=False,
+                self.state_mgr.state,
+                selection,
             )
-            deny_read_paths.extend(f"docs/{name}" for name in existing)
-            print(f"  Hyper-mode review: {len(existing)} docs existentes carregados")
+            if selection.engine != "opencode":
+                return task_prompt, []
+        elif selection.engine == "opencode":
+            output_doc_names = {
+                Path(output).name
+                for output in node.outputs
+                if Path(output).parts and Path(output).parts[0] == "docs"
+            }
+            existing = {
+                name: content
+                for name, content in self._scan_hyper_mode_docs(node).items()
+                if name not in output_doc_names
+            }
+            if existing:
+                task_prompt = self._hyper_mode_prompt_for_node(
+                    node,
+                    existing,
+                    task_prompt,
+                    default_preview_lines=25,
+                    allow_followup_reads=False,
+                )
+                deny_read_paths.extend(f"docs/{name}" for name in existing)
+                print(f"  Hyper-mode review: {len(existing)} docs existentes carregados")
+        else:
+            return task_prompt, deny_read_paths
 
         missing_output_dirs = [
             output
@@ -4248,6 +4380,11 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         finally:
             self._clear_active_llm_log(state)
 
+        # Quando uma validação já foi executada depois da última possível
+        # mutação do worktree, reutilize-a no fechamento. Alguns validadores
+        # disparam suítes completas; executá-los novamente sem qualquer escrita
+        # intermediária só acrescenta latência e não aumenta a confiança.
+        post_delegation_validation: ValidationResult | None = None
         if not result.success:
             # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
             # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
@@ -4255,6 +4392,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             if pre_check.passed:
                 print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
+                post_delegation_validation = pre_check
             else:
                 rejected_review_output = self._read_review_output(node)
                 rejected_verdict = (
@@ -4346,6 +4484,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 )
                 if recovery_result.success or recovery_check.passed:
                     result.success = True
+                    post_delegation_validation = recovery_check
                 else:
                     blocking_reason = self._review_blocking_evidence_reason(node)
                     if blocking_reason:
@@ -4372,7 +4511,16 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             self.state_mgr.record_artifact(name, output_path)
 
         # Validar artefatos deterministicos
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        validation = (
+            post_delegation_validation
+            if post_delegation_validation is not None
+            else run_validators(
+                node,
+                self.project_root,
+                state_dir=str(self.state_mgr.path.parent),
+                work_dir=self._run_dir,
+            )
+        )
         self._print_validation(validation)
 
         if not validation.passed:
@@ -4495,14 +4643,29 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             state,
             node=self.graph.nodes.get(state.current_node),
         )
+        exploration_prompt = (
+            f"MODO EXPLORAÇÃO — pedido do stakeholder:\n\n{request}\n\n"
+            f"Implemente a mudança pedida. Diga DONE e liste arquivos alterados. "
+            f"Diga BLOCKED se não conseguir."
+        )
+        exploration_options: OpenCodeOptions | None = None
+        if node := self.graph.nodes.get(state.current_node):
+            if node.context_profile:
+                exploration_prompt, exploration_deny_paths = self._compose_profile_context(
+                    node,
+                    exploration_prompt,
+                    state,
+                    llm_selection,
+                )
+                exploration_options = self._opencode_options_for_node(
+                    node,
+                    llm_selection.engine,
+                    deny_read_paths=exploration_deny_paths,
+                )
 
         from ft.engine.delegate import delegate_to_llm
-        result = delegate_to_llm(
-            task=(
-                f"MODO EXPLORAÇÃO — pedido do stakeholder:\n\n{request}\n\n"
-                f"Implemente a mudança pedida. Diga DONE e liste arquivos alterados. "
-                f"Diga BLOCKED se não conseguir."
-            ),
+        exploration_kwargs: dict = dict(
+            task=exploration_prompt,
             project_root=self._work_dir,
             allowed_paths=self._delegate_allowed_paths(allowed),
             llm_engine=llm_selection.engine,
@@ -4510,6 +4673,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             llm_effort=llm_selection.effort,
             log_path=log_path,
         )
+        if exploration_options is not None:
+            self._apply_opencode_options(exploration_kwargs, exploration_options)
+        result = delegate_to_llm(**exploration_kwargs)
 
         summary = "DONE" if result.success else f"BLOCKED: {result.output[:120]}"
         state.exploration_log.append(f"[{ts}] {request} → {summary}")
@@ -4547,8 +4713,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 node=node,
             )
             from ft.engine.delegate import delegate_to_llm
-            report_result = delegate_to_llm(
-                task=(
+            report_prompt = (
                     f"Gere docs/exploration-report.md com o relatório da sessão de exploração.\n\n"
                     f"Pedidos realizados:\n{log_text}\n\n"
                     f"O relatório deve ter:\n"
@@ -4561,7 +4726,22 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     f"## Sugestões para o Próximo Ciclo\n"
                     f"Itens que o stakeholder pode querer levar adiante (em aberto — stakeholder decide).\n\n"
                     f"Diga DONE ao terminar."
-                ),
+            )
+            report_options: OpenCodeOptions | None = None
+            if node.context_profile:
+                report_prompt, report_deny_paths = self._compose_profile_context(
+                    node,
+                    report_prompt,
+                    state,
+                    llm_selection,
+                )
+                report_options = self._opencode_options_for_node(
+                    node,
+                    llm_selection.engine,
+                    deny_read_paths=report_deny_paths,
+                )
+            report_kwargs: dict = dict(
+                task=report_prompt,
                 project_root=self._work_dir,
                 allowed_paths=self._delegate_allowed_paths(allowed),
                 llm_engine=llm_selection.engine,
@@ -4569,6 +4749,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 llm_effort=llm_selection.effort,
                 log_path=str(self._llm_log_dir() / "exploration_report.log"),
             )
+            if report_options is not None:
+                self._apply_opencode_options(report_kwargs, report_options)
+            report_result = delegate_to_llm(**report_kwargs)
             if report_result.success:
                 report_path = Path(self._work_dir) / "docs" / "exploration-report.md"
                 print(ui.success(f"Relatório de exploração gerado: {report_path}"))
@@ -4890,7 +5073,6 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         if retry and retry_node.executor.startswith("llm"):
             # Reenviar ao LLM com feedback da rejeicao
-            from ft.engine.delegate import delegate_with_feedback
             original_prompt = build_task_prompt(retry_node, {})
 
             allowed = self._resolve_allowed_paths(retry_node)
@@ -4913,7 +5095,19 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 "stakeholder-retry",
             )
             retry_engine = retry_selection.engine
-            opencode_options = self._opencode_options_for_node(retry_node, retry_engine)
+            retry_deny_paths: list[str] = []
+            if retry_node.context_profile:
+                original_prompt, retry_deny_paths = self._compose_profile_context(
+                    retry_node,
+                    original_prompt,
+                    state,
+                    retry_selection,
+                )
+            opencode_options = self._opencode_options_for_node(
+                retry_node,
+                retry_engine,
+                deny_read_paths=retry_deny_paths,
+            )
 
             try:
                 result = delegate_with_feedback(

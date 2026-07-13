@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -16,7 +17,7 @@ import sys
 import tempfile
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RECEIPT_KIND = "ft.feature.product-validation"
 PROCESS_PATHS = (
     ".ft/process/feature/process.yml",
@@ -30,6 +31,16 @@ SNAPSHOT_KEYS = (
     "commands",
     "tools",
     "files",
+)
+RECEIPT_KEYS = (
+    "schema_version",
+    "kind",
+    "product_root",
+    "commands",
+    "file_count",
+    "fingerprint",
+    "result",
+    "recorded_at",
 )
 
 
@@ -179,7 +190,22 @@ def _normalize_product_root(root: Path, raw_product_root: str) -> str:
     if candidate.is_absolute() or ".." in candidate.parts:
         raise ReceiptError("product_root deve ser relativo à raiz do projeto")
     normalized = candidate.as_posix().strip("/")
-    if not normalized or not (root / normalized / "Makefile").is_file():
+    product_path = root / normalized
+    if not normalized:
+        raise ReceiptError("product_root deve ser relativo à raiz do projeto")
+    current = root
+    for part in Path(normalized).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ReceiptError(f"product_root não pode conter symlink: {normalized}")
+    try:
+        resolved = product_path.resolve(strict=True)
+        resolved.relative_to(root)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        raise ReceiptError(
+            f"product_root ausente ou fora da raiz do projeto: {normalized}"
+        ) from exc
+    if not resolved.is_dir() or not (resolved / "Makefile").is_file():
         raise ReceiptError(
             f"Makefile ausente em product_root: {normalized or raw_product_root}"
         )
@@ -189,8 +215,8 @@ def _normalize_product_root(root: Path, raw_product_root: str) -> str:
 def _commands(product_root: str) -> list[list[str]]:
     make = ["env", "-u", "MAKEFLAGS", "-u", "MFLAGS", "-u", "GNUMAKEFLAGS", "make"]
     return [
-        [*make, "-C", product_root, "test"],
         [*make, "-C", product_root, "build"],
+        [*make, "-C", product_root, "test"],
     ]
 
 
@@ -246,26 +272,6 @@ def _load_receipt(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _changed_paths(stored: dict[str, Any], current: dict[str, Any]) -> list[str]:
-    def by_path(payload: dict[str, Any]) -> dict[str, object]:
-        files = payload.get("files")
-        if not isinstance(files, list):
-            return {}
-        return {
-            str(item.get("path")): item
-            for item in files
-            if isinstance(item, dict) and item.get("path")
-        }
-
-    before = by_path(stored)
-    after = by_path(current)
-    return sorted(
-        path
-        for path in before.keys() | after.keys()
-        if before.get(path) != after.get(path)
-    )
-
-
 def _write_receipt(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -302,7 +308,12 @@ def command_record(args: argparse.Namespace) -> None:
         )
     path = _receipt_path(args.root, args.receipt, snapshot["product_root"])
     payload = {
-        **snapshot,
+        "schema_version": snapshot["schema_version"],
+        "kind": snapshot["kind"],
+        "product_root": snapshot["product_root"],
+        "commands": snapshot["commands"],
+        "file_count": len(snapshot["files"]),
+        "fingerprint": snapshot["fingerprint"],
         "result": "pass",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -314,6 +325,8 @@ def command_verify(args: argparse.Namespace) -> None:
     product_root = _normalize_product_root(args.root, args.product_root)
     path = _receipt_path(args.root, args.receipt, product_root)
     stored = _load_receipt(path)
+    if set(stored) != set(RECEIPT_KEYS):
+        raise ReceiptError("receipt compacto contém campos ausentes ou não permitidos")
     if (
         stored.get("schema_version") != SCHEMA_VERSION
         or stored.get("kind") != RECEIPT_KIND
@@ -321,22 +334,37 @@ def command_verify(args: argparse.Namespace) -> None:
         raise ReceiptError("schema/kind do receipt não é suportado")
     if stored.get("result") != "pass":
         raise ReceiptError("receipt não registra uma validação completa PASS")
-    if any(key not in stored for key in SNAPSHOT_KEYS):
-        raise ReceiptError("receipt não contém todo o contexto determinístico")
-    if _fingerprint(stored) != stored.get("fingerprint"):
-        raise ReceiptError("fingerprint interno do receipt é inválido")
+    file_count = stored.get("file_count")
+    if isinstance(file_count, bool) or not isinstance(file_count, int) or file_count < 0:
+        raise ReceiptError("file_count do receipt compacto é inválido")
+    fingerprint = stored.get("fingerprint")
+    if not isinstance(fingerprint, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", fingerprint
+    ):
+        raise ReceiptError("fingerprint do receipt compacto é inválido")
+    recorded_at = stored.get("recorded_at")
+    if not isinstance(recorded_at, str) or not recorded_at.strip():
+        raise ReceiptError("recorded_at do receipt compacto é inválido")
+    try:
+        datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ReceiptError("recorded_at do receipt compacto é inválido") from exc
+    if not isinstance(stored.get("commands"), list):
+        raise ReceiptError("commands do receipt compacto é inválido")
 
     current = _snapshot(args.root, product_root)
+    if (
+        stored.get("product_root") != current["product_root"]
+        or stored.get("commands") != current["commands"]
+    ):
+        raise ReceiptError("fingerprint interno do receipt é inválido")
     if current["fingerprint"] != stored.get("fingerprint"):
-        changed = _changed_paths(stored, current)
-        detail = ", ".join(changed[:8])
-        if len(changed) > 8:
-            detail += f", … (+{len(changed) - 8})"
-        if not detail:
-            detail = "ferramentas, versões ou comandos"
         raise ReceiptError(
-            "receipt não corresponde ao estado atual do produto: " + detail
+            "receipt não corresponde ao estado atual do produto: "
+            "inputs executáveis, ferramentas ou comandos mudaram"
         )
+    if stored.get("file_count") != len(current["files"]):
+        raise ReceiptError("fingerprint interno do receipt é inválido")
     print(f"product validation receipt VERIFIED: {path.relative_to(args.root)}")
 
 

@@ -199,6 +199,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature"
+    assert graph.meta["version"] == "1.2.0"
     assert graph.meta["execution_policy"] == {
         "entrypoint": "feature",
         "template": "feature",
@@ -252,9 +253,28 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert "CHANGELOG.md" in nodes["feature.reconcile"].write_scope
 
     raw = PROCESS.read_text(encoding="utf-8")
+    process_payload = yaml.safe_load(raw)
+    raw_nodes = {node["id"]: node for node in process_payload["nodes"]}
     assert "templates/feature" not in raw
     assert ".ft/process/process.yml" not in raw
     assert ".ft/process/feature/scripts/" in raw
+    assert "hyper_mode_" not in raw
+    assert "Leia obrigatoriamente" not in raw
+    assert "Releia feature-plan" not in raw
+    assert {
+        node_id: raw_nodes[node_id]["context_profile"]
+        for node_id in (
+            "feature.discovery",
+            "feature.implement",
+            "feature.review",
+            "feature.reconcile",
+        )
+    } == {
+        "feature.discovery": "feature_delta.discovery",
+        "feature.implement": "feature_delta.implement",
+        "feature.review": "feature_delta.review",
+        "feature.reconcile": "feature_delta.reconcile",
+    }
     assert "product.sh test" in raw
     assert "product.sh build" in raw
     assert "cd project" not in raw
@@ -267,6 +287,11 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
                     "python .ft/process/feature/scripts/validate_feature.py "
                     "implementation && bash .ft/process/feature/scripts/product.sh "
                     "full --record docs/feature-validation.json"
+                ),
+                "resume_command": (
+                    "python .ft/process/feature/scripts/validate_feature.py "
+                    "implementation && bash .ft/process/feature/scripts/product.sh "
+                    "verify docs/feature-validation.json"
                 ),
                 "timeout": 300,
             }
@@ -289,6 +314,26 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
             "command_succeeds": "python .ft/process/feature/scripts/validate_feature.py reconcile"
         },
     ]
+    assert nodes["feature.preflight"].validators[-2:] == [
+        {
+            "command_succeeds": {
+                "command": "bash .ft/process/feature/scripts/product.sh build",
+                "timeout": 300,
+            }
+        },
+        {
+            "command_succeeds": {
+                "command": "bash .ft/process/feature/scripts/product.sh test",
+                "timeout": 300,
+            }
+        },
+    ]
+    reconcile_commands = [
+        validator["command_succeeds"]
+        for validator in nodes["feature.reconcile"].validators
+        if "command_succeeds" in validator
+    ]
+    assert reconcile_commands == []
 
     policy = graph.meta["artifact_policy"]
     assert "CHANGELOG.md" in policy["canonical"]
@@ -322,26 +367,26 @@ def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
     assert full.returncode == 0, full.stderr
     assert (root / "validation-calls.log").read_text(
         encoding="utf-8"
-    ) == "test\nbuild\n"
+    ) == "build\ntest\n"
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["kind"] == "ft.feature.product-validation"
     assert payload["result"] == "pass"
     assert payload["fingerprint"].startswith("sha256:")
+    assert payload["product_root"] == "project"
+    assert isinstance(payload["recorded_at"], str)
+    assert payload["file_count"] > 0
+    assert set(payload) == {
+        "schema_version",
+        "kind",
+        "product_root",
+        "commands",
+        "file_count",
+        "fingerprint",
+        "result",
+        "recorded_at",
+    }
     assert payload["commands"] == [
-        [
-            "env",
-            "-u",
-            "MAKEFLAGS",
-            "-u",
-            "MFLAGS",
-            "-u",
-            "GNUMAKEFLAGS",
-            "make",
-            "-C",
-            "project",
-            "test",
-        ],
         [
             "env",
             "-u",
@@ -355,13 +400,20 @@ def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
             "project",
             "build",
         ],
+        [
+            "env",
+            "-u",
+            "MAKEFLAGS",
+            "-u",
+            "MFLAGS",
+            "-u",
+            "GNUMAKEFLAGS",
+            "make",
+            "-C",
+            "project",
+            "test",
+        ],
     ]
-    assert set(payload["tools"]) == {"bash", "git", "make", "node", "npm", "python"}
-    recorded_paths = {item["path"] for item in payload["files"]}
-    assert "project/app.py" in recorded_paths
-    assert "requirements.txt" in recorded_paths
-    assert ".ft/process/feature/scripts/product.sh" in recorded_paths
-    assert ".ft/process/feature/scripts/product_receipt.py" in recorded_paths
 
     verified = _run_product_helper(root, "verify", "docs/feature-validation.json")
 
@@ -369,7 +421,7 @@ def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
     assert "VERIFIED" in verified.stdout
     assert (root / "validation-calls.log").read_text(
         encoding="utf-8"
-    ) == "test\nbuild\n"
+    ) == "build\ntest\n"
 
 
 def test_feature_implementation_validation_fails_before_full_suite(tmp_path):
@@ -377,7 +429,7 @@ def test_feature_implementation_validation_fails_before_full_suite(tmp_path):
     _clear_discovery(root)
     _snapshot_baseline(root)
     # Há mudança de produto/teste potencial, mas o relatório estrutural exigido
-    # está ausente. O comando composto deve parar antes de make test/build.
+    # está ausente. O comando composto deve parar antes de make build/test.
     _write(root, "project/test_app.py", "def test_value():\n    assert True\n")
     node = load_graph(PROCESS).nodes["feature.implement"]
 
@@ -399,13 +451,13 @@ def test_feature_product_verify_rejects_source_lockfile_and_receipt_tampering(tm
     _write(root, "project/app.py", "VALUE = 2\n")
     changed_source = _run_product_helper(root, "verify", receipt)
     assert changed_source.returncode == 1
-    assert "project/app.py" in changed_source.stderr
+    assert "inputs executáveis" in changed_source.stderr
 
     _write(root, "project/app.py", "VALUE = 1\n")
     _write(root, "requirements.txt", "example==2\n")
     changed_lockfile = _run_product_helper(root, "verify", receipt)
     assert changed_lockfile.returncode == 1
-    assert "requirements.txt" in changed_lockfile.stderr
+    assert "inputs executáveis" in changed_lockfile.stderr
 
     _write(root, "requirements.txt", "example==1\n")
     product_script.write_text(
@@ -413,7 +465,7 @@ def test_feature_product_verify_rejects_source_lockfile_and_receipt_tampering(tm
     )
     changed_script = _run_product_helper(root, "verify", receipt)
     assert changed_script.returncode == 1
-    assert ".ft/process/feature/scripts/product.sh" in changed_script.stderr
+    assert "inputs executáveis" in changed_script.stderr
 
     product_script.write_text(original_product_script, encoding="utf-8")
     receipt_path = root / receipt
@@ -465,6 +517,44 @@ def test_feature_product_receipt_symlink_never_deletes_target(tmp_path):
     assert receipt_path.is_symlink()
 
 
+def test_feature_product_root_symlink_outside_project_is_rejected(tmp_path):
+    root = _receipt_project(tmp_path / "root")
+    external = tmp_path / "external-product"
+    external.mkdir()
+    _write(external, "Makefile", "test:\n\t@true\n\nbuild:\n\t@true\n")
+    shutil.rmtree(root / "project")
+    (root / "project").symlink_to(external, target_is_directory=True)
+
+    result = _run_product_helper(
+        root, "full", "--record", "docs/feature-validation.json"
+    )
+
+    assert result.returncode != 0
+    assert "product_root não pode conter symlink" in result.stderr
+    assert not (root / "docs" / "feature-validation.json").exists()
+
+
+def test_feature_product_verify_rejects_non_compact_or_mistyped_receipt(tmp_path):
+    root = _receipt_project(tmp_path)
+    receipt = root / "docs" / "feature-validation.json"
+    full = _run_product_helper(root, "full", "--record", str(receipt.relative_to(root)))
+    assert full.returncode == 0, full.stderr
+    original = json.loads(receipt.read_text(encoding="utf-8"))
+
+    for mutate, expected in (
+        (lambda payload: payload.update({"files": []}), "campos ausentes ou não permitidos"),
+        (lambda payload: payload.update({"file_count": True}), "file_count"),
+        (lambda payload: payload.update({"recorded_at": None}), "recorded_at"),
+        (lambda payload: payload.update({"fingerprint": "sha256:not-a-digest"}), "fingerprint"),
+    ):
+        payload = dict(original)
+        mutate(payload)
+        receipt.write_text(json.dumps(payload), encoding="utf-8")
+        verified = _run_product_helper(root, "verify", str(receipt.relative_to(root)))
+        assert verified.returncode != 0
+        assert expected in verified.stderr
+
+
 def test_feature_product_full_neutralizes_makeflags(tmp_path, monkeypatch):
     root = _receipt_project(tmp_path)
     monkeypatch.setenv("MAKEFLAGS", "-n -i")
@@ -478,7 +568,23 @@ def test_feature_product_full_neutralizes_makeflags(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stderr
     assert (root / "validation-calls.log").read_text(
         encoding="utf-8"
-    ) == "test\nbuild\n"
+    ) == "build\ntest\n"
+
+
+def test_feature_product_build_and_test_neutralize_makeflags(tmp_path, monkeypatch):
+    root = _receipt_project(tmp_path)
+    monkeypatch.setenv("MAKEFLAGS", "-n -i")
+    monkeypatch.setenv("MFLAGS", "-n")
+    monkeypatch.setenv("GNUMAKEFLAGS", "-n")
+
+    build = _run_product_helper(root, "build")
+    test = _run_product_helper(root, "test")
+
+    assert build.returncode == 0, build.stderr
+    assert test.returncode == 0, test.stderr
+    assert (root / "validation-calls.log").read_text(
+        encoding="utf-8"
+    ) == "build\ntest\n"
 
 
 def test_feature_product_tracks_root_inputs_but_not_reconcile_docs(tmp_path):
@@ -495,7 +601,7 @@ def test_feature_product_tracks_root_inputs_but_not_reconcile_docs(tmp_path):
     _write(root, "shared.mk", "VALUE := two\n")
     changed_input = _run_product_helper(root, "verify", receipt)
     assert changed_input.returncode == 1
-    assert "shared.mk" in changed_input.stderr
+    assert "inputs executáveis" in changed_input.stderr
 
 
 def test_feature_product_focal_executes_argv_directly_from_product_root(tmp_path):

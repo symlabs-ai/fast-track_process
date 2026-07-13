@@ -78,7 +78,7 @@ Uso:
   $0 verify <receipt.json>
   $0 focal -- <comando> [argumentos...]
 
-full executa test+build e grava um receipt ligado aos arquivos, lockfiles,
+full executa build+test e grava um receipt ligado aos arquivos, lockfiles,
 scripts, versões das ferramentas e comandos exatos. verify não reexecuta a
 suíte: aceita somente um receipt PASS correspondente ao estado atual. focal
 executa um comando direto (sem eval) a partir de $PRODUCT_REL/.
@@ -89,7 +89,10 @@ case "${1:-path}" in
   path)
     printf '%s\n' "$PRODUCT_REL"
     ;;
-  test|build|run)
+  test|build)
+    exec env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_ROOT" "$1"
+    ;;
+  run)
     exec make -C "$PRODUCT_ROOT" "$1"
     ;;
   url)
@@ -104,18 +107,18 @@ case "${1:-path}" in
     receipt="$2"
     receipt_tool invalidate --receipt "$receipt"
     before="$(receipt_tool fingerprint)"
-    if (cd "$ROOT" && env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_REL" test); then
-      :
-    else
-      status="$?"
-      printf 'ERRO: validação completa falhou em test; receipt não foi gravado\n' >&2
-      exit "$status"
-    fi
     if (cd "$ROOT" && env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_REL" build); then
       :
     else
       status="$?"
       printf 'ERRO: validação completa falhou em build; receipt não foi gravado\n' >&2
+      exit "$status"
+    fi
+    if (cd "$ROOT" && env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_REL" test); then
+      :
+    else
+      status="$?"
+      printf 'ERRO: validação completa falhou em test; receipt não foi gravado\n' >&2
       exit "$status"
     fi
     receipt_tool record --receipt "$receipt" --expected "$before"

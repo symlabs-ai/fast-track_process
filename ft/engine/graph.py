@@ -61,6 +61,9 @@ class Node:
     hyper_mode_full_docs: list[str] | None = None
     hyper_mode_preview_lines: int | None = None
     hyper_mode_full_max_lines: int | None = None
+    # Perfil deterministico e limitado de contexto. Quando definido, substitui
+    # o HyperMode/KB/cycle-memory somente para este node.
+    context_profile: str | None = None
 
 
 class ProcessGraph:
@@ -254,6 +257,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             hyper_mode_full_docs=node_raw.get("hyper_mode_full_docs"),
             hyper_mode_preview_lines=node_raw.get("hyper_mode_preview_lines"),
             hyper_mode_full_max_lines=node_raw.get("hyper_mode_full_max_lines"),
+            context_profile=node_raw.get("context_profile"),
         ))
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}

@@ -1,7 +1,7 @@
 # Feature — Diagrama de Fluxo
 
 Fluxo do processo definido em [`process.yml`](./process.yml) (`id: feature`,
-versão `1.0.0`). Gerado a partir dos `nodes`, seus `next`, `branches`,
+versão `1.2.0`). Gerado a partir dos `nodes`, seus `next`, `branches`,
 `reject_next` e `on_fail`.
 
 ## Legenda
@@ -86,4 +86,4 @@ flowchart TD
 - **Falha de revisão:** `review` com `on_fail` abre um human_gate e retorna para
   `implement`.
 - **Rejeição no aceite:** `acceptance` (reject) volta para `implement`, repetindo
-  `make test` / `make build`.
+  `make build` / `make test`.

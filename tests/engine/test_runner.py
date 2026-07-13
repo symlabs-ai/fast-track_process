@@ -272,6 +272,7 @@ class TestRecoverOrphanedDelegation:
 
         assert recovered is True
         delegate.assert_not_called()
+        assert validators.call_args.kwargs["resume"] is True
         auto_commit.assert_called_once()
         record_summary.assert_called_once()
         state = runner_v2.state_mgr.load()
@@ -293,11 +294,106 @@ class TestRecoverOrphanedDelegation:
             recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
 
         assert recovered is False
+        assert validators.call_count == 1
+        assert validators.call_args.kwargs["resume"] is True
         auto_commit.assert_not_called()
         state = runner_v2.state_mgr.load()
         assert state.current_node == "step.03.implementacao"
         assert state.node_status == "ready"
         assert state.active_llm_log is None
+
+    def test_recovery_uses_resume_command_instead_of_expensive_command(
+        self, runner_v2
+    ):
+        self._orphan_build(runner_v2)
+        node = runner_v2.graph.get_node("step.03.implementacao")
+        node.validators = [
+            {
+                "command_succeeds": {
+                    "command": "python -c 'raise SystemExit(23)'",
+                    "resume_command": "python -c 'print(\"receipt verified\")'",
+                    "timeout": 1,
+                }
+            }
+        ]
+
+        with (
+            patch.object(runner_v2.state_mgr, "_is_pid_alive", return_value=False),
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+        ):
+            recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
+
+        assert recovered is True
+        auto_commit.assert_called_once()
+        state = runner_v2.state_mgr.load()
+        assert state.current_node == "gate.02.delivery"
+        assert "step.03.implementacao" in state.completed_nodes
+
+    def test_missing_receipt_falls_back_to_full_once_without_llm(self, runner_v2):
+        self._orphan_build(runner_v2)
+        node = runner_v2.graph.get_node("step.03.implementacao")
+        node.validators = [
+            {
+                "command_succeeds": {
+                    "command": "python -c 'print(\"full recorded\")'",
+                    "resume_command": (
+                        "test -f docs/definitely-missing-feature-validation.json"
+                    ),
+                    "timeout": 1,
+                }
+            }
+        ]
+
+        with (
+            patch.object(runner_v2.state_mgr, "_is_pid_alive", return_value=False),
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+            patch("ft.engine.runner.delegate_to_llm") as delegate,
+            patch(
+                "ft.engine.runner.run_validators", wraps=run_validators
+            ) as validators,
+        ):
+            recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
+
+        assert recovered is True
+        assert validators.call_count == 2
+        assert validators.call_args_list[0].kwargs["resume"] is True
+        assert "resume" not in validators.call_args_list[1].kwargs
+        delegate.assert_not_called()
+        auto_commit.assert_called_once()
+        assert runner_v2.state_mgr.load().current_node == "gate.02.delivery"
+
+    def test_resume_and_full_failure_reset_ready_without_llm(self, runner_v2):
+        self._orphan_build(runner_v2)
+        node = runner_v2.graph.get_node("step.03.implementacao")
+        node.validators = [
+            {
+                "command_succeeds": {
+                    "command": "python -c 'raise SystemExit(41)'",
+                    "resume_command": "test -f docs/missing-receipt.json",
+                    "timeout": 1,
+                }
+            }
+        ]
+
+        with (
+            patch.object(runner_v2.state_mgr, "_is_pid_alive", return_value=False),
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+            patch("ft.engine.runner.delegate_to_llm") as delegate,
+            patch(
+                "ft.engine.runner.run_validators", wraps=run_validators
+            ) as validators,
+        ):
+            recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
+
+        assert recovered is False
+        assert validators.call_count == 2
+        assert validators.call_args_list[0].kwargs["resume"] is True
+        assert "resume" not in validators.call_args_list[1].kwargs
+        delegate.assert_not_called()
+        auto_commit.assert_not_called()
+        state = runner_v2.state_mgr.load()
+        assert state.current_node == "step.03.implementacao"
+        assert state.node_status == "ready"
 
     def test_live_delegation_is_left_untouched(self, runner_v2):
         self._orphan_build(runner_v2)
@@ -2803,10 +2899,16 @@ nodes:
                 ),
             ),
             patch("ft.engine.runner.delegate_with_feedback", side_effect=recovery_side_effect) as recovery_mock,
+            patch(
+                "ft.engine.runner.run_validators", wraps=run_validators
+            ) as validator_mock,
         ):
             runner._run_review(node)
 
         assert recovery_mock.called
+        # early check + pre-check pós-falha + check pós-recovery. O último
+        # resultado é reutilizado no fechamento, sem uma quarta suíte idêntica.
+        assert validator_mock.call_count == 3
         state = runner.state_mgr.load()
         assert state.current_node == "ft.end"
         assert state.gate_log["ft.review.visual"] == "APPROVED WITH NOTES"
@@ -3821,6 +3923,55 @@ class TestRunValidators:
 
         assert not result.passed
         assert "0.01s" in result.feedback
+
+    def test_command_succeeds_uses_resume_command_only_on_explicit_resume(
+        self, tmp_path
+    ):
+        from ft.engine.graph import Node
+
+        node = Node(
+            id="x",
+            type="gate",
+            title="X",
+            validators=[
+                {
+                    "command_succeeds": {
+                        "command": "python -c 'raise SystemExit(9)'",
+                        "resume_command": "python -c 'print(\"receipt verified\")'",
+                        "timeout": 1,
+                    }
+                }
+            ],
+        )
+
+        normal = run_validators(node, str(tmp_path))
+        resumed = run_validators(node, str(tmp_path), resume=True)
+
+        assert not normal.passed
+        assert resumed.passed
+        assert "receipt verified" in resumed.items[0].detail
+
+    def test_command_succeeds_resume_falls_back_to_normal_command(self, tmp_path):
+        from ft.engine.graph import Node
+
+        node = Node(
+            id="x",
+            type="gate",
+            title="X",
+            validators=[
+                {
+                    "command_succeeds": {
+                        "command": "python -c 'print(\"normal validator\")'",
+                        "timeout": 1,
+                    }
+                }
+            ],
+        )
+
+        resumed = run_validators(node, str(tmp_path), resume=True)
+
+        assert resumed.passed
+        assert "normal validator" in resumed.items[0].detail
 
     def test_retryable_when_llm_executor(self, tmp_path):
         from ft.engine.graph import Node

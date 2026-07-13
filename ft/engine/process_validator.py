@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ft.engine.graph import ProcessGraph, Node
+from ft.engine.context_profiles import HYPER_MODE_FIELDS, KNOWN_CONTEXT_PROFILES
 
 
 VALID_NODE_TYPES = frozenset({
@@ -109,6 +110,26 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
                 report.add_error(
                     node.id,
                     f"{field_name} deve ser um inteiro maior ou igual a zero",
+                )
+        if node.context_profile is not None:
+            if not isinstance(node.context_profile, str) or not node.context_profile.strip():
+                report.add_error(node.id, "context_profile deve ser uma string não vazia")
+            elif node.context_profile not in KNOWN_CONTEXT_PROFILES:
+                report.add_error(
+                    node.id,
+                    f"context_profile '{node.context_profile}' não reconhecido "
+                    f"(válidos: {', '.join(sorted(KNOWN_CONTEXT_PROFILES))})",
+                )
+            mixed_fields = [
+                field_name
+                for field_name in HYPER_MODE_FIELDS
+                if getattr(node, field_name) is not None
+            ]
+            if mixed_fields:
+                report.add_error(
+                    node.id,
+                    "context_profile não pode ser combinado com HyperMode: "
+                    + ", ".join(mixed_fields),
                 )
 
 

@@ -413,6 +413,22 @@ a especificidade vazou para o processo.
 | `features_catalog_valid` | `features_catalog_valid: {path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Catálogo tem schema, IDs, lifecycle, origem entregue e evidência válidos |
 | `implemented_backlog_covered_by_features` | `implemented_backlog_covered_by_features: {features_path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Todo item de feature/US entregue está representado por algum `FEAT-*` |
 
+`command_succeeds` aceita a forma composta com `command`, `timeout` e um
+`resume_command` opcional. O comando alternativo é usado somente ao recuperar
+uma delegação órfã; nos demais caminhos, inclusive retries normais, o engine
+continua executando `command`. Isso permite verificar um receipt já gravado sem
+repetir a suíte completa que o produziu. Se o comando de retomada falhar, o
+engine executa `command` uma única vez antes de considerar nova delegação; sem
+`resume_command`, não há uma segunda execução:
+
+```yaml
+validators:
+  - command_succeeds:
+      command: bash scripts/product.sh full --record docs/validation.json
+      resume_command: bash scripts/product.sh verify docs/validation.json
+      timeout: 300
+```
+
 ### Testes
 | Validador | Uso | Descrição |
 |-----------|-----|-----------|

@@ -204,6 +204,27 @@ def _validate_v2_manifest(manifest: dict[str, Any], path: Path) -> None:
             )
 
 
+# Caches e artefatos gerados nunca fazem parte de um bundle de processo —
+# compartilhado entre o digest (cycle pinning) e as operações de cópia/merge
+# do ft process update, que precisam enxergar o mesmo conjunto de arquivos.
+BUNDLE_IGNORED_DIRS = frozenset({
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "node_modules",
+})
+BUNDLE_IGNORED_FILES = frozenset({
+    ".DS_Store",
+    ".serve.log",
+    ".serve.pid",
+    ".serve_backend.pid",
+    ".serve_frontend.pid",
+    ".serve_url",
+})
+BUNDLE_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
+
+
 def process_digest(process_file: str | Path) -> str | None:
     """Hash the complete runtime bundle selected by ``process_file``.
 
@@ -222,28 +243,12 @@ def process_digest(process_file: str | Path) -> str | None:
     if environment.is_file():
         candidates.append(environment)
 
-    ignored_dirs = {
-        "__pycache__",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        "node_modules",
-    }
-    ignored_files = {
-        ".DS_Store",
-        ".serve.log",
-        ".serve.pid",
-        ".serve_backend.pid",
-        ".serve_frontend.pid",
-        ".serve_url",
-    }
-
     def ignored(candidate: Path) -> bool:
         relative = candidate.relative_to(requested_process.parent)
         return (
-            any(part in ignored_dirs for part in relative.parts)
-            or candidate.name in ignored_files
-            or candidate.suffix.lower() in {".pyc", ".pyo"}
+            any(part in BUNDLE_IGNORED_DIRS for part in relative.parts)
+            or candidate.name in BUNDLE_IGNORED_FILES
+            or candidate.suffix.lower() in BUNDLE_IGNORED_SUFFIXES
         )
 
     scripts_dir = requested_process.parent / "scripts"

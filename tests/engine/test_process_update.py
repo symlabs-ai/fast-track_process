@@ -383,3 +383,27 @@ def test_feature_preflight_warning_never_raises(project, monkeypatch, capsys):
     )
     cli_main._warn_process_drift(project, "feature")  # não levanta
     assert capsys.readouterr().out == ""
+
+
+def test_generated_caches_are_invisible_to_update(project, fake_engine):
+    """Caches (__pycache__, .pyc) no template ou no fork nunca entram em
+    cópia, merge ou classificação — mesmo conjunto ignorado pelo digest."""
+    pycache = fake_engine / "templates" / "feature" / "scripts" / "__pycache__"
+    pycache.mkdir(exist_ok=True)
+    (pycache / "x.cpython-312.pyc").write_bytes(b"\x00cache")
+    (fake_engine / "templates" / "feature" / "scripts" / "y.pyc").write_bytes(b"\x00")
+
+    # Cache não é drift: continua em sincronia.
+    assert _scan(project, fake_engine).state == pu.STATE_IN_SYNC
+
+    # E não vaza para o fork num update real.
+    _customize_local(project)
+    _evolve_global(fake_engine)
+    state = _scan(project, fake_engine)
+    result = pu.build_merge_staging(state, pu.staging_dir_for(project, "feature"))
+    assert result.clean
+    staged = [str(p) for p in result.staging_dir.rglob("*")]
+    assert not any("__pycache__" in p or p.endswith(".pyc") for p in staged)
+    pu.apply_update(project, state, result.staging_dir)
+    local = project / ".ft" / "process" / "feature"
+    assert not list(local.rglob("*.pyc"))

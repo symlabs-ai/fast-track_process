@@ -27,7 +27,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ft.engine import paths
-from ft.engine.layout import process_digest, read_manifest, refresh_process_digests
+from ft.engine.layout import (
+    BUNDLE_IGNORED_DIRS,
+    BUNDLE_IGNORED_FILES,
+    BUNDLE_IGNORED_SUFFIXES,
+    process_digest,
+    read_manifest,
+    refresh_process_digests,
+)
 
 BASE_SNAPSHOT_DIR = ".base"
 BACKUP_ROOT = ".backup"
@@ -148,11 +155,24 @@ def rewrite_local_refs(directory: Path, process_name: str) -> None:
 _BUNDLE_SKIP = frozenset({BASE_SNAPSHOT_DIR, BACKUP_ROOT, STAGING_ROOT, "docs", "src"})
 
 
+def _is_generated(name: str) -> bool:
+    """Caches e artefatos gerados, invisíveis ao digest e a qualquer cópia/merge."""
+    return (
+        name in BUNDLE_IGNORED_DIRS
+        or name in BUNDLE_IGNORED_FILES
+        or Path(name).suffix.lower() in BUNDLE_IGNORED_SUFFIXES
+    )
+
+
 def _copy_bundle(source: Path, destination: Path) -> None:
     """Copia um bundle de processo com as mesmas exclusões da materialização."""
+
+    def _ignore(_dir: str, names: list[str]) -> set[str]:
+        return {name for name in names if _is_generated(name)}
+
     destination.mkdir(parents=True)
     for child in source.iterdir():
-        if child.name in _BUNDLE_SKIP:
+        if child.name in _BUNDLE_SKIP or _is_generated(child.name):
             continue
         if child.is_symlink():
             raise ValueError(
@@ -160,7 +180,7 @@ def _copy_bundle(source: Path, destination: Path) -> None:
             )
         target = destination / child.name
         if child.is_dir():
-            shutil.copytree(child, target)
+            shutil.copytree(child, target, ignore=_ignore)
         else:
             shutil.copy2(child, target)
 
@@ -358,6 +378,8 @@ def _iter_bundle_files(directory: Path) -> dict[str, Path]:
             continue
         relative = candidate.relative_to(directory)
         if relative.parts and relative.parts[0] in _BUNDLE_SKIP:
+            continue
+        if any(_is_generated(part) for part in relative.parts):
             continue
         files[relative.as_posix()] = candidate
     return files

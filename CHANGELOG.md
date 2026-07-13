@@ -6,6 +6,8 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+## [v0.13.5] - 2026-07-13
+
 ### Layout uniforme de processos — manifest schema v2
 
 - Todos os processos locais agora vivem em bundles nomeados

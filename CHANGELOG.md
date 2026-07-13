@@ -6,6 +6,35 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+### ft process update — sincronização global→local dos processos materializados
+- Novo comando `ft process update [nome] [--check] [--yes]`: fecha a direção
+  que faltava no modelo `copy_once`/`local_only` — evoluções do template
+  global chegam ao fork local como ato explícito e auditável, nunca como
+  efeito colateral. Sem nome varre todos os processos do manifest; `--check`
+  é 100% read-only (exit 1 com drift acionável, utilizável em automação).
+- Máquina de estados 3-way por digests (ancestral × fork local × template
+  global em coordenadas locais): `in_sync`, `fast_forward` (fork intocado —
+  recopiar é seguro por construção), `local_fork`, `diverged` e
+  `diverged_no_base` (ancestral perdido).
+- Snapshot base em `.ft/process/<nome>/.base/`: gravado na materialização e
+  renovado a cada update com o global recém-integrado — o ancestral real dos
+  merges futuros. Forks materializados antes do snapshot são reconstruídos
+  quando um dos lados é provadamente intocado (digests do manifest).
+- Divergência real passa por merge 3-way determinístico via
+  `git merge-file --diff3`, arquivo a arquivo do bundle: staging em
+  `.ft/process/.staging/`, validação do grafo, diff exibido e aprovação
+  interativa obrigatória (`--yes` cobre só fast-forwards). Conflitos
+  preservam o staging com marcadores `local/base/global` para resolução
+  manual — futura resolução assistida por LLM. Todo apply faz backup do fork
+  anterior em `.ft/process/.backup/<nome>/` e re-registra os digests no
+  manifest.
+- Preflight de `ft feature` e `ft feature --parallel` agora avisa (uma linha,
+  não-bloqueante) quando o template global do processo evoluiu.
+- Update bloqueado com ciclo ativo: o digest do bundle fixa a semântica de
+  execução do ciclo (cycle pinning).
+- Novo módulo `ft/engine/process_update.py`; cobertura em
+  `tests/engine/test_process_update.py`.
+
 ## [v0.13.5] - 2026-07-13
 
 ### Layout uniforme de processos — manifest schema v2

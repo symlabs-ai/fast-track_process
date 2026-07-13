@@ -40,6 +40,9 @@ PROJECT_GITIGNORE = """# Runtime data never belongs to the project history.
 /tmp/
 /logs/
 *.pid
+# Áreas transientes do ft process update (staging e backup dos forks locais).
+/process/.staging/
+/process/.backup/
 """
 
 # Product sources of truth remain visible under docs/. Everything below is a
@@ -470,6 +473,38 @@ def register_project_process(
     processes[process_name] = record
     if set_default:
         manifest["default_process"] = process_name
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def refresh_process_digests(
+    project_root: str | Path,
+    process_name: str,
+    *,
+    source_digest: str | None,
+) -> Path:
+    """Reancora os digests de um processo já registrado.
+
+    O registro normal é write-once nos digests por segurança. A sincronização
+    explícita global→local (`ft process update`) é o único fluxo autorizado a
+    reancorá-los: ``source_digest`` passa a apontar o template recém-integrado
+    e ``base_digest`` o fork local resultante.
+    """
+    root = Path(project_root).resolve()
+    manifest_path = paths.project_manifest(root)
+    manifest = _read_yaml(manifest_path)
+    processes = manifest.get("processes")
+    if not isinstance(processes, dict) or not isinstance(
+        processes.get(process_name), dict
+    ):
+        raise ValueError(f"processo '{process_name}' não está registrado no manifest")
+    record = processes[process_name]
+    if source_digest:
+        record["source_digest"] = source_digest
+    record["base_digest"] = process_digest(_canonical_process_path(root, process_name))
     manifest_path.write_text(
         yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
         encoding="utf-8",

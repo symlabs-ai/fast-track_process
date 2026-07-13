@@ -108,6 +108,7 @@ def _preflight(root: Path, args) -> None:
             "ft feature --parallel exige um projeto já inicializado; "
             "execute ft init <nome> --template <template> primeiro"
         )
+    cli._warn_process_drift(root, str(getattr(args, "template", None) or "feature"))
     inside = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
         cwd=root, capture_output=True, text=True,

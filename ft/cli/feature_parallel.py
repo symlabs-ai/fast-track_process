@@ -18,6 +18,7 @@ Contratos com o resto do engine:
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import time
@@ -33,6 +34,8 @@ RATE_LIMIT_RETRY_SECONDS = 60
 MAX_RATE_LIMIT_RESPAWNS = 3
 
 _TERMINAL = {"merged", "failed", "skipped"}
+_EXTERNAL_CLOSE_CANDIDATES = {"setup", "running", "gate", "blocked", "done"}
+_GIT_OBJECT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
 
 def _cli():
@@ -357,6 +360,118 @@ def _cycle_state(root: Path, cycle_name: str) -> tuple[str, str]:
     except (OSError, yaml.YAMLError):
         return "?", "unreadable"
     return str(data.get("current_node") or "?"), str(data.get("node_status") or "?")
+
+
+def _git_is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _externally_closed_cycle_was_merged(root: Path, cycle_name: str) -> bool:
+    """Prova conservadoramente que um ciclo fechado fora do batch foi integrado.
+
+    A mera ausência da worktree não basta: ``ft close --merge none`` também a
+    remove. Exigimos o registro ``done`` no checkout principal e o commit de
+    archive original alcançável por HEAD, com a cadeia ancorada no base_commit
+    registrado pelo ciclo.
+    """
+    if not cycle_name or Path(cycle_name).name != cycle_name:
+        return False
+    if (paths.worktrees_home(root) / cycle_name).exists():
+        return False
+
+    archive = paths.project_cycle_dir(root, cycle_name) / "cycle.yml"
+    if not archive.is_file():
+        return False
+    try:
+        archive_bytes = archive.read_bytes()
+        record = yaml.safe_load(archive_bytes) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(record, dict):
+        return False
+    if record.get("id") != cycle_name or record.get("status") != "done":
+        return False
+    git_record = record.get("git")
+    if not isinstance(git_record, dict):
+        return False
+    base_commit = str(git_record.get("base_commit") or "")
+    worktree_branch = str(git_record.get("worktree_branch") or "")
+    if not _GIT_OBJECT_RE.fullmatch(base_commit) or not worktree_branch:
+        return False
+
+    relative = archive.relative_to(root).as_posix()
+    history = subprocess.run(
+        ["git", "log", "HEAD", "--format=%H%x09%s", "--", relative],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if history.returncode != 0:
+        return False
+    expected_subject = f"chore(ft): archive {cycle_name}"
+    for line in history.stdout.splitlines():
+        archive_commit, separator, subject = line.partition("\t")
+        if not separator or subject != expected_subject:
+            continue
+        if not _GIT_OBJECT_RE.fullmatch(archive_commit):
+            continue
+        changed = subprocess.run(
+            [
+                "git",
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                archive_commit,
+                "--",
+                relative,
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        if changed.returncode != 0 or relative not in changed.stdout.splitlines():
+            continue
+        committed = subprocess.run(
+            ["git", "show", f"{archive_commit}:{relative}"],
+            cwd=root,
+            capture_output=True,
+        )
+        if committed.returncode != 0 or committed.stdout != archive_bytes:
+            continue
+        if not _git_is_ancestor(root, base_commit, archive_commit):
+            continue
+        if not _git_is_ancestor(root, archive_commit, "HEAD"):
+            continue
+        return True
+    return False
+
+
+def _reconcile_externally_closed_cycles(
+    batch: fb.FeatureBatch,
+    wave_ids: list[str],
+) -> list[str]:
+    """Atualiza estados obsoletos do batch após um ``ft close`` externo."""
+    root = Path(batch.project_root)
+    reconciled: list[str] = []
+    for feature_id in wave_ids:
+        feature = batch.feature(feature_id)
+        if feature.status not in _EXTERNAL_CLOSE_CANDIDATES or not feature.cycle_name:
+            continue
+        if not _externally_closed_cycle_was_merged(root, feature.cycle_name):
+            continue
+        feature.status = "merged"
+        feature.detail = ""
+        reconciled.append(feature_id)
+    if reconciled:
+        fb.save_batch(batch)
+    return reconciled
 
 
 def _reserve_wave_backlog_items(
@@ -809,6 +924,7 @@ def _execute_batch(batch: fb.FeatureBatch, args) -> None:
 
     while batch.current_wave < len(batch.waves):
         wave_ids = batch.waves[batch.current_wave]
+        _reconcile_externally_closed_cycles(batch, wave_ids)
         _skip_orphans(batch, wave_ids)
         pending = [
             batch.feature(fid)

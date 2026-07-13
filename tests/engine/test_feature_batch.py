@@ -308,6 +308,153 @@ def _batch(tmp_path, features, waves) -> fb.FeatureBatch:
     )
 
 
+def _repo_with_external_cycle_close(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    integrated: bool,
+    worktree_exists: bool = False,
+) -> tuple[Path, str]:
+    """Repo real com archive commit integrado ou descartado por merge none."""
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = tmp_path / ("integrated" if integrated else "not-integrated")
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.name", "Test")
+    _git(root, "config", "user.email", "test@example.com")
+    (root / "README.md").write_text("base\n", encoding="utf-8")
+    _git(root, "add", "README.md")
+    _git(root, "commit", "-qm", "base")
+    base_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    cycle_name = "cycle-20-f-01-external"
+    _git(root, "checkout", "-qb", cycle_name)
+    (root / "product.txt").write_text("integrated feature\n", encoding="utf-8")
+    _git(root, "add", "product.txt")
+    _git(root, "commit", "-qm", "feat: external cycle")
+
+    archive = root / ".ft" / "cycles" / cycle_name / "cycle.yml"
+    archive.parent.mkdir(parents=True)
+    archive.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 2,
+                "id": cycle_name,
+                "status": "done",
+                "git": {
+                    "base_commit": base_commit,
+                    "worktree_branch": cycle_name,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    archive_bytes = archive.read_bytes()
+    _git(root, "add", archive.relative_to(root).as_posix())
+    _git(root, "commit", "-qm", f"chore(ft): archive {cycle_name}")
+
+    _git(root, "checkout", "-q", "main")
+    if integrated:
+        _git(root, "merge", "--no-ff", "--no-edit", cycle_name)
+    else:
+        # Simula o efeito observável de close --merge none: a branch fechada
+        # não foi integrada. Mesmo que alguém copie o archive para main, ele
+        # continua sem um archive commit alcançável por HEAD.
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(archive_bytes)
+    _git(root, "branch", "-D", cycle_name)
+
+    if worktree_exists:
+        (paths.worktrees_home(root) / cycle_name).mkdir(parents=True)
+    return root, cycle_name
+
+
+def test_resume_reconcilia_ciclo_arquivado_e_integrado_e_avanca_wave(
+    tmp_path, monkeypatch
+):
+    root, cycle_name = _repo_with_external_cycle_close(
+        tmp_path, monkeypatch, integrated=True
+    )
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "gate"
+    feature.cycle_name = cycle_name
+    batch = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="feature",
+        features=[feature],
+        waves=[["F-01"]],
+    )
+    fb.save_batch(batch)
+
+    fp._execute_batch(batch, Namespace(verbose=False))
+
+    assert feature.status == "merged"
+    assert batch.current_wave == 1
+    assert batch.status == "done"
+    assert fb.load_batch(root, batch.batch_id).feature("F-01").status == "merged"
+
+
+def test_resume_nao_reconcilia_archive_sem_merge(tmp_path, monkeypatch):
+    root, cycle_name = _repo_with_external_cycle_close(
+        tmp_path, monkeypatch, integrated=False
+    )
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "done"
+    feature.cycle_name = cycle_name
+    batch = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="feature",
+        features=[feature],
+        waves=[["F-01"]],
+    )
+
+    assert fp._reconcile_externally_closed_cycles(batch, ["F-01"]) == []
+    assert feature.status == "done"
+
+
+def test_resume_nao_reconcilia_enquanto_worktree_existe(tmp_path, monkeypatch):
+    root, cycle_name = _repo_with_external_cycle_close(
+        tmp_path, monkeypatch, integrated=True, worktree_exists=True
+    )
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "running"
+    feature.cycle_name = cycle_name
+    batch = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="feature",
+        features=[feature],
+        waves=[["F-01"]],
+    )
+
+    assert fp._reconcile_externally_closed_cycles(batch, ["F-01"]) == []
+    assert feature.status == "running"
+
+
+def test_resume_preserva_estado_legado_sem_evidencia_de_close(tmp_path, monkeypatch):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "gate"
+    feature.cycle_name = "cycle-legacy"
+    terminal = _feature("F-02", ["src/b/"])
+    terminal.status = "failed"
+    terminal.cycle_name = "cycle-failed"
+    batch = _batch(tmp_path, [feature, terminal], [["F-01", "F-02"]])
+
+    assert fp._reconcile_externally_closed_cycles(batch, ["F-01", "F-02"]) == []
+    assert feature.status == "gate"
+    assert terminal.status == "failed"
+
+
 def test_collect_demands_exclusividade(tmp_path):
     args = Namespace(demand=["a"], feature_input="x.md")
     with pytest.raises(ValueError, match="não ambos"):

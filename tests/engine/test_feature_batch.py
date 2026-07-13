@@ -735,6 +735,86 @@ def test_run_wave_reconcilia_gate_aprovado_externamente_durante_outro_prompt(
     assert {feature.status for feature in features} == {"done"}
 
 
+def test_run_wave_resume_reconcilia_running_sem_child_com_gate_real(
+    tmp_path, monkeypatch
+):
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "running"  # persistido pelo batch antes da pausa
+    feature.cycle_name = "c-f01"
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    fb.save_batch(batch)
+
+    current = {"value": ("feature.scope_gate", "awaiting_approval")}
+    gate_calls: list[str] = []
+    sleep_calls = 0
+
+    def fake_handle_gate(batch_arg, feature_arg, args):
+        gate_calls.append(feature_arg.feature_id)
+        feature_arg.status = "running"
+        current["value"] = ("feature.end", "done")
+        return _DoneProc()
+
+    def bounded_sleep(seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            pytest.fail("resume entrou em polling sem subprocesso")
+
+    monkeypatch.setattr(fp, "_cycle_state", lambda root, name: current["value"])
+    monkeypatch.setattr(fp, "_handle_gate", fake_handle_gate)
+    monkeypatch.setattr(fp.time, "sleep", bounded_sleep)
+
+    fp._run_wave(batch, Namespace(verbose=False, bypass_human_gates=False))
+
+    assert gate_calls == ["F-01"]
+    assert feature.status == "done"
+
+
+def test_run_wave_nao_reconcilia_running_enquanto_child_local_esta_ativo(
+    tmp_path, monkeypatch
+):
+    feature = _feature("F-01", ["src/a/"])
+    feature.status = "setup"
+    feature.cycle_name = "c-f01"
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    fb.save_batch(batch)
+
+    current = {"value": ("feature.start", "ready")}
+    gate_calls: list[str] = []
+
+    class _ActiveOnceProc(_DoneProc):
+        def __init__(self):
+            super().__init__()
+            self.poll_calls = 0
+
+        def poll(self):
+            self.poll_calls += 1
+            return None if self.poll_calls == 1 else 0
+
+    active = _ActiveOnceProc()
+
+    def fake_spawn_continue(batch_arg, feature_arg, args):
+        current["value"] = ("feature.scope_gate", "awaiting_approval")
+        return active
+
+    def fake_handle_gate(batch_arg, feature_arg, args):
+        assert active.poll_calls == 2  # somente após o child terminar
+        gate_calls.append(feature_arg.feature_id)
+        feature_arg.status = "running"
+        current["value"] = ("feature.end", "done")
+        return _DoneProc()
+
+    monkeypatch.setattr(fp, "_cycle_state", lambda root, name: current["value"])
+    monkeypatch.setattr(fp, "_spawn_continue", fake_spawn_continue)
+    monkeypatch.setattr(fp, "_handle_gate", fake_handle_gate)
+    monkeypatch.setattr(fp.time, "sleep", lambda seconds: None)
+
+    fp._run_wave(batch, Namespace(verbose=False, bypass_human_gates=False))
+
+    assert gate_calls == ["F-01"]
+    assert feature.status == "done"
+
+
 def test_questions_gate_exige_mensagem_e_encaminha_no_approve(tmp_path, monkeypatch):
     feature = _feature("F-01", ["src/a/"])
     feature.status = "gate"

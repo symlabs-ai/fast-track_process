@@ -362,20 +362,20 @@ def _cycle_state(root: Path, cycle_name: str) -> tuple[str, str]:
     return str(data.get("current_node") or "?"), str(data.get("node_status") or "?")
 
 
-def _reconcile_external_waiting_transition(
+def _reconcile_external_idle_transition(
     root: Path,
     feature: fb.BatchFeature,
 ) -> bool:
-    """Sincroniza um gate/bloqueio alterado por outro comando ``ft``.
+    """Sincroniza uma feature sem subprocesso com o state do ciclo.
 
-    O batch persiste ``gate`` e ``blocked`` como estados de interação. Enquanto
-    outro gate está aberto neste terminal, porém, o stakeholder pode decidir um
-    ciclo diferente com ``--no-continue``. Nesse caso o state autoritativo do
-    ciclo já aponta para o próximo node ``ready`` e a interação persistida ficou
-    obsoleta. A retomada deve voltar ao caminho normal de spawn, sem tratar esse
-    ``ready`` deliberado como rate limit.
+    O batch pode persistir ``running``, ``gate`` ou ``blocked`` antes de uma
+    pausa ou de uma decisão feita por outro comando ``ft``. Sem um ``Popen``
+    local, esses estados são apenas um cache: o state autoritativo pode já estar
+    em outro gate, no próximo node ``ready``, bloqueado ou concluído. Um
+    ``ready`` deliberado volta ao caminho normal de spawn, sem ser confundido
+    com rate limit.
     """
-    if feature.status not in {"gate", "blocked"} or not feature.cycle_name:
+    if feature.status not in {"running", "gate", "blocked"} or not feature.cycle_name:
         return False
 
     _node, cycle_status = _cycle_state(root, feature.cycle_name)
@@ -848,7 +848,10 @@ def _run_wave(batch: fb.FeatureBatch, args) -> None:
             # 2. Gates e bloqueios — interação inline, um por vez.
             for feature_id in wave_ids:
                 feature = batch.feature(feature_id)
-                if _reconcile_external_waiting_transition(root, feature):
+                if (
+                    feature_id not in procs
+                    and _reconcile_external_idle_transition(root, feature)
+                ):
                     fb.save_batch(batch)
                 if feature.status == "gate":
                     proc = _handle_gate(batch, feature, args)

@@ -689,6 +689,52 @@ def test_run_wave_gate_aprovado_inline(tmp_path, monkeypatch):
     assert spawned_commands[1][:2] == ["approve", "--auto"]
 
 
+def test_run_wave_reconcilia_gate_aprovado_externamente_durante_outro_prompt(
+    tmp_path, monkeypatch
+):
+    features = [_feature("F-01", ["src/a/"]), _feature("F-02", ["src/b/"])]
+    for feature, name in ((features[0], "c-f01"), (features[1], "c-f02")):
+        feature.status = "gate"
+        feature.cycle_name = name
+    batch = _batch(tmp_path, features, [["F-01", "F-02"]])
+    fb.save_batch(batch)
+
+    states = {
+        "c-f01": ("feature.scope_gate", "awaiting_approval"),
+        "c-f02": ("feature.acceptance", "awaiting_approval"),
+    }
+    gate_calls: list[str] = []
+    continued: list[str] = []
+
+    def fake_handle_gate(batch_arg, feature, args):
+        gate_calls.append(feature.feature_id)
+        if feature.feature_id != "F-01":
+            pytest.fail("F-02 não deve ser apresentada novamente como gate")
+
+        # Enquanto o prompt de F-01 estava aberto, outro terminal executou:
+        # ft approve --no-continue --cycle c-f02
+        states["c-f02"] = ("feature.reconcile", "ready")
+        feature.status = "running"
+        states["c-f01"] = ("feature.end", "done")
+        return _DoneProc()
+
+    def fake_spawn_continue(batch_arg, feature, args):
+        continued.append(feature.feature_id)
+        states[str(feature.cycle_name)] = ("feature.end", "done")
+        return _DoneProc()
+
+    monkeypatch.setattr(fp, "_cycle_state", lambda root, name: states[name])
+    monkeypatch.setattr(fp, "_handle_gate", fake_handle_gate)
+    monkeypatch.setattr(fp, "_spawn_continue", fake_spawn_continue)
+    monkeypatch.setattr(fp.time, "sleep", lambda seconds: None)
+
+    fp._run_wave(batch, Namespace(verbose=False, bypass_human_gates=False))
+
+    assert gate_calls == ["F-01"]
+    assert continued == ["F-02"]
+    assert {feature.status for feature in features} == {"done"}
+
+
 def test_questions_gate_exige_mensagem_e_encaminha_no_approve(tmp_path, monkeypatch):
     feature = _feature("F-01", ["src/a/"])
     feature.status = "gate"

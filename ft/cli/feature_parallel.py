@@ -362,6 +362,38 @@ def _cycle_state(root: Path, cycle_name: str) -> tuple[str, str]:
     return str(data.get("current_node") or "?"), str(data.get("node_status") or "?")
 
 
+def _reconcile_external_waiting_transition(
+    root: Path,
+    feature: fb.BatchFeature,
+) -> bool:
+    """Sincroniza um gate/bloqueio alterado por outro comando ``ft``.
+
+    O batch persiste ``gate`` e ``blocked`` como estados de interação. Enquanto
+    outro gate está aberto neste terminal, porém, o stakeholder pode decidir um
+    ciclo diferente com ``--no-continue``. Nesse caso o state autoritativo do
+    ciclo já aponta para o próximo node ``ready`` e a interação persistida ficou
+    obsoleta. A retomada deve voltar ao caminho normal de spawn, sem tratar esse
+    ``ready`` deliberado como rate limit.
+    """
+    if feature.status not in {"gate", "blocked"} or not feature.cycle_name:
+        return False
+
+    _node, cycle_status = _cycle_state(root, feature.cycle_name)
+    target = {
+        "ready": "setup",
+        "awaiting_approval": "gate",
+        "blocked": "blocked",
+        "done": "done",
+        "completed": "done",
+    }.get(cycle_status)
+    if target is None or target == feature.status:
+        return False
+
+    feature.status = target
+    feature.detail = ""
+    return True
+
+
 def _git_is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor, descendant],
@@ -816,6 +848,8 @@ def _run_wave(batch: fb.FeatureBatch, args) -> None:
             # 2. Gates e bloqueios — interação inline, um por vez.
             for feature_id in wave_ids:
                 feature = batch.feature(feature_id)
+                if _reconcile_external_waiting_transition(root, feature):
+                    fb.save_batch(batch)
                 if feature.status == "gate":
                     proc = _handle_gate(batch, feature, args)
                     if proc is not None:

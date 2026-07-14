@@ -69,6 +69,7 @@ def test_status_progress_line_shows_runtime_and_last_activity(tmp_path, capsys):
 
     runner.status()
     out = capsys.readouterr().out
+    assert "Ciclo: cycle-01" in out  # nome do ciclo sempre visível no status
     progress = next(line for line in out.splitlines() if "Progresso:" in line)
     assert "ciclo rodando há 1h30m" in progress
     assert "última atividade" in progress

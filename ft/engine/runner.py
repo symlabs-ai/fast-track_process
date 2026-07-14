@@ -5320,6 +5320,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         print(ui.header(f"{state.process_id} v{state.version}"))
         # Preserve the public text consumed by existing status parsers; model
         # and effort are additive lines instead of a breaking replacement.
+        if state.current_cycle:
+            print(ui.info(f"Ciclo: {state.current_cycle}"))
         print(ui.info(f"LLM engine: {state.llm_engine}"))
         if state.llm_model:
             print(ui.info(f"LLM model: {state.llm_model}"))

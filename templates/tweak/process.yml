@@ -5,7 +5,7 @@
 # precisam de minutos, não de uma rodada de discovery/review/reconcile.
 
 id: tweak
-version: "1.0.0"
+version: "1.0.1"
 title: "Tweak — Mudança Pequena e Direta"
 
 execution_policy:
@@ -117,12 +117,16 @@ nodes:
       - resumo do comportamento alterado;
       - lista de todos os arquivos alterados;
       - a linha exata `Validação focal: PASS`;
-      - uma linha `Comando focal: <comando executado>`;
+      - uma linha `Comando focal: <comando interno>` com exatamente o comando e
+        os argumentos informados depois de `focal --`, sem repetir o wrapper
+        `.ft/process/tweak/scripts/product.sh focal --`;
       - uma linha `Risco residual: <risco objetivo ou nenhum conhecido>`.
 
       O validator executará apenas o build rápido depois da sua entrega. Não o
-      repita por conta própria. O wrapper do comando focal registra a execução;
-      não declare PASS sem tê-lo usado de fato.
+      repita por conta própria. O wrapper do comando focal registra somente o
+      argv informado depois de `focal --`; reproduza esse argv, em formato
+      shell válido, na linha `Comando focal:`. Não declare PASS sem ter usado o
+      wrapper de fato.
     validators:
       - file_exists: docs/tweak-report.md
       - command_succeeds:

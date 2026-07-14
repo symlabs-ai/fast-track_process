@@ -1,0 +1,469 @@
+# Fastfy — Adoção de Repositório Legado no Fast Track
+#
+# Transforma um repositório que ainda não é Fast Track em um projeto FT
+# completo: analisa o código existente, esclarece dúvidas com o stakeholder,
+# constrói a documentação canônica (PRD, TECH_STACK, PROJECT_BACKLOG, FEATURES,
+# CHANGELOG reconstruído do git) e cria o harness de validação (Makefile com
+# build/test/run). Ao final o projeto está pronto para evoluir com
+# `ft run . --template feature`.
+#
+# Este arquivo global nunca é executado diretamente. Na primeira invocação de
+# `ft run . --template fastfy`, o engine materializa todo o diretório em
+# `.ft/process/fastfy/` e executa somente a cópia local versionada.
+
+id: fastfy
+version: "0.1.0"
+title: "Fastfy — Adoção de Repositório Legado"
+
+execution_policy:
+  entrypoint: run
+  template: fastfy
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/fastfy/process.yml
+  merge_command: ft close --merge full
+
+input_policy:
+  required: false
+  destination: docs/adoption-request.md
+  prompt: "Contexto opcional sobre o repositório legado (propósito, módulos mortos, prioridades)"
+
+correction_policy:
+  follow_graph_after_retry: true
+  mandatory_after_implementation:
+    - fastfy.review
+
+close_policy:
+  backlog:
+    mode: global
+  features_catalog: required
+  merge: full
+
+artifact_policy:
+  canonical:
+    - CHANGELOG.md
+    - docs/PRD.md
+    - docs/TECH_STACK.md
+    - docs/PROJECT_BACKLOG.md
+    - docs/FEATURES.md
+    - docs/ui_criteria.md
+    - docs/api_contract.md
+  cycle:
+    - docs/adoption-request.md
+    - docs/adoption-survey.md
+    - docs/adoption-questions.md
+    - docs/adoption-plan.md
+    - docs/adoption-review.md
+    - docs/stakeholder-feedback.md
+
+nodes:
+  - id: fastfy.preflight
+    type: gate
+    title: "Preflight da Adoção"
+    description: >-
+      Confirma que o repositório tem histórico Git utilizável e que o projeto
+      ainda não possui a documentação canônica Fast Track. Um projeto já
+      adotado deve evoluir com o template feature, não repetir a adoção.
+    sprint: adopt-01-survey
+    executor: python
+    validators:
+      - command_succeeds: "python .ft/process/fastfy/scripts/validate_fastfy.py preflight"
+    next: fastfy.survey
+
+  - id: fastfy.survey
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: discovery
+    title: "Levantamento do Repositório Legado"
+    description: >-
+      Analisa o código, o histórico Git e a documentação existente para
+      inventariar o produto: stack, layout, capacidades, comandos de
+      build/test/run e dívidas. Formula somente perguntas que mudem a
+      documentação canônica ou o harness. Quando não houver ambiguidade,
+      fecha o levantamento e o plano de adoção.
+    sprint: adopt-01-survey
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/adoption-survey.md
+      - docs/adoption-questions.md
+      - docs/adoption-plan.md
+    write_scope:
+      - docs/adoption-survey.md
+      - docs/adoption-questions.md
+      - docs/adoption-plan.md
+    prompt: |
+      Você está adotando um repositório LEGADO no processo Fast Track. Neste
+      node você apenas LEVANTA e PLANEJA; não altere código nem crie a
+      documentação canônica ainda.
+
+      Se docs/adoption-request.md existir, trate-o como contexto do
+      stakeholder. Investigue o repositório de verdade: leia README e docs
+      existentes, estrutura de diretórios, manifests de dependência
+      (package.json, pyproject.toml, go.mod, etc.), entrypoints, rotas/CLI,
+      testes existentes e o histórico Git (`git log --oneline`, tags) para
+      entender o que o produto faz hoje.
+
+      Gere docs/adoption-survey.md com frontmatter YAML:
+        stack: <linguagens/frameworks principais>
+        product_root: . | project | src   (onde vive o Makefile do harness;
+          use "." quando o código mora na raiz do repositório)
+        interface: ui | api | internal | mixed
+        has_tests: true | false
+        build_command: <comando real de build; "true" se não houver build>
+        test_command: <comando real de teste, ou o smoke test planejado>
+        run_command: <comando que sobe o produto; vazio apenas se internal>
+        clarification_status: required | clear
+
+      O corpo do survey deve conter: propósito do produto, capacidades
+      observadas (candidatas a FEAT-*), módulos mortos ou duvidosos, dívidas
+      técnicas visíveis e um resumo do histórico Git (releases/tags e marcos).
+
+      Gere docs/adoption-questions.md: numere perguntas objetivas SOMENTE
+      sobre decisões que alterem a documentação canônica ou o harness (ex.:
+      propósito de um módulo ambíguo, comando oficial de teste, se um
+      diretório é código morto). Se não houver perguntas, escreva que não há
+      pendências.
+
+      Gere docs/adoption-plan.md como draft do plano de adoção: lista de
+      FEAT-* que serão catalogadas, PB-* previstos (históricos como done,
+      dívidas como deferred/P2 com justificativa), estratégia do harness
+      (Makefile com targets build/test/run em product_root, target url quando
+      houver interface ui/api/mixed) e, quando has_tests=false, o smoke test
+      mínimo que será criado (é o default do processo; o stakeholder pode
+      ajustar no gate de escopo).
+
+      Marque clarification_status: required enquanto houver qualquer pergunta
+      pendente; marque clear somente com o plano fechado e sem perguntas.
+    validators:
+      - file_exists: docs/adoption-survey.md
+      - file_exists: docs/adoption-questions.md
+      - file_exists: docs/adoption-plan.md
+      - command_succeeds: "python .ft/process/fastfy/scripts/validate_fastfy.py survey"
+    next: fastfy.survey_gate
+
+  - id: fastfy.survey_gate
+    type: gate
+    title: "Registrar Resultado do Levantamento"
+    description: >-
+      Extrai deterministicamente o estado de clarificação para encaminhar
+      perguntas pendentes ou seguir para a aprovação do plano.
+    sprint: adopt-01-survey
+    executor: python
+    validators:
+      - read_artifact:
+          path: docs/adoption-survey.md
+          key: clarification_status
+          pattern: "clarification_status:\\s*(required|clear)"
+    next: fastfy.clarity
+
+  - id: fastfy.clarity
+    type: decision
+    title: "Levantamento Está Claro?"
+    description: "Encaminha perguntas pendentes ao stakeholder ou segue para a aprovação do plano de adoção."
+    sprint: adopt-01-survey
+    executor: python
+    condition: clarification_status
+    branches:
+      required: fastfy.questions
+      clear: fastfy.scope_gate
+      _default: fastfy.questions
+
+  - id: fastfy.questions
+    type: human_gate
+    title: "Perguntas sobre o Repositório"
+    description: >-
+      Leia docs/adoption-questions.md e responda às perguntas pendentes com
+      `ft approve "1. ... 2. ..."`. As respostas voltam ao levantamento. Para
+      cancelar a adoção sem alterar o checkout principal, use ft abort.
+    sprint: adopt-01-survey
+    executor: python
+    outputs:
+      - docs/adoption-questions.md
+      - docs/adoption-survey.md
+    next: fastfy.survey
+
+  - id: fastfy.scope_gate
+    type: human_gate
+    title: "Aprovação do Plano de Adoção"
+    description: >-
+      Revise docs/adoption-survey.md e docs/adoption-plan.md. Confirme as
+      capacidades que serão catalogadas, as dívidas registradas, os comandos
+      do harness e — quando o repositório não tem testes — o smoke test
+      mínimo que será criado (default do processo). Uma rejeição deve dizer
+      objetivamente o que mudar.
+    sprint: adopt-01-survey
+    executor: python
+    outputs:
+      - docs/adoption-survey.md
+      - docs/adoption-plan.md
+    reject_next: fastfy.survey
+    next: fastfy.docs
+
+  - id: fastfy.docs
+    type: document
+    title: "Construir Documentação Canônica"
+    description: >-
+      Materializa a documentação canônica Fast Track a partir do levantamento
+      aprovado: PRD as-is, TECH_STACK, FEATURES, PROJECT_BACKLOG e CHANGELOG
+      reconstruído do histórico Git.
+    sprint: adopt-02-canon
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/PRD.md
+      - docs/TECH_STACK.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - CHANGELOG.md
+      - docs/ui_criteria.md
+      - docs/api_contract.md
+    write_scope:
+      - docs/PRD.md
+      - docs/TECH_STACK.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - CHANGELOG.md
+      - docs/ui_criteria.md
+      - docs/api_contract.md
+    prompt: |
+      O plano de adoção foi aprovado (docs/adoption-plan.md). Construa a
+      documentação canônica Fast Track descrevendo o produto COMO ELE É HOJE —
+      nada aspiracional. Não altere código neste node.
+
+      1. docs/PRD.md — propósito, usuários, capacidades atuais e limites do
+         produto existente. É retrato, não roadmap.
+
+      2. docs/FEATURES.md — tabela com colunas: ID | Status | Backlog |
+         Título | Descrição | Entregue em | Evidência | Última evolução |
+         Notas. Uma FEAT-001, FEAT-002... por capacidade observável, status
+         active, Evidência apontando arquivos/rotas/testes reais, Entregue em
+         "legado" (ou a tag/release do git quando identificável). Toda FEAT
+         referencia ao menos um PB-* na coluna Backlog.
+
+      3. docs/PROJECT_BACKLOG.md — tabela com colunas: ID | Tipo |
+         Prioridade | Status | Origem | Título | Critérios de Aceite |
+         Evidência | Decisão/Notas. Um PB-* tipo Feature status done por
+         capacidade entregue (cobrindo todas as FEAT-*), origem "adoption".
+         Dívidas/pendências viram PB-* planned P2, ou deferred com a coluna
+         Decisão/Notas SEMPRE preenchida quando P0/P1 — nenhum P0/P1 pode
+         ficar em aberto sem decisão explícita.
+
+      4. CHANGELOG.md — RECONSTRUA o histórico a partir do Git: use tags e
+         releases como seções (`## <versão> — <data>`); sem tags, agrupe por
+         marcos do `git log`. Feche com a entrada da adoção começando com
+         `#FEAT` como primeiro token textual (ex.:
+         `- #FEAT Adoção Fast Track (PB-XXX): documentação canônica e harness criados.`)
+         referenciando um PB-* de adoção registrado como done no backlog.
+
+      5. docs/TECH_STACK.md — linguagens, frameworks, dependências
+         principais, layout de diretórios e os comandos reais de
+         build/test/run levantados no survey.
+
+      6. Somente quando a interface do survey for ui/mixed: docs/ui_criteria.md
+         com critérios C01, C02... das telas que JÁ existem. Somente quando for
+         api/mixed: docs/api_contract.md com os endpoints atuais. Interface
+         internal não cria nenhum dos dois.
+
+      Não invente capacidades: tudo em FEATURES precisa de evidência real no
+      código. O que for incerto vira dívida no backlog, não feature.
+    validators:
+      - file_exists: docs/PRD.md
+      - file_exists: docs/TECH_STACK.md
+      - file_exists: CHANGELOG.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - backlog_pending_decisions:
+          path: docs/PROJECT_BACKLOG.md
+      - command_succeeds: "python .ft/process/fastfy/scripts/validate_fastfy.py docs"
+    next: fastfy.harness
+
+  - id: fastfy.harness
+    type: build
+    title: "Criar Harness de Validação"
+    description: >-
+      Cria o Makefile do produto com os targets que o Fast Track usa
+      (build/test/run e url quando há interface) delegando aos comandos reais
+      do legado, e o smoke test mínimo quando o repositório não tem testes.
+      É a única alteração de código da adoção.
+    sprint: adopt-02-canon
+    executor: claude
+    max_turns: 60
+    outputs:
+      - Makefile
+    write_scope:
+      - Makefile
+      - project
+      - src
+      - tests
+      - package.json
+      - pyproject.toml
+    prompt: |
+      Crie o harness de validação aprovado em docs/adoption-plan.md. Altere o
+      mínimo possível do produto — o comportamento legado não pode mudar.
+
+      1. Crie o Makefile em product_root (frontmatter de
+         docs/adoption-survey.md): na raiz quando product_root for ".",
+         senão em project/ ou src/. Targets obrigatórios:
+           build: comando real de build do legado ("@true" quando não há build)
+           test:  comando real de teste (ou o smoke test criado abaixo)
+           run:   sobe o produto respeitando a variável PORT
+           url:   imprime a URL local (ex.: @echo http://127.0.0.1:$(PORT))
+         Os targets run/url só são obrigatórios quando interface for
+         ui/api/mixed; para internal, crie apenas build e test.
+
+      2. Se has_tests=false no survey, crie o smoke test mínimo definido no
+         plano: um teste real que importa/executa o entrypoint principal e
+         falharia se o produto quebrasse. Use o runner idiomático do stack e
+         coloque-o no diretório de testes convencional (tests/ na raiz, ou
+         dentro de project//src/ conforme o layout).
+
+      3. Não reescreva código do produto, não atualize dependências, não
+         formate arquivos alheios. Ajustes em package.json/pyproject.toml só
+         se forem indispensáveis para o comando de teste rodar.
+
+      4. Rode você mesmo os comandos do Makefile para confirmar que passam.
+         O gate seguinte executará build e test do zero.
+    validators:
+      - command_succeeds: "python .ft/process/fastfy/scripts/validate_fastfy.py harness"
+    next: fastfy.baseline
+
+  - id: fastfy.baseline
+    type: gate
+    title: "Baseline Executável"
+    description: >-
+      Prova determinística de que o projeto adotado builda e testa pelos
+      targets do harness, e que a documentação canônica é estruturalmente
+      consistente — exatamente o que o preflight do template feature exigirá
+      nos próximos ciclos.
+    sprint: adopt-03-validation
+    executor: python
+    validators:
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - backlog_pending_decisions:
+          path: docs/PROJECT_BACKLOG.md
+      - command_succeeds:
+          command: "bash .ft/process/fastfy/scripts/product.sh build"
+          timeout: 300
+      - command_succeeds:
+          command: "bash .ft/process/fastfy/scripts/product.sh test"
+          timeout: 300
+    next: fastfy.review
+
+  - id: fastfy.review
+    type: review
+    title: "Revisão Independente da Adoção"
+    description: >-
+      Audita a documentação canônica contra o código real: cada FEAT-* tem
+      evidência verdadeira, o CHANGELOG reflete o histórico Git, o harness
+      executa o produto de verdade e nada foi inventado.
+    sprint: adopt-03-validation
+    executor: claude
+    max_turns: 40
+    outputs:
+      - docs/adoption-review.md
+    write_scope:
+      - docs/adoption-review.md
+    prompt: |
+      Faça uma revisão independente da adoção. Confronte a documentação com o
+      repositório real:
+
+      - Cada FEAT-* de docs/FEATURES.md existe mesmo no código? Verifique a
+        evidência citada (arquivos, rotas, testes). Feature sem evidência
+        real é REJECTED.
+      - docs/PRD.md descreve o produto como ele é, sem capacidades
+        inventadas ou aspiracionais?
+      - CHANGELOG.md é coerente com `git log`/tags e contém a entrada de
+        adoção iniciada por `#FEAT`?
+      - O Makefile do harness executa o produto real (não é um stub que
+        sempre passa)? O target test exercita código de verdade?
+      - PROJECT_BACKLOG: PBs done têm evidência; P0/P1 deferred/blocked têm
+        decisão preenchida.
+
+      Não repita build/test completos já cobertos pelo gate de baseline; use
+      sondas focais quando precisar desafiar uma evidência.
+
+      Gere docs/adoption-review.md contendo exatamente uma linha
+      `Resultado: APPROVED` ou `Resultado: REJECTED`, uma tabela FEAT-* ×
+      PASS/FAIL de evidência, os problemas encontrados e as verificações
+      feitas.
+    validators:
+      - file_exists: docs/adoption-review.md
+      - command_succeeds: "python .ft/process/fastfy/scripts/validate_fastfy.py review"
+    on_fail:
+      human_gate: "A revisão encontrou problemas na adoção. Corrija a documentação/harness e revalide."
+      goto: fastfy.docs
+    next: fastfy.acceptance
+
+  - id: fastfy.acceptance
+    type: human_gate
+    title: "Aceite da Adoção"
+    description: >-
+      Valide a adoção: leia PRD, FEATURES, PROJECT_BACKLOG e CHANGELOG; para
+      produtos com UI o serve.sh sobe o produto para inspeção. Rejeite
+      apontando objetivamente o que está errado ou faltando — a correção
+      volta à documentação.
+    sprint: adopt-03-validation
+    executor: python
+    env_setup:
+      - bash .ft/process/fastfy/scripts/serve.sh
+    env_teardown:
+      - bash .ft/process/fastfy/scripts/serve.sh stop
+    outputs:
+      - docs/stakeholder-feedback.md
+    reject_next: fastfy.docs
+    next: fastfy.final_gate
+
+  - id: fastfy.final_gate
+    type: gate
+    title: "Gate Final da Adoção"
+    description: >-
+      Reconfirma que o harness ainda passa e que a documentação canônica
+      permanece consistente antes de declarar a worktree pronta para merge.
+    sprint: adopt-03-validation
+    executor: python
+    validators:
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - backlog_pending_decisions:
+          path: docs/PROJECT_BACKLOG.md
+      - command_succeeds:
+          command: "bash .ft/process/fastfy/scripts/product.sh test"
+          timeout: 300
+      - command_succeeds: "python .ft/process/fastfy/scripts/validate_fastfy.py docs"
+    next: fastfy.end
+
+  - id: fastfy.end
+    type: end
+    title: "Projeto Adotado no Fast Track"
+    description: >-
+      Adoção aceita e validada na worktree. Execute `ft close --merge full`
+      para fazer merge no checkout principal e arquivar o ciclo. A partir daí
+      o projeto evolui com `ft run . --template feature`.

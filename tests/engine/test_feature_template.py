@@ -649,6 +649,89 @@ def test_feature_validator_detects_src_product_root(tmp_path):
     assert payload["product_root"] == "src"
 
 
+def test_feature_validator_detects_root_product_root(tmp_path):
+    root = _base_project(tmp_path, product_dir=".")
+    _clear_discovery(root)
+
+    baseline = _run_validator(root, "baseline")
+
+    assert baseline.returncode == 0, baseline.stderr
+    payload = yaml.safe_load(
+        (root / "docs" / "feature-baseline.yml").read_text(encoding="utf-8")
+    )
+    assert payload["product_root"] == "."
+
+
+def test_feature_validator_prefers_nested_makefile_over_root(tmp_path):
+    root = _base_project(tmp_path, product_dir="project")
+    _write(root, "Makefile", "test:\n\t@true\n\nbuild:\n\t@true\n")
+    _clear_discovery(root)
+
+    baseline = _run_validator(root, "baseline")
+
+    assert baseline.returncode == 0, baseline.stderr
+    payload = yaml.safe_load(
+        (root / "docs" / "feature-baseline.yml").read_text(encoding="utf-8")
+    )
+    assert payload["product_root"] == "project"
+
+
+def test_feature_validator_accepts_implementation_at_repo_root(tmp_path):
+    root = _base_project(tmp_path, product_dir=".")
+    _snapshot_baseline(root)
+    _clear_discovery(root)
+    _write(root, "app.py", "VALUE = 1\n")
+    _write(root, "tests/test_app.py", "def test_value():\n    assert True\n")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=root,
+        check=True,
+    )
+    _write(root, "app.py", "VALUE = 2\n")
+    _write(root, "tests/test_app.py", "def test_value():\n    assert 2 == 2\n")
+    _write(
+        root, "docs/implementation-report.md", "| AC-01 | PASS |\n| AC-02 | PASS |\n"
+    )
+
+    implementation = _run_validator(root, "implementation")
+
+    assert implementation.returncode == 0, implementation.stderr
+
+    # Mudança apenas em docs/ não conta como implementação do produto na raiz.
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "implemented",
+        ],
+        cwd=root,
+        check=True,
+    )
+    _write(root, "docs/feature-result.md", "draft\n")
+
+    docs_only = _run_validator(root, "implementation")
+
+    assert docs_only.returncode == 1
+    assert "não alterou nenhum arquivo" in docs_only.stderr
+
+
 def test_feature_validator_rejects_ambiguous_product_roots(tmp_path):
     root = _base_project(tmp_path, product_dir="project")
     _write(root, "src/Makefile", "test:\n\t@true\n\nbuild:\n\t@true\n")

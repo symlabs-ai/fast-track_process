@@ -1055,7 +1055,8 @@ def cmd_init(args):
         print(_ui.success("Workspace Fast Track saudável."))
         return
 
-    result = bootstrap_project(root)
+    adopt = getattr(args, "adopt", False)
+    result = bootstrap_project(root, adopt=adopt)
     print(f"  Projeto: {result.root}")
     for action in result.actions:
         print(f"  ✓ {action}")
@@ -1063,6 +1064,18 @@ def cmd_init(args):
         print(_ui.success("Workspace Fast Track já estava inicializado e saudável."))
     else:
         print(_ui.success("Workspace Fast Track inicializado."))
+    if adopt:
+        import subprocess as _subprocess
+
+        status = _subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=root, capture_output=True, text=True, timeout=30, check=False,
+        )
+        if status.returncode == 0 and status.stdout.strip():
+            print(_ui.warn(
+                "Adoção deixou arquivos legados fora do Git; commite-os antes de "
+                "ft run (worktrees exigem checkout limpo)."
+            ))
     print("  Nenhum template foi selecionado. Inicie um ciclo com:")
     print("    ft run . --template <template>")
 
@@ -4494,6 +4507,14 @@ def main():
         "--fix",
         action="store_true",
         help="Reparar com segurança uma inicialização Fast Track quebrada",
+    )
+    init_mode.add_argument(
+        "--adopt",
+        action="store_true",
+        help=(
+            "Adotar um diretório legado: cria o repositório Git se não existir "
+            "e aceita arquivos ainda não commitados"
+        ),
     )
 
     # resume (alias: continue para backward compat)

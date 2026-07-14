@@ -130,7 +130,7 @@ def bootstrap_project(
         if has_entries and not adopt:
             raise BootstrapError(
                 "diretório não vazio sem repositório Git próprio; "
-                "mova o projeto para um repositório ou use adoção explícita"
+                "mova o projeto para um repositório ou use ft init --adopt"
             )
         _run_git(root, "init", "-q")
         created_repository = True
@@ -142,6 +142,7 @@ def bootstrap_project(
         raise BootstrapError(
             "checkout Git deve estar limpo antes do bootstrap"
             + (f": {shown}" if shown else "")
+            + "; commite as mudanças ou use ft init --adopt"
         )
 
     ft_dir = paths.project_ft_dir(root)

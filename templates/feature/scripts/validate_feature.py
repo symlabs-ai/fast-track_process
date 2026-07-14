@@ -181,8 +181,11 @@ def _detect_product_root(root: Path) -> str:
         if (root / relative / "Makefile").is_file()
     ]
     if not candidates:
+        if (root / "Makefile").is_file():
+            return "."
         raise FeatureValidationError(
-            "Makefile do produto ausente; esperado em project/Makefile ou src/Makefile"
+            "Makefile do produto ausente; esperado em project/Makefile, "
+            "src/Makefile ou Makefile na raiz"
         )
     if len(candidates) > 1:
         raise FeatureValidationError(
@@ -234,7 +237,7 @@ def _load_baseline(
     product_root = payload.get("product_root")
     if not isinstance(backlog, list) or not isinstance(features, list):
         raise FeatureValidationError(f"{BASELINE_PATH}: tabelas da baseline ausentes")
-    if product_root not in {"project", "src"}:
+    if product_root not in {"project", "src", "."}:
         raise FeatureValidationError(f"{BASELINE_PATH}: product_root ausente ou inválido")
     if not all(isinstance(row, dict) for row in [*backlog, *features]):
         raise FeatureValidationError(f"{BASELINE_PATH}: registros inválidos")
@@ -487,7 +490,13 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
         raw = line[3:].strip()
         if " -> " in raw:
             raw = raw.split(" -> ", 1)[1]
-        if raw.startswith(f"{product_root}/"):
+        if product_root == ".":
+            # Produto na raiz: docs/.ft/CHANGELOG são evidência do ciclo, não produto.
+            first = raw.split("/", 1)[0]
+            if first in {"docs", ".ft", ".git", "state"} or raw == "CHANGELOG.md":
+                continue
+            paths.append(raw)
+        elif raw.startswith(f"{product_root}/"):
             paths.append(raw)
     return paths
 

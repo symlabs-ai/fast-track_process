@@ -255,6 +255,37 @@ def test_bootstrap_refuses_dirty_existing_repository_without_writes(tmp_path):
     assert not (project / "docs").exists()
 
 
+def test_bootstrap_adopts_nonempty_directory_without_git(tmp_path):
+    project = tmp_path / "legacy"
+    project.mkdir()
+    (project / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    result = bootstrap_project(project, adopt=True)
+
+    assert result.status == "created"
+    assert result.created_repository is True
+    assert result.commit == _git(project, "rev-parse", "HEAD")
+    assert read_manifest(project) == {"schema_version": 3, "processes": {}}
+    # A adoção nunca commita o legado silenciosamente: app.py continua fora do Git.
+    assert "app.py" in _git(project, "status", "--porcelain")
+    assert (project / "app.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_bootstrap_adopts_dirty_existing_repository(tmp_path):
+    project = tmp_path / "dirty-adopt"
+    _initialized_git(project)
+    (project / "uncommitted.txt").write_text("mine", encoding="utf-8")
+
+    result = bootstrap_project(project, adopt=True)
+
+    assert result.status == "updated"
+    assert result.created_repository is False
+    assert result.commit == _git(project, "rev-parse", "HEAD")
+    assert (project / ".ft/manifest.yml").is_file()
+    assert "uncommitted.txt" in _git(project, "status", "--porcelain")
+    assert (project / "uncommitted.txt").read_text(encoding="utf-8") == "mine"
+
+
 def test_v2_migration_dry_run_and_apply_preserve_bundles_and_cycles(tmp_path):
     project = tmp_path / "project"
     process = project / ".ft/process/feature/process.yml"

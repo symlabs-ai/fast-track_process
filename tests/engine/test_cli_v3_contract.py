@@ -124,6 +124,34 @@ def test_init_creates_common_workspace_and_is_idempotent_and_checkable(
     assert _tracked_workspace_snapshot(project) == initial_files
 
 
+def test_init_adopt_bootstraps_legacy_directory_without_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as refused_exit:
+        _invoke_cli(monkeypatch, "init", "legacy")
+    assert refused_exit.value.code == 1
+    refused = capsys.readouterr()
+    assert "--adopt" in refused.err + refused.out
+    assert not (legacy / ".git").exists()
+
+    _invoke_cli(monkeypatch, "init", "legacy", "--adopt")
+    output = capsys.readouterr().out
+
+    assert (legacy / ".git").is_dir()
+    assert (legacy / ".ft" / "manifest.yml").is_file()
+    assert _git(legacy, "rev-parse", "--verify", "HEAD")
+    # O legado não é commitado silenciosamente; o usuário é avisado.
+    assert "app.py" in _git(legacy, "status", "--porcelain")
+    assert "commite-os antes" in output
+
+
 def test_run_rejects_repository_without_ft_initialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

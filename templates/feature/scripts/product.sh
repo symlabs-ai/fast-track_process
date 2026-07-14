@@ -28,8 +28,12 @@ resolve_product_root() {
     fi
   done
   if test -z "$found"; then
-    printf 'ERRO: Makefile do produto ausente; esperado em project/Makefile ou src/Makefile\n' >&2
-    return 1
+    if test -f "$root/Makefile"; then
+      found="."
+    else
+      printf 'ERRO: Makefile do produto ausente; esperado em project/Makefile, src/Makefile ou Makefile na raiz\n' >&2
+      return 1
+    fi
   fi
   printf '%s\n' "$found"
 }

@@ -4645,6 +4645,18 @@ def cmd_run(args):
             _record_cycle_ledger(project_root, wt_name)
         else:
             # Fallback sem git: diretório simples em ~/.ft/worktrees/
+            # --parallel é incompatível com este fallback: o fan-out de
+            # parallel_group usa git worktrees dentro do run_dir e falharia
+            # só na hora do grupo, muitos steps depois. Abortar cedo.
+            if getattr(args, "parallel", False):
+                from ft.engine import ui as _ui
+                print(_ui.fail(
+                    "--parallel exige que o projeto seja um repositório git "
+                    f"com ao menos um commit: {project_root}"
+                ))
+                print("  Execute: git init && git add -A && git commit -m 'init'")
+                print("  Ou rode sem --parallel.")
+                sys.exit(1)
             wt_home = _worktrees_home(project_root)
             next_num = _next_cycle_num(project_root)
             engine_name = _effective_engine or "run"

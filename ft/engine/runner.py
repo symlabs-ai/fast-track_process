@@ -4890,6 +4890,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             if not wt_result.success:
                 self.state_mgr.block(f"Parallel task falhou: {wt_result.node_id}")
                 print(f"  PARALLEL FAIL: {wt_result.node_id}")
+                detail = (wt_result.output or "").strip()
+                if detail:
+                    print(f"    → {detail[:300]}")
                 all_passed = False
                 continue
 

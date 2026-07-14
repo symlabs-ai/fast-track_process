@@ -2607,27 +2607,53 @@ def cmd_runs(args):
         else:
             node = current_node
 
-        # Status colorido
+        # Status colorido (sem a indentação padrão dos helpers — é célula de tabela)
         if node_status == "done":
-            status_str = _ui.success(node)
+            status_str = _ui.success(node).lstrip()
         elif node_status == "blocked":
-            status_str = _ui.fail(node)
+            status_str = _ui.fail(node).lstrip()
         elif node_status == "awaiting_approval":
-            status_str = _ui.warn(f"⏸ {node}")
+            status_str = _ui.warn(f"⏸ {node}").lstrip()
         elif node_status == "delegated":
-            status_str = f"   ⟳ {node}"
+            status_str = f"⟳ {node}"
         else:
-            status_str = f"   {node}"
+            status_str = node
 
         source = "archive" if archived else "runtime"
-        rows.append((cycle.name, f"{steps_done}/{steps_total}", ts, status_str, serve_url, source))
+        steps_label = f"{steps_done}/{steps_total}".replace("unknown", "?")
+        rows.append((cycle.name, steps_label, ts, status_str, serve_url, source))
 
-    # Header
+    # Tabela com larguras dinâmicas; o STATUS carrega cores ANSI, então o
+    # padding usa a largura visível (códigos de escape não contam coluna).
+    def _visible_len(text: str) -> int:
+        return len(_ANSI_RE.sub("", text))
+
+    def _pad_visible(text: str, width: int) -> str:
+        return text + " " * max(0, width - _visible_len(text))
+
+    def _col(header: str, values, measure=len) -> int:
+        return max(len(header), max((measure(v) for v in values), default=0))
+
+    w_name = _col("CICLO", (r[0] for r in rows))
+    w_steps = _col("STEPS", (r[1] for r in rows))
+    w_ts = _col("ÚLT.", (r[2] for r in rows))
+    w_status = _col("STATUS", (r[3] for r in rows), _visible_len)
+    w_source = _col("FONTE", (r[5] for r in rows))
+
     print()
-    print(f"  {'CICLO':<22} {'STEPS':>8}  {'ÚLT.':>5}  {'STATUS':<40}  {'FONTE':<8}  URL")
-    print(f"  {'─'*22}  {'─'*8}  {'─'*5}  {'─'*40}  {'─'*8}  {'─'*25}")
+    print(
+        f"  {'CICLO':<{w_name}}  {'STEPS':>{w_steps}}  {'ÚLT.':>{w_ts}}  "
+        f"{'STATUS':<{w_status}}  {'FONTE':<{w_source}}  URL"
+    )
+    print(
+        f"  {'─' * w_name}  {'─' * w_steps}  {'─' * w_ts}  "
+        f"{'─' * w_status}  {'─' * w_source}  {'─' * 3}"
+    )
     for name, steps, ts, node_str, url, source in rows:
-        print(f"  {name:<22}  {steps:>8}  {ts:>5}  {node_str:<40}  {source:<8}  {url}")
+        print(
+            f"  {name:<{w_name}}  {steps:>{w_steps}}  {ts:>{w_ts}}  "
+            f"{_pad_visible(node_str, w_status)}  {source:<{w_source}}  {url}"
+        )
     print()
 
 
@@ -4579,13 +4605,18 @@ class _ActiveRunRecord:
     isolated: bool
 
 
-def _startup_reservation_payload(process_relative: Path | None) -> dict:
+def _startup_reservation_payload(
+    process_relative: Path | None,
+    *,
+    isolated: bool = True,
+) -> dict:
     """State mínimo que torna o startup visível antes de construir o runner."""
     process_path = process_relative.as_posix() if process_relative is not None else None
     return {
         "process_path": process_path,
         "current_node": "__preparing__",
         "node_status": "preparing",
+        "isolated": isolated,
         "completed_nodes": [],
         "metrics": {"steps_completed": 0, "steps_total": 0},
         "_lock": {
@@ -4598,20 +4629,24 @@ def _startup_reservation_payload(process_relative: Path | None) -> dict:
 def _write_startup_reservation(
     reservation_path: Path,
     process_relative: Path | None,
+    *,
+    isolated: bool = True,
 ) -> None:
     """Persiste uma reserva atômica usando o mesmo lock do state normal."""
     from ft.engine.state import StateManager
 
     StateManager(reservation_path)._write_raw(
-        _startup_reservation_payload(process_relative)
+        _startup_reservation_payload(process_relative, isolated=isolated)
     )
 
 
-def _release_continuous_startup(project_root: Path) -> None:
-    """Remove somente a reserva pertencente a esta invocação."""
+def _release_startup_reservation(
+    project_root: Path,
+    reservation: Path,
+) -> None:
+    """Remove somente uma reserva pertencente a esta invocação."""
     from ft.engine.layout import _manifest_write_lock
 
-    reservation = paths.continuous_startup_path(project_root)
     with _manifest_write_lock(project_root):
         if not reservation.exists():
             return
@@ -4622,6 +4657,13 @@ def _release_continuous_startup(project_root: Path) -> None:
         lock = payload.get("_lock", {}) if isinstance(payload, dict) else {}
         if isinstance(lock, dict) and lock.get("pid") == os.getpid():
             reservation.unlink(missing_ok=True)
+
+
+def _release_continuous_startup(project_root: Path) -> None:
+    _release_startup_reservation(
+        project_root,
+        paths.continuous_startup_path(project_root),
+    )
 
 
 def _state_process_name(data: dict) -> str | None:
@@ -4745,6 +4787,44 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
                 process_name=None,
                 isolated=False,
             ))
+
+    startup_home = paths.startup_reservations_home(project_root)
+    if startup_home.is_dir():
+        for reservation in sorted(startup_home.glob("*.yml")):
+            try:
+                payload = yaml.safe_load(
+                    reservation.read_text(encoding="utf-8")
+                ) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                payload = None
+            if not isinstance(payload, dict):
+                records.append(_ActiveRunRecord(
+                    description="startup de ciclo (reserva inválida)",
+                    state_path=reservation,
+                    process_name=None,
+                    isolated=True,
+                ))
+                continue
+            raw_lock = payload.get("_lock", {})
+            raw_pid = raw_lock.get("pid") if isinstance(raw_lock, dict) else None
+            try:
+                parsed_pid = int(raw_pid)
+            except (TypeError, ValueError):
+                parsed_pid = 0
+            if parsed_pid <= 0 or payload.get("isolated") is not True:
+                records.append(_ActiveRunRecord(
+                    description="startup de ciclo (reserva inválida)",
+                    state_path=reservation,
+                    process_name=None,
+                    isolated=True,
+                ))
+            elif _is_pid_alive(parsed_pid):
+                records.append(_ActiveRunRecord(
+                    description=f"startup de ciclo (PID {parsed_pid} — preparando snapshot)",
+                    state_path=reservation,
+                    process_name=_state_process_name(payload),
+                    isolated=True,
+                ))
 
     wt_home = paths.worktrees_home(project_root)
     if wt_home.is_dir():

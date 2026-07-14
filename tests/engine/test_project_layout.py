@@ -842,9 +842,45 @@ metrics:
 
     output = capsys.readouterr().out
     assert "cycle-08" in output
-    assert "unknown/unknown" in output
+    assert "?/?" in output  # progresso desconhecido compactado, sem estourar a coluna
     assert "archive" in output
     assert "runtime" not in output
+
+
+def test_runs_table_columns_stay_aligned_with_long_names_and_ansi(
+    tmp_path, monkeypatch, capsys
+):
+    """Nomes longos e status colorido (ANSI) não podem desalinhar as colunas."""
+    import re as _re
+
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+    for name, status in (
+        ("cycle-01", "done"),
+        ("cycle-99-um-nome-bem-mais-longo-que-a-coluna", "blocked"),
+    ):
+        cycle = project / ".ft" / "cycles" / name
+        cycle.mkdir(parents=True)
+        (cycle / "cycle.yml").write_text(
+            f"""schema_version: 1
+id: {name}
+status: {status}
+progress:
+  completed: 3
+  total: 11
+""",
+        )
+
+    cmd_runs(SimpleNamespace(project=str(project)))
+
+    ansi = _re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+    lines = [ansi.sub("", l) for l in capsys.readouterr().out.splitlines() if l.strip()]
+    data = [l for l in lines if l.lstrip().startswith("cycle-")]
+    assert len(data) == 2
+    # A coluna FONTE ("archive") deve começar na mesma posição em todas as linhas.
+    positions = {l.index("archive") for l in data}
+    assert len(positions) == 1, data
 
 
 def test_full_merge_archives_cycle_before_integrating_branch(tmp_path, monkeypatch):

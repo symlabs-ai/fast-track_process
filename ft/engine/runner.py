@@ -5221,6 +5221,66 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         else:
             self.state_mgr.block(f"Rejeitado pelo stakeholder: {reason}")
 
+    _LOG_TS_RE = re.compile(r"^\| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \|")
+
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        total = max(0, int(seconds))
+        hours, rest = divmod(total, 3600)
+        minutes, secs = divmod(rest, 60)
+        if hours:
+            return f"{hours}h{minutes:02d}m"
+        if minutes:
+            return f"{minutes}m{secs:02d}s"
+        return f"{secs}s"
+
+    def _status_timing_labels(self) -> tuple[str | None, str | None]:
+        """(tempo de ciclo, última atividade) para o status — best effort.
+
+        Início do ciclo: timestamp da primeira linha da tabela do run log
+        (INIT). Última atividade: mtime mais recente entre os llm_logs, o
+        engine_state e o próprio run log — cobre delegação em andamento, cujo
+        progresso aparece nos logs antes de qualquer transição de node.
+        """
+        now = datetime.now()
+        log_path = Path(self.project_root) / self._log_filename
+
+        started = None
+        if log_path.is_file():
+            try:
+                with log_path.open(encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        m = self._LOG_TS_RE.match(line)
+                        if m:
+                            started = datetime.strptime(
+                                m.group(1), "%Y-%m-%d %H:%M:%S"
+                            )
+                            break
+            except OSError:
+                started = None
+
+        mtimes: list[float] = []
+        llm_dir = self._llm_log_dir()
+        if llm_dir.is_dir():
+            mtimes.extend(
+                p.stat().st_mtime for p in llm_dir.iterdir() if p.is_file()
+            )
+        for extra in (self.state_mgr.path, log_path):
+            if extra.is_file():
+                mtimes.append(extra.stat().st_mtime)
+
+        runtime_label = (
+            self._format_elapsed((now - started).total_seconds())
+            if started
+            else None
+        )
+        activity_label = None
+        if mtimes:
+            last = datetime.fromtimestamp(max(mtimes))
+            fmt = "%H:%M:%S" if last.date() == now.date() else "%Y-%m-%d %H:%M:%S"
+            activity_label = last.strftime(fmt)
+        return runtime_label, activity_label
+
     def status(self, full: bool = False):
         """Mostra estado atual."""
         state = self.state_mgr.load()
@@ -5248,7 +5308,13 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         steps_done = state.metrics.get("steps_completed", 0)
         steps_total = state.metrics.get("steps_total", 0)
         current_step = steps_done + 1 if state.node_status not in ("done", "completed") else steps_done
-        print(ui.info(f"Progresso: {current_step}/{steps_total} (passo atual)"))
+        progress_line = f"Progresso: {current_step}/{steps_total} (passo atual)"
+        runtime_label, activity_label = self._status_timing_labels()
+        if runtime_label:
+            progress_line += f" · ciclo rodando há {runtime_label}"
+        if activity_label:
+            progress_line += f" · última atividade {activity_label}"
+        print(ui.info(progress_line))
         # Mostrar URL se node atual é human_gate
         current_node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
         if current_node_obj and current_node_obj.type == "human_gate":

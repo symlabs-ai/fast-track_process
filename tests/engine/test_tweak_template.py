@@ -311,6 +311,20 @@ def test_tweak_implementation_accepts_one_small_documented_diff(tmp_path):
     assert receipt["count"] == 1
 
 
+@pytest.mark.parametrize("suffix", [".cjs", ".mjs", ".cts", ".mts"])
+def test_tweak_accepts_module_source_suffixes(tmp_path, suffix):
+    root = _project(tmp_path)
+    _preflight(root)
+    changed = [f"project/focal{suffix}"]
+    _write(root, changed[0], "export const color = 'blue';\n")
+    command = _run_focal(root, sys.executable, "-c", "pass")
+    _report(root, changed, command)
+
+    result = _run_validator(root, "implementation")
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_tweak_ignores_only_the_exact_engine_activity_log(tmp_path):
     root = _project(tmp_path)
     _preflight(root)

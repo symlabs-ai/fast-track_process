@@ -250,6 +250,23 @@ ft close --keep-worktree     # preserva o worktree no disco
 ft close --force             # encerra mesmo incompleto
 ```
 
+**Verificação pós-close (OBRIGATÓRIA antes de entregar o link ao stakeholder).** O ciclo
+valida no worktree com dependências frescas; o checkout promovido pode ter `node_modules`,
+lockfiles e caches defasados — "passou no worktree" NÃO implica "funciona no projeto".
+Após o merge:
+
+1. Reinstale dependências que o ciclo possa ter adicionado (`npm install` no frontend;
+   `pip install`/`poetry install` se o backend mudou deps).
+2. Limpe caches de build antigos (ex.: `.next/`) se um dev server rodava durante o merge.
+3. Reinicie backend e frontend a partir do checkout promovido.
+4. Verifique TODAS as rotas principais com HTTP 200 — não apenas `/` e `/health`.
+5. Exercite de fato o fluxo novo do ciclo (a feature que o handoff anuncia) antes de
+   qualquer demonstração.
+
+Incidente de referência: cycle-05 do clari_nf (2026-07-14) — o ciclo adicionou `jsqr` ao
+`package.json`, o `node_modules` promovido era antigo, e todas as rotas responderam 500 na
+primeira interação do stakeholder, apesar de 11/11 E2E verdes no worktree.
+
 Antes do close, revise aprendizados de processo estruturados:
 
 ```bash

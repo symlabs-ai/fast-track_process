@@ -402,6 +402,7 @@ nodes:
 
   - id: ft.plan.03.api_contract
     type: document
+    parallel_group: plan-docs   # com ft run --parallel: roda junto de plan.04 e plan.05
     no_pre_seed: true
     title: "Definir Contrato de API"
     description: "Documentar todos os endpoints da API em formato acionavel. Estrutura obrigatoria: ## Base URL e ## Endpoints. Em ## Endpoints, use tabela Markdown com colunas Método | Path | Descrição | Request | Response | Erros. Cada Path deve ser concreto e derivado de docs/PROJECT_BACKLOG.md e docs/task_list.md; é proibido usar / como endpoint de produto. Incluir GET /health sem prefixo /api. Endpoints de produto devem usar paths como /api/<recurso>. Se o produto tiver criação/cadastro, incluir POST /api/<recurso> para cada entidade criável. Servir como contrato entre frontend e backend — evita mismatch de rotas."
@@ -426,6 +427,7 @@ nodes:
 
   - id: ft.plan.04.ui_criteria
     type: document
+    parallel_group: plan-docs
     title: "Gerar Critérios Visuais de UI"
     description: "Definir critérios objetivos de aceitação visual para cada tela do produto: componentes obrigatórios, estados (vazio, carregado, erro), navegação e ícones. Se este arquivo ainda não existir, faça perguntas objetivas ao stakeholder antes de fechar. Cada critério deve ter ID estável (C01, C02, C03...) para o screenshot_review/visual_check ou o código comprovarem cobertura item a item; no código, a evidência deve usar data-ui-criteria=\"C01\" ou comentário ui-criteria: C01."
     sprint: sprint-02-planning
@@ -441,6 +443,7 @@ nodes:
 
   - id: ft.plan.05.test_data
     type: document
+    parallel_group: plan-docs
     title: "Gerar Massa de Dados para Aceitação"
     description: "Criar massa de dados realista para os testes de aceitação. OBRIGATÓRIO: todas as datas devem ser relativas à execução (HOJE, HOJE+N, HOJE-N) — nunca inclua anos ou datas absolutas hardcodadas. Ao menos um registro com data de hoje para validar agendamentos/eventos do dia."
     sprint: sprint-02-planning
@@ -1120,6 +1123,7 @@ nodes:
   - id: ft.handoff.02.prd_rewrite
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
+    parallel_group: handoff-analysis   # com ft run --parallel: roda junto de handoff.03
     title: "Propor Ajustes ao PRD"
     description: "Gerar docs/PRD.next.md com propostas de atualização do PRD canônico a partir do backlog, decisões e aprendizados do ciclo. Não usar este documento como backlog paralelo: pendências concretas devem estar em docs/PROJECT_BACKLOG.md."
     sprint: sprint-10-handoff
@@ -1133,6 +1137,7 @@ nodes:
   - id: ft.handoff.03.critical_analysis
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
+    parallel_group: handoff-analysis
     title: "Análise Crítica — Sugestões do LLM"
     description: "O LLM produz uma análise crítica honesta do produto entregue: o que está bom, o que está frágil, oportunidades de melhoria que o stakeholder pode não ter visto. Numeradas e priorizadas."
     sprint: sprint-10-handoff

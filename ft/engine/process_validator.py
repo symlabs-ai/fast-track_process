@@ -68,6 +68,7 @@ def validate_process(graph: ProcessGraph, validator_registry: dict[str, Any] | N
     _check_graph_integrity(graph, report)
     _check_validators(graph, validator_registry or {}, report)
     _check_semantics(graph, report)
+    _check_parallel_groups(graph, report)
 
     return report
 
@@ -228,6 +229,55 @@ def _check_semantics(graph: ProcessGraph, report: ValidationReport) -> None:
         # Nó não-terminal sem next e sem branches
         if node.type != "end" and not node.next and not node.branches:
             report.add_error(node.id, "nó não-terminal sem next nem branches")
+
+
+def _check_parallel_groups(graph: ProcessGraph, report: ValidationReport) -> None:
+    """Valida parallel_group: só nodes LLM, outputs disjuntos entre membros.
+
+    O fan-out roda cada membro num worktree e faz merge no fan-in — outputs
+    compartilhados geram conflito de merge, e tipos de controle (gate,
+    human_gate, decision, end) não podem ser delegados a um worktree.
+    """
+    groups: dict[str, list[Node]] = {}
+    for node in graph.nodes.values():
+        if node.parallel_group:
+            groups.setdefault(str(node.parallel_group), []).append(node)
+
+    control_types = {"gate", "human_gate", "decision", "end", "exploration"}
+    for group_name, members in groups.items():
+        if len(members) < 2:
+            report.add_warning(
+                members[0].id,
+                f"parallel_group '{group_name}' com um único node — sem efeito",
+            )
+        for node in members:
+            if node.type in control_types:
+                report.add_error(
+                    node.id,
+                    f"parallel_group '{group_name}' não aceita node de controle "
+                    f"(type={node.type})",
+                )
+            if not node.executor.startswith("llm"):
+                report.add_error(
+                    node.id,
+                    f"parallel_group '{group_name}' exige executor LLM "
+                    f"(executor={node.executor})",
+                )
+            if not node.outputs:
+                report.add_error(
+                    node.id,
+                    f"parallel_group '{group_name}' exige outputs declarados "
+                    "(usados na checagem de independência do fan-out)",
+                )
+        for i, a in enumerate(members):
+            for b in members[i + 1:]:
+                shared = set(a.outputs) & set(b.outputs)
+                if shared:
+                    report.add_error(
+                        a.id,
+                        f"parallel_group '{group_name}': outputs compartilhados "
+                        f"com {b.id}: {sorted(shared)}",
+                    )
 
 
 def format_report(report: ValidationReport, total_nodes: int) -> str:

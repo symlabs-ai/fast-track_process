@@ -44,6 +44,8 @@ class EngineState:
     last_approval_message: str | None = None  # mensagem do ultimo ft approve (consumida pelo proximo LLM)
     pending_fix: dict | None = None  # {goto: node_id, feedback: str} quando on_fail aguarda ft fix
     exploration_log: list[str] = field(default_factory=list)  # requests feitos em modo exploração
+    parallel_enabled: bool = False  # ft run/continue --parallel: honrar parallel_group dos nodes
+    parallel_max_slots: int = 2  # worktrees simultâneos no fan-out de um parallel_group
     metrics: dict[str, Any] = field(default_factory=lambda: {
         "steps_completed": 0,
         "steps_total": 0,
@@ -121,6 +123,8 @@ class StateManager:
                 last_approval_message=raw.get("last_approval_message"),
                 pending_fix=raw.get("pending_fix"),
                 exploration_log=raw.get("exploration_log", []),
+                parallel_enabled=bool(raw.get("parallel_enabled", False)),
+                parallel_max_slots=int(raw.get("parallel_max_slots", 2) or 2),
                 metrics=raw.get("metrics", EngineState().metrics),
                 _lock=raw.get("_lock"),
             )
@@ -197,6 +201,8 @@ class StateManager:
             "last_approval_message": self._state.last_approval_message,
             "pending_fix": self._state.pending_fix,
             "exploration_log": self._state.exploration_log,
+            "parallel_enabled": self._state.parallel_enabled,
+            "parallel_max_slots": self._state.parallel_max_slots,
             "metrics": self._state.metrics,
             "_lock": self._state._lock,
         }

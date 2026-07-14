@@ -6,6 +6,25 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## Unreleased
 
+### ft run/continue --parallel — paralelismo intra-processo via parallel_group
+- `ft run --parallel [--max-parallel N]` habilita o fan-out de nodes marcados
+  com `parallel_group` no processo: cada membro roda num git worktree isolado
+  e o fan-in faz merge + validação na ordem do YAML. Opt-in: sem a flag os
+  grupos rodam sequencialmente, como antes.
+- A escolha persiste no `engine_state.yml` (`parallel_enabled`,
+  `parallel_max_slots`) — `ft continue`, `ft approve --auto` e `ft retry`
+  respeitam sem re-passar flags; `ft continue --no-parallel` desliga num run
+  já iniciado.
+- Fan-in corrigido: desempacotamento do retorno de `merge_all` (3-tupla) e
+  avanço de estado em ordem determinística do grupo — antes, a ordem de
+  término das threads podia regredir o `current_node` para um node já
+  completado.
+- `ft validate` ganhou regras para `parallel_group`: só executor LLM, outputs
+  disjuntos entre membros, sem nodes de controle (gate/human_gate/decision).
+- Template `mvp-builder` marca dois grupos seguros: `plan-docs`
+  (api_contract, ui_criteria, test_data) e `handoff-analysis` (prd_rewrite,
+  critical_analysis).
+
 ### ft process update — sincronização global→local dos processos materializados
 - Novo comando `ft process update [nome] [--check] [--yes]`: fecha a direção
   que faltava no modelo `copy_once`/`local_only` — evoluções do template

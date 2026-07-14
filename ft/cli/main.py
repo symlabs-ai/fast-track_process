@@ -87,6 +87,29 @@ def resolve_bypass_human_gates(args) -> bool:
     return bool(getattr(args, "bypass_human_gates", False))
 
 
+def apply_parallel_flags(runner, args) -> None:
+    """Persiste no estado do run a escolha de paralelismo intra-processo.
+
+    --parallel habilita o fan-out de nodes com parallel_group no YAML;
+    --no-parallel desabilita num run já iniciado; --max-parallel ajusta os
+    worktrees simultâneos. Persistido em ft_state.yml, então ft continue,
+    ft approve --auto e ft retry honram a escolha sem re-passar flags.
+    """
+    parallel = bool(getattr(args, "parallel", False))
+    no_parallel = bool(getattr(args, "no_parallel", False))
+    max_parallel = getattr(args, "max_parallel", None)
+    if not parallel and not no_parallel and max_parallel is None:
+        return
+    state = runner.state_mgr.load()
+    if parallel:
+        state.parallel_enabled = True
+    if no_parallel:
+        state.parallel_enabled = False
+    if max_parallel is not None:
+        state.parallel_max_slots = max(1, int(max_parallel))
+    runner.state_mgr.save()
+
+
 def resolve_run_mode(args) -> str:
     """Resolve o modo de execução a partir dos flags: --auto → 'mvp' (avança
     até o próximo human gate), --sprint → 'sprint' (até fim da sprint), senão
@@ -1744,6 +1767,7 @@ def cmd_continue(args):
     # Inicializar estado só se nunca rodou
     if state.current_node is None:
         runner.init_state()
+    apply_parallel_flags(runner, args)
 
     mode = resolve_run_mode(args)
     recovered = runner.recover_orphaned_delegation(mode=mode)
@@ -4843,6 +4867,7 @@ def cmd_run(args):
         runner._fire_hooks("on_cycle_end")
     else:
         runner.init_state()
+    apply_parallel_flags(runner, args)
     if setup_only:
         runner.state_mgr.release_lock()
         print(f"  Ciclo preparado (setup-only): {project_root}")
@@ -4951,6 +4976,12 @@ def main():
     cont.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
                       help="Pular human_gates automaticamente (LLM decide)")
     cont.add_argument("--cycle", help="Ciclo específico a retomar (ex: cycle-07)")
+    cont.add_argument("--parallel", action="store_true",
+                      help="Honrar parallel_group do processo (persiste no estado do run)")
+    cont.add_argument("--no-parallel", action="store_true", dest="no_parallel",
+                      help="Desabilitar paralelismo intra-processo num run já iniciado")
+    cont.add_argument("--max-parallel", dest="max_parallel", type=int, metavar="N",
+                      help="Máximo de worktrees simultâneos por parallel_group (default: 2)")
 
     # status
     st = sub.add_parser("status", help="Estado atual")
@@ -5223,6 +5254,11 @@ def main():
     ru.add_argument("--auto", action="store_true",
                     help="Avançar em modo autônomo até MVP (PARA em human_gates; "
                          "para pular use --bypass-human-gates)")
+    ru.add_argument("--parallel", action="store_true",
+                    help="Honrar parallel_group do processo: nodes independentes "
+                         "rodam em worktrees paralelos (fan-out/fan-in com merge)")
+    ru.add_argument("--max-parallel", dest="max_parallel", type=int, metavar="N",
+                    help="Máximo de worktrees simultâneos por parallel_group (default: 2)")
 
     args = parser.parse_args()
 

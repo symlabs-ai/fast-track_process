@@ -547,6 +547,24 @@ git init && git add -A && git commit -m "chore: bootstrap fast track"
 ft run . --auto
 ```
 
+### Paralelismo intra-processo (`--parallel`)
+
+`ft run . --auto --parallel` habilita o fan-out dos nodes marcados com
+`parallel_group` no `process.yml`: cada membro do grupo roda num git worktree
+isolado e o engine faz merge + validação no fan-in, avançando na ordem do YAML.
+A escolha persiste em `engine_state.yml`, então `ft continue`, `ft approve
+--auto` e `ft retry` a respeitam sem re-passar flags; use `ft continue
+--no-parallel` para desligar num run já iniciado e `--max-parallel N` para
+ajustar os worktrees simultâneos (default: 2).
+
+Regras de um `parallel_group` (verificadas por `ft validate`): só nodes com
+executor LLM, outputs disjuntos entre os membros e nenhum node de controle
+(gate, human_gate, decision). Membros não podem ler o output uns dos outros —
+os worktrees nascem do mesmo commit base. O template mvp-builder marca dois
+grupos: `plan-docs` (api_contract, ui_criteria, test_data) e
+`handoff-analysis` (prd_rewrite, critical_analysis). Sem `--parallel` os
+grupos rodam sequencialmente, como antes.
+
 O processo V2 continua disponível como template histórico e, quando escolhido,
 usa seu próprio bundle `.ft/process/fast-track-v2/process.yml`.
 

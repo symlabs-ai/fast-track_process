@@ -3133,8 +3133,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                                    f"→ {state.current_node}", sprint=node_sprint)
                 continue
 
-            # Parallel group — fan-out/fan-in
-            if node.parallel_group:
+            # Parallel group — fan-out/fan-in (opt-in via ft run/continue --parallel)
+            if node.parallel_group and self.state_mgr.state.parallel_enabled:
                 group_nodes = self.graph.get_parallel_group(node.parallel_group)
                 # So inicia fan-out se este e o primeiro do grupo nao completado
                 completed = set(self.state_mgr.state.completed_nodes)
@@ -4793,7 +4793,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 "delegate_kwargs": {"selection_node_id": n.id},
             })
 
-        par = ParallelRunner(project_root=self._work_dir, max_slots=2)
+        max_slots = max(1, int(self.state_mgr.state.parallel_max_slots or 2))
+        par = ParallelRunner(project_root=self._work_dir, max_slots=max_slots)
         selection_lock = threading.Lock()
 
         def delegate_parallel(*, selection_node_id: str, **kwargs):
@@ -4842,6 +4843,12 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             print(f"  PARALLEL BLOCK: {e}")
             return
 
+        # Fan-in determinístico: seguir a ordem do grupo no YAML, não a ordem
+        # de término das threads — o último advance define o current_node, que
+        # precisa ser a saída do grupo.
+        group_order = {n.id: i for i, n in enumerate(nodes)}
+        results = sorted(results, key=lambda r: group_order.get(r.node_id, len(nodes)))
+
         # Fan-in: merge + validar cada resultado
         all_passed = True
         for wt_result in results:
@@ -4853,7 +4860,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 continue
 
             # Merge worktree branch
-            ok, detail = par.merge_all([wt_result])[0] if wt_result.branch else (False, "sem branch")
+            if wt_result.branch:
+                _, ok, detail = par.merge_all([wt_result])[0]
+            else:
+                ok, detail = False, "sem branch"
             if not ok:
                 self.state_mgr.block(f"Merge falhou: {detail}")
                 print(f"  MERGE FAIL: {detail}")
@@ -4874,10 +4884,15 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 next_id = self.graph.resolve_next(node.id)
                 self._advance_state(node.id, next_id)
                 print(f"  PARALLEL PASS: {node.id} → {next_id}")
+                self._log_activity(node.id, node.title, "parallel", "PASS",
+                                   f"→ {next_id or 'fim'}", sprint=node.sprint)
             else:
                 self.state_mgr.block(
                     f"Validacao falhou apos merge: {node.id}: {validation.feedback}"
                 )
+                self._log_activity(node.id, node.title, "parallel", "BLOCKED",
+                                   validation.feedback or "validação falhou após merge",
+                                   sprint=node.sprint)
                 return
 
     def _generate_sprint_report(self, sprint: str, state):

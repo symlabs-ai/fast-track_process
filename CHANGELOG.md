@@ -4,6 +4,37 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.15.0] - 2026-07-14
+
+### Template material_design_pwa — M3 + PWA sobre projeto existente
+- Novo template runnable `ft run . --template material_design_pwa`: aplica as
+  guidelines de Material Design 3 (incluindo M3 Expressive) à UI de um
+  projeto Fast Track e o transforma em PWA instalável e offline-first, em um
+  ciclo com três fases de build — tokens/tema (color roles, typescale, shape,
+  dark mode, foco visível), shell/navegação adaptativa pelos breakpoints
+  oficiais (bar < 600px, rail 600–1199px, drawer ≥ 1200px, componentes
+  híbridos com `@material/web` por import) e PWA (manifesto com ícones
+  192/512+maskable, service worker com estratégia de cache por recurso,
+  fallback offline, CTA de instalação contextual e update sem reload
+  forçado).
+- Guidelines completas embarcadas no bundle do processo
+  (`guidelines/material_design_pwa.md`): os nodes LLM trabalham a partir do
+  documento normativo, com cada prompt apontando a seção aplicável — tokens,
+  componentes, WCAG 2.2, offline-first e checklist de QA.
+- Auditoria inicial com loop de perguntas ao stakeholder (cor da marca, dark
+  mode, telas prioritárias, rotas offline) e plano aprovado em human gate;
+  revisão independente exige PASS/FAIL nos 9 itens do checklist de QA das
+  guidelines antes do aceite.
+- Camada determinística própria (`validate_mdpwa.py`, 6 modos): contrato
+  mínimo de tokens M3 no CSS, manifesto JSON válido com campos e ícones
+  obrigatórios, service worker e fallback offline presentes, PB concluído e
+  entrada `#FEAT` no CHANGELOG no reconcile.
+- Integração com o ecossistema: preflight exige base canônica + harness e
+  aponta o fastfy quando falta — pipeline para legado:
+  `fastfy → material_design_pwa → feature`. O reconcile atualiza
+  `docs/ui_criteria.md` com critérios M3 (IDs C0x) que guiam os próximos
+  ciclos de feature.
+
 ## [v0.14.0] - 2026-07-14
 
 ### Template fastfy — adoção de repositório legado

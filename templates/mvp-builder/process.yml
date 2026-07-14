@@ -529,7 +529,7 @@ nodes:
   - id: ft.frontend.02.implement
     type: build
     title: "Implementar Frontend"
-    description: "Implementar todas as telas e funcionalidades P0 do PRD seguindo os critérios visuais de docs/ui_criteria.md e o contrato de API de docs/api_contract.md. Proxy Vite configurado para /api → backend."
+    description: "Implementar todas as telas e funcionalidades P0 do PRD seguindo os critérios visuais de docs/ui_criteria.md e o contrato de API de docs/api_contract.md. O proxy de /api → backend deve seguir o mecanismo da stack escolhida em docs/tech_stack.md (ex.: rewrites do Next, server.proxy do Vite) — não assuma um bundler/framework específico."
     sprint: sprint-03-frontend
     executor: claude
     outputs:

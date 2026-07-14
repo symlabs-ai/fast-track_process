@@ -993,6 +993,34 @@ progress:
     assert "--done" in out
 
 
+def test_runs_default_keeps_finished_runtime_cycle_visible(tmp_path, monkeypatch, capsys):
+    """done ainda no runtime (worktree aberto, sem ft close) continua listado."""
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+    project.mkdir(parents=True)
+    state = ft_home / "worktrees" / project.name / "cycle-05" / "state"
+    state.mkdir(parents=True)
+    (state / "engine_state.yml").write_text(
+        """process_id: test
+version: '1.0'
+current_node: null
+node_status: done
+completed_nodes: [a]
+gate_log: {}
+artifacts: {}
+metrics:
+  steps_completed: 3
+  steps_total: 3
+""",
+    )
+
+    cmd_runs(SimpleNamespace(project=str(project)))
+    out = capsys.readouterr().out
+    assert "cycle-05" in out
+    assert "runtime" in out
+
+
 def test_full_merge_archives_cycle_before_integrating_branch(tmp_path, monkeypatch):
     ft_home = tmp_path / "ft-home"
     monkeypatch.setenv("FT_HOME", str(ft_home))

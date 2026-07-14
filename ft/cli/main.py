@@ -1854,7 +1854,9 @@ def cmd_runs(args):
 
         source = "archive" if archived else "runtime"
         steps_label = f"{steps_done}/{steps_total}".replace("unknown", "?")
-        finished = node_status in ("done", "completed")
+        # Só o histórico arquivado sai do default: um ciclo done ainda no
+        # runtime tem worktree aberto e precisa de ft close — continua visível.
+        finished = archived and node_status in ("done", "completed")
         if finished and not getattr(args, "done", False):
             continue
         rows.append((cycle.name, steps_label, ts, status_str, serve_url, source))

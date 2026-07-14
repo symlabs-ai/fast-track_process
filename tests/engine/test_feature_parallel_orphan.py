@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 import yaml
 
 from ft.cli import feature_parallel as fp
@@ -23,6 +24,7 @@ def _write_cycle_state(
     *,
     node_status: str,
     lock_pid: int | None,
+    lock_pid_start: str | None = None,
 ) -> None:
     state_dir = paths.worktrees_home(root) / cycle_name / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -32,6 +34,8 @@ def _write_cycle_state(
     }
     if lock_pid is not None:
         payload["_lock"] = {"owner": "ft_engine", "pid": lock_pid}
+        if lock_pid_start is not None:
+            payload["_lock"]["pid_start"] = lock_pid_start
     (state_dir / "engine_state.yml").write_text(
         yaml.dump(payload), encoding="utf-8"
     )
@@ -70,6 +74,21 @@ def test_delegated_with_live_lock_is_not_orphaned(tmp_path, monkeypatch):
     assert fp._cycle_delegation_is_orphaned(root, "cycle-01") is False
 
 
+def test_delegated_with_recycled_pid_identity_is_orphaned(tmp_path, monkeypatch):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_cycle_state(
+        root,
+        "cycle-01",
+        node_status="delegated",
+        lock_pid=os.getpid(),
+        lock_pid_start="not-the-current-process",
+    )
+
+    assert fp._cycle_delegation_is_orphaned(root, "cycle-01") is True
+
+
 def test_ready_state_is_not_orphaned(tmp_path, monkeypatch):
     monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
     root = tmp_path / "proj"
@@ -103,3 +122,61 @@ def test_reconcile_leaves_externally_driven_delegation_alone(tmp_path, monkeypat
 
     assert changed is False
     assert feature.status == "running"
+
+
+def test_reaper_keeps_delegated_cycle_owned_by_external_driver_running(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    cycle_name = "cycle-01"
+    _write_cycle_state(
+        root,
+        cycle_name,
+        node_status="delegated",
+        lock_pid=os.getpid(),
+    )
+    feature = _feature(cycle_name, status="setup")
+    batch = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="feature",
+        features=[feature],
+        waves=[[feature.feature_id]],
+        status="running",
+        max_parallel=1,
+    )
+
+    class FinishedWorker:
+        def poll(self):
+            return 0
+
+    class StopWave(RuntimeError):
+        pass
+
+    blocked_calls: list[str] = []
+    sleeps = 0
+
+    def stop_after_reap(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 2:
+            raise StopWave
+
+    def handle_blocked(_batch, blocked_feature, _args):
+        blocked_calls.append(blocked_feature.feature_id)
+        return None
+
+    monkeypatch.setattr(fp, "_spawn_continue", lambda *_args: FinishedWorker())
+    monkeypatch.setattr(fp, "_handle_blocked", handle_blocked)
+    monkeypatch.setattr(fp, "_print_board", lambda *_args: None)
+    monkeypatch.setattr(fp.fb, "save_batch", lambda _batch: None)
+    monkeypatch.setattr(fp.time, "sleep", stop_after_reap)
+
+    with pytest.raises(StopWave):
+        fp._run_wave(batch, object())
+
+    assert feature.status == "running"
+    assert blocked_calls == []

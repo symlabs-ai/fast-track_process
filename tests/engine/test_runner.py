@@ -5,7 +5,7 @@ import json
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from ft.engine.graph import load_graph
 from ft.engine.runner import (
@@ -280,6 +280,35 @@ class TestRecoverOrphanedDelegation:
         assert state.node_status == "ready"
         assert "step.03.implementacao" in state.completed_nodes
         assert state.artifacts["main"] == "src/main.py"
+
+    def test_claim_without_previous_lock_still_recovers_delegation(
+        self,
+        runner_v2,
+    ):
+        self._orphan_build(runner_v2)
+        runner_v2.state_mgr.release_lock()
+        claimed = runner_v2.state_mgr.claim()
+
+        assert claimed.node_status == "delegated"
+        assert runner_v2.state_mgr._claim_performed is True
+        assert runner_v2.state_mgr._previous_claim_lock is None
+
+        with (
+            patch("ft.engine.runner.run_validators") as validators,
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+            patch.object(runner_v2, "_record_node_summary"),
+            patch("ft.engine.runner.delegate_to_llm") as delegate,
+        ):
+            validators.return_value = ValidationResult(True, False, None, [])
+
+            recovered = runner_v2.recover_orphaned_delegation(mode="mvp")
+
+        assert recovered is True
+        delegate.assert_not_called()
+        auto_commit.assert_called_once()
+        state = runner_v2.state_mgr.load()
+        assert state.current_node == "gate.02.delivery"
+        assert "step.03.implementacao" in state.completed_nodes
 
     def test_failed_validation_resets_ready_for_normal_delegation(self, runner_v2):
         self._orphan_build(runner_v2)

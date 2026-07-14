@@ -11,6 +11,7 @@ depois de todos os YAMLs staged validarem.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 import shutil
 
@@ -425,7 +426,47 @@ def diff_staged(workspace: EvolveWorkspace) -> list[StagedChange]:
     return changes
 
 
+def change_fingerprint(changes: list[StagedChange]) -> tuple[tuple[str, ...], ...]:
+    """Snapshot imutável dos dois lados usados pelo diff mostrado ao humano."""
+
+    def digest(path: Path | None) -> str:
+        if path is None or not path.is_file():
+            return "-"
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    return tuple(
+        (
+            change.target,
+            change.status,
+            change.relative,
+            digest(change.staged),
+            digest(change.real),
+        )
+        for change in changes
+    )
+
+
 def apply_staged(
+    workspace: EvolveWorkspace,
+    changes: list[StagedChange] | None = None,
+) -> list[str]:
+    """Apply staged changes under the project catalog barrier when present."""
+    project_dir = workspace.targets.project_dir
+    if project_dir is None:
+        return _apply_staged_unlocked(workspace, changes)
+
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
+
+    project_root = project_dir.resolve().parent.parent
+    with _manifest_write_lock(project_root):
+        _assert_no_exclusive_startup(project_root)
+        return _apply_staged_unlocked(workspace, changes)
+
+
+def _apply_staged_unlocked(
     workspace: EvolveWorkspace,
     changes: list[StagedChange] | None = None,
 ) -> list[str]:

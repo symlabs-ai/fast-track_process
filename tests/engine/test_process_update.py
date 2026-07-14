@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from ft.cli import main as cli_main
+from ft.engine import feature_batch as fb
 from ft.engine import paths
 from ft.engine import process_update as pu
 from ft.engine.layout import process_digest, read_manifest
@@ -27,7 +28,7 @@ _REAL_ENGINE = cli_main.engine_root()
 def fake_engine(tmp_path, monkeypatch):
     """Cópia dos templates reais que os testes podem evoluir livremente."""
     engine = tmp_path / "engine"
-    for template in ("base", "feature"):
+    for template in ("base", "feature", "bug"):
         shutil.copytree(
             _REAL_ENGINE / "templates" / template,
             engine / "templates" / template,
@@ -45,6 +46,7 @@ def project(tmp_path, fake_engine):
     (root / "docs").mkdir(exist_ok=True)
     (root / "src").mkdir(exist_ok=True)
     cli_main.materialize_process_template("feature", root, entrypoint="feature")
+    cli_main.materialize_process_template("bug", root, entrypoint="feature")
     return root
 
 
@@ -58,12 +60,74 @@ def _scan(root: Path, fake_engine: Path, name: str | None = "feature"):
     return states[0]
 
 
-def _evolve_global(fake_engine: Path, marker: str = "# evolved-global") -> Path:
-    process = fake_engine / "templates" / "feature" / "process.yml"
+def _evolve_global(
+    fake_engine: Path,
+    marker: str = "# evolved-global",
+    *,
+    name: str = "feature",
+) -> Path:
+    process = fake_engine / "templates" / name / "process.yml"
     process.write_text(
         process.read_text(encoding="utf-8") + f"\n{marker}\n", encoding="utf-8"
     )
     return process
+
+
+_DEFAULT_PROCESS_PATH = object()
+
+
+def _write_active_state(
+    root: Path,
+    cycle_name: str = "cycle-01",
+    *,
+    process_name: str = "feature",
+    process_path: str | None | object = _DEFAULT_PROCESS_PATH,
+    continuous: bool = False,
+) -> Path:
+    """Cria um runtime inequivocamente ativo para exercitar o guard da CLI."""
+    state = (
+        paths.continuous_state_path(root)
+        if continuous
+        else paths.worktrees_home(root)
+        / cycle_name
+        / "state"
+        / "engine_state.yml"
+    )
+    state.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "process_id": process_name,
+        "template_id": process_name,
+        "current_node": f"{process_name}.implement",
+        "node_status": "delegated",
+    }
+    if process_path is _DEFAULT_PROCESS_PATH:
+        payload["process_path"] = f".ft/process/{process_name}/process.yml"
+    elif process_path is not None:
+        payload["process_path"] = process_path
+    state.write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    return state
+
+
+def _write_active_batch(
+    root: Path,
+    *,
+    batch_id: str = "batch-01",
+    template: str = "feature",
+    status: str = "paused",
+) -> Path:
+    feature = fb.BatchFeature(feature_id="F-01", demand="demanda em andamento")
+    batch = fb.FeatureBatch(
+        batch_id=batch_id,
+        project_root=str(root),
+        template=template,
+        features=[feature],
+        waves=[[feature.feature_id]],
+        status=status,
+    )
+    return fb.save_batch(batch)
 
 
 def _customize_local(root: Path, marker: str = "# fork-local") -> Path:
@@ -400,13 +464,263 @@ def test_cli_merge_requires_confirmation(project, fake_engine, monkeypatch, caps
     assert _scan(project, fake_engine).state == pu.STATE_LOCAL_FORK
 
 
-def test_cli_blocks_with_active_cycle(project, fake_engine, monkeypatch):
-    _evolve_global(fake_engine)
+def test_cli_allows_bug_update_while_feature_cycle_is_active(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_state(project, process_name="feature")
     monkeypatch.chdir(project)
-    monkeypatch.setattr(cli_main, "_check_active_run", lambda root: "cycle-01 (build)")
+
+    cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_IN_SYNC
+
+
+def test_cli_blocks_bug_update_while_bug_cycle_is_active(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_state(project, process_name="bug")
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="ciclo ativo"):
+        cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_blocks_overlap_across_multiple_active_cycles(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    # O ciclo conflitante é deliberadamente o mais antigo: olhar apenas o
+    # primeiro/mais recente runtime daria um falso negativo.
+    _write_active_state(project, "cycle-01", process_name="bug")
+    _write_active_state(project, "cycle-02", process_name="feature")
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="ciclo ativo"):
+        cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_ignores_orphan_worktree_without_state_or_live_sentinel(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    preparing = paths.worktrees_home(project) / "cycle-01-preparing"
+    preparing.mkdir(parents=True)
+    # A janela legítima de startup agora é coberta por um sentinel. Sem state e
+    # sem sentinel vivo, este diretório é resíduo órfão, não um runtime ativo.
+    (preparing / ".git").write_text(
+        "gitdir: /tmp/orphan-worktree\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    assert cli_main._process_update_runtime_guard(project, {"bug"}) == []
+    cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_IN_SYNC
+
+
+@pytest.mark.parametrize(
+    "ambiguous_path",
+    [
+        None,
+        ".ft/process/process.yml",
+        "../process/feature/process.yml",
+    ],
+)
+def test_cli_fails_closed_for_active_state_with_ambiguous_process_metadata(
+    project, fake_engine, monkeypatch, ambiguous_path
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_state(
+        project,
+        process_name="feature",
+        process_path=ambiguous_path,
+    )
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="ciclo ativo"):
+        cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_blocks_disjoint_update_during_continuous_runtime(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_state(project, process_name="feature", continuous=True)
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="ciclo ativo"):
+        cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_unnamed_update_allows_only_actionable_disjoint_process(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_state(project, process_name="feature")
+    monkeypatch.chdir(project)
+
+    cli_main.cmd_process_update(_update_args(yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_IN_SYNC
+    assert _scan(project, fake_engine, name="feature").state == pu.STATE_IN_SYNC
+
+
+def test_cli_unnamed_update_blocks_atomically_on_any_active_process(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, marker="# feature-evolved", name="feature")
+    _evolve_global(fake_engine, marker="# bug-evolved", name="bug")
+    _write_active_state(project, process_name="feature")
+    bug_before = process_digest(
+        project / ".ft" / "process" / "bug" / "process.yml"
+    )
+    feature_before = process_digest(
+        project / ".ft" / "process" / "feature" / "process.yml"
+    )
+    monkeypatch.chdir(project)
 
     with pytest.raises(RuntimeError, match="ciclo ativo"):
         cli_main.cmd_process_update(_update_args(yes=True))
+
+    assert process_digest(
+        project / ".ft" / "process" / "bug" / "process.yml"
+    ) == bug_before
+    assert process_digest(
+        project / ".ft" / "process" / "feature" / "process.yml"
+    ) == feature_before
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
+    assert _scan(project, fake_engine, name="feature").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_check_remains_read_only_with_same_process_active(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_state(project, process_name="bug")
+    monkeypatch.chdir(project)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main.cmd_process_update(_update_args(name="bug", check=True))
+
+    assert excinfo.value.code == 1
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_cas_aborts_if_local_bundle_changes_before_apply(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, marker="# global-bug-update", name="bug")
+    local_process = project / ".ft" / "process" / "bug" / "process.yml"
+    original_validate = cli_main._validate_staged_process
+
+    def validate_then_change_local(staging):
+        result = original_validate(staging)
+        local_process.write_text(
+            local_process.read_text(encoding="utf-8")
+            + "\n# concurrent-local-change\n",
+            encoding="utf-8",
+        )
+        return result
+
+    monkeypatch.setattr(
+        cli_main,
+        "_validate_staged_process",
+        validate_then_change_local,
+    )
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="mudou durante o update"):
+        cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    content = local_process.read_text(encoding="utf-8")
+    assert "# concurrent-local-change" in content
+    assert "# global-bug-update" not in content
+    assert not pu.backup_dir_for(project, "bug").exists()
+
+
+def test_cli_allows_bug_update_while_feature_batch_is_paused(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_batch(project, template="feature", status="paused")
+    monkeypatch.chdir(project)
+
+    cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_IN_SYNC
+
+
+def test_cli_blocks_feature_update_while_feature_batch_is_paused(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="feature")
+    _write_active_batch(project, template="feature", status="paused")
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="batch|ciclo ativo"):
+        cli_main.cmd_process_update(_update_args(name="feature", yes=True))
+
+    assert _scan(project, fake_engine, name="feature").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_running_feature_batch_allows_disjoint_bug_update(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_batch(project, template="feature", status="running")
+    monkeypatch.chdir(project)
+
+    cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_IN_SYNC
+
+
+def test_cli_running_feature_batch_blocks_feature_update(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="feature")
+    _write_active_batch(project, template="feature", status="running")
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="batch|ciclo ativo"):
+        cli_main.cmd_process_update(_update_args(name="feature", yes=True))
+
+    assert _scan(project, fake_engine, name="feature").state == pu.STATE_FAST_FORWARD
+
+
+def test_cli_older_running_batch_is_not_hidden_by_newer_done_batch(
+    project, fake_engine, monkeypatch
+):
+    _evolve_global(fake_engine, name="bug")
+    _write_active_batch(
+        project,
+        batch_id="batch-01",
+        template="bug",
+        status="running",
+    )
+    _write_active_batch(
+        project,
+        batch_id="batch-02",
+        template="feature",
+        status="done",
+    )
+    monkeypatch.chdir(project)
+
+    with pytest.raises(RuntimeError, match="batch|ciclo ativo"):
+        cli_main.cmd_process_update(_update_args(name="bug", yes=True))
+
+    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
 
 
 def test_cli_unknown_process_fails(project, monkeypatch, capsys):

@@ -6,8 +6,10 @@ subtype aparece e o `init` expõe modelo / modo de permissão / nº de tools.
 """
 
 import json
+import os
+from types import SimpleNamespace
 
-from ft.cli.main import _log_model_prefix, _track_heartbeat
+from ft.cli.main import _log_model_prefix, _orchestrator_alive, _track_heartbeat
 from ft.engine.delegate import _format_stream_line
 
 
@@ -32,6 +34,22 @@ def test_system_init_mostra_modelo_e_tools():
 def test_log_model_prefix():
     assert _log_model_prefix("claude-fable-5") == "[claude-fable-5] "
     assert _log_model_prefix(None) == ""
+
+
+def test_orchestrator_pid_identity_mismatch_is_not_alive():
+    class StateManagerProbe:
+        @staticmethod
+        def _is_pid_alive(_pid: int) -> bool:
+            return True
+
+    state = SimpleNamespace(
+        _lock={
+            "pid": os.getpid(),
+            "pid_start": "not-the-current-process",
+        }
+    )
+
+    assert _orchestrator_alive(StateManagerProbe(), state) is False
 
 
 def test_system_init_sem_permission_mode_nao_quebra():

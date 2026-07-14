@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from ft.engine import layout as layout_module
 from ft.engine.layout import (
     ManifestError,
     archive_cycle_artifacts,
@@ -36,6 +38,35 @@ nodes:
     type: end
     title: End
 """
+
+
+def _run_copy_close(
+    source: Path,
+    destination: Path,
+) -> subprocess.CompletedProcess[str]:
+    code = "\n".join(
+        [
+            "import sys",
+            "from pathlib import Path",
+            "from ft.engine.runner import _copy_close_paths",
+            "source, destination = map(Path, sys.argv[1:])",
+            "ok, _copied = _copy_close_paths(source, destination, ['docs/'], label='copy-close-test')",
+            "raise SystemExit(0 if ok else 23)",
+        ]
+    )
+    env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[2]
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(repo_root), env.get("PYTHONPATH", "")])
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code, str(source), str(destination)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
 
 
 def test_layout_contains_only_versionable_metadata(tmp_path):
@@ -486,6 +517,29 @@ def test_migration_blocks_active_local_state_but_archives_terminal_state(
     assert (done / ".ft/process/test/process.yml").exists()
 
 
+def test_migration_blocks_pending_merge_before_dry_run_or_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    project = tmp_path / "project"
+    flat = project / ".ft/process/process.yml"
+    flat.parent.mkdir(parents=True)
+    flat.write_text(MINIMAL_PROCESS, encoding="utf-8")
+    git_dir = project / ".git"
+    git_dir.mkdir()
+    merge_head = git_dir / "MERGE_HEAD"
+    merge_head.write_text("deadbeef\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="merge Git pendente"):
+        migrate_legacy_layout(project, dry_run=True)
+
+    assert flat.read_text(encoding="utf-8") == MINIMAL_PROCESS
+    assert merge_head.read_text(encoding="utf-8") == "deadbeef\n"
+    assert not (project / ".ft/manifest.yml").exists()
+    assert not (project / ".ft/process/test").exists()
+
+
 def test_migration_preflights_process_collision_without_moving_sources(tmp_path):
     project = tmp_path / "project"
     catalog = project / ".ft/process"
@@ -875,11 +929,15 @@ progress:
     cmd_runs(SimpleNamespace(project=str(project), done=True))
 
     ansi = _re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-    lines = [ansi.sub("", l) for l in capsys.readouterr().out.splitlines() if l.strip()]
-    data = [l for l in lines if l.lstrip().startswith("cycle-")]
+    lines = [
+        ansi.sub("", line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    data = [line for line in lines if line.lstrip().startswith("cycle-")]
     assert len(data) == 2
     # A coluna FONTE ("archive") deve começar na mesma posição em todas as linhas.
-    positions = {l.index("archive") for l in data}
+    positions = {line.index("archive") for line in data}
     assert len(positions) == 1, data
 
 
@@ -1050,6 +1108,23 @@ def test_docs_copy_merge_preserves_live_main_manifest(tmp_path, monkeypatch):
         project_root=worktree,
     )
     runner.init_state()
+    process.write_text(
+        process.read_text(encoding="utf-8") + "\n# root process update\n",
+        encoding="utf-8",
+    )
+    worktree_process = worktree / process.relative_to(repo)
+    worktree_process.write_text(
+        worktree_process.read_text(encoding="utf-8")
+        + "\n# stale cycle process\n",
+        encoding="utf-8",
+    )
+    external_process = tmp_path / "external-process"
+    external_process.mkdir()
+    (external_process / "payload.txt").write_text("ignored", encoding="utf-8")
+    (worktree / ".ft/process/ignored-link").symlink_to(
+        external_process,
+        target_is_directory=True,
+    )
     update_manifest_llm_defaults(
         repo,
         llm_engine="codex",
@@ -1067,6 +1142,10 @@ def test_docs_copy_merge_preserves_live_main_manifest(tmp_path, monkeypatch):
     }
     assert manifest["llm_defaults_revision"] == 1
     assert (repo / ".ft/cycles/cycle-01/task_list.md").exists()
+    live_process = process.read_text(encoding="utf-8")
+    assert "# root process update" in live_process
+    assert "# stale cycle process" not in live_process
+    assert not (repo / ".ft/process/ignored-link").exists()
 
     live_manifest = (repo / ".ft/manifest.yml").read_text()
     worktree_manifest = worktree / ".ft/manifest.yml"
@@ -1074,8 +1153,11 @@ def test_docs_copy_merge_preserves_live_main_manifest(tmp_path, monkeypatch):
     external_manifest.write_text(worktree_manifest.read_text())
     worktree_manifest.unlink()
     worktree_manifest.symlink_to(external_manifest)
+    # O manifest continua sendo metadado estrutural confiável para o archive;
+    # o catálogo ignorado pelo copy é especificamente `.ft/process/`.
     assert not runner.merge_on_close("docs")
     assert (repo / ".ft/manifest.yml").read_text() == live_manifest
+    assert process.read_text(encoding="utf-8") == live_process
 
 
 def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
@@ -1110,6 +1192,15 @@ def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
         project_root=work,
     )
     runner.init_state()
+    process.write_text(
+        process.read_text(encoding="utf-8") + "\n# root process update\n",
+        encoding="utf-8",
+    )
+    work_process = work / ".ft/process/base/process.yml"
+    work_process.write_text(
+        work_process.read_text(encoding="utf-8") + "\n# stale cycle process\n",
+        encoding="utf-8",
+    )
     update_manifest_llm_defaults(
         repo,
         llm_engine="opencode",
@@ -1123,7 +1214,10 @@ def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
         assert runner.merge_on_close("docs")
 
     live_manifest = (repo / ".ft/manifest.yml").read_text()
+    live_process = process.read_text(encoding="utf-8")
     assert "provider/live" in live_manifest
+    assert "# root process update" in live_process
+    assert "# stale cycle process" not in live_process
     assert (repo / ".ft/cycles/cycle-01/task_list.md").exists()
 
     external_manifest = tmp_path / "malicious-manifest.yml"
@@ -1132,6 +1226,17 @@ def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
     (work / ".ft/manifest.yml").symlink_to(external_manifest)
     assert runner._merge_by_copy("selective", [".ft/manifest.yml"])
     assert (repo / ".ft/manifest.yml").read_text() == live_manifest
+    assert not runner._merge_by_copy(
+        "selective",
+        [".ft/process/base/process.yml"],
+    )
+    assert not runner._merge_by_copy(
+        "selective",
+        [".FT/PrOcEsS/base/process.yml"],
+    )
+    assert runner._merge_by_copy("selective", [".FT/MANIFEST.YML"])
+    assert not runner._merge_by_copy("selective", ["."])
+    assert process.read_text(encoding="utf-8") == live_process
 
     external_destination = tmp_path / "external-destination"
     external_destination.mkdir()
@@ -1143,7 +1248,7 @@ def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
     work_scripts = work / ".ft/process/base/scripts"
     work_scripts.mkdir()
     (work_scripts / "hook.sh").write_text("#!/bin/sh\n")
-    assert not runner._merge_by_copy("docs")
+    assert runner._merge_by_copy("docs")
     assert list(external_destination.iterdir()) == []
 
     destination_scripts.unlink()
@@ -1154,8 +1259,10 @@ def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
         external_source,
         target_is_directory=True,
     )
-    assert not runner._merge_by_copy("docs")
+    assert runner._merge_by_copy("docs")
     assert not (repo / ".ft/process/linked").exists()
+    assert (repo / ".ft/manifest.yml").read_text() == live_manifest
+    assert process.read_text(encoding="utf-8") == live_process
 
     external_docs = tmp_path / "external-docs"
     external_docs.mkdir()
@@ -1166,3 +1273,87 @@ def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
         ["docs/link/secret.txt"],
     )
     assert not (repo / "docs/link/secret.txt").exists()
+
+
+@pytest.mark.parametrize("strategy", ["docs", "full"])
+def test_fallback_copy_never_reverts_live_process_or_manifest(
+    tmp_path,
+    monkeypatch,
+    strategy,
+):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    repo = tmp_path / "project"
+    repo.mkdir()
+    ensure_project_layout(repo)
+    process = repo / ".ft/process/base/process.yml"
+    process.parent.mkdir()
+    process.write_text(MINIMAL_PROCESS)
+    register_project_process(
+        repo,
+        process_name="base",
+        process_path=process,
+        template_id="base",
+        entrypoint="init",
+        set_default=True,
+    )
+    (repo / "docs").mkdir()
+
+    work = ft_home / "worktrees" / repo.name / "cycle-01"
+    shutil.copytree(repo / ".ft", work / ".ft")
+    (work / "docs").mkdir()
+    (work / "docs/task_list.md").write_text("# Cycle")
+    runner = StepRunner(
+        work / ".ft/process/base/process.yml",
+        work / "state/engine_state.yml",
+        project_root=work,
+    )
+
+    process.write_text(
+        process.read_text(encoding="utf-8") + "\n# root newer process\n",
+        encoding="utf-8",
+    )
+    work_process = work / ".ft/process/base/process.yml"
+    work_process.write_text(
+        work_process.read_text(encoding="utf-8") + "\n# stale worktree process\n",
+        encoding="utf-8",
+    )
+    update_manifest_llm_defaults(
+        repo,
+        llm_engine="codex",
+        llm_model="root/newer",
+        llm_effort="max",
+    )
+    live_process = process.read_text(encoding="utf-8")
+    live_manifest = (repo / ".ft/manifest.yml").read_text(encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    assert runner._merge_by_copy(strategy)
+
+    assert process.read_text(encoding="utf-8") == live_process
+    assert (repo / ".ft/manifest.yml").read_text(encoding="utf-8") == live_manifest
+    assert (repo / "docs/task_list.md").is_file()
+
+
+def test_copy_close_respects_exclusive_project_barrier(tmp_path, monkeypatch):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    repo = tmp_path / "project"
+    repo.mkdir()
+    ensure_project_layout(repo)
+    work = tmp_path / "cycle-source"
+    (work / "docs").mkdir(parents=True)
+    (work / "docs/report.md").write_text("# Report\n", encoding="utf-8")
+
+    with layout_module._manifest_write_lock(repo):
+        with layout_module._suspend_for_exclusive_project_write(
+            repo,
+            reason="copy close test",
+        ):
+            blocked = _run_copy_close(work, repo)
+            assert blocked.returncode == 23, blocked.stdout + blocked.stderr
+            assert "temporariamente reservado" in blocked.stdout
+            assert not (repo / "docs/report.md").exists()
+
+    allowed = _run_copy_close(work, repo)
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert (repo / "docs/report.md").read_text(encoding="utf-8") == "# Report\n"

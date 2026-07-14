@@ -20,7 +20,7 @@ _PROCESS_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 def ft_home() -> Path:
     """Diretório base de dados do ft. Default ~/.ft, override via FT_HOME."""
     env = os.environ.get("FT_HOME")
-    return Path(env) if env else Path.home() / ".ft"
+    return Path(env).expanduser().resolve() if env else Path.home() / ".ft"
 
 
 def project_ft_dir(project_root: str | Path) -> Path:
@@ -74,14 +74,16 @@ def worktrees_root() -> Path:
 
 
 def project_runtime_key(project_root: str | Path) -> str:
-    """Return the owning project name for a main checkout or FT worktree."""
+    """Return the owning project name for checkout, worktree or runtime path."""
     root = Path(project_root).resolve()
-    try:
-        relative = root.relative_to(worktrees_root().resolve())
-    except ValueError:
-        return root.name
-    if len(relative.parts) >= 2:
-        return relative.parts[0]
+    containers = (worktrees_root(), ft_home() / "runtime")
+    for container in containers:
+        try:
+            relative = root.relative_to(container.resolve())
+        except ValueError:
+            continue
+        if len(relative.parts) >= 2:
+            return relative.parts[0]
     return root.name
 
 
@@ -111,6 +113,24 @@ def migration_backups_home(project_root: str | Path) -> Path:
 
 def continuous_state_path(project_root: str | Path) -> Path:
     return runtime_home(project_root) / "continuous" / "state" / "engine_state.yml"
+
+
+def continuous_startup_path(project_root: str | Path) -> Path:
+    """Reserva curta enquanto um run continuous ainda não inicializou state."""
+    return runtime_home(project_root) / "continuous" / "state" / "startup.yml"
+
+
+def startup_reservations_home(project_root: str | Path) -> Path:
+    """Reservas curtas anteriores à criação de uma worktree isolada."""
+    return runtime_home(project_root) / "startup"
+
+
+def startup_reservation_path(
+    project_root: str | Path,
+    pid: int | None = None,
+) -> Path:
+    owner = os.getpid() if pid is None else int(pid)
+    return startup_reservations_home(project_root) / f"{owner}.yml"
 
 
 def is_worktree_path(path: str | Path) -> bool:

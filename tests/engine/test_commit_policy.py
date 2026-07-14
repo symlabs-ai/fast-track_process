@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from ft.cli import main as cli_main
+from ft.engine import paths
 from ft.engine.git_ops import (
     auto_commit,
     commit_knowledge,
@@ -249,10 +250,12 @@ def test_runner_propagates_policy_to_node_and_post_run_commits(
 )
 def test_archive_commit_and_merge_receive_process_policy(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     policy: bool | None,
     expected: bool,
     expected_flags: set[str],
 ) -> None:
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
     work = tmp_path / "work"
     original = tmp_path / "original"
     work.mkdir()
@@ -265,6 +268,17 @@ def test_archive_commit_and_merge_receive_process_policy(
         stdout="merged",
         stderr="",
     )
+    barrier_observed: list[dict] = []
+
+    def merge_with_barrier(*_args, **_kwargs):
+        reservations = list(paths.startup_reservations_home(original).glob("*.yml"))
+        assert len(reservations) == 1
+        payload = yaml.safe_load(reservations[0].read_text(encoding="utf-8"))
+        assert payload["exclusive"] is True
+        assert payload["process_path"] is None
+        assert payload["reason"] == "ft close merge cycle-01"
+        barrier_observed.append(payload)
+        return completed
 
     with (
         patch.object(
@@ -280,11 +294,16 @@ def test_archive_commit_and_merge_receive_process_policy(
             "ft.engine.runner.auto_commit",
             return_value=(True, "archived"),
         ) as archive_commit,
-        patch("ft.engine.runner.subprocess.run", return_value=completed) as git_run,
+        patch(
+            "ft.engine.runner.subprocess.run",
+            side_effect=merge_with_barrier,
+        ) as git_run,
     ):
         assert runner.merge_on_close("full")
 
     assert archive_commit.call_args.kwargs["verify_hooks"] is expected
+    assert len(barrier_observed) == 1
+    assert not list(paths.startup_reservations_home(original).glob("*.yml"))
     merge_command = git_run.call_args.args[0]
     actual_flags = {flag for flag in merge_command if flag.startswith("--no-")}
     assert actual_flags == expected_flags | {"--no-edit"}
@@ -356,7 +375,11 @@ def test_pre_run_knowledge_commit_receives_selected_process_policy(
         patch("ft.cli.main.StepRunner", _FakeRunner),
         patch("ft.cli.main._api_health_check"),
         patch(
-            "ft.engine.git_ops.commit_knowledge",
+            "ft.engine.git_ops.stage_knowledge",
+            return_value=(True, True, ""),
+        ),
+        patch(
+            "ft.engine.git_ops.commit_staged_knowledge",
             return_value=(True, "snapshot"),
         ) as knowledge,
     ):

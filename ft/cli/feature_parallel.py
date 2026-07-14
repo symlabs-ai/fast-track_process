@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import fcntl
 import os
 import re
 import subprocess
@@ -401,34 +400,36 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
 
     _preflight(root, args)
 
-    template = cli.resolve_feature_template(getattr(args, "template", None))
-    parallel_policy = _parallel_policy(root, template)
-
-    manifest_engine, manifest_model, manifest_effort = cli.manifest_llm_defaults(root)
-    requested_engine = cli.resolve_llm_engine(args)
-    requested_model = cli.resolve_llm_model(args)
-    requested_effort = cli.resolve_llm_effort(args)
-    planner_engine = requested_engine or manifest_engine or "claude"
-    manifest_is_compatible = (
-        requested_engine is None or requested_engine == manifest_engine
-    )
-    planner_model = requested_model or (
-        manifest_model if manifest_is_compatible else None
-    )
-    planner_effort = requested_effort or (
-        manifest_effort if manifest_is_compatible else None
+    # Policy, defaults e reserva do batch formam uma única leitura pinada do
+    # processo. Depois de save_batch, o guard enxerga o template reservado e o
+    # planner (LLM) roda fora do lock, sem pausar processos disjuntos.
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
     )
 
-    # O planner faz parte do processo e pode levar alguns minutos. Persista o
-    # batch antes da delegacao para que ``ft status`` nao afirme que nao ha
-    # trabalho ativo durante essa janela anterior a criacao dos ciclos. A
-    # alocacao fica sob flock para que dois planners nao reutilizem o mesmo ID
-    # nem atravessem simultaneamente a verificacao de exclusividade.
-    parallel_home = fb.parallel_home(root)
-    parallel_home.mkdir(parents=True, exist_ok=True)
-    lock_path = parallel_home / ".allocation.lock"
-    with lock_path.open("a+", encoding="utf-8") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
+        template = cli.resolve_feature_template(getattr(args, "template", None))
+        parallel_policy = _parallel_policy(root, template)
+
+        manifest_engine, manifest_model, manifest_effort = (
+            cli.manifest_llm_defaults(root)
+        )
+        requested_engine = cli.resolve_llm_engine(args)
+        requested_model = cli.resolve_llm_model(args)
+        requested_effort = cli.resolve_llm_effort(args)
+        planner_engine = requested_engine or manifest_engine or "claude"
+        manifest_is_compatible = (
+            requested_engine is None or requested_engine == manifest_engine
+        )
+        planner_model = requested_model or (
+            manifest_model if manifest_is_compatible else None
+        )
+        planner_effort = requested_effort or (
+            manifest_effort if manifest_is_compatible else None
+        )
+
         active_batch = fb.latest_active_batch(root)
         if active_batch is not None and not getattr(args, "force", False):
             raise RuntimeError(
@@ -450,7 +451,6 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
             planner_effort=planner_effort,
         )
         fb.save_batch(batch)
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
     batch_directory = fb.batch_dir(root, batch_id)
     (batch_directory / "logs").mkdir(parents=True, exist_ok=True)
@@ -559,15 +559,9 @@ def _cycle_delegation_is_orphaned(root: Path, cycle_name: str) -> bool:
         return False
     if str(data.get("node_status") or "") not in {"delegated", "validating"}:
         return False
-    lock = data.get("_lock") or {}
-    pid = lock.get("pid") if isinstance(lock, dict) else None
-    if not pid:
-        return True
-    try:
-        os.kill(int(pid), 0)
-    except (OSError, ProcessLookupError, ValueError):
-        return True
-    return False
+    from ft.engine.state import lock_owner_is_alive
+
+    return not lock_owner_is_alive(data.get("_lock"))
 
 
 def _reconcile_external_idle_transition(
@@ -1091,6 +1085,18 @@ def _run_wave(batch: fb.FeatureBatch, args) -> None:
                         next_spawn_at[feature_id] = (
                             time.monotonic() + RATE_LIMIT_RETRY_SECONDS
                         )
+                elif status in {"delegated", "validating"}:
+                    if _cycle_delegation_is_orphaned(
+                        root, str(feature.cycle_name)
+                    ):
+                        feature.status = "setup"
+                        feature.detail = "delegação órfã — retomando"
+                    else:
+                        # Outro `ft continue` venceu o claim e segue dirigindo
+                        # o mesmo ciclo. O subprocesso local perder a corrida
+                        # não transforma uma execução saudável em BLOCKED.
+                        feature.status = "running"
+                        feature.detail = "driver externo ativo"
                 else:
                     feature.status = "blocked"
                     feature.detail = f"estado inesperado: {status}"

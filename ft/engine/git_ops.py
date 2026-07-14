@@ -122,6 +122,85 @@ def auto_commit(
     return False, f"auto_commit FAIL: {result.stderr.strip()[:200]}"
 
 
+_KNOWLEDGE_PATHS = (
+    "docs/",
+    ".ft/process/",
+    ".ft/manifest.yml",
+    ".ft/.gitignore",
+)
+
+
+def stage_knowledge(project_root: str = ".") -> tuple[bool, bool, str]:
+    """Stageia o snapshot de conhecimento sem executar hooks.
+
+    Retorna ``(ok, staged, detalhe)``. Separar stage de commit permite que o
+    caller solte locks de runtime antes de executar hooks arbitrários, mantendo
+    no índice a versão coerente capturada sob coordenação.
+    """
+    cwd = project_root
+    check = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if check.returncode != 0:
+        return True, False, "commit_knowledge: não é um repo git — pulando"
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", *_KNOWLEDGE_PATHS],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode != 0:
+        return False, False, f"commit_knowledge FAIL: {status.stderr.strip()[:200]}"
+    if not status.stdout.strip():
+        return True, False, "commit_knowledge: docs/ e .ft/process/ sem mudanças"
+
+    staged = subprocess.run(
+        ["git", "add", "--", *_KNOWLEDGE_PATHS],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if staged.returncode != 0:
+        return False, False, f"commit_knowledge FAIL: {staged.stderr.strip()[:200]}"
+    return True, True, ""
+
+
+def commit_staged_knowledge(
+    project_root: str = ".",
+    label: str = "snapshot",
+    *,
+    verify_hooks: bool = True,
+) -> tuple[bool, str]:
+    """Commita o snapshot de conhecimento já capturado no índice."""
+    cwd = project_root
+    result = subprocess.run(
+        [
+            *git_command_prefix(verify_hooks),
+            "commit",
+            *_commit_policy_flags(verify_hooks),
+            "-m",
+            f"chore: {label} — docs/ e .ft/process/",
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        hash_result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        short_hash = hash_result.stdout.strip()
+        return True, f"commit_knowledge: {short_hash} — {label}"
+    return False, f"commit_knowledge FAIL: {result.stderr.strip()[:200]}"
+
+
 def commit_knowledge(
     project_root: str = ".",
     label: str = "snapshot",
@@ -133,56 +212,14 @@ def commit_knowledge(
     Chamado nativamente pelo engine antes de iniciar um run e ao final.
     Garante que o conhecimento do projeto tem histórico no Git.
     """
-    cwd = project_root
-
-    # Verificar se é um repo git
-    check = subprocess.run(
-        ["git", "rev-parse", "--is-inside-work-tree"],
-        cwd=cwd, capture_output=True, text=True,
+    ok, staged, detail = stage_knowledge(project_root)
+    if not ok or not staged:
+        return ok, detail
+    return commit_staged_knowledge(
+        project_root,
+        label,
+        verify_hooks=verify_hooks,
     )
-    if check.returncode != 0:
-        return True, "commit_knowledge: não é um repo git — pulando"
-
-    # Verificar mudanças nas fontes humanas e no processo local.
-    status = subprocess.run(
-        [
-            "git", "status", "--porcelain", "--",
-            "docs/", ".ft/process/", ".ft/manifest.yml", ".ft/.gitignore",
-        ],
-        cwd=cwd, capture_output=True, text=True,
-    )
-    if not status.stdout.strip():
-        return True, "commit_knowledge: docs/ e .ft/process/ sem mudanças"
-
-    # Stage e commit
-    subprocess.run(
-        [
-            "git", "add", "--",
-            "docs/", ".ft/process/", ".ft/manifest.yml", ".ft/.gitignore",
-        ],
-        cwd=cwd,
-        capture_output=True,
-    )
-    result = subprocess.run(
-        [
-            *git_command_prefix(verify_hooks),
-            "commit",
-            *_commit_policy_flags(verify_hooks),
-            "-m",
-            f"chore: {label} — docs/ e .ft/process/",
-        ],
-        cwd=cwd, capture_output=True, text=True,
-    )
-
-    if result.returncode == 0:
-        hash_result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=cwd, capture_output=True, text=True,
-        )
-        short_hash = hash_result.stdout.strip()
-        return True, f"commit_knowledge: {short_hash} — {label}"
-
-    return False, f"commit_knowledge FAIL: {result.stderr.strip()[:200]}"
 
 
 def get_changed_files(project_root: str = ".") -> list[str]:

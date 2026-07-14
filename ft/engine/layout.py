@@ -7,8 +7,10 @@ state and LLM logs remain under ``$FT_HOME`` and are never archived here.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import os
 from pathlib import Path
@@ -17,7 +19,9 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 from typing import Any
+from uuid import uuid4
 
 import yaml
 
@@ -25,6 +29,9 @@ from ft.engine import paths
 
 
 LAYOUT_VERSION = 2
+_MANIFEST_THREAD_LOCKS: dict[Path, threading.RLock] = {}
+_MANIFEST_THREAD_LOCKS_GUARD = threading.Lock()
+_MANIFEST_LOCK_STATE = threading.local()
 
 
 class LayoutMigrationRequired(ValueError):
@@ -420,6 +427,234 @@ def resolve_project_process(
     return _manifest_process_path(root, manifest, selected)
 
 
+@contextmanager
+def _manifest_write_lock(project_root: str | Path):
+    """Serialize manifest RMW transactions, including same-thread nesting."""
+    root = Path(project_root).resolve()
+    # Locks are coordination metadata, not an active runtime. Keeping them out
+    # of runtime_home preserves the contract that ``ft init`` creates no run.
+    lock_dir = paths.ft_home() / "locks" / paths.project_runtime_key(root)
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / ".manifest.lock"
+    with _MANIFEST_THREAD_LOCKS_GUARD:
+        thread_lock = _MANIFEST_THREAD_LOCKS.setdefault(
+            lock_path,
+            threading.RLock(),
+        )
+    with thread_lock:
+        held = getattr(_MANIFEST_LOCK_STATE, "held", None)
+        if held is None:
+            held = {}
+            _MANIFEST_LOCK_STATE.held = held
+        if lock_path in held:
+            entry = held[lock_path]
+            if entry["suspended"]:
+                raise RuntimeError(
+                    "operação FT tentou reentrar no project lock suspenso"
+                )
+            entry["depth"] += 1
+            try:
+                yield
+            finally:
+                entry["depth"] -= 1
+            return
+
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            held[lock_path] = {
+                "depth": 1,
+                "handle": lock_handle,
+                "suspended": False,
+            }
+            try:
+                yield
+            finally:
+                del held[lock_path]
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _suspend_manifest_write_lock(project_root: str | Path):
+    """Solta temporariamente o flock externo durante hooks subprocessados.
+
+    O RLock da thread permanece adquirido; somente outros processos podem
+    progredir. O caller deve ter publicado uma reserva de startup antes.
+    """
+    root = Path(project_root).resolve()
+    lock_path = (
+        paths.ft_home()
+        / "locks"
+        / paths.project_runtime_key(root)
+        / ".manifest.lock"
+    )
+    held = getattr(_MANIFEST_LOCK_STATE, "held", {})
+    entry = held.get(lock_path)
+    if entry is None or entry.get("depth") != 1 or entry.get("suspended"):
+        raise RuntimeError("project lock não pode ser suspenso neste contexto")
+    handle = entry["handle"]
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    entry["suspended"] = True
+    try:
+        yield
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        entry["suspended"] = False
+
+
+def _assert_no_exclusive_startup(project_root: str | Path) -> None:
+    """Block writers while a Git hook or unfinished merge owns the checkout.
+
+    The project flock is temporarily released around subprocess hooks to avoid
+    nested-FT deadlocks. An ``exclusive`` startup reservation is the cross-
+    process barrier during that short window. A failed ``ft close`` merge can
+    outlive its process, so ``MERGE_HEAD`` remains a durable barrier until the
+    user concludes or aborts that merge.
+    """
+    root = Path(project_root).resolve()
+    git_entry = root / ".git"
+    git_dir: Path | None = None
+    if git_entry.is_dir():
+        git_dir = git_entry.resolve()
+    elif git_entry.is_file():
+        try:
+            pointer = git_entry.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            pointer = ""
+        if pointer.startswith("gitdir:"):
+            raw_git_dir = Path(pointer.split(":", 1)[1].strip())
+            if not raw_git_dir.is_absolute():
+                raw_git_dir = git_entry.parent / raw_git_dir
+            git_dir = raw_git_dir.resolve()
+    if git_dir is not None and (git_dir / "MERGE_HEAD").is_file():
+        raise RuntimeError(
+            "checkout possui merge Git pendente (MERGE_HEAD); conclua ou "
+            "aborte o merge antes de iniciar ciclos ou alterar o catálogo"
+        )
+
+    reservations = [paths.continuous_startup_path(root)]
+    startup_home = paths.startup_reservations_home(root)
+    if startup_home.is_dir():
+        reservations.extend(sorted(startup_home.glob("*.yml")))
+
+    from ft.engine.state import lock_owner_is_alive
+
+    for reservation in reservations:
+        if not reservation.is_file():
+            continue
+        try:
+            payload = _read_yaml(reservation)
+        except (OSError, UnicodeError, yaml.YAMLError):
+            continue
+        if payload.get("exclusive") is not True:
+            continue
+        lock = payload.get("_lock", {})
+        if not lock_owner_is_alive(lock):
+            continue
+        try:
+            owner_pid = int(lock.get("pid")) if isinstance(lock, dict) else 0
+        except (TypeError, ValueError):
+            owner_pid = 0
+        if owner_pid == os.getpid():
+            continue
+        raise RuntimeError(
+            "catálogo de processos temporariamente reservado por startup "
+            "durante hook Git; tente novamente em instantes"
+        )
+
+
+@contextmanager
+def _suspend_for_exclusive_project_write(
+    project_root: str | Path,
+    *,
+    reason: str,
+):
+    """Release the flock around a Git command while retaining a live barrier.
+
+    The caller must hold ``_manifest_write_lock`` at depth one. The reservation
+    is intentionally indistinguishable from an ambiguous startup to other FT
+    processes, so catalog writers and new startups fail quickly instead of
+    racing a repository-wide Git hook.
+    """
+    root = Path(project_root).resolve()
+    from ft.engine.state import (
+        _atomic_write_state,
+        process_start_identity,
+    )
+
+    reservation = paths.startup_reservations_home(root) / (
+        f"catalog-{os.getpid()}-{uuid4().hex}.yml"
+    )
+    payload = {
+        "process_path": None,
+        "current_node": "__project_write__",
+        "node_status": "preparing",
+        "isolated": True,
+        "exclusive": True,
+        "reason": reason,
+        "completed_nodes": [],
+        "metrics": {"steps_completed": 0, "steps_total": 0},
+        "_lock": {
+            "owner": "ft_project_write",
+            "pid": os.getpid(),
+            "pid_start": process_start_identity(os.getpid()),
+        },
+    }
+    _atomic_write_state(reservation, payload)
+    try:
+        with _suspend_manifest_write_lock(root):
+            yield
+    finally:
+        reservation.unlink(missing_ok=True)
+
+
+def _atomic_write_manifest(manifest_path: Path, manifest: dict[str, Any]) -> None:
+    """Replace the manifest atomically; caller holds ``_manifest_write_lock``."""
+    payload = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
+    original_mode = (
+        stat.S_IMODE(manifest_path.stat().st_mode)
+        if manifest_path.exists()
+        else 0o644
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        fd, raw_temporary_path = tempfile.mkstemp(
+            prefix=f".{manifest_path.name}.",
+            suffix=".tmp",
+            dir=manifest_path.parent,
+        )
+        temporary_path = Path(raw_temporary_path)
+        os.fchmod(fd, original_mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as temporary:
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, manifest_path)
+        temporary_path = None
+
+        try:
+            directory_fd = os.open(manifest_path.parent, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                try:
+                    os.fsync(directory_fd)
+                except OSError:
+                    # The replace already succeeded. Directory fsync is a
+                    # durability enhancement; reporting failure now would make
+                    # callers roll back other files while keeping this manifest.
+                    pass
+            finally:
+                try:
+                    os.close(directory_fd)
+                except OSError:
+                    pass
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def register_project_process(
     project_root: str | Path,
     *,
@@ -433,13 +668,6 @@ def register_project_process(
     """Register one named, local process in the versioned project manifest."""
     root = Path(project_root).resolve()
     manifest_path = ensure_project_layout(root)
-    manifest = _read_manifest_file(manifest_path)
-    if not manifest:
-        raise ManifestError(
-            f"manifest inválido em {manifest_path}: arquivo vazio; "
-            "execute ft migrate-layout . ou restaure o manifesto v2"
-        )
-    _validate_v2_manifest(manifest, manifest_path)
     raw_process_file = Path(process_path)
     if not raw_process_file.is_absolute():
         raw_process_file = root / raw_process_file
@@ -461,27 +689,33 @@ def register_project_process(
     if not process_file.is_file():
         raise ValueError(f"processo local ausente ou simbólico: {process_file}")
 
-    processes = manifest.setdefault("processes", {})
-    if not isinstance(processes, dict):
-        raise ManifestError("manifest inválido: processes deve ser mapping")
-    existing = processes.get(process_name, {})
-    record = dict(existing) if isinstance(existing, dict) else {}
-    record.update({
-        "path": relative,
-        "template": template_id,
-        "entrypoint": entrypoint,
-    })
-    if not record.get("source_digest") and source_digest:
-        record["source_digest"] = source_digest
-    if not record.get("base_digest"):
-        record["base_digest"] = process_digest(process_file)
-    processes[process_name] = record
-    if set_default:
-        manifest["default_process"] = process_name
-    manifest_path.write_text(
-        yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
+        manifest = _read_manifest_file(manifest_path)
+        if not manifest:
+            raise ManifestError(
+                f"manifest inválido em {manifest_path}: arquivo vazio; "
+                "execute ft migrate-layout . ou restaure o manifesto v2"
+            )
+        _validate_v2_manifest(manifest, manifest_path)
+        processes = manifest.setdefault("processes", {})
+        if not isinstance(processes, dict):
+            raise ManifestError("manifest inválido: processes deve ser mapping")
+        existing = processes.get(process_name, {})
+        record = dict(existing) if isinstance(existing, dict) else {}
+        record.update({
+            "path": relative,
+            "template": template_id,
+            "entrypoint": entrypoint,
+        })
+        if not record.get("source_digest") and source_digest:
+            record["source_digest"] = source_digest
+        if not record.get("base_digest"):
+            record["base_digest"] = process_digest(process_file)
+        processes[process_name] = record
+        if set_default:
+            manifest["default_process"] = process_name
+        _atomic_write_manifest(manifest_path, manifest)
     return manifest_path
 
 
@@ -500,20 +734,23 @@ def refresh_process_digests(
     """
     root = Path(project_root).resolve()
     manifest_path = paths.project_manifest(root)
-    manifest = _read_yaml(manifest_path)
-    processes = manifest.get("processes")
-    if not isinstance(processes, dict) or not isinstance(
-        processes.get(process_name), dict
-    ):
-        raise ValueError(f"processo '{process_name}' não está registrado no manifest")
-    record = processes[process_name]
-    if source_digest:
-        record["source_digest"] = source_digest
-    record["base_digest"] = process_digest(_canonical_process_path(root, process_name))
-    manifest_path.write_text(
-        yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
+        manifest = _read_yaml(manifest_path)
+        processes = manifest.get("processes")
+        if not isinstance(processes, dict) or not isinstance(
+            processes.get(process_name), dict
+        ):
+            raise ValueError(
+                f"processo '{process_name}' não está registrado no manifest"
+            )
+        record = processes[process_name]
+        if source_digest:
+            record["source_digest"] = source_digest
+        record["base_digest"] = process_digest(
+            _canonical_process_path(root, process_name)
+        )
+        _atomic_write_manifest(manifest_path, manifest)
     return manifest_path
 
 
@@ -524,6 +761,18 @@ def ensure_project_layout(
 ) -> Path:
     """Create tracked layout metadata without creating any execution state."""
     root = Path(project_root).resolve()
+    with _manifest_write_lock(root):
+        return _ensure_project_layout_locked(root, defaults=defaults)
+
+
+def _ensure_project_layout_locked(
+    project_root: str | Path,
+    *,
+    defaults: dict[str, Any] | None = None,
+) -> Path:
+    """Create tracked layout metadata without creating any execution state."""
+    root = Path(project_root).resolve()
+    _assert_no_exclusive_startup(root)
     ft_dir = paths.project_ft_dir(root)
     process_dir = paths.project_process_dir(root)
     cycles_dir = paths.project_cycles_dir(root)
@@ -560,10 +809,7 @@ def ensure_project_layout(
             and requested_effort.strip().lower() == "default"
         ):
             current.pop("llm_effort", None)
-    manifest_path.write_text(
-        yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    _atomic_write_manifest(manifest_path, manifest)
     return manifest_path
 
 
@@ -625,12 +871,33 @@ def update_manifest_llm_defaults(
     llm_model: str,
     llm_effort: str | None,
 ) -> Path:
+    """Atomically replace only the project's persisted LLM defaults."""
+    root = Path(project_root).resolve()
+    with _manifest_write_lock(root):
+        return _update_manifest_llm_defaults_locked(
+            root,
+            llm_engine=llm_engine,
+            llm_model=llm_model,
+            llm_effort=llm_effort,
+        )
+
+
+def _update_manifest_llm_defaults_locked(
+    project_root: str | Path,
+    *,
+    llm_engine: str,
+    llm_model: str,
+    llm_effort: str | None,
+) -> Path:
     """Atomically replace only the project's persisted LLM defaults.
 
     ``None`` means provider default and removes ``defaults.llm_effort``.  A
     caller must validate the agent/model/effort combination against a fresh
     provider capability probe before invoking this storage primitive.
     """
+
+    root = Path(project_root).resolve()
+    _assert_no_exclusive_startup(root)
 
     engine = str(llm_engine).strip()
     model = str(llm_model).strip()
@@ -642,7 +909,7 @@ def update_manifest_llm_defaults(
     if effort == "":
         effort = None
 
-    manifest_path = paths.project_manifest(Path(project_root).resolve())
+    manifest_path = paths.project_manifest(root)
     if not manifest_path.is_file():
         raise FileNotFoundError(
             f"projeto não inicializado: {manifest_path} não existe"
@@ -674,37 +941,7 @@ def update_manifest_llm_defaults(
         raise ValueError("manifest inválido: llm_defaults_revision deve ser inteiro >= 0")
     manifest["llm_defaults_revision"] = raw_revision + 1
 
-    payload = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
-    original_mode = stat.S_IMODE(manifest_path.stat().st_mode)
-    temporary_path: Path | None = None
-    try:
-        fd, raw_temporary_path = tempfile.mkstemp(
-            prefix=f".{manifest_path.name}.",
-            suffix=".tmp",
-            dir=manifest_path.parent,
-        )
-        temporary_path = Path(raw_temporary_path)
-        os.fchmod(fd, original_mode)
-        with os.fdopen(fd, "w", encoding="utf-8") as temporary:
-            temporary.write(payload)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_path, manifest_path)
-        temporary_path = None
-
-        # Persist the directory entry as well when the platform supports it.
-        try:
-            directory_fd = os.open(manifest_path.parent, os.O_RDONLY)
-        except OSError:
-            directory_fd = None
-        if directory_fd is not None:
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    _atomic_write_manifest(manifest_path, manifest)
     return manifest_path
 
 
@@ -1372,6 +1609,27 @@ def _assert_no_runtime_cycles(root: Path) -> None:
     continuous = paths.continuous_state_path(root)
     if continuous.is_file():
         state_files.append(continuous)
+    reservations = [paths.continuous_startup_path(root)]
+    startup_home = paths.startup_reservations_home(root)
+    if startup_home.is_dir():
+        reservations.extend(startup_home.glob("*.yml"))
+    for reservation in reservations:
+        if not reservation.is_file():
+            continue
+        try:
+            payload = _read_yaml(reservation)
+            lock = payload.get("_lock", {})
+            pid = int(lock.get("pid")) if isinstance(lock, dict) else 0
+        except (TypeError, ValueError):
+            pid = 0
+            lock = {}
+        if pid <= 0:
+            state_files.append(reservation)
+            continue
+        from ft.engine.state import lock_owner_is_alive
+
+        if lock_owner_is_alive(lock):
+            state_files.append(reservation)
     legacy_state = root / "state" / "engine_state.yml"
     if legacy_state.is_file() and _legacy_state_represents_runtime(legacy_state):
         state_files.append(legacy_state)
@@ -1665,6 +1923,19 @@ def migrate_legacy_layout(
     dry_run: bool = False,
     cycle_id: str = "legacy-unscoped",
 ) -> list[str]:
+    """Migra layout legado sem concorrer com criação/update de runtimes."""
+    root = Path(project_root).resolve()
+    with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
+        return _migrate_legacy_layout(root, dry_run=dry_run, cycle_id=cycle_id)
+
+
+def _migrate_legacy_layout(
+    project_root: str | Path,
+    *,
+    dry_run: bool,
+    cycle_id: str,
+) -> list[str]:
     """Migrate a singular v1 process bundle into the uniform named v2 catalog."""
     root = Path(project_root).resolve()
     legacy_process = root / "process"
@@ -1863,10 +2134,8 @@ def migrate_legacy_layout(
         default_process=canonical,
     )
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        yaml.safe_dump(migrated_manifest, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    with _manifest_write_lock(root):
+        _atomic_write_manifest(manifest_path, migrated_manifest)
     ensure_project_layout(root)
     _import_legacy_cycle_archives(root, actions, dry_run=False)
     _import_named_handoffs(root, actions, dry_run=False)

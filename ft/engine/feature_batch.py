@@ -13,7 +13,10 @@ O estado do batch vive em ``$FT_HOME/runtime/<projeto>/parallel/<batch-id>/``
 
 from __future__ import annotations
 
+import os
 import re
+import stat
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -552,13 +555,34 @@ def new_batch_id(project_root: str | Path) -> str:
 
 
 def save_batch(batch: FeatureBatch) -> Path:
+    from ft.engine.layout import _manifest_write_lock
+
     directory = batch_dir(batch.project_root, batch.batch_id)
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / BATCH_FILENAME
-    target.write_text(
-        yaml.safe_dump(batch.to_dict(), sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    with _manifest_write_lock(batch.project_root):
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / BATCH_FILENAME
+        payload = yaml.safe_dump(
+            batch.to_dict(), sort_keys=False, allow_unicode=True
+        )
+        mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
+        temporary_path: Path | None = None
+        try:
+            fd, raw_temporary_path = tempfile.mkstemp(
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                dir=target.parent,
+            )
+            temporary_path = Path(raw_temporary_path)
+            os.fchmod(fd, mode)
+            with os.fdopen(fd, "w", encoding="utf-8") as temporary:
+                temporary.write(payload)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_path, target)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
     return target
 
 

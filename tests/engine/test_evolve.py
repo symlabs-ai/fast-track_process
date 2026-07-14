@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from ft.cli import main as cli_main
-from ft.engine import evolve, paths
+from ft.engine import evolve, layout, paths
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -174,6 +177,45 @@ def _workspace(project, fake_engine, ft_home, **kwargs):
     )
 
 
+def _tree_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _run_evolve_apply(workspace: evolve.EvolveWorkspace) -> subprocess.CompletedProcess[str]:
+    project_dir = workspace.targets.project_dir
+    assert project_dir is not None
+    code = "\n".join(
+        [
+            "import sys",
+            "from pathlib import Path",
+            "from ft.engine.evolve import EvolveTargets, EvolveWorkspace, apply_staged, diff_staged",
+            "workspace_root, project_dir = map(Path, sys.argv[1:])",
+            "workspace = EvolveWorkspace(root=workspace_root, targets=EvolveTargets(project_dir=project_dir), context_label='barrier-test')",
+            "try:",
+            "    apply_staged(workspace, diff_staged(workspace))",
+            "except RuntimeError as exc:",
+            "    print(str(exc))",
+            "    raise SystemExit(23)",
+        ]
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(REPO_ROOT), env.get("PYTHONPATH", "")])
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code, str(workspace.root), str(project_dir)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+
 def test_prepare_workspace_monta_staging_e_contexto(ft_home, project, fake_engine):
     _active_cycle(ft_home, project)
     ws = _workspace(project, fake_engine, ft_home, directive="focar em retries")
@@ -274,6 +316,74 @@ def test_diff_e_apply_espelham_staging(ft_home, project, fake_engine):
     assert not (fake_engine / "templates" / "feature" / "README.md").exists()
     # Staging e alvos idênticos após o apply.
     assert evolve.diff_staged(ws) == []
+
+
+def test_apply_project_target_respects_exclusive_startup_barrier(
+    ft_home,
+    project,
+    fake_engine,
+):
+    ws = _workspace(project, fake_engine, ft_home, include_global=False)
+    staged_process = ws.staged_project_dir / "feature" / "process.yml"
+    staged_process.write_text(
+        staged_process.read_text(encoding="utf-8")
+        + "\n# evolve after exclusive barrier\n",
+        encoding="utf-8",
+    )
+    project_processes = paths.project_process_dir(project)
+    before = _tree_snapshot(project_processes)
+    process_relative = Path(".ft/process/feature/process.yml")
+    reservation = paths.startup_reservation_path(project)
+
+    try:
+        with layout._manifest_write_lock(project):
+            cli_main._write_startup_reservation(
+                reservation,
+                process_relative,
+                isolated=True,
+            )
+            with cli_main._suspend_startup_exclusively(
+                project,
+                reservation,
+                process_relative,
+                isolated=True,
+            ):
+                blocked = _run_evolve_apply(ws)
+                assert blocked.returncode == 23, blocked.stderr
+                assert "temporariamente reservado" in blocked.stdout
+                assert _tree_snapshot(project_processes) == before
+
+        allowed = _run_evolve_apply(ws)
+        assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+        real_process = project_processes / "feature" / "process.yml"
+        assert "# evolve after exclusive barrier" in real_process.read_text(
+            encoding="utf-8"
+        )
+        assert evolve.diff_staged(ws) == []
+    finally:
+        cli_main._release_startup_reservation(project, reservation)
+
+
+def test_change_fingerprint_detects_concurrent_real_target_change(
+    ft_home,
+    project,
+    fake_engine,
+):
+    ws = _workspace(project, fake_engine, ft_home, include_global=False)
+    staged_process = ws.staged_project_dir / "feature" / "process.yml"
+    staged_process.write_text(
+        staged_process.read_text(encoding="utf-8") + "\n# staged evolution\n",
+        encoding="utf-8",
+    )
+    changes = evolve.diff_staged(ws)
+    before = evolve.change_fingerprint(changes)
+    real_process = project / ".ft" / "process" / "feature" / "process.yml"
+    real_process.write_text(
+        real_process.read_text(encoding="utf-8") + "\n# concurrent edit\n",
+        encoding="utf-8",
+    )
+
+    assert evolve.change_fingerprint(changes) != before
 
 
 # ---------------------------------------------------------------------------

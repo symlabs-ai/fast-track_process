@@ -1524,6 +1524,50 @@ def test_primeiro_batch_planeja_sem_sujar_checkout_e_materializa_no_setup(
     )
 
 
+def test_plan_batch_refuses_unfinished_merge_before_persisting_reservation(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = _git_project(tmp_path)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(fp, "_preflight", lambda *_args: None)
+    monkeypatch.setattr(
+        fp,
+        "_run_planner",
+        lambda *_args, **_kwargs: pytest.fail("planner não deveria iniciar"),
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    (root / ".git" / "MERGE_HEAD").write_text(head, encoding="utf-8")
+    args = Namespace(
+        demand=["Ajuste A", "Ajuste B"],
+        feature_input=None,
+        engines=None,
+        template="feature",
+        max_parallel=2,
+        yes=True,
+        force=False,
+        verbose=False,
+        bypass_human_gates=False,
+        claude=None,
+        codex=None,
+        gemini=None,
+        opencode=None,
+        effort=None,
+    )
+
+    with pytest.raises(RuntimeError, match="merge Git pendente"):
+        fp._plan_batch(args, root)
+
+    assert fb.latest_batch_id(root) is None
+
+
 def test_plan_batch_applies_planner_budget_declared_by_local_process(
     tmp_path, monkeypatch
 ):

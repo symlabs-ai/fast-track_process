@@ -869,6 +869,148 @@ def _destination_symlink_or_escape(root: Path, destination: Path) -> Path | None
     return None
 
 
+def _normalized_close_copy_paths(
+    requested: list[str],
+    *,
+    cycle_id: str,
+) -> tuple[list[str], str | None]:
+    """Expand safe `.ft/` metadata without ever copying process snapshots.
+
+    A cycle worktree pins `.ft/process/` at birth. Copying that catalog back
+    would revert updates/evolves performed later in the main checkout. Process
+    evolution must use Git's 3-way merge (`full`) or `ft evolve`, never a
+    last-writer-wins directory copy.
+    """
+    result: list[str] = []
+    safe_ft = [f".ft/cycles/{cycle_id}/", ".ft/.gitignore"]
+    for raw in requested:
+        value = str(raw).strip()
+        relative = Path(value.rstrip("/"))
+        folded_parts = tuple(part.casefold() for part in relative.parts)
+        if not value or relative.is_absolute() or ".." in relative.parts:
+            return [], f"path seletivo inseguro: {raw}"
+        if relative == Path("."):
+            return [], (
+                "merge seletivo da raiz é recusado porque incluiria snapshots "
+                "de .ft/process; informe paths específicos"
+            )
+        if folded_parts[:2] == (".ft", "process"):
+            return [], (
+                "merge por cópia de .ft/process é recusado para não reverter "
+                "updates concorrentes; use merge full ou ft evolve"
+            )
+        if folded_parts == (".ft",):
+            candidates = safe_ft
+        elif folded_parts == (".ft", "manifest.yml"):
+            candidates = []
+        else:
+            canonical_parts = list(relative.parts)
+            if folded_parts and folded_parts[0] == ".ft":
+                canonical_parts[0] = ".ft"
+                if len(folded_parts) > 1 and folded_parts[1] == "cycles":
+                    canonical_parts[1] = "cycles"
+                elif len(folded_parts) > 1 and folded_parts[1] == ".gitignore":
+                    canonical_parts[1] = ".gitignore"
+            candidates = [Path(*canonical_parts).as_posix()]
+        for candidate in candidates:
+            if candidate not in result:
+                result.append(candidate)
+    cycle_path = f".ft/cycles/{cycle_id}/"
+    if cycle_path not in result:
+        result.append(cycle_path)
+    return result, None
+
+
+def _copy_close_paths(
+    source_root: Path,
+    destination_root: Path,
+    copy_paths: list[str],
+    *,
+    label: str,
+    ignore=None,
+) -> tuple[bool, list[str]]:
+    """Copy close artifacts atomically with respect to project writers."""
+    import shutil as _shutil
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
+
+    protected_manifest = _lexical_absolute(source_root / ".ft" / "manifest.yml")
+    copied: list[str] = []
+    try:
+        with _manifest_write_lock(destination_root):
+            _assert_no_exclusive_startup(destination_root)
+            for raw in copy_paths:
+                relative = Path(str(raw).strip().rstrip("/"))
+                folded_parts = tuple(
+                    part.casefold() for part in relative.parts
+                )
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or relative == Path(".")
+                    or folded_parts == (".ft",)
+                    or folded_parts[:2] == (".ft", "process")
+                ):
+                    print(ui.fail(f"{label}: path por cópia inseguro — {raw}"))
+                    return False, []
+                source = source_root / raw
+                destination = destination_root / raw
+                if folded_parts == (".ft", "manifest.yml"):
+                    continue
+                source_issue = _first_unprotected_symlink(
+                    source,
+                    root=source_root,
+                    protected=protected_manifest,
+                )
+                if source_issue is not None:
+                    print(ui.fail(f"{label}: origem simbólica recusada — {source_issue}"))
+                    return False, []
+                destination_issue = _destination_symlink_or_escape(
+                    destination_root,
+                    destination,
+                )
+                if destination_issue is not None:
+                    print(ui.fail(
+                        f"{label}: destino inseguro recusado — {destination_issue}"
+                    ))
+                    return False, []
+
+            for raw in copy_paths:
+                source = source_root / raw
+                destination = destination_root / raw
+                relative = Path(str(raw).strip().rstrip("/"))
+                folded_parts = tuple(
+                    part.casefold() for part in relative.parts
+                )
+                if folded_parts == (".ft", "manifest.yml"):
+                    print(ui.dim(
+                        "  Skip: .ft/manifest.yml "
+                        "(defaults vivem no checkout principal)"
+                    ))
+                    continue
+                if not source.exists():
+                    print(ui.dim(f"  Skip: {raw} (não existe)"))
+                    continue
+                if source.is_dir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                    _shutil.copytree(
+                        source,
+                        destination,
+                        dirs_exist_ok=True,
+                        ignore=ignore,
+                    )
+                else:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    _shutil.copy2(source, destination)
+                copied.append(raw)
+    except RuntimeError as exc:
+        print(ui.fail(f"{label}: {exc}"))
+        return False, []
+    return True, copied
+
+
 @dataclass
 class OpenCodeOptions:
     deny_read_paths: list[str] = field(default_factory=list)
@@ -2341,7 +2483,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         strategy:
           "full"      → git merge da branch inteira
-          "docs"      → copia docs/ e metadados versionados em .ft/
+          "docs"      → copia docs/ e histórico em .ft/cycles/ (não processos)
           "selective"  → copia apenas os paths informados
           "none"      → nada
         paths: lista de paths para modo selective (ex: ["docs/", "project/backend/"])
@@ -2349,7 +2491,6 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         Retorna True se o merge foi concluído (ou intencionalmente não havia nada
         a fazer); False se falhou — o chamador NÃO deve destruir worktree/branch.
         """
-        import shutil as _shutil
         import subprocess as _sp
         from ft.engine import paths as _engine_paths
 
@@ -2407,6 +2548,12 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         if strategy == "full":
             if branch:
+                from ft.engine.layout import (
+                    _assert_no_exclusive_startup,
+                    _manifest_write_lock,
+                    _suspend_for_exclusive_project_write,
+                )
+
                 verify_hooks = self._verify_commit_hooks()
                 merge_command = [
                     *git_command_prefix(verify_hooks),
@@ -2416,10 +2563,18 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 ]
                 if not verify_hooks:
                     merge_command.extend(["--no-verify", "--no-gpg-sign"])
-                result = _sp.run(
-                    merge_command,
-                    cwd=original_root, capture_output=True, text=True,
-                )
+                with _manifest_write_lock(original_root):
+                    _assert_no_exclusive_startup(original_root)
+                    with _suspend_for_exclusive_project_write(
+                        original_root,
+                        reason=f"ft close merge {cycle_id}",
+                    ):
+                        result = _sp.run(
+                            merge_command,
+                            cwd=original_root,
+                            capture_output=True,
+                            text=True,
+                        )
                 if result.returncode == 0:
                     print(ui.success(f"Merge: branch {branch} mergida em {original_root.name}"))
                     return True
@@ -2438,77 +2593,39 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         # Resolver lista de paths a copiar
         if strategy == "docs":
-            copy_paths = ["docs/", ".ft/"]
+            requested_paths = ["docs/", ".ft/"]
         elif strategy == "selective" and paths:
-            copy_paths = list(paths)
-            cycle_path = f".ft/cycles/{cycle_id}/"
-            if not any(str(path).rstrip("/") == cycle_path.rstrip("/") for path in copy_paths):
-                copy_paths.append(cycle_path)
+            requested_paths = list(paths)
         else:
             return True
+        copy_paths, copy_error = _normalized_close_copy_paths(
+            requested_paths,
+            cycle_id=cycle_id,
+        )
+        if copy_error:
+            print(ui.fail(f"Merge: {copy_error}"))
+            return False
 
-        count = 0
-        protected_manifest = _lexical_absolute(work / ".ft" / "manifest.yml")
-        for p in copy_paths:
-            candidate = work / p
-            destination = original_root / p
-            lexical = _lexical_absolute(candidate)
-            if lexical == protected_manifest:
-                continue
-            source_symlink = _first_unprotected_symlink(
-                candidate,
-                root=work,
-                protected=protected_manifest,
-            )
-            if source_symlink is not None:
-                print(ui.fail(f"Merge: origem simbólica recusada — {source_symlink}"))
-                return False
-            destination_issue = _destination_symlink_or_escape(
-                original_root,
-                destination,
-            )
-            if destination_issue is not None:
-                print(ui.fail(f"Merge: destino inseguro recusado — {destination_issue}"))
-                return False
-        for p in copy_paths:
-            src = work / p
-            dst = original_root / p
-            lexical_src = _lexical_absolute(src)
-            if lexical_src == protected_manifest:
-                print(ui.dim("  Skip: .ft/manifest.yml (defaults vivem no checkout principal)"))
-                continue
-            if not src.exists():
-                print(ui.dim(f"  Skip: {p} (não existe)"))
-                continue
-            if src.is_dir():
-                dst.mkdir(parents=True, exist_ok=True)
-                def preserve_main_manifest(directory, names):
-                    current = _lexical_absolute(directory)
-                    if current == protected_manifest.parent:
-                        return ["manifest.yml"]
-                    return []
-
-                _shutil.copytree(
-                    src,
-                    dst,
-                    dirs_exist_ok=True,
-                    ignore=preserve_main_manifest,
-                )
-                count += 1
-            elif src.is_file():
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                _shutil.copy2(src, dst)
-                count += 1
-
-        if count:
-            print(ui.success(f"Merge: {count} item(ns) copiado(s) para {original_root.name}/"))
+        copied_ok, copied = _copy_close_paths(
+            work,
+            original_root,
+            copy_paths,
+            label="Merge",
+        )
+        if not copied_ok:
+            return False
+        if copied:
+            print(ui.success(
+                f"Merge: {len(copied)} item(ns) copiado(s) "
+                f"para {original_root.name}/"
+            ))
         return True
 
     def _merge_by_copy(self, strategy: str, paths: list[str] | None = None) -> bool:
         """Fallback do merge quando o cycle dir não é git worktree.
 
-        full      → código, docs canônicos e .ft/ voltam para a raiz
-        docs      → apenas docs canônicos e .ft/
+        full      → código, docs canônicos e histórico voltam para a raiz
+        docs      → apenas docs canônicos e .ft/cycles/
         selective → paths informados, copiados 1:1
         Retorna True se copiou (ou nada a fazer por design); False se falhou.
         """
@@ -2533,72 +2650,28 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         ignore = _shutil.ignore_patterns(
             "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "*.pyc"
         )
-        copied: list[str] = []
-        protected_manifest = _lexical_absolute(work / ".ft" / "manifest.yml")
-
-        def _copy(src: Path, dst: Path, label: str) -> None:
-            lexical_src = _lexical_absolute(src)
-            if lexical_src == protected_manifest:
-                print(ui.dim("  Skip: .ft/manifest.yml (defaults vivem no checkout principal)"))
-                return
-            if not src.exists():
-                print(ui.dim(f"  Skip: {label} (não existe no ciclo)"))
-                return
-            if src.is_dir():
-                dst.mkdir(parents=True, exist_ok=True)
-                def preserve_main_manifest(directory, names):
-                    ignored = set(ignore(directory, names))
-                    current = _lexical_absolute(directory)
-                    if current == protected_manifest.parent:
-                        ignored.add("manifest.yml")
-                    return sorted(ignored)
-
-                _shutil.copytree(
-                    src,
-                    dst,
-                    dirs_exist_ok=True,
-                    ignore=preserve_main_manifest,
-                )
-            else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                _shutil.copy2(src, dst)
-            copied.append(label)
-
-        copy_items: list[tuple[Path, Path, str]] = []
         if strategy == "selective" and paths:
-            selected = list(paths)
-            cycle_path = f".ft/cycles/{cycle}/"
-            if not any(str(path).rstrip("/") == cycle_path.rstrip("/") for path in selected):
-                selected.append(cycle_path)
-            for p in selected:
-                copy_items.append((work / p, root / p, p))
+            requested_paths = list(paths)
         else:
-            copy_items.extend(
-                [
-                    (work / "docs", root / "docs", "docs/"),
-                    (work / ".ft", root / ".ft", ".ft/"),
-                ]
-            )
+            requested_paths = ["docs/", ".ft/"]
             if strategy == "full":
-                copy_items.append((work / "project", root / "project", "project/"))
-
-        for src, dst, label in copy_items:
-            if _lexical_absolute(src) == protected_manifest:
-                continue
-            source_symlink = _first_unprotected_symlink(
-                src,
-                root=work,
-                protected=protected_manifest,
-            )
-            if source_symlink is not None:
-                print(ui.fail(f"Merge por cópia: origem simbólica recusada — {source_symlink}"))
-                return False
-            destination_issue = _destination_symlink_or_escape(root, dst)
-            if destination_issue is not None:
-                print(ui.fail(f"Merge por cópia: destino inseguro recusado — {destination_issue}"))
-                return False
-        for src, dst, label in copy_items:
-            _copy(src, dst, label)
+                requested_paths.append("project/")
+        copy_paths, copy_error = _normalized_close_copy_paths(
+            requested_paths,
+            cycle_id=cycle,
+        )
+        if copy_error:
+            print(ui.fail(f"Merge por cópia: {copy_error}"))
+            return False
+        copied_ok, copied = _copy_close_paths(
+            work,
+            root,
+            copy_paths,
+            label="Merge por cópia",
+            ignore=ignore,
+        )
+        if not copied_ok:
+            return False
 
         if copied:
             print(ui.success(f"Merge por cópia ({strategy}): {len(copied)} item(ns) → {root.name}/"))
@@ -2907,14 +2980,26 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if state.node_status != "delegated" or not state.current_node:
             return False
 
-        lock = state._lock if isinstance(state._lock, dict) else {}
+        previous_lock = getattr(self.state_mgr, "_previous_claim_lock", None)
+        was_claimed = bool(getattr(self.state_mgr, "_claim_performed", False))
+        lock = previous_lock if isinstance(previous_lock, dict) else (
+            {} if was_claimed else
+            state._lock if isinstance(state._lock, dict) else {}
+        )
         pid = lock.get("pid")
         if pid:
-            try:
-                if self.state_mgr._is_pid_alive(int(pid)):
+            from ft.engine.state import lock_owner_is_alive
+
+            if was_claimed:
+                if lock_owner_is_alive(lock):
                     return False
-            except (TypeError, ValueError):
-                return False
+            else:
+                try:
+                    pid_alive = self.state_mgr._is_pid_alive(int(pid))
+                except (TypeError, ValueError):
+                    pid_alive = False
+                if pid_alive and lock_owner_is_alive(lock):
+                    return False
 
         node_id = state.current_node
         if node_id not in self.graph.nodes:

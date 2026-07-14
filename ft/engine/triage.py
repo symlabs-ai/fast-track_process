@@ -360,32 +360,27 @@ def diff_process(original_yaml: str, adapted_yaml: str) -> dict[str, Any]:
 
 def apply_renames_to_state(state_path: str | Path, renames: dict[str, str]) -> None:
     """Aplica mapa de renomeação ao state existente."""
-    import yaml as _yaml
+    from ft.engine.state import mutate_state_payload
 
     path = Path(state_path)
     if not path.exists() or not renames:
         return
 
-    data = _yaml.safe_load(path.read_text()) or {}
+    def apply(data: dict[str, Any]) -> None:
+        current = data.get("current_node")
+        if current and current in renames:
+            data["current_node"] = renames[current]
 
-    # Renomear current_node
-    current = data.get("current_node")
-    if current and current in renames:
-        data["current_node"] = renames[current]
+        completed = data.get("completed_nodes", [])
+        data["completed_nodes"] = [renames.get(n, n) for n in completed]
 
-    # Renomear completed_nodes
-    completed = data.get("completed_nodes", [])
-    data["completed_nodes"] = [renames.get(n, n) for n in completed]
+        gate_log = data.get("gate_log", {})
+        data["gate_log"] = {renames.get(k, k): v for k, v in gate_log.items()}
 
-    # Renomear gate_log keys
-    gate_log = data.get("gate_log", {})
-    data["gate_log"] = {renames.get(k, k): v for k, v in gate_log.items()}
+        artifacts = data.get("artifacts", {})
+        data["artifacts"] = {renames.get(k, k): v for k, v in artifacts.items()}
 
-    # Renomear artifacts keys
-    artifacts = data.get("artifacts", {})
-    data["artifacts"] = {renames.get(k, k): v for k, v in artifacts.items()}
-
-    path.write_text(_yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False))
+    mutate_state_payload(path, apply)
 
 
 def present_adaptation_proposal(

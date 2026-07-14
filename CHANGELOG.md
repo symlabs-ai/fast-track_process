@@ -49,8 +49,36 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   manifest.
 - Preflight de `ft feature` e `ft feature --parallel` agora avisa (uma linha,
   não-bloqueante) quando o template global do processo evoluiu.
-- Update bloqueado com ciclo ativo: o digest do bundle fixa a semântica de
-  execução do ciclo (cycle pinning).
+- O guard de update agora usa o `process_path` fixado no state de **todos** os
+  ciclos: worktrees isoladas em processos disjuntos podem continuar rodando,
+  enquanto sobreposição, runtime `continuous` e states legados ambíguos
+  bloqueiam conservadoramente. Batches abertos reservam somente seu próprio
+  template, incluindo workers futuros e batches anteriores retomáveis. Antes
+  do apply, o engine repete o guard e compara os digests sob o mesmo lock usado
+  pela materialização de processos, criação de worktrees e persistência do
+  runtime; mudanças concorrentes abortam sem substituir o bundle. O startup
+  passa a registrar `preparing` antes de hooks/triage/health-check, fechando a
+  janela anterior ao primeiro state, e snapshot Git + reserva do ciclo formam
+  uma única transação. Durante hooks Git e `git worktree add`, uma reserva
+  exclusiva curta bloqueia todos os writers de bundle/manifest; fora dessa
+  janela, ciclos e updates disjuntos seguem em paralelo. Diff e confirmação
+  humana de merge ficam fora do lock e não pausam ciclos disjuntos.
+- `ft close` por cópia agora promove somente docs e histórico do ciclo: nunca
+  reimporta o snapshot antigo de `.ft/process` nem o manifest da worktree.
+  Paths reservados são comparados sem diferença de caixa para manter a mesma
+  proteção em filesystems case-insensitive. No merge full, a barreira cobre o
+  comando Git e um `MERGE_HEAD` pendente continua bloqueando novos startups e
+  writers até o conflito ser concluído ou abortado.
+- A atualização dos digests no manifest passou a usar replace atômico, evitando
+  que ciclos ativos leiam YAML parcial enquanto outro bundle é sincronizado;
+  registro de processo, update e defaults LLM são serializados por projeto
+  para não perder alterações concorrentes. `engine_state.yml` e `batch.yml`
+  também passam a ser substituídos atomicamente; claim/release, cancelamento,
+  avanço de ciclo e renomeação de nodes usam read-modify-write coordenado, sem
+  truncamento ou dois `ft continue` assumindo o mesmo state. Locks persistem a
+  identidade de nascimento do PID (com fallback portátil via `ps`), evitando
+  que PID reciclado simule runner vivo; batches reconhecem um driver externo
+  legítimo sem transformar a feature concorrente em `blocked`.
 - Novo módulo `ft/engine/process_update.py`; cobertura em
   `tests/engine/test_process_update.py`.
 

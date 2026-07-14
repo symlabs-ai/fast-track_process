@@ -5,6 +5,7 @@ ft engine CLI — comandos do motor deterministico.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
@@ -277,8 +278,10 @@ def _materialize_process_template_locked(
     overwritten, even when the global template changes later.
     """
     import shutil
+    from ft.engine.layout import _assert_no_exclusive_startup
 
     root = project_root.resolve()
+    _assert_no_exclusive_startup(root)
     for guarded in (
         paths.project_ft_dir(root),
         paths.project_manifest(root),
@@ -416,6 +419,19 @@ def _guard_engine_repo(root: Path) -> None:
 
 
 def copy_template(template_name: str, project_root: Path) -> Path:
+    """Materialize an init template under the metadata writer barrier."""
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
+
+    root = project_root.resolve()
+    with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
+        return _copy_template_locked(template_name, root)
+
+
+def _copy_template_locked(template_name: str, project_root: Path) -> Path:
     """Materialize an init template as the named default process."""
     import shutil
 
@@ -456,12 +472,19 @@ def copy_template(template_name: str, project_root: Path) -> Path:
 def _copy_agents_md(project_root: Path) -> None:
     """Copia o playbook AGENTS.md do engine para a raiz do projeto (não sobrescreve)."""
     import shutil
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
 
-    src = engine_root() / "AGENTS.md"
-    dst = project_root / "AGENTS.md"
-    if src.exists() and not dst.exists():
-        shutil.copy(src, dst)
-        print("  AGENTS.md (playbook do condutor) copiado para o projeto")
+    root = project_root.resolve()
+    with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
+        src = engine_root() / "AGENTS.md"
+        dst = root / "AGENTS.md"
+        if src.exists() and not dst.exists():
+            shutil.copy(src, dst)
+            print("  AGENTS.md (playbook do condutor) copiado para o projeto")
 
 
 def _run_environment_script(project_root: Path, script: str) -> bool:
@@ -1831,9 +1854,17 @@ def cmd_continue(args):
     runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
+    from ft.engine.state import StateLockError
+    try:
+        state = runner.state_mgr.claim()
+    except StateLockError as exc:
+        from ft.engine import ui as _ui
+
+        print(_ui.fail(str(exc)))
+        sys.exit(1)
+
     # Ciclo já concluído? NÃO reiniciar do zero (footgun: continue num ciclo
     # done chamava init_state e recomeçava tudo).
-    state = runner.state_mgr.load()
     if _cycle_complete(state):
         from ft.engine import ui as _ui
         if runner.audit_completed_cycle():
@@ -2093,12 +2124,10 @@ def _orchestrator_alive(state_mgr, st) -> bool:
     """True se o processo que segura o lock do estado ainda está vivo. O lock é
     reescrito com o pid a cada save e nunca liberado, então um pid morto = o
     orquestrador saiu (ciclo parado)."""
-    lock = getattr(st, "_lock", None)
-    pid = lock.get("pid") if isinstance(lock, dict) else None
-    if not pid:
-        return False
     try:
-        return state_mgr._is_pid_alive(int(pid))
+        from ft.engine.state import lock_owner_is_alive
+
+        return lock_owner_is_alive(getattr(st, "_lock", None))
     except Exception:
         return True  # na dúvida, não alarma falso
 
@@ -2984,6 +3013,7 @@ def cmd_evolve(args):
     print(_ui.header(f"Mudanças staged ({len(changes)})"))
     for change in changes:
         print(f"  {change.status:8s} {change.target}: {change.relative}")
+    expected_changes = _evolve.change_fingerprint(changes)
 
     if getattr(args, "dry_run", False):
         print(_ui.info("--dry-run: nada foi aplicado."))
@@ -3004,7 +3034,27 @@ def cmd_evolve(args):
             ))
             return
 
-    applied = _evolve.apply_staged(workspace, changes)
+    if include_project:
+        from ft.engine.layout import (
+            _assert_no_exclusive_startup,
+            _manifest_write_lock,
+        )
+
+        with _manifest_write_lock(root):
+            _assert_no_exclusive_startup(root)
+            final_errors = _evolve.validate_staged(workspace)
+            final_changes = _evolve.diff_staged(workspace)
+            if final_errors or (
+                _evolve.change_fingerprint(final_changes) != expected_changes
+            ):
+                print(_ui.fail(
+                    "Alvos ou staging mudaram durante a revisão; nada foi "
+                    "aplicado. Revise o diff novamente."
+                ))
+                sys.exit(1)
+            applied = _evolve.apply_staged(workspace, final_changes)
+    else:
+        applied = _evolve.apply_staged(workspace, changes)
     print(_ui.success(f"{len(applied)} arquivo(s) aplicado(s):"))
     for line in applied:
         print(f"  {line}")
@@ -3325,9 +3375,13 @@ def _process_update_runtime_guard(
 def _apply_staged_process_update(root: Path, expected, staging: Path) -> Path:
     """CAS + guard final + apply sob o lock compartilhado do projeto."""
     from ft.engine import process_update as pu
-    from ft.engine.layout import _manifest_write_lock
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
 
     with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
         current_states = _drift_scan(root, expected.name)
         if len(current_states) != 1:
             raise RuntimeError(
@@ -3361,7 +3415,10 @@ def cmd_process_update(args):
 
     from ft.engine import process_update as pu
     from ft.engine import ui as _ui
-    from ft.engine.layout import _manifest_write_lock
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
 
     root = find_project_root().resolve()
     if not paths.project_manifest(root).is_file():
@@ -3374,7 +3431,10 @@ def cmd_process_update(args):
         )
 
     name = getattr(args, "name", None)
-    states = _drift_scan(root, name)
+    # Mesmo --check é read-only, mas precisa de um snapshot coerente enquanto
+    # outro apply pode estar trocando o diretório do bundle.
+    with _manifest_write_lock(root):
+        states = _drift_scan(root, name)
     if not states:
         if name:
             print(_ui.fail(f"processo '{name}' não está registrado no manifest"))
@@ -3427,6 +3487,7 @@ def cmd_process_update(args):
         if getattr(args, "yes", False) or _confirm("Aplicar fast-forward(s)?"):
             for state in fast_forwards:
                 with _manifest_write_lock(root):
+                    _assert_no_exclusive_startup(root)
                     staging, changed = pu.prepare_fast_forward(root, state)
                     ok, why = _validate_staged_process(staging)
                     if not ok:
@@ -3458,6 +3519,7 @@ def cmd_process_update(args):
             f"{state.name}-{os.getpid()}-{uuid4().hex}"
         )
         with _manifest_write_lock(root):
+            _assert_no_exclusive_startup(root)
             pu.ensure_base_snapshot(state)
             result = pu.build_merge_staging(state, staging)
 
@@ -3942,14 +4004,12 @@ def cmd_retry(args):
 
     state = runner.state_mgr.load()
     if state.node_status != "blocked":
-        orphaned_delegation = False
-        if state.node_status == "delegated" and isinstance(state._lock, dict):
-            pid = state._lock.get("pid")
-            if pid:
-                try:
-                    os.kill(int(pid), 0)
-                except (OSError, ProcessLookupError, ValueError):
-                    orphaned_delegation = True
+        from ft.engine.state import lock_owner_is_alive
+
+        orphaned_delegation = (
+            state.node_status == "delegated"
+            and not lock_owner_is_alive(state._lock)
+        )
         if orphaned_delegation:
             print(_ui.warn("Delegação órfã detectada — limpando estado antes do retry"))
             state.active_llm_log = None
@@ -4253,7 +4313,7 @@ def cmd_cancel(args):
     """Cancela o run ativo com justificativa."""
     from datetime import datetime
     from ft.engine import ui as _ui
-    from ft.engine.state import mutate_state_payload
+    from ft.engine.state import lock_owner_is_alive, mutate_state_payload
 
     root = find_project_root()
     reason = args.reason
@@ -4265,6 +4325,9 @@ def cmd_cancel(args):
         return
 
     outcome: dict[str, object] = {}
+
+    class _CannotVerifyCancelOwner(RuntimeError):
+        pass
 
     def cancel(data: dict) -> None:
         current_node = data.get("current_node")
@@ -4280,18 +4343,28 @@ def cmd_cancel(args):
             pid = int(raw_pid) if raw_pid is not None else None
         except (TypeError, ValueError):
             pid = None
-        if pid and _is_pid_alive(pid):
-            try:
-                os.kill(pid, 15)  # SIGTERM
-                outcome["terminated_pid"] = pid
-            except OSError:
-                pass
+        if pid:
+            if lock_owner_is_alive(lock, require_identity=True):
+                try:
+                    os.kill(pid, 15)  # SIGTERM
+                    outcome["terminated_pid"] = pid
+                except OSError:
+                    pass
+            elif lock_owner_is_alive(lock):
+                raise _CannotVerifyCancelOwner(
+                    f"não foi possível validar a identidade do PID {pid}; "
+                    "o cancelamento não alterou o state"
+                )
 
         data["node_status"] = "cancelled"
         data["blocked_reason"] = f"CANCELADO: {reason}"
         data["_lock"] = None
 
-    data = mutate_state_payload(state_path, cancel)
+    try:
+        data = mutate_state_payload(state_path, cancel)
+    except _CannotVerifyCancelOwner as exc:
+        print(_ui.fail(str(exc)))
+        return
     if data is None:
         print(_ui.warn("Nenhum run ativo encontrado."))
         return
@@ -4582,6 +4655,8 @@ def _cleanup_pristine_runs(project_root: Path) -> int:
             except Exception:
                 continue
             if _is_pristine_cycle_dir(cycle_dir, data):
+                if _runtime_lock_owner_is_alive(data.get("_lock")):
+                    continue
                 shutil.rmtree(cycle_dir)
                 removed += 1
     return removed
@@ -4612,18 +4687,28 @@ class _ActiveRunRecord:
     isolated: bool
 
 
-def _startup_reservation_payload(process_relative: Path | None) -> dict:
+def _startup_reservation_payload(
+    process_relative: Path | None,
+    *,
+    isolated: bool = True,
+    exclusive: bool = False,
+) -> dict:
     """State mínimo que torna o startup visível antes de construir o runner."""
+    from ft.engine.state import process_start_identity
+
     process_path = process_relative.as_posix() if process_relative is not None else None
     return {
         "process_path": process_path,
         "current_node": "__preparing__",
         "node_status": "preparing",
+        "isolated": isolated,
+        "exclusive": exclusive,
         "completed_nodes": [],
         "metrics": {"steps_completed": 0, "steps_total": 0},
         "_lock": {
             "owner": "ft_startup",
             "pid": os.getpid(),
+            "pid_start": process_start_identity(os.getpid()),
         },
     }
 
@@ -4631,20 +4716,29 @@ def _startup_reservation_payload(process_relative: Path | None) -> dict:
 def _write_startup_reservation(
     reservation_path: Path,
     process_relative: Path | None,
+    *,
+    isolated: bool = True,
+    exclusive: bool = False,
 ) -> None:
     """Persiste uma reserva atômica usando o mesmo lock do state normal."""
     from ft.engine.state import StateManager
 
     StateManager(reservation_path)._write_raw(
-        _startup_reservation_payload(process_relative)
+        _startup_reservation_payload(
+            process_relative,
+            isolated=isolated,
+            exclusive=exclusive,
+        )
     )
 
 
-def _release_continuous_startup(project_root: Path) -> None:
-    """Remove somente a reserva pertencente a esta invocação."""
+def _release_startup_reservation(
+    project_root: Path,
+    reservation: Path,
+) -> None:
+    """Remove somente uma reserva pertencente a esta invocação."""
     from ft.engine.layout import _manifest_write_lock
 
-    reservation = paths.continuous_startup_path(project_root)
     with _manifest_write_lock(project_root):
         if not reservation.exists():
             return
@@ -4655,6 +4749,47 @@ def _release_continuous_startup(project_root: Path) -> None:
         lock = payload.get("_lock", {}) if isinstance(payload, dict) else {}
         if isinstance(lock, dict) and lock.get("pid") == os.getpid():
             reservation.unlink(missing_ok=True)
+
+
+def _release_continuous_startup(project_root: Path) -> None:
+    _release_startup_reservation(
+        project_root,
+        paths.continuous_startup_path(project_root),
+    )
+
+
+@contextmanager
+def _suspend_startup_exclusively(
+    project_root: Path,
+    reservation: Path,
+    process_relative: Path | None,
+    *,
+    isolated: bool,
+):
+    """Solta o flock sem permitir mutações durante hooks Git arbitrários.
+
+    Hooks e ``git worktree add`` podem observar o repositório inteiro, não só
+    o processo selecionado. Enquanto executam, a reserva fica deliberadamente
+    sem identidade de processo: comandos mutantes falham rápido no guard em
+    vez de deadlockar ou expor um bundle parcialmente substituído ao hook.
+    """
+    from ft.engine.layout import _suspend_manifest_write_lock
+
+    _write_startup_reservation(
+        reservation,
+        None,
+        isolated=isolated,
+        exclusive=True,
+    )
+    try:
+        with _suspend_manifest_write_lock(project_root):
+            yield
+    finally:
+        _write_startup_reservation(
+            reservation,
+            process_relative,
+            isolated=isolated,
+        )
 
 
 def _state_process_name(data: dict) -> str | None:
@@ -4683,6 +4818,30 @@ def _state_process_name(data: dict) -> str | None:
     if candidate.as_posix() != f".ft/process/{name}/process.yml":
         return None
     return name
+
+
+def _runtime_lock_owner_is_alive(lock: object) -> bool:
+    """Valida PID de runtime sem confundir um PID reciclado com o dono.
+
+    Reservas de versões anteriores não têm ``pid_start``; para elas mantemos
+    o comportamento conservador de considerar um PID vivo como proprietário.
+    """
+    if not isinstance(lock, dict):
+        return False
+    try:
+        pid = int(lock.get("pid"))
+    except (TypeError, ValueError):
+        return False
+    if not _is_pid_alive(pid):
+        return False
+    recorded = lock.get("pid_start")
+    if recorded in (None, ""):
+        return True
+
+    from ft.engine.state import process_start_identity
+
+    current = process_start_identity(pid)
+    return current is not None and str(recorded) == current
 
 
 def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
@@ -4724,6 +4883,26 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
                 isolated=isolated,
             ))
             return
+        if (
+            loaded.get("node_status") == "preparing"
+            or loaded.get("current_node") == "__preparing__"
+        ):
+            raw_lock = loaded.get("_lock", {})
+            raw_pid = raw_lock.get("pid") if isinstance(raw_lock, dict) else None
+            try:
+                parsed_pid = int(raw_pid)
+            except (TypeError, ValueError):
+                parsed_pid = 0
+            if parsed_pid <= 0:
+                records.append(_ActiveRunRecord(
+                    description=f"{cycle_name} (reserva de state inválida)",
+                    state_path=state_path,
+                    process_name=None,
+                    isolated=isolated,
+                ))
+                return
+            if not _runtime_lock_owner_is_alive(raw_lock):
+                return
         if not _is_active_state_data(loaded):
             return
         node = loaded.get("current_node", "?")
@@ -4764,7 +4943,7 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
                     process_name=None,
                     isolated=False,
                 ))
-            elif _is_pid_alive(parsed_pid):
+            elif _runtime_lock_owner_is_alive(raw_lock):
                 records.append(_ActiveRunRecord(
                     description="modo continuous (preparando state)",
                     state_path=startup,
@@ -4779,6 +4958,44 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
                 isolated=False,
             ))
 
+    startup_home = paths.startup_reservations_home(project_root)
+    if startup_home.is_dir():
+        for reservation in sorted(startup_home.glob("*.yml")):
+            try:
+                payload = yaml.safe_load(
+                    reservation.read_text(encoding="utf-8")
+                ) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                payload = None
+            if not isinstance(payload, dict):
+                records.append(_ActiveRunRecord(
+                    description="startup de ciclo (reserva inválida)",
+                    state_path=reservation,
+                    process_name=None,
+                    isolated=True,
+                ))
+                continue
+            raw_lock = payload.get("_lock", {})
+            raw_pid = raw_lock.get("pid") if isinstance(raw_lock, dict) else None
+            try:
+                parsed_pid = int(raw_pid)
+            except (TypeError, ValueError):
+                parsed_pid = 0
+            if parsed_pid <= 0 or payload.get("isolated") is not True:
+                records.append(_ActiveRunRecord(
+                    description="startup de ciclo (reserva inválida)",
+                    state_path=reservation,
+                    process_name=None,
+                    isolated=True,
+                ))
+            elif _runtime_lock_owner_is_alive(raw_lock):
+                records.append(_ActiveRunRecord(
+                    description=f"startup de ciclo (PID {parsed_pid} — preparando snapshot)",
+                    state_path=reservation,
+                    process_name=_state_process_name(payload),
+                    isolated=True,
+                ))
+
     wt_home = paths.worktrees_home(project_root)
     if wt_home.is_dir():
         candidates = sorted(
@@ -4789,12 +5006,11 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
         for wt in candidates:
             state_path = wt / "state" / "engine_state.yml"
             if not state_path.exists():
-                records.append(_ActiveRunRecord(
-                    description=f"{wt.name} (preparando state)",
-                    state_path=state_path,
-                    process_name=None,
-                    isolated=True,
-                ))
+                # O startup atual sempre publica uma reserva antes de criar a
+                # worktree. Sem state e sem reserva viva, este diretório é um
+                # órfão inerte (por exemplo, SIGKILL após `git worktree add`),
+                # não um runtime capaz de observar updates no checkout raiz.
+                continue
             else:
                 collect(
                     state_path,
@@ -4821,10 +5037,14 @@ def _is_pid_alive(pid: int) -> bool:
 
 def _select_run_process(args, project_root: Path) -> tuple[Path, Path | None]:
     """Resolve/materializa o processo sem atravessar um update concorrente."""
-    from ft.engine.layout import _manifest_write_lock
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
 
     root = project_root.resolve()
     with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
         process_override = (
             Path(args.process) if getattr(args, "process", None) else None
         )
@@ -4893,17 +5113,25 @@ def _prepare_run_runtime(
 ) -> _PreparedRunRuntime:
     """Cria o snapshot e reserva o runtime na mesma transação do update.
 
-    O lock termina assim que há uma presença detectável (state preparando ou
-    sentinel continuous). Hooks, triage, health-check e LLM ficam de fora para
-    não bloquear o progresso de processos disjuntos.
+    A reserva torna o startup visível antes de soltar o flock. Hooks Git e
+    criação de worktree usam uma reserva exclusiva curta; após o handoff para
+    state, triage, health-check e LLM não bloqueiam processos disjuntos.
     """
-    from ft.engine.git_ops import commit_knowledge, verify_hooks_from_process_meta
-    from ft.engine.layout import _manifest_write_lock
+    from ft.engine.git_ops import (
+        commit_staged_knowledge,
+        stage_knowledge,
+        verify_hooks_from_process_meta,
+    )
+    from ft.engine.layout import (
+        _assert_no_exclusive_startup,
+        _manifest_write_lock,
+    )
 
     root = source_project_root.resolve()
     requires_git_worktree = bool(getattr(args, "_require_git_worktree", False))
 
     with _manifest_write_lock(root):
+        _assert_no_exclusive_startup(root)
         # A seleção preliminar pode ter ocorrido antes de um update. Reabra o
         # path já sob o lock para que graph, scripts e snapshot venham todos da
         # mesma versão do bundle.
@@ -4964,27 +5192,85 @@ def _prepare_run_runtime(
             print(_ui.dim("Escolha outro --cycle-name ou remova o ciclo existente."))
             sys.exit(1)
 
-        _cleanup_pristine_runs(root)
-        if not getattr(args, "force", False):
-            active = _check_active_run(root)
-            if active:
-                from ft.engine import ui as _ui
-
-                print(_ui.fail(f"Já existe um ciclo ativo: {active}"))
-                print(_ui.warn("Use: ft continue"))
-                print(_ui.dim(
-                    "Para forçar novo ciclo mesmo assim: ft run . --force"
-                ))
-                sys.exit(1)
-
-        # commit_knowledge stageia .ft/process/. Mantê-lo junto da criação da
-        # reserva impede que um apply concorrente exponha uma deleção transitória
-        # ao Git entre o backup e a recópia do bundle.
-        ok, detail = commit_knowledge(
-            str(root),
-            label="pré-run snapshot",
-            verify_hooks=verify_hooks_from_process_meta(process_payload),
+        # Antes de qualquer cleanup destrutivo, procure uma reserva de startup.
+        # Outro processo pode estar com o flock temporariamente suspenso dentro
+        # de `git worktree add`; tocar naquele diretório quebraria a criação.
+        active_records = _active_run_records(root)
+        startup_home = paths.startup_reservations_home(root).resolve()
+        unforceable = next(
+            (
+                record
+                for record in active_records
+                if not record.isolated
+                or record.state_path.parent.resolve() == startup_home
+            ),
+            None,
         )
+        if unforceable is not None:
+            raise RuntimeError(
+                "já existe um startup/runtime continuous que compartilha este "
+                f"checkout: {unforceable.description}; --force não é seguro"
+            )
+
+        _cleanup_pristine_runs(root)
+        active_records = _active_run_records(root)
+        if active_records and not getattr(args, "force", False):
+            from ft.engine import ui as _ui
+
+            active = active_records[0].description
+            print(_ui.fail(f"Já existe um ciclo ativo: {active}"))
+            print(_ui.warn("Use: ft continue"))
+            print(_ui.dim(
+                "Para forçar novo ciclo mesmo assim: ft run . --force"
+            ))
+            sys.exit(1)
+
+        if explicit_cycle_name and getattr(args, "worktree", None):
+            from ft.engine import ui as _ui
+
+            print(_ui.fail("Use --cycle-name ou --worktree, não ambos."))
+            sys.exit(1)
+
+        run_mode = _resolve_run_mode(root, selected)
+        if requires_git_worktree and run_mode != "isolated":
+            raise RuntimeError("ft feature exige run_mode: isolated")
+
+        manifest_engine, manifest_model, manifest_effort = manifest_llm_defaults(root)
+        effective_engine = (
+            resolve_llm_engine(args)
+            or manifest_engine
+            or inherited_engine
+            or os.environ.get("FT_LLM_ENGINE", "").strip().lower()
+            or "claude"
+        )
+
+        prework_reservation = (
+            paths.continuous_startup_path(root)
+            if run_mode == "continuous"
+            else paths.startup_reservation_path(root)
+        )
+        _write_startup_reservation(
+            prework_reservation,
+            process_relative,
+            isolated=run_mode != "continuous",
+        )
+
+        # Capture o índice sob o lock, mas execute hooks com o flock suspenso.
+        # Como hooks podem ler todo o checkout, a reserva fica sem identidade
+        # de processo apenas nessa janela e bloqueia qualquer update mutante.
+        ok, staged, detail = stage_knowledge(str(root))
+        if staged:
+            with _suspend_startup_exclusively(
+                root,
+                prework_reservation,
+                process_relative,
+                isolated=run_mode != "continuous",
+            ):
+                ok, detail = commit_staged_knowledge(
+                    str(root),
+                    label="pré-run snapshot",
+                    verify_hooks=verify_hooks_from_process_meta(process_payload),
+                )
         print(f"  {detail}")
         if requires_git_worktree and not ok:
             raise RuntimeError(detail)
@@ -5021,25 +5307,6 @@ def _prepare_run_runtime(
                     + dirty.stdout.strip()
                 )
 
-        if explicit_cycle_name and getattr(args, "worktree", None):
-            from ft.engine import ui as _ui
-
-            print(_ui.fail("Use --cycle-name ou --worktree, não ambos."))
-            sys.exit(1)
-
-        run_mode = _resolve_run_mode(root, selected)
-        if requires_git_worktree and run_mode != "isolated":
-            raise RuntimeError("ft feature exige run_mode: isolated")
-
-        manifest_engine, manifest_model, manifest_effort = manifest_llm_defaults(root)
-        effective_engine = (
-            resolve_llm_engine(args)
-            or manifest_engine
-            or inherited_engine
-            or os.environ.get("FT_LLM_ENGINE", "").strip().lower()
-            or "claude"
-        )
-
         project_root = root
         worktree_name = getattr(args, "worktree", None)
         outer_worktree_used = False
@@ -5049,7 +5316,13 @@ def _prepare_run_runtime(
                 if isinstance(worktree_name, str) and worktree_name != "True"
                 else f"cycle-{_next_cycle_num(project_root):02d}"
             )
-            project_root = _setup_worktree(project_root, wt_name)
+            with _suspend_startup_exclusively(
+                root,
+                prework_reservation,
+                process_relative,
+                isolated=run_mode != "continuous",
+            ):
+                project_root = _setup_worktree_locked(project_root, wt_name)
             outer_worktree_used = True
 
         continuous_state_existed = False
@@ -5057,10 +5330,6 @@ def _prepare_run_runtime(
             state_path = paths.continuous_state_path(project_root)
             continuous_state_existed = state_path.exists()
             state_path.parent.mkdir(parents=True, exist_ok=True)
-            _write_startup_reservation(
-                paths.continuous_startup_path(root),
-                process_relative,
-            )
             print("  RunMode: continuous")
         else:
             git_ok = (project_root / ".git").exists()
@@ -5079,7 +5348,13 @@ def _prepare_run_runtime(
             elif git_ok and has_commits:
                 next_num = _next_cycle_num(project_root)
                 wt_name = explicit_cycle_name or f"cycle-{next_num:02d}"
-                run_dir = _setup_worktree(project_root, wt_name)
+                with _suspend_startup_exclusively(
+                    root,
+                    prework_reservation,
+                    process_relative,
+                    isolated=True,
+                ):
+                    run_dir = _setup_worktree_locked(project_root, wt_name)
                 _record_cycle_ledger(project_root, wt_name)
             else:
                 if getattr(args, "parallel", False):
@@ -5113,6 +5388,7 @@ def _prepare_run_runtime(
             state_path = run_dir / "state" / "engine_state.yml"
             state_path.parent.mkdir(parents=True, exist_ok=True)
             _write_startup_reservation(state_path, process_relative)
+            _release_startup_reservation(root, prework_reservation)
             project_root = run_dir
             print(f"  RunMode: isolated → {run_dir}")
 

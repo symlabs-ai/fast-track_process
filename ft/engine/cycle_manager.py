@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from ft.engine.state import StateManager, _atomic_write_state
+
 
 class CycleManager:
     """Gerencia avanço de ciclos no arquivo de estado."""
@@ -22,39 +24,44 @@ class CycleManager:
         return {}
 
     def _save_raw(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        from ft.engine.layout import _manifest_write_lock
+
+        with _manifest_write_lock(self.path):
+            _atomic_write_state(self.path, data)
 
     def current_cycle(self) -> str:
         return self._load_raw().get("current_cycle", "cycle-01")
 
     def advance_cycle(self, first_node: str | None = None) -> None:
         """Avança para o próximo ciclo, resetando steps_completed."""
-        data = self._load_raw()
-        current = data.get("current_cycle", "cycle-01")
+        from ft.engine.layout import _manifest_write_lock
 
-        # Acumula histórico
-        history = data.get("cycle_history", [])
-        if current not in history:
-            history.append(current)
+        with _manifest_write_lock(self.path):
+            data = self._load_raw()
+            StateManager(self.path)._check_lock(data)
+            current = data.get("current_cycle", "cycle-01")
 
-        # Incrementa número do ciclo
-        num = int(current.split("-")[1])
-        new_cycle = f"cycle-{num + 1:02d}"
+            # Acumula histórico
+            history = data.get("cycle_history", [])
+            if current not in history:
+                history.append(current)
 
-        data["current_cycle"] = new_cycle
-        data["cycle_history"] = history
+            # Incrementa número do ciclo
+            num = int(current.split("-")[1])
+            new_cycle = f"cycle-{num + 1:02d}"
 
-        # Reset steps_completed
-        metrics = data.get("metrics", {})
-        metrics["steps_completed"] = 0
-        data["metrics"] = metrics
+            data["current_cycle"] = new_cycle
+            data["cycle_history"] = history
 
-        if first_node is not None:
-            data["current_node"] = first_node
+            # Reset steps_completed
+            metrics = data.get("metrics", {})
+            metrics["steps_completed"] = 0
+            data["metrics"] = metrics
 
-        self._save_raw(data)
+            if first_node is not None:
+                data["current_node"] = first_node
+
+            _atomic_write_state(self.path, data)
 
     def cycle_history(self) -> list[str]:
         return self._load_raw().get("cycle_history", [])

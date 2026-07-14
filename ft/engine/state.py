@@ -6,12 +6,129 @@ Unico escritor do estado. LLM nunca toca.
 from __future__ import annotations
 
 import os
+import stat
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
+
+
+def process_start_identity(pid: int) -> str | None:
+    """Identidade de nascimento do PID, sem confundir reutilização numérica."""
+    try:
+        raw = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8")
+        _prefix, separator, suffix = raw.rpartition(")")
+        fields = suffix.strip().split() if separator else []
+        # Depois de ``comm)``, índice 0 é o campo 3; starttime é o campo 22.
+        if len(fields) > 19:
+            return fields[19]
+    except (OSError, ValueError):
+        pass
+
+    # BSD/macOS não expõem /proc por padrão. ``lstart`` é estável durante a
+    # vida do processo e fornece a mesma proteção contra reciclagem de PID.
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(int(pid))],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    started = " ".join(result.stdout.split()) if result.returncode == 0 else ""
+    return f"ps:{started}" if started else None
+
+
+def lock_owner_is_alive(
+    lock: object,
+    *,
+    require_identity: bool = False,
+) -> bool:
+    """Valida PID e, para locks novos, a identidade de nascimento."""
+    if not isinstance(lock, dict):
+        return False
+    try:
+        pid = int(lock.get("pid"))
+    except (TypeError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return False
+    recorded = lock.get("pid_start")
+    if recorded in (None, ""):
+        return not require_identity
+    current = process_start_identity(pid)
+    return current is not None and str(recorded) == current
+
+
+def _atomic_write_state(path: str | Path, data: dict[str, Any]) -> None:
+    """Persiste um payload YAML por replace atômico.
+
+    O chamador deve manter ``_manifest_write_lock`` durante toda a transação
+    read-modify-write. A função fica no módulo de estado para que escritores
+    auxiliares, como ``CycleManager``, usem exatamente a mesma primitiva sem
+    reabrir o arquivo em modo truncante.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = yaml.dump(
+        data,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
+    temporary_path: Path | None = None
+    try:
+        fd, raw_temporary_path = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=target.parent,
+        )
+        temporary_path = Path(raw_temporary_path)
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as temporary:
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def mutate_state_payload(
+    path: str | Path,
+    mutation: Callable[[dict[str, Any]], None],
+) -> dict[str, Any] | None:
+    """Aplica read-modify-write atômico ao payload completo de um state.
+
+    Retorna o payload final, ou ``None`` quando o arquivo não existe. Campos
+    desconhecidos são preservados para permitir interoperabilidade entre
+    versões do engine.
+    """
+    from ft.engine.layout import _manifest_write_lock
+
+    target = Path(path)
+    with _manifest_write_lock(target):
+        if not target.exists():
+            return None
+        try:
+            data = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise RuntimeError(f"State invalido em {target}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"State invalido em {target}")
+        mutation(data)
+        _atomic_write_state(target, data)
+        return data
 
 
 @dataclass
@@ -67,6 +184,8 @@ class StateManager:
     def __init__(self, state_path: str | Path):
         self.path = Path(state_path)
         self._state: EngineState | None = None
+        self._previous_claim_lock: dict[str, Any] | None = None
+        self._claim_performed = False
 
     def _is_pid_alive(self, pid: int) -> bool:
         """Verifica se um PID ainda esta em execucao."""
@@ -82,7 +201,7 @@ class StateManager:
         if not lock or not isinstance(lock, dict):
             return
         pid = lock.get("pid")
-        if pid and pid != os.getpid() and self._is_pid_alive(int(pid)):
+        if pid and pid != os.getpid() and lock_owner_is_alive(lock):
             raise StateLockError(
                 f"ft engine ja esta rodando (PID {pid}). "
                 "Aguarde o termino ou delete engine_state.yml para resetar."
@@ -141,10 +260,36 @@ class StateManager:
         self._state._lock = {
             "owner": "ft_engine",
             "pid": os.getpid(),
+            "pid_start": process_start_identity(os.getpid()),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
         self._write_raw(self._serialize_state())
+
+    def claim(self) -> EngineState:
+        """Lê, valida e assume a execução em uma única transação.
+
+        Dois ``ft continue`` simultâneos não podem ambos observar ``_lock``
+        livre e sobrescrever o PID um do outro depois.
+        """
+        from ft.engine.layout import _manifest_write_lock
+
+        with _manifest_write_lock(self.path):
+            state = self.load(check_lock=True)
+            self._claim_performed = True
+            self._previous_claim_lock = (
+                dict(state._lock) if isinstance(state._lock, dict) else None
+            )
+            state._lock = {
+                "owner": "ft_engine",
+                "pid": os.getpid(),
+                "pid_start": process_start_identity(os.getpid()),
+                "timestamp": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                ),
+            }
+            self._write_raw_locked(self._serialize_state())
+            return state
 
     def release_lock(self) -> None:
         """Libera o lock persistido sem alterar os demais campos do estado.
@@ -153,18 +298,21 @@ class StateManager:
         escrita usam o payload do disco para preservar inclusive campos que
         uma versão mais nova do engine possa ter acrescentado.
         """
-        if not self.path.exists():
-            if self._state is not None:
-                self._state._lock = None
-            return
+        from ft.engine.layout import _manifest_write_lock
 
-        with open(self.path) as f:
-            raw = yaml.safe_load(f) or {}
-        if not isinstance(raw, dict):
-            raise RuntimeError(f"State invalido em {self.path}")
-        self._check_lock(raw)
-        raw["_lock"] = None
-        self._write_raw(raw)
+        with _manifest_write_lock(self.path):
+            if not self.path.exists():
+                if self._state is not None:
+                    self._state._lock = None
+                return
+
+            with open(self.path, encoding="utf-8") as state_file:
+                raw = yaml.safe_load(state_file) or {}
+            if not isinstance(raw, dict):
+                raise RuntimeError(f"State invalido em {self.path}")
+            self._check_lock(raw)
+            raw["_lock"] = None
+            self._write_raw_locked(raw)
         if self._state is not None:
             self._state._lock = None
 
@@ -208,12 +356,15 @@ class StateManager:
         }
 
     def _write_raw(self, data: dict[str, Any]) -> None:
-        """Persiste um payload de estado já serializado."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "w") as f:
-            yaml.dump(
-                data, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-            )
+        """Serializa state com updates de processo do mesmo projeto."""
+        from ft.engine.layout import _manifest_write_lock
+
+        with _manifest_write_lock(self.path):
+            self._write_raw_locked(data)
+
+    def _write_raw_locked(self, data: dict[str, Any]) -> None:
+        """Persiste state por replace atômico; leitores nunca veem truncamento."""
+        _atomic_write_state(self.path, data)
 
     @property
     def state(self) -> EngineState:

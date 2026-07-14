@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 
+import pytest
 import yaml
 
 from ft.cli.main import available_templates
@@ -242,6 +243,20 @@ def _full(root: Path) -> None:
     _green(root)
     result = _run_validator(root, "full")
     assert result.returncode == 0, result.stderr
+
+
+def _prepare_reconcile(root: Path, baseline_changelog: str) -> None:
+    _write(root, "CHANGELOG.md", baseline_changelog)
+    _git(root, "add", "CHANGELOG.md")
+    _git(root, "commit", "-qm", "chore: changelog layout")
+    _full(root)
+    _write(root, "docs/PROJECT_BACKLOG.md", RECONCILED_BACKLOG)
+    _write(root, "docs/FEATURES.md", RECONCILED_FEATURES)
+    _write(
+        root,
+        "docs/bug-result.md",
+        "# Resultado\n\nPB-002 atualiza FEAT-001 com evidência RED → GREEN.\n",
+    )
 
 
 def test_bug_catalog_entrypoint_and_exact_graph_contract() -> None:
@@ -482,3 +497,184 @@ def test_bug_reconcile_requires_bug_entry_and_forbids_new_feature(
 
     assert new_feature.returncode == 1
     assert "FEAT" in new_feature.stderr
+
+
+def test_bug_reconcile_accepts_fixed_heading_and_blank_line_insertions(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    baseline_changelog = (
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "### Evoluído\n\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n\n"
+        "## 1.0.0\n\n"
+        "### Corrigido\n\n"
+        "- correção histórica.\n"
+    )
+    _prepare_reconcile(root, baseline_changelog)
+    _write(
+        root,
+        "CHANGELOG.md",
+        "# Changelog\n\n"
+        "## Unreleased\n\n\n"
+        "### Corrigido\n\n"
+        "- #BUG PB-002 / FEAT-001 — corrige a operação de soma.\n\n"
+        "### Evoluído\n\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n\n"
+        "## 1.0.0\n\n"
+        "### Corrigido\n\n"
+        "- correção histórica.\n",
+    )
+
+    reconciled = _run_validator(root, "reconcile")
+
+    assert reconciled.returncode == 0, reconciled.stderr
+
+
+@pytest.mark.parametrize(
+    "current_changelog",
+    [
+        (
+            "# Changelog\n\n## Unreleased\n\n### Evoluído\n\n"
+            "- #BUG PB-001 / FEAT-001 — correção anterior.\n\n"
+            "## 1.0.0\n\n### Alterado\n\n"
+            "- #BUG PB-002 / FEAT-001 — corrige a soma.\n"
+            "- item histórico.\n"
+        ),
+        (
+            "# Changelog\n\n## Unreleased\n\n"
+            "- #BUG PB-002 / FEAT-001 — corrige a soma.\n\n"
+            "### Evoluído\n\n"
+            "- #BUG PB-001 / FEAT-001 — correção anterior.\n\n"
+            "## 1.0.0\n\n### Corrigido\n\n### Alterado\n\n"
+            "- item histórico.\n"
+        ),
+    ],
+    ids=("entry-outside-unreleased", "heading-outside-unreleased"),
+)
+def test_bug_reconcile_requires_new_changelog_content_in_unreleased(
+    tmp_path: Path,
+    current_changelog: str,
+) -> None:
+    root = _project(tmp_path)
+    baseline_changelog = (
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "### Evoluído\n\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n\n"
+        "## 1.0.0\n\n"
+        "### Alterado\n\n"
+        "- item histórico.\n"
+    )
+    _prepare_reconcile(root, baseline_changelog)
+    _write(root, "CHANGELOG.md", current_changelog)
+
+    rejected = _run_validator(root, "reconcile")
+
+    assert rejected.returncode == 1
+    assert "Unreleased" in rejected.stderr
+
+
+def test_bug_reconcile_reuses_existing_unreleased_heading(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    baseline_changelog = (
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "### Corrigido\n\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n"
+    )
+    _prepare_reconcile(root, baseline_changelog)
+    _write(
+        root,
+        "CHANGELOG.md",
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "### Corrigido\n\n"
+        "- #BUG PB-002 / FEAT-001 — corrige a soma.\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n",
+    )
+
+    reconciled = _run_validator(root, "reconcile")
+
+    assert reconciled.returncode == 0, reconciled.stderr
+
+
+@pytest.mark.parametrize(
+    "current_changelog",
+    [
+        (
+            "# Changelog\n\n## Unreleased\n\n### Corrigido\n\n"
+            "- #BUG PB-002 / FEAT-001 — corrige a soma.\n\n"
+            "### Evoluído (editado)\n\n"
+            "- #BUG PB-001 / FEAT-001 — correção anterior.\n"
+        ),
+        (
+            "# Changelog\n\n## Unreleased\n\n### Corrigido\n\n"
+            "- #BUG PB-002 / FEAT-001 — corrige a soma.\n\n"
+            "### Evoluído\n\n"
+        ),
+        (
+            "# Changelog\n\n## Unreleased\n\n### Corrigido\n\n"
+            "- #BUG PB-002 / FEAT-001 — corrige a soma.\n"
+            "Nota adicional não permitida.\n\n"
+            "### Evoluído\n\n"
+            "- #BUG PB-001 / FEAT-001 — correção anterior.\n"
+        ),
+        (
+            "# Changelog\n\n## Unreleased\n\n### Corrigido\n\n### Fixed\n\n"
+            "- #BUG PB-002 / FEAT-001 — corrige a soma.\n\n"
+            "### Evoluído\n\n"
+            "- #BUG PB-001 / FEAT-001 — correção anterior.\n"
+        ),
+    ],
+    ids=("edited-history", "removed-history", "extra-text", "two-headings"),
+)
+def test_bug_reconcile_rejects_history_changes_and_extra_nonempty_text(
+    tmp_path: Path,
+    current_changelog: str,
+) -> None:
+    root = _project(tmp_path)
+    baseline_changelog = (
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "### Evoluído\n\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n"
+    )
+    _prepare_reconcile(root, baseline_changelog)
+    _write(root, "CHANGELOG.md", current_changelog)
+
+    rejected = _run_validator(root, "reconcile")
+
+    assert rejected.returncode == 1
+    assert "CHANGELOG.md" in rejected.stderr
+
+
+def test_bug_reconcile_does_not_add_heading_when_fixed_section_exists(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    baseline_changelog = (
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "### Corrigido\n\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n"
+    )
+    _prepare_reconcile(root, baseline_changelog)
+    _write(
+        root,
+        "CHANGELOG.md",
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "### Fixed\n\n"
+        "- #BUG PB-002 / FEAT-001 — corrige a soma.\n\n"
+        "### Corrigido\n\n"
+        "- #BUG PB-001 / FEAT-001 — correção anterior.\n",
+    )
+
+    rejected = _run_validator(root, "reconcile")
+
+    assert rejected.returncode == 1
+    assert "já possuía heading" in rejected.stderr

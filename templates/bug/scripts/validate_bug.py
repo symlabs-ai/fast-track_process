@@ -277,6 +277,112 @@ def _bug_entries(text: str, tag: str) -> list[str]:
     return [match.group(0).strip() for match in pattern.finditer(text)]
 
 
+_BUG_CHANGELOG_HEADINGS = {"### Corrigido", "### Fixed"}
+_UNRELEASED_HEADING = re.compile(
+    r"^[ \t]*##[ \t]+(?:unreleased|\[unreleased\])[ \t]*(?:#+[ \t]*)?$",
+    re.IGNORECASE,
+)
+_LEVEL_TWO_HEADING = re.compile(r"^[ \t]*##(?:[ \t]+|$)")
+
+
+def _unreleased_bounds(lines: list[str]) -> tuple[int, int] | None:
+    """Return the first Unreleased section without including its heading."""
+    for start, line in enumerate(lines):
+        if not _UNRELEASED_HEADING.fullmatch(line):
+            continue
+        end = next(
+            (
+                index
+                for index in range(start + 1, len(lines))
+                if _LEVEL_TWO_HEADING.match(lines[index])
+            ),
+            len(lines),
+        )
+        return start + 1, end
+    return None
+
+
+def _validate_changelog_insertions(
+    original: str,
+    current: str,
+    new_bug_entry: str,
+) -> None:
+    """Allow a focal changelog insertion without permitting history rewrites."""
+    original_lines = original.splitlines()
+    current_lines = current.splitlines()
+    inserted_lines: list[tuple[int, str]] = []
+    original_index = 0
+
+    for current_index, line in enumerate(current_lines):
+        if (
+            original_index < len(original_lines)
+            and line == original_lines[original_index]
+        ):
+            original_index += 1
+        else:
+            inserted_lines.append((current_index, line))
+
+    if original_index != len(original_lines):
+        raise BugValidationError(
+            "CHANGELOG.md removeu, editou ou reordenou conteúdo histórico"
+        )
+
+    inserted_text = [
+        line.strip() for _index, line in inserted_lines if line.strip()
+    ]
+    if inserted_text.count(new_bug_entry) != 1:
+        raise BugValidationError(
+            "CHANGELOG.md deve inserir exatamente a nova linha #BUG"
+        )
+
+    headings = [
+        line for line in inserted_text if line in _BUG_CHANGELOG_HEADINGS
+    ]
+    unexpected = [
+        line
+        for line in inserted_text
+        if line != new_bug_entry and line not in _BUG_CHANGELOG_HEADINGS
+    ]
+    if unexpected:
+        raise BugValidationError(
+            "CHANGELOG.md contém texto novo além da entrada #BUG e do heading permitido"
+        )
+    if len(headings) > 1:
+        raise BugValidationError(
+            "CHANGELOG.md pode inserir no máximo um heading ### Corrigido/### Fixed"
+        )
+
+    original_unreleased = _unreleased_bounds(original_lines)
+    current_unreleased = _unreleased_bounds(current_lines)
+    if original_unreleased is not None and current_unreleased is not None:
+        start, end = current_unreleased
+        misplaced = [
+            line.strip() or "<linha em branco>"
+            for index, line in inserted_lines
+            if not start <= index < end
+        ]
+        if misplaced:
+            raise BugValidationError(
+                "CHANGELOG.md deve limitar inserções à seção Unreleased"
+            )
+
+        original_start, original_end = original_unreleased
+        original_heading_lines = original_lines[original_start:original_end]
+    else:
+        # Changelogs sem uma seção Unreleased continuam suportados. Nesse
+        # layout flat, o arquivo inteiro é a única seção disponível.
+        original_heading_lines = original_lines
+    original_headings = {
+        line.strip()
+        for line in original_heading_lines
+        if line.strip() in _BUG_CHANGELOG_HEADINGS
+    }
+    if headings and original_headings:
+        raise BugValidationError(
+            "CHANGELOG.md já possuía heading ### Corrigido/### Fixed"
+        )
+
+
 def _write_baseline(root: Path) -> None:
     target = root / BASELINE_PATH
     if target.exists():
@@ -1081,17 +1187,11 @@ def validate_reconcile(root: Path) -> None:
     )
     if not isinstance(original_changelog, str):
         raise BugValidationError("baseline não preservou CHANGELOG.md")
-    removed = False
-    remaining: list[str] = []
-    for line in changelog.splitlines(keepends=True):
-        if not removed and line.strip() == new_entries[0]:
-            removed = True
-            continue
-        remaining.append(line)
-    if not removed or "".join(remaining) != original_changelog:
-        raise BugValidationError(
-            "CHANGELOG.md só pode inserir a nova linha #BUG, preservando o restante"
-        )
+    _validate_changelog_insertions(
+        original_changelog,
+        changelog,
+        new_entries[0],
+    )
     result = _read(root, RESULT_PATH)
     for required in (backlog_id, feature_id, "RED", "GREEN"):
         if required.upper() not in result.upper():

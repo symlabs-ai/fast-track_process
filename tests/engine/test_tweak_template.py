@@ -311,6 +311,37 @@ def test_tweak_implementation_accepts_one_small_documented_diff(tmp_path):
     assert receipt["count"] == 1
 
 
+def test_tweak_ignores_only_the_exact_engine_activity_log(tmp_path):
+    root = _project(tmp_path)
+    _preflight(root)
+    changed = ["project/button.css"]
+    _write(root, changed[0], ".save-button { color: blue; }\n")
+    engine_log = root / f"{root.name}_log.md"
+    engine_log.write_text("init\n", encoding="utf-8")
+    command = _run_focal(root, sys.executable, "-c", "pass")
+    engine_log.write_text("init\nimplementation pass\n", encoding="utf-8")
+    _report(root, changed, command)
+
+    result = _run_validator(root, "implementation")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_tweak_rejects_arbitrary_engine_lookalike_log(tmp_path):
+    root = _project(tmp_path)
+    _preflight(root)
+    changed = ["project/button.css"]
+    _write(root, changed[0], ".save-button { color: blue; }\n")
+    command = _run_focal(root, sys.executable, "-c", "pass")
+    _write(root, "attacker_log.md", "not engine runtime\n")
+    _report(root, changed, command)
+
+    result = _run_validator(root, "implementation")
+
+    assert result.returncode == 1
+    assert "attacker_log.md" in result.stderr
+
+
 def test_tweak_implementation_gate_runs_guard_then_one_quick_build(tmp_path):
     root = _project(tmp_path)
     _preflight(root)

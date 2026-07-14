@@ -556,7 +556,7 @@ def _working_tree_fingerprint(root: Path, base_commit: str) -> str:
         raise TweakValidationError("working tree amplo demais para validação focal")
     digest = hashlib.sha256()
     for status_code, relative in entries:
-        if _is_cycle_path(relative):
+        if _is_cycle_path(root, relative):
             continue
         path = Path(relative)
         if path.is_absolute() or not path.parts or ".." in path.parts:
@@ -880,11 +880,17 @@ def _command_quick(root: Path) -> None:
     print("tweak quick build PASS")
 
 
-def _is_cycle_path(relative: str) -> bool:
+def _is_cycle_path(root: Path, relative: str) -> bool:
     try:
-        return Path(relative) in CYCLE_PATHS
+        path = Path(relative)
     except (OSError, ValueError):
         return False
+    if path in CYCLE_PATHS:
+        return True
+    # StepRunner's activity log is a runtime artifact consumed by `ft runs`,
+    # close/archive and duration reports. Ignore only its exact root-level
+    # filename; arbitrary `*_log.md` paths remain guarded product changes.
+    return len(path.parts) == 1 and path.name == f"{root.name}_log.md"
 
 
 def _forbidden_product_path(relative: str) -> str | None:
@@ -1079,7 +1085,7 @@ def _command_implementation(root: Path) -> None:
     changed: dict[str, str] = {}
     unexpected: list[str] = []
     for status_code, relative in entries:
-        if _is_cycle_path(relative):
+        if _is_cycle_path(root, relative):
             continue
         path = Path(relative)
         if (

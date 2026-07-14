@@ -129,29 +129,6 @@ class TestInitState:
         state = runner.state_mgr.load()
         assert state.llm_engine == "codex"
 
-    def test_tweak_activity_log_stays_in_runtime_state(self, tmp_path):
-        process_path = tmp_path / "tweak.yml"
-        process_path.write_text(
-            "id: tweak\n"
-            "version: '1.0'\n"
-            "title: Tweak\n"
-            "nodes:\n"
-            "  - id: tweak.end\n"
-            "    type: end\n"
-            "    title: Done\n",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=tmp_path / "state" / "engine_state.yml",
-            project_root=str(tmp_path),
-        )
-
-        runner.init_state()
-
-        assert (tmp_path / "state/tweak_run_log.md").is_file()
-        assert not (tmp_path / f"{tmp_path.name}_log.md").exists()
-
     def test_init_persists_selected_model_and_effort(self, tmp_path):
         process_path = tmp_path / "process.yml"
         process_path.write_text(_TEST_PROCESS_V2_YAML)

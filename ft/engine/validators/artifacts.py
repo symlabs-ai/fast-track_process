@@ -282,12 +282,39 @@ def _extract_ui_criteria(content: str) -> list[tuple[str, str]]:
     return criteria
 
 
+_REPORT_STATUS_MARKERS = (
+    "pass", "ok", "approved", "aprov", "atendid", "conforme",
+    "fail", "reprov", "nao atend", "pendente", "missing", "ausente",
+)
+
+_REPORT_STATUS_CELL_RE = re.compile(
+    r"^(pass|fail|ok\b|aprovad|reprovad|approved|conforme|atendid|nao atendid|"
+    r"pendente|ausente|missing)",
+    re.IGNORECASE,
+)
+
+
 def _criterion_report_line(report: str, code: str) -> str:
     canonical_code = _canonical_ui_criterion_code(code)
+    fallback = ""
+    preferred = ""
     for line in report.splitlines():
-        if canonical_code in _extract_criterion_codes(line):
-            return _normalize(line)
-    return ""
+        if canonical_code not in _extract_criterion_codes(line):
+            continue
+        normalized = _normalize(line)
+        if not fallback:
+            fallback = normalized
+        cells = [cell.strip() for cell in normalized.strip().strip("|").split("|")]
+        # Linha canônica do critério: a primeira célula é o próprio ID (linha
+        # de tabela ou "C10: ..."). Títulos de seção com faixas ("C10–C16") e
+        # menções cruzadas em outras linhas não devem sombrear a linha real.
+        if cells and _extract_criterion_codes(cells[0]) == {canonical_code}:
+            return normalized
+        if not preferred:
+            status_text = _criterion_report_status_text(normalized, code)
+            if any(marker in status_text for marker in _REPORT_STATUS_MARKERS):
+                preferred = normalized
+    return preferred or fallback
 
 
 def _canonical_ui_criterion_code(raw: str) -> str:
@@ -307,8 +334,15 @@ def _criterion_report_status_text(line: str, code: str) -> str:
     canonical_code = _canonical_ui_criterion_code(code)
     for index, cell in enumerate(cells):
         if canonical_code in _extract_criterion_codes(cell):
-            if index + 1 < len(cells):
-                return cells[index + 1]
+            rest = cells[index + 1:]
+            # A célula de status pode não ser a imediatamente seguinte ao ID
+            # (formato "| ID | descrição | PASS | evidência |"): usar a
+            # primeira célula que parece um veredito.
+            for candidate in rest:
+                if _REPORT_STATUS_CELL_RE.match(candidate):
+                    return candidate
+            if rest:
+                return rest[0]
             break
     return line
 

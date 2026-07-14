@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import os
 import re
 import subprocess
 import sys
@@ -460,6 +461,32 @@ def _cycle_state(root: Path, cycle_name: str) -> tuple[str, str]:
     return str(data.get("current_node") or "?"), str(data.get("node_status") or "?")
 
 
+def _cycle_delegation_is_orphaned(root: Path, cycle_name: str) -> bool:
+    """True se o state diz delegated/validating mas ninguém está dirigindo o ciclo.
+
+    O lock persistido registra o PID do runner. Worker morto no meio de uma
+    chamada LLM deixa o state em ``delegated`` com um lock de PID morto — sem
+    esta checagem o batch espera para sempre por um subprocesso que não existe.
+    Um PID vivo significa um driver externo legítimo (ex.: ft continue manual).
+    """
+    state_file = paths.worktrees_home(root) / cycle_name / "state" / "engine_state.yml"
+    try:
+        data = yaml.safe_load(state_file.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+    if str(data.get("node_status") or "") not in {"delegated", "validating"}:
+        return False
+    lock = data.get("_lock") or {}
+    pid = lock.get("pid") if isinstance(lock, dict) else None
+    if not pid:
+        return True
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, ProcessLookupError, ValueError):
+        return True
+    return False
+
+
 def _reconcile_external_idle_transition(
     root: Path,
     feature: fb.BatchFeature,
@@ -484,6 +511,11 @@ def _reconcile_external_idle_transition(
         "done": "done",
         "completed": "done",
     }.get(cycle_status)
+    if target is None and cycle_status in {"delegated", "validating"}:
+        # Delegação órfã (worker morto em voo, lock com PID morto): volta a
+        # setup para o loop respawnar ft continue, que recupera a delegação.
+        if _cycle_delegation_is_orphaned(root, feature.cycle_name):
+            target = "setup"
     if target is None or target == feature.status:
         return False
 

@@ -61,6 +61,10 @@ Num produto FT já inicializado e commitado:
 ```bash
 ft feature "Adicionar busca por telefone" --template feature --claude
 # ou: ft feature --input demanda.md --template feature --codex
+# bug reproduzível com teste RED→GREEN:
+ft feature "Terminal duplica o comando ao ecoar input" --template bug --codex
+# bugs independentes em workers paralelos:
+ft feature --parallel "bug A" "bug B" --template bug --codex
 # mudança pequena e focal:
 ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
 ```
@@ -76,6 +80,13 @@ mesma worktree, mas executa somente preflight, uma implementação, um build
 curto e o aceite. Não faz discovery, review independente, E2E, reconciliação de
 backlog ou retries automáticos. Se o diff deixar de ser pequeno ou tocar áreas
 de risco, o ciclo bloqueia e orienta usar `--template feature`.
+
+Para defeitos reproduzíveis, `--template bug` acrescenta as salvaguardas que
+faltam ao tweak sem carregar o discovery completo de feature: teste de regressão
+RED antes da correção, mesmo comando GREEN, build/test completo uma vez, aceite
+e atualização do PB/FEAT existente com uma entrada `#BUG` no changelog. Em
+`--parallel`, ele usa o mesmo planner, waves, reservas e worktrees do comando
+`ft feature`; não há um segundo orquestrador.
 
 O ciclo roda em worktree externo:
 
@@ -94,6 +105,8 @@ descreve as capacidades efetivamente entregues.
 ```bash
 ft run .                       # iniciar ciclo
 ft feature "demanda" --template feature  # evoluir capacidade existente
+ft feature "defeito" --template bug  # corrigir com regressão RED→GREEN
+ft feature --parallel "bug A" "bug B" -t bug  # bugs em waves paralelas
 ft feature "ajuste pequeno" --template tweak  # alteração focal em poucos minutos
 ft run . --auto                # avançar automaticamente até human gate/MVP/BLOCK
 ft continue                    # avançar um node

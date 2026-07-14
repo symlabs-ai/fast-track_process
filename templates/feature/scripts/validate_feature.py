@@ -50,6 +50,15 @@ def _normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
 
 
+def _has_tagged_feature_changelog_entry(text: str, backlog: str) -> bool:
+    """Return whether this backlog has an entry led by the canonical tag."""
+    pattern = re.compile(
+        rf"(?m)^[ \t]*(?:[-*+][ \t]+)?#FEAT(?=[ \t]|$)"
+        rf"[^\r\n]*\b{re.escape(backlog)}\b"
+    )
+    return pattern.search(text) is not None
+
+
 def _read(root: Path, relative: str) -> str:
     path = root / relative
     if not path.is_file():
@@ -593,6 +602,11 @@ def validate_reconcile(root: Path) -> None:
         raise FeatureValidationError("CHANGELOG.md não foi atualizado neste ciclo")
     if backlog not in changelog.upper():
         raise FeatureValidationError(f"CHANGELOG.md não referencia {backlog}")
+    if not _has_tagged_feature_changelog_entry(changelog, backlog):
+        raise FeatureValidationError(
+            f"CHANGELOG.md: entrada de {backlog} deve usar `#FEAT` como "
+            "primeiro token (bullet opcional)"
+        )
 
     required_documentation = (
         "CHANGELOG.md",

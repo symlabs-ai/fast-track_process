@@ -69,6 +69,51 @@ class TestStructure:
 
         assert validate_process(graph).passed
 
+    def test_parallel_policy_accepts_declarative_limits(self):
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "next": "end"},
+                {"id": "end", "type": "end"},
+            ],
+            meta={
+                "id": "test",
+                "version": "1.0.0",
+                "parallel_policy": {
+                    "planner_timeout_seconds": 120,
+                    "rate_limit_respawns": 0,
+                },
+            },
+        )
+
+        assert validate_process(graph).passed
+
+    @pytest.mark.parametrize(
+        "parallel_policy",
+        [
+            "fast",
+            {"planner_timeout_seconds": 0},
+            {"planner_timeout_seconds": True},
+            {"rate_limit_respawns": -1},
+            {"rate_limit_respawns": False},
+        ],
+    )
+    def test_parallel_policy_rejects_invalid_limits(self, parallel_policy):
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "next": "end"},
+                {"id": "end", "type": "end"},
+            ],
+            meta={
+                "id": "test",
+                "version": "1.0.0",
+                "parallel_policy": parallel_policy,
+            },
+        )
+
+        report = validate_process(graph)
+
+        assert any("parallel_policy" in error.message for error in report.errors)
+
     @pytest.mark.parametrize(
         "backlog_policy",
         [
@@ -405,6 +450,7 @@ class TestRealProcess:
 
     @pytest.mark.parametrize("template", [
         "templates/base/process.yml",
+        "templates/bug/process.yml",
         "templates/feature/process.yml",
         "templates/tweak/process.yml",
         "templates/mvp-builder/process.yml",

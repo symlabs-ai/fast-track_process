@@ -18,6 +18,7 @@ Contratos com o resto do engine:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import fcntl
 import os
 import re
@@ -34,7 +35,6 @@ from ft.engine import paths
 POLL_SECONDS = 5
 RATE_LIMIT_RETRY_SECONDS = 60
 MAX_RATE_LIMIT_RESPAWNS = 3
-TWEAK_PLANNER_TIMEOUT_SECONDS = 120
 
 _TERMINAL = {"merged", "failed", "skipped"}
 _EXTERNAL_CLOSE_CANDIDATES = {"setup", "running", "gate", "blocked", "done"}
@@ -42,9 +42,92 @@ _GIT_OBJECT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _RESUMABLE_BATCH_STATUSES = {"planned", "running", "paused"}
 
 
+@dataclass(frozen=True)
+class ParallelPolicy:
+    """Process-owned limits for the shared ``ft feature --parallel`` runner."""
+
+    planner_timeout_seconds: int | None
+    rate_limit_respawns: int
+
+
+_DEFAULT_PARALLEL_POLICY = ParallelPolicy(
+    planner_timeout_seconds=None,
+    rate_limit_respawns=MAX_RATE_LIMIT_RESPAWNS,
+)
+_HISTORICAL_PARALLEL_POLICIES = {
+    # Preserve the contract of already-materialized tweak forks that predate
+    # the declarative policy. New templates must declare their own values.
+    "tweak": ParallelPolicy(planner_timeout_seconds=120, rate_limit_respawns=0),
+}
+
+
+def _parallel_policy_source(root: Path, template: str) -> Path | None:
+    """Prefer the project-owned process and fall back to its global template."""
+    local = paths.project_named_process_file(root, template)
+    if local.is_symlink():
+        raise ValueError(f"processo paralelo local não pode ser symlink: {local}")
+    if local.is_file():
+        return local
+
+    global_process = _cli().engine_root() / "templates" / template / "process.yml"
+    return global_process if global_process.is_file() else None
+
+
+def _parallel_policy(root: Path, template: str) -> ParallelPolicy:
+    """Load a template's declarative policy with backward-compatible defaults."""
+    defaults = _HISTORICAL_PARALLEL_POLICIES.get(
+        template, _DEFAULT_PARALLEL_POLICY
+    )
+    source = _parallel_policy_source(root, template)
+    if source is None:
+        return defaults
+    try:
+        payload = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"processo paralelo inválido em {source}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"processo paralelo inválido em {source}: raiz deve ser mapping")
+
+    raw_policy = payload.get("parallel_policy")
+    if raw_policy is None:
+        return defaults
+    if not isinstance(raw_policy, dict):
+        raise ValueError(
+            f"parallel_policy inválida em {source}: esperado mapping"
+        )
+
+    timeout = raw_policy.get(
+        "planner_timeout_seconds", defaults.planner_timeout_seconds
+    )
+    if timeout is not None and (
+        isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0
+    ):
+        raise ValueError(
+            f"parallel_policy.planner_timeout_seconds inválido em {source}: "
+            "esperado inteiro positivo ou null"
+        )
+
+    respawns = raw_policy.get("rate_limit_respawns", defaults.rate_limit_respawns)
+    if (
+        isinstance(respawns, bool)
+        or not isinstance(respawns, int)
+        or respawns < 0
+    ):
+        raise ValueError(
+            f"parallel_policy.rate_limit_respawns inválido em {source}: "
+            "esperado inteiro não negativo"
+        )
+    return ParallelPolicy(
+        planner_timeout_seconds=timeout,
+        rate_limit_respawns=respawns,
+    )
+
+
 def _rate_limit_respawn_limit(batch: fb.FeatureBatch) -> int:
-    """Tweak keeps its no-automatic-retry contract in parallel batches too."""
-    return 0 if batch.template == "tweak" else MAX_RATE_LIMIT_RESPAWNS
+    """Resolve the selected process policy without forking the orchestrator."""
+    return _parallel_policy(
+        Path(batch.project_root), batch.template
+    ).rate_limit_respawns
 
 
 def _cli():
@@ -290,7 +373,8 @@ def _print_plan(batch: fb.FeatureBatch) -> None:
     print()
     print(
         ui.header(
-            f"Plano do batch {batch.batch_id} — {len(batch.features)} features, {len(batch.waves)} wave(s)"
+            f"Plano do batch {batch.batch_id} — {len(batch.features)} demanda(s), "
+            f"{len(batch.waves)} wave(s)"
         )
     )
     for wave_index, wave in enumerate(batch.waves, start=1):
@@ -318,6 +402,7 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
     _preflight(root, args)
 
     template = cli.resolve_feature_template(getattr(args, "template", None))
+    parallel_policy = _parallel_policy(root, template)
 
     manifest_engine, manifest_model, manifest_effort = cli.manifest_llm_defaults(root)
     requested_engine = cli.resolve_llm_engine(args)
@@ -383,9 +468,7 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
             llm_engine=planner_engine,
             llm_model=planner_model,
             llm_effort=planner_effort,
-            llm_timeout_seconds=(
-                TWEAK_PLANNER_TIMEOUT_SECONDS if template == "tweak" else None
-            ),
+            llm_timeout_seconds=parallel_policy.planner_timeout_seconds,
         )
         fb.apply_plan(plan, features)
         waves = fb.compute_waves(features)
@@ -1103,6 +1186,14 @@ def _close_wave(batch: fb.FeatureBatch, args) -> bool:
         except SystemExit:
             pass
         worktree = paths.worktrees_home(root) / str(feature.cycle_name)
+        if worktree.exists() and _finish_canonical_merge(batch, feature):
+            # O primeiro close já arquivou/commitou o worker e deixou um merge
+            # válido em andamento. Após a reconciliação determinística, uma
+            # segunda chamada constata a branch integrada e faz apenas cleanup.
+            try:
+                cli.cmd_close(namespace)
+            except SystemExit:
+                pass
         if worktree.exists():
             feature.detail = "close/merge pendente — resolva e rode --resume"
             fb.save_batch(batch)
@@ -1121,6 +1212,115 @@ def _close_wave(batch: fb.FeatureBatch, args) -> bool:
         feature.status = "merged"
         feature.detail = ""
         fb.save_batch(batch)
+    return True
+
+
+def _finish_canonical_merge(
+    batch: fb.FeatureBatch,
+    feature: fb.BatchFeature,
+) -> bool:
+    """Finish a docs-only merge conflict without serializing product workers."""
+    from ft.engine.canonical_merge import resolve_canonical_conflicts
+    from ft.engine.git_ops import git_command_prefix, verify_hooks_from_process_meta
+    from ft.engine.validators.artifacts import (
+        features_catalog_valid,
+        implemented_backlog_covered_by_features,
+        project_backlog_valid,
+    )
+
+    root = Path(batch.project_root)
+    if not root.is_dir():
+        return False
+    try:
+        merge_head = subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    if merge_head.returncode != 0:
+        return False
+
+    resolution = resolve_canonical_conflicts(root)
+    if not resolution.success:
+        print(
+            _ui().warn(
+                f"{feature.feature_id}: conflito não reconciliável automaticamente — "
+                f"{resolution.error or 'motivo desconhecido'}"
+            )
+        )
+        return False
+
+    checks = (
+        project_backlog_valid(project_root=str(root), min_items=1),
+        features_catalog_valid(project_root=str(root)),
+        implemented_backlog_covered_by_features(project_root=str(root)),
+    )
+    failed = [detail for passed, detail in checks if not passed]
+    if failed:
+        print(
+            _ui().warn(
+                f"{feature.feature_id}: documentos reconciliados não passaram "
+                f"na validação — {'; '.join(failed)}"
+            )
+        )
+        return False
+
+    diff_check = subprocess.run(
+        ["git", "diff", "--cached", "--check"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if diff_check.returncode != 0:
+        print(
+            _ui().warn(
+                f"{feature.feature_id}: reconciliação contém whitespace inválido — "
+                f"{diff_check.stdout.strip() or diff_check.stderr.strip()}"
+            )
+        )
+        return False
+
+    process_path = _parallel_policy_source(root, batch.template)
+    process_meta: dict = {}
+    if process_path is not None:
+        try:
+            loaded = yaml.safe_load(process_path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                process_meta = loaded
+        except (OSError, yaml.YAMLError):
+            process_meta = {}
+    verify_hooks = verify_hooks_from_process_meta(process_meta)
+    command = [*git_command_prefix(verify_hooks), "commit"]
+    if not verify_hooks:
+        command.extend(["--no-verify", "--no-gpg-sign"])
+    command.append("--no-edit")
+    environment = os.environ.copy()
+    environment["GIT_EDITOR"] = "true"
+    committed = subprocess.run(
+        command,
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    if committed.returncode != 0:
+        print(
+            _ui().warn(
+                f"{feature.feature_id}: não foi possível concluir o merge "
+                f"reconciliado — {committed.stdout.strip() or committed.stderr.strip()}"
+            )
+        )
+        return False
+
+    print(
+        _ui().success(
+            f"{feature.feature_id}: conflito canônico reconciliado "
+            f"({', '.join(resolution.resolved)})"
+        )
+    )
     return True
 
 
@@ -1145,7 +1345,7 @@ def _execute_batch(batch: fb.FeatureBatch, args) -> None:
         print(
             ui.header(
                 f"Wave {batch.current_wave + 1}/{len(batch.waves)} — "
-                f"{len(pending)} feature(s), max {batch.max_parallel} em paralelo"
+                f"{len(pending)} ciclo(s), max {batch.max_parallel} em paralelo"
             )
         )
 

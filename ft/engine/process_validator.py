@@ -75,6 +75,36 @@ def validate_process(graph: ProcessGraph, validator_registry: dict[str, Any] | N
 
 def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
     """Verifica schema: tipos, executors, campos obrigatórios."""
+    parallel_policy = graph.meta.get("parallel_policy")
+    if parallel_policy is not None:
+        if not isinstance(parallel_policy, dict):
+            report.add_error(None, "parallel_policy deve ser um mapping")
+        else:
+            planner_timeout = parallel_policy.get("planner_timeout_seconds")
+            if "planner_timeout_seconds" in parallel_policy and (
+                planner_timeout is not None
+                and (
+                    isinstance(planner_timeout, bool)
+                    or not isinstance(planner_timeout, int)
+                    or planner_timeout <= 0
+                )
+            ):
+                report.add_error(
+                    None,
+                    "parallel_policy.planner_timeout_seconds deve ser inteiro "
+                    "positivo ou null",
+                )
+            rate_limit_respawns = parallel_policy.get("rate_limit_respawns")
+            if "rate_limit_respawns" in parallel_policy and (
+                isinstance(rate_limit_respawns, bool)
+                or not isinstance(rate_limit_respawns, int)
+                or rate_limit_respawns < 0
+            ):
+                report.add_error(
+                    None,
+                    "parallel_policy.rate_limit_respawns deve ser inteiro não negativo",
+                )
+
     commit_policy = graph.meta.get("commit_policy")
     if commit_policy is not None:
         if not isinstance(commit_policy, dict):

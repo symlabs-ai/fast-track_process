@@ -121,6 +121,24 @@ def _snapshot_baseline(root: Path) -> None:
     assert (root / "docs" / "feature-baseline.yml").is_file()
 
 
+def _prepare_reconcile_artifacts(root: Path) -> None:
+    _snapshot_baseline(root)
+    _clear_discovery(root)
+    _write(root, "docs/PROJECT_BACKLOG.md", BACKLOG.replace("in_progress", "accepted"))
+    _write(
+        root,
+        "docs/FEATURES.md",
+        FEATURES.replace("| PB-001 |", "| PB-001, PB-002 |"),
+    )
+    _write(
+        root,
+        "docs/feature-result.md",
+        "# Resultado PB-002\n\n| AC-01 | PASS |\n| AC-02 | PASS |\n\n"
+        "## Documentação atualizada\n\n"
+        "- CHANGELOG.md\n- docs/PROJECT_BACKLOG.md\n- docs/FEATURES.md\n",
+    )
+
+
 def _receipt_project(tmp_path: Path) -> Path:
     root = _base_project(tmp_path)
     scripts = root / ".ft" / "process" / "feature" / "scripts"
@@ -188,7 +206,8 @@ def _stop_owned_process(token: str) -> None:
 
 
 def test_feature_template_is_discoverable_and_pristine():
-    assert available_templates(entrypoint="feature") == ["feature", "tweak"]
+    assert available_templates(entrypoint="feature") == ["bug", "feature", "tweak"]
+    assert "bug" not in available_templates(entrypoint="init")
     assert "feature" not in available_templates()
     validate_template_is_pristine(TEMPLATE)
 
@@ -253,6 +272,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert "CHANGELOG.md" in nodes["feature.reconcile"].write_scope
 
     raw = PROCESS.read_text(encoding="utf-8")
+    assert "começar com `#FEAT` como primeiro token" in raw
     process_payload = yaml.safe_load(raw)
     raw_nodes = {node["id"]: node for node in process_payload["nodes"]}
     assert "templates/feature" not in raw
@@ -738,7 +758,7 @@ def test_feature_validator_implementation_review_and_reconcile_pass(tmp_path):
     _write(
         root,
         "CHANGELOG.md",
-        "# Changelog\n\n## Não lançado\n\n- PB-002: busca de clientes entregue.\n",
+        "# Changelog\n\n## Não lançado\n\n- #FEAT PB-002: busca de clientes entregue.\n",
     )
 
     reconcile = _run_validator(root, "reconcile")
@@ -792,6 +812,35 @@ def test_feature_validator_reconcile_requires_changelog_backlog_reference(tmp_pa
     assert "CHANGELOG.md não referencia PB-002" in result.stderr
 
 
+def test_feature_validator_reconcile_requires_feat_as_first_entry_token(tmp_path):
+    root = _base_project(tmp_path)
+    _prepare_reconcile_artifacts(root)
+    _write(
+        root,
+        "CHANGELOG.md",
+        "# Changelog\n\n## Não lançado\n\n- PB-002: busca entregue com #FEAT.\n",
+    )
+
+    result = _run_validator(root, "reconcile")
+
+    assert result.returncode == 1
+    assert "`#FEAT` como primeiro token" in result.stderr
+
+
+def test_feature_validator_reconcile_accepts_feat_tag_without_bullet(tmp_path):
+    root = _base_project(tmp_path)
+    _prepare_reconcile_artifacts(root)
+    _write(
+        root,
+        "CHANGELOG.md",
+        "# Changelog\n\n## Não lançado\n\n#FEAT PB-002: busca entregue.\n",
+    )
+
+    result = _run_validator(root, "reconcile")
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_feature_validator_reconcile_requires_documentation_section(tmp_path):
     root = _base_project(tmp_path)
     _snapshot_baseline(root)
@@ -803,7 +852,7 @@ def test_feature_validator_reconcile_requires_documentation_section(tmp_path):
         FEATURES.replace("| PB-001 |", "| PB-001, PB-002 |"),
     )
     _write(root, "docs/feature-result.md", "PB-002\nAC-01 PASS\nAC-02 PASS\n")
-    _write(root, "CHANGELOG.md", "# Changelog\n\n- PB-002: busca entregue.\n")
+    _write(root, "CHANGELOG.md", "# Changelog\n\n- #FEAT PB-002: busca entregue.\n")
 
     result = _run_validator(root, "reconcile")
 

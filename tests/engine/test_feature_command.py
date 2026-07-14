@@ -95,12 +95,13 @@ def _write_backlog(root: Path, selected_status: str = "accepted") -> None:
     )
 
 
-def test_incremental_catalog_exposes_feature_and_tweak_templates():
+def test_incremental_catalog_exposes_bug_feature_and_tweak_templates():
     incremental = cli_main.available_templates("feature")
     assert incremental == sorted(incremental)
-    assert {"feature", "tweak"} <= set(incremental)
+    assert {"bug", "feature", "tweak"} <= set(incremental)
     assert cli_main.resolve_feature_template(None) == "feature"
     assert cli_main.resolve_feature_template("tweak") == "tweak"
+    assert cli_main.resolve_feature_template("bug") == "bug"
 
 
 def test_materialize_feature_template_is_complete_and_copy_once(tmp_path):

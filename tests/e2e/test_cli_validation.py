@@ -201,7 +201,7 @@ class TestHelpAndUsage:
         assert "--input" in output
         assert "--claude" in output
         assert "--codex" in output
-        assert "{feature,tweak}" in output
+        assert "{bug,feature,tweak}" in output
 
     def test_no_args_shows_usage(self, tmp_path):
         result = run_ft([], cwd=tmp_path)

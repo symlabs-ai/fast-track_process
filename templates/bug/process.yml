@@ -1,0 +1,266 @@
+# Bug — correção focal com prova RED→GREEN
+#
+# Template do entrypoint `ft feature`: reutiliza worktrees, batches e waves do
+# orquestrador existente. O processo por bug permanece deliberadamente curto.
+
+id: bug
+version: "1.0.0"
+title: "Bug — Diagnóstico, Regressão e Correção"
+
+execution_policy:
+  entrypoint: feature
+  template: bug
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/bug/process.yml
+  merge_command: ft close --merge full
+
+parallel_policy:
+  planner_timeout_seconds: 120
+  rate_limit_respawns: 0
+
+# A validação completa pós-GREEN substitui hooks amplos e evita executar a
+# mesma suíte novamente no auto-commit.
+commit_policy:
+  verify_hooks: false
+
+correction_policy:
+  follow_graph_after_retry: true
+  acceptance_rejection_restarts_at: bug.diagnose_fix
+  mandatory_after_implementation:
+    - bug.acceptance
+    - bug.reconcile
+
+# Bugs pertencem a uma FEAT existente e a exatamente um PB. Em batch, o
+# orquestrador reserva os PBs antes de criar as worktrees da wave.
+close_policy:
+  backlog:
+    mode: referenced
+    references_path: docs/bug-report.md
+    reference_field: backlog_item
+    required_count: 1
+    accepted_statuses:
+      - done
+      - accepted
+  features_catalog: required
+  merge: full
+
+artifact_policy:
+  canonical:
+    - CHANGELOG.md
+    - docs/PROJECT_BACKLOG.md
+    - docs/FEATURES.md
+  cycle:
+    - docs/feature-request.md
+    - docs/bug-baseline.yml
+    - docs/bug-report.md
+    - docs/bug-validation.json
+    - docs/stakeholder-feedback.md
+    - docs/bug-result.md
+
+nodes:
+  - id: bug.preflight
+    type: gate
+    title: "Confirmar Baseline e Governança do Bug"
+    description: >-
+      Valida demanda, produto, backlog e catálogo e grava a baseline sem rodar
+      build ou testes. Escopos sensíveis ou que representam nova capacidade
+      devem usar o template feature.
+    sprint: bug-01-fix
+    executor: python
+    outputs:
+      - docs/bug-baseline.yml
+    validators:
+      - file_exists: docs/feature-request.md
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - file_exists: docs/FEATURES.md
+      - file_exists: CHANGELOG.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - command_succeeds:
+          command: "python .ft/process/bug/scripts/validate_bug.py baseline"
+          timeout: 10
+      - file_exists: docs/bug-baseline.yml
+    next: bug.diagnose_fix
+
+  - id: bug.diagnose_fix
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: build
+    context_profile: bug.direct
+    title: "Reproduzir e Corrigir o Bug"
+    description: >-
+      Uma delegação identifica a causa, prova o defeito com um teste RED,
+      implementa a correção mínima e prova GREEN com o mesmo comando e teste.
+      Depois o gate executa build e suíte completa uma única vez.
+    sprint: bug-01-fix
+    executor: claude
+    max_turns: 36
+    llm_timeout_seconds: 900
+    env_setup:
+      - python .ft/process/bug/scripts/validate_bug.py begin
+    outputs:
+      - project/
+      - src/
+      - test/
+      - tests/
+      - docs/bug-report.md
+    write_scope:
+      - project
+      - src
+      - test
+      - tests
+      - docs/bug-report.md
+    prompt: |
+      Corrija exatamente UM defeito descrito em docs/feature-request.md.
+      Não amplie comportamento, contrato ou arquitetura. O contexto
+      `bug.direct` já contém a demanda, baseline, catálogo, stack, estado da
+      tentativa e recortes focais do produto.
+
+      Contrato obrigatório:
+      1. Identifique comportamento observado, esperado e causa raiz objetiva.
+      2. Crie ou altere pelo menos um teste de regressão focal.
+      3. Antes de alterar código de produto, execute exatamente:
+         `.ft/process/bug/scripts/product.sh red -- <comando> [args...]`.
+         O comando deve mencionar o teste alterado e falhar pela asserção que
+         demonstra o bug. Se já houver RED válido de uma tentativa anterior,
+         o wrapper o reutilizará e manterá o teste congelado.
+      4. Implemente somente a correção mínima. Não altere o teste congelado.
+      5. Execute o MESMO argv com:
+         `.ft/process/bug/scripts/product.sh green -- <comando> [args...]`.
+      6. Não rode build, suíte completa ou E2E: o gate fará build+test uma vez.
+      7. Não altere CHANGELOG, backlog ou FEATURES neste node.
+
+      Se não houver reprodução determinística, a demanda for ambígua, exigir
+      nova capacidade, mudança de contrato, auth/security, migration, reparo
+      de dados, dependência/lockfile, infraestrutura ou correção transversal,
+      não faça correção parcial. Escreva `Resultado: ESCALATE` no relatório e
+      recomende `ft feature --template feature`.
+
+      Crie docs/bug-report.md com frontmatter:
+        backlog_item: PB-NNN
+        target_feature: FEAT-NNN
+        severity: low | medium | high | critical
+
+      Em batch, preserve exatamente o `reserved_backlog_item` da demanda como
+      backlog_item. Fora de batch, reutilize o PB explícito ou reserve o próximo
+      ID livre. target_feature deve existir; bug nunca cria FEAT nova.
+
+      O relatório deve conter uma única linha `Resultado: FIXED`, as seções
+      Sintoma, Comportamento esperado, Causa raiz, Regressão, Correção e Risco,
+      além de `Comando de regressão: <argv interno>` e
+      `Assinatura RED: <trecho objetivo presente na falha registrada>`.
+    validators:
+      - file_exists: docs/bug-report.md
+      - command_succeeds:
+          command: >-
+            python .ft/process/bug/scripts/validate_bug.py full
+          resume_command: >-
+            python .ft/process/bug/scripts/validate_bug.py implementation
+            && python .ft/process/bug/scripts/validate_bug.py verify
+          timeout: 420
+    next: bug.acceptance
+
+  - id: bug.acceptance
+    type: human_gate
+    title: "Aceite da Correção"
+    description: >-
+      Confirme que o sintoma desapareceu sem regressão observável. Rejeite com
+      um desvio reproduzível; a correção volta ao node RED/GREEN preservando o
+      teste de regressão já comprovado.
+    sprint: bug-02-acceptance
+    executor: python
+    env_setup:
+      - bash .ft/process/bug/scripts/serve.sh
+    env_teardown:
+      - bash .ft/process/bug/scripts/serve.sh stop
+    outputs:
+      - docs/stakeholder-feedback.md
+    reject_next: bug.diagnose_fix
+    next: bug.reconcile
+
+  - id: bug.reconcile
+    no_pre_seed: true
+    type: document
+    context_profile: bug.reconcile
+    title: "Registrar a Correção"
+    description: >-
+      Uma delegação documental curta registra somente o PB e a FEAT existentes,
+      adiciona a entrada #BUG no changelog e produz o resultado do ciclo.
+    sprint: bug-02-acceptance
+    executor: claude
+    max_turns: 12
+    llm_timeout_seconds: 240
+    outputs:
+      - CHANGELOG.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/bug-result.md
+    write_scope:
+      - CHANGELOG.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/bug-result.md
+    prompt: |
+      A correção foi aceita. Atualize somente os registros identificados em
+      docs/bug-report.md, sem ler ou alterar código.
+
+      - Marque o PB selecionado como accepted/done e registre a evidência.
+      - Atualize somente a FEAT existente indicada por target_feature. Nela,
+        preserve ID, status, título, descrição e entrega; altere apenas Backlog,
+        Evidência, Última evolução e Notas, de forma aditiva.
+      - Nunca crie, renumere, reutilize ou apague uma FEAT.
+      - Não altere PBs ou FEATs alheios.
+      - Adicione exatamente uma entrada nova ao CHANGELOG.md. O primeiro token
+        textual da entrada, após bullet Markdown opcional, deve ser `#BUG` e a
+        mesma linha deve conter PB-NNN e FEAT-NNN. Exemplo:
+        `- #BUG PB-023 / FEAT-005 — corrige perda de streaming no Explore.`
+      - Não use `#FEAT`; essa tag pertence ao template feature.
+
+      Gere docs/bug-result.md com sintoma, causa raiz, correção, comando e
+      evidência RED→GREEN, build/test, PB, FEAT e risco residual.
+    validators:
+      - file_exists: CHANGELOG.md
+      - file_exists: docs/bug-result.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+    next: bug.final_gate
+
+  - id: bug.final_gate
+    type: gate
+    title: "Gate Final do Bug"
+    description: >-
+      Reutiliza o receipt completo sem repetir testes e valida que somente PB,
+      FEAT e changelog do bug aceito foram reconciliados.
+    sprint: bug-02-acceptance
+    executor: python
+    outputs:
+      - docs/bug-result.md
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/bug/scripts/validate_bug.py reconcile"
+          timeout: 15
+    next: bug.end
+
+  - id: bug.end
+    type: end
+    title: "Bug Corrigido e Pronto para Merge"
+    description: >-
+      Correção aceita, RED→GREEN comprovado e documentação reconciliada.
+      `ft close` arquiva o ciclo, faz merge e remove worktree/branch.

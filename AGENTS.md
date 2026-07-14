@@ -72,6 +72,7 @@ Templates disponíveis (`templates/` no repo do engine):
 |----------|-----|
 | `base` | Estrutura mínima com `.ft/process/base/process.yml`, docs seed e `src/` |
 | `feature` | Evolução incremental de uma única feature em produto já entregue; destinado ao comando `ft feature` |
+| `bug` | Correção focal com diagnóstico, teste de regressão RED→GREEN e registro `#BUG`; use com `ft feature --template bug` |
 | `tweak` | Mudança pequena e focal, com uma implementação e salvaguardas mínimas; use com `ft feature --template tweak` |
 | `mvp-builder` | Processo completo de MVP (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
 | `fast-track-v2` | Processo V2 legado |
@@ -127,6 +128,10 @@ Use o entrypoint incremental em vez de iniciar outro ciclo completo de MVP:
 ft feature "Adicionar busca por telefone" --template feature --claude
 # ou
 ft feature --input demanda.md --template feature --codex
+# bug reproduzível, com teste de regressão
+ft feature "Terminal duplica o comando ao ecoar input" --template bug --codex
+# múltiplos bugs: planner, waves e worktrees do próprio ft feature
+ft feature --parallel "bug A" "bug B" --template bug --codex
 # ajuste pequeno, sem o pipeline completo de feature
 ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
 ```
@@ -143,6 +148,18 @@ worktree, paralelismo e controles de ciclo do `ft feature`, mas vai direto à
 implementação. Ele não executa discovery, review independente, E2E completo ou
 reconciliação de backlog/catálogo. O diff é limitado e áreas de risco são
 recusadas; nesses casos, reinicie a demanda com `--template feature`.
+
+Para defeitos reproduzíveis, `bug` também reutiliza o entrypoint e o
+orquestrador paralelo existentes. Cada worker faz uma delegação RED→GREEN,
+build/test completo uma vez, aceite humano e uma reconciliação documental curta.
+Bugs independentes rodam na mesma wave; áreas sobrepostas ou dependências viram
+waves sequenciais. Use `feature` se a correção exigir comportamento novo,
+contrato, auth/security, migração, dados, dependência, infraestrutura ou mudança
+transversal.
+
+No `CHANGELOG.md`, entregas de `feature` começam com `#FEAT` e correções de
+`bug` começam com `#BUG` (após bullet Markdown opcional). `tweak` não exige
+entrada no changelog.
 
 ## 2. Rodar o ciclo
 

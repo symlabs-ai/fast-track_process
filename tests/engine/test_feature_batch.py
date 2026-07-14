@@ -446,13 +446,72 @@ def _batch(tmp_path, features, waves) -> fb.FeatureBatch:
     )
 
 
-def test_tweak_parallel_disables_outer_rate_limit_respawns(tmp_path):
+def test_parallel_policy_reads_global_tweak_declaration(tmp_path):
     tweak = _batch(tmp_path, [_feature("F-01", ["src/a/"])], [["F-01"]])
     tweak.template = "tweak"
     feature = _batch(tmp_path, [_feature("F-01", ["src/a/"])], [["F-01"]])
 
+    assert fp._parallel_policy(Path(tweak.project_root), "tweak") == fp.ParallelPolicy(
+        planner_timeout_seconds=120,
+        rate_limit_respawns=0,
+    )
     assert fp._rate_limit_respawn_limit(tweak) == 0
     assert fp._rate_limit_respawn_limit(feature) == fp.MAX_RATE_LIMIT_RESPAWNS
+
+
+def test_parallel_policy_prefers_local_process_for_any_feature_template(tmp_path):
+    root = tmp_path / "proj"
+    local = paths.project_named_process_file(root, "feature")
+    local.parent.mkdir(parents=True)
+    local.write_text(
+        "parallel_policy:\n"
+        "  planner_timeout_seconds: 37\n"
+        "  rate_limit_respawns: 1\n",
+        encoding="utf-8",
+    )
+
+    policy = fp._parallel_policy(root, "feature")
+
+    assert policy == fp.ParallelPolicy(
+        planner_timeout_seconds=37,
+        rate_limit_respawns=1,
+    )
+
+
+def test_parallel_policy_preserves_historical_defaults_for_old_local_tweak(
+    tmp_path,
+):
+    root = tmp_path / "proj"
+    local = paths.project_named_process_file(root, "tweak")
+    local.parent.mkdir(parents=True)
+    local.write_text("id: tweak\n", encoding="utf-8")
+
+    assert fp._parallel_policy(root, "tweak") == fp.ParallelPolicy(
+        planner_timeout_seconds=120,
+        rate_limit_respawns=0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        ({"planner_timeout_seconds": 0}, "planner_timeout_seconds"),
+        ({"planner_timeout_seconds": True}, "planner_timeout_seconds"),
+        ({"rate_limit_respawns": -1}, "rate_limit_respawns"),
+        ({"rate_limit_respawns": False}, "rate_limit_respawns"),
+    ],
+)
+def test_parallel_policy_rejects_invalid_local_values(tmp_path, policy, message):
+    root = tmp_path / "proj"
+    local = paths.project_named_process_file(root, "feature")
+    local.parent.mkdir(parents=True)
+    local.write_text(
+        yaml.safe_dump({"parallel_policy": policy}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        fp._parallel_policy(root, "feature")
 
 
 def _repo_with_external_cycle_close(
@@ -883,6 +942,28 @@ def test_close_wave_sucesso_e_falha(tmp_path, monkeypatch):
     assert fp._close_wave(batch, Namespace(verbose=False)) is True
     assert closed == ["cycle-03-f-02-b"]  # merged não fecha de novo
     assert batch.feature("F-02").status == "merged"
+
+
+def test_close_wave_retries_cleanup_after_canonical_merge(tmp_path, monkeypatch):
+    feature = _feature("F-01", ["src/a/"])
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    feature.status = "done"
+    feature.cycle_name = "cycle-02-f-01-a"
+    worktree = paths.worktrees_home(Path(batch.project_root)) / feature.cycle_name
+    worktree.mkdir(parents=True)
+    closes: list[str] = []
+
+    def fake_close(namespace):
+        closes.append(namespace.cycle)
+        if len(closes) == 2:
+            worktree.rmdir()
+
+    monkeypatch.setattr(cli_main, "cmd_close", fake_close)
+    monkeypatch.setattr(fp, "_finish_canonical_merge", lambda _batch, _feature: True)
+
+    assert fp._close_wave(batch, Namespace(verbose=False)) is True
+    assert closes == [feature.cycle_name, feature.cycle_name]
+    assert feature.status == "merged"
 
 
 class _DoneProc:
@@ -1443,10 +1524,22 @@ def test_primeiro_batch_planeja_sem_sujar_checkout_e_materializa_no_setup(
     )
 
 
-def test_plan_batch_applies_short_planner_budget_only_to_tweak(tmp_path, monkeypatch):
+def test_plan_batch_applies_planner_budget_declared_by_local_process(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
     root = _git_project(tmp_path)
     monkeypatch.chdir(root)
+    local = paths.project_named_process_file(root, "tweak")
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(
+        "parallel_policy:\n"
+        "  planner_timeout_seconds: 37\n"
+        "  rate_limit_respawns: 2\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "local tweak policy")
     captured: dict[str, object] = {}
     plan = {
         "schema_version": fb.PLAN_SCHEMA_VERSION,
@@ -1482,7 +1575,7 @@ def test_plan_batch_applies_short_planner_budget_only_to_tweak(tmp_path, monkeyp
 
     assert batch is not None
     assert batch.template == "tweak"
-    assert captured["llm_timeout_seconds"] == fp.TWEAK_PLANNER_TIMEOUT_SECONDS
+    assert captured["llm_timeout_seconds"] == 37
 
 
 def test_plan_batch_persists_planning_status_before_llm_returns(

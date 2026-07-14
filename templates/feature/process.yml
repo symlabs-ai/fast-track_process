@@ -416,8 +416,11 @@ nodes:
         comportamento, contrato, configuração ou uso da feature; não faça churn
         em documentos alheios.
       - Crie ou atualize sempre CHANGELOG.md na raiz, preservando o formato já
-        adotado pelo projeto. Registre de forma humana o PB/FEAT, a mudança
-        entregue e qualquer compatibilidade ou migração relevante.
+        adotado pelo projeto. Preserve seções e o estilo de bullet existente,
+        mas faça a entrada deste ciclo começar com `#FEAT` como primeiro token
+        textual (`#FEAT ...` ou `- #FEAT ...`). Registre de forma humana o
+        PB/FEAT, a mudança entregue e qualquer compatibilidade ou migração
+        relevante.
 
       Gere docs/feature-result.md com escopo entregue, AC-*, testes/build,
       evidências, PB/FEAT final, arquivos alterados, nenhuma pendência escondida

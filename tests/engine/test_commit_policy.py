@@ -365,13 +365,10 @@ def test_pre_run_knowledge_commit_receives_selected_process_policy(
     assert knowledge.call_args.kwargs["verify_hooks"] is expected
 
 
-def test_tweak_template_is_the_only_opt_in_for_hook_bypass() -> None:
+def test_lightweight_templates_opt_out_after_their_own_deterministic_checks() -> None:
     root = Path(__file__).resolve().parents[2]
-    tweak = yaml.safe_load((root / "templates" / "tweak" / "process.yml").read_text())
-
-    assert tweak["commit_policy"] == {"verify_hooks": False}
+    lightweight = {"bug", "tweak"}
     for process_path in (root / "templates").glob("*/process.yml"):
-        if process_path.parent.name == "tweak":
-            continue
         payload = yaml.safe_load(process_path.read_text())
-        assert payload.get("commit_policy", {}).get("verify_hooks", True) is True
+        verify_hooks = payload.get("commit_policy", {}).get("verify_hooks", True)
+        assert verify_hooks is (process_path.parent.name not in lightweight)

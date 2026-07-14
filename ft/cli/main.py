@@ -4982,7 +4982,7 @@ def main():
     feature.add_argument(
         "demand",
         nargs="*",
-        help="Demanda da feature em texto livre (com --parallel: várias, entre aspas)",
+        help="Demanda incremental em texto livre (com --parallel: várias, entre aspas)",
     )
     feature.add_argument(
         "--input",
@@ -5007,7 +5007,7 @@ def main():
     feature.add_argument(
         "--engines",
         metavar="LIST",
-        help="Engines por feature em round-robin (ex: claude:opus,codex:gpt-5.3@high)",
+        help="Engines por demanda em round-robin (ex: claude:opus,codex:gpt-5.3@high)",
     )
     feature.add_argument(
         "--max-parallel",

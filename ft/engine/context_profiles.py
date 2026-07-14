@@ -19,6 +19,8 @@ import unicodedata
 
 FEATURE_DELTA_PREFIX = "feature_delta."
 TWEAK_PROFILE = "tweak.direct"
+BUG_DIRECT_PROFILE = "bug.direct"
+BUG_RECONCILE_PROFILE = "bug.reconcile"
 CONTEXT_BEGIN = "<FT_CONTEXT_PROFILE>"
 CONTEXT_END = "</FT_CONTEXT_PROFILE>"
 
@@ -65,6 +67,7 @@ class ContextProfileSpec:
     manifest_max_paths: int = 400
     git_namespace: str = "feature-delta"
     delta_before_manifest: bool = False
+    compact_receipt_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -225,9 +228,68 @@ TWEAK_PROFILES: Mapping[str, ContextProfileSpec] = {
     ),
 }
 
+BUG_PROFILES: Mapping[str, ContextProfileSpec] = {
+    BUG_DIRECT_PROFILE: ContextProfileSpec(
+        name=BUG_DIRECT_PROFILE,
+        max_chars=40_000,
+        paths=(
+            "docs/feature-request.md",
+            "docs/bug-baseline.yml",
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            *_TECH_STACK_PATHS,
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+        ),
+        compact_receipt=True,
+        include_changed_delta=True,
+        include_product_manifest=True,
+        priority_paths=(
+            "docs/feature-request.md",
+            "docs/bug-baseline.yml",
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+        ),
+        manifest_max_paths=240,
+        git_namespace="bug",
+        delta_before_manifest=True,
+        compact_receipt_paths=("docs/bug-validation.json",),
+    ),
+    BUG_RECONCILE_PROFILE: ContextProfileSpec(
+        name=BUG_RECONCILE_PROFILE,
+        max_chars=40_000,
+        paths=(
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            "docs/stakeholder-feedback.md",
+            "docs/bug-result.md",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+            "CHANGELOG.md",
+        ),
+        compact_receipt=True,
+        priority_paths=(
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            "docs/stakeholder-feedback.md",
+            "docs/bug-result.md",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+            "CHANGELOG.md",
+        ),
+        git_namespace="bug-reconcile",
+        compact_receipt_paths=("docs/bug-validation.json",),
+    ),
+}
+
 CONTEXT_PROFILES: Mapping[str, ContextProfileSpec] = {
     **FEATURE_DELTA_PROFILES,
     **TWEAK_PROFILES,
+    **BUG_PROFILES,
 }
 
 KNOWN_CONTEXT_PROFILES = frozenset(CONTEXT_PROFILES)
@@ -543,6 +605,7 @@ def _changed_delta_sections(
     base_commit: str | None,
     *,
     extra_paths: tuple[str, ...] = (),
+    excluded_paths: tuple[str, ...] = (),
     namespace: str = "feature-delta",
 ) -> list[tuple[str, str]]:
     """Build focal diff/current excerpts from Git paths, never a filesystem walk."""
@@ -559,8 +622,11 @@ def _changed_delta_sections(
         root,
         ["ls-files", "--others", "--exclude-standard", "-z"],
     )
+    excluded = frozenset(excluded_paths)
     allowed_extra = frozenset(
-        path for path in extra_paths if path != _RECEIPT_PATH and not _is_forbidden_path(path)
+        path
+        for path in extra_paths
+        if path not in excluded and not _is_forbidden_path(path)
     )
     changed: list[str] = []
     for raw in (tracked_raw or b"", untracked_raw or b""):
@@ -692,6 +758,11 @@ def compose_context_profile(
 
     root = Path(project_root).resolve()
     paths, tech_manifest = _effective_paths(spec, root)
+    compact_receipt_paths = (
+        spec.compact_receipt_paths
+        if spec.compact_receipt_paths
+        else ((_RECEIPT_PATH,) if spec.compact_receipt else ())
+    )
     target_ids = (
         _feature_target_ids(root)
         if {"docs/PROJECT_BACKLOG.md", "docs/FEATURES.md"}.intersection(paths)
@@ -729,7 +800,7 @@ def compose_context_profile(
         candidate = _safe_candidate(root, relative)
         if candidate is None:
             return
-        if relative == _RECEIPT_PATH and spec.compact_receipt:
+        if relative in compact_receipt_paths and spec.compact_receipt:
             content = _compact_receipt(candidate)
             source_truncated = False
         else:
@@ -810,6 +881,7 @@ def compose_context_profile(
             root,
             base_commit,
             extra_paths=extra_delta_paths,
+            excluded_paths=compact_receipt_paths,
             namespace=spec.git_namespace,
         ):
             section = f"\n### {virtual_path}\n{content.rstrip()}\n"

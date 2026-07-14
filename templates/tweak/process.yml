@@ -18,6 +18,12 @@ execution_policy:
   local_process_path: .ft/process/tweak/process.yml
   merge_command: ft close --merge full
 
+# O orquestrador continua sendo o mesmo de `ft feature --parallel`; o processo
+# declara apenas seus budgets externos para preservar o contrato ultraleve.
+parallel_policy:
+  planner_timeout_seconds: 120
+  rate_limit_respawns: 0
+
 # Tweaks são deliberadamente rápidos e já passam pelos limites/validadores
 # determinísticos abaixo; hooks amplos do projeto ficam para o processo feature.
 commit_policy:

@@ -187,6 +187,10 @@ def test_tweak_graph_has_one_bounded_llm_node_and_no_heavy_phases():
         "refactor",
     } & {node.type for node in graph.nodes.values()}
     assert graph.nodes["tweak.acceptance"].reject_next == "tweak.implement"
+    assert graph.meta["parallel_policy"] == {
+        "planner_timeout_seconds": 120,
+        "rate_limit_respawns": 0,
+    }
 
     implementation_command = graph.nodes["tweak.implement"].validators[-1][
         "command_succeeds"

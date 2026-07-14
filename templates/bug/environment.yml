@@ -1,0 +1,4 @@
+run_mode: isolated
+max_node_retries: 0
+max_gate_retries: 0
+max_auto_fix: 0

@@ -35,8 +35,10 @@ ft --help
 ```bash
 ft init --template base    # Criar layout versionado, sem estado de execução
 ft feature "demanda" --template feature  # Evoluir produto em worktree isolada
+ft feature "defeito" --template bug  # Corrigir com teste de regressão RED→GREEN
 ft feature "ajuste pequeno" --template tweak  # Mudança focal com pipeline mínimo
 ft feature --parallel "d1" "d2" "d3" -t feature  # Batch de features em waves paralelas
+ft feature --parallel "bug 1" "bug 2" -t bug  # Batch de bugs no mesmo orquestrador
 ft migrate-layout . --cycle-id cycle-08  # Migrar process/ e atribuir artefatos soltos
 ft continue                # Avançar 1 step
 ft continue --sprint       # Avançar até fim da sprint atual
@@ -623,6 +625,34 @@ uma mudança em dependências, migrações, autenticação, contratos ou infraes
 `approve`, `reject`, `retry` e `close` aceitam `--cycle <nome>` para mirar um
 ciclo específico quando há mais de um ativo.
 
+### Bugs focais com regressão
+
+`bug` é um terceiro template do entrypoint `ft feature`. Ele fica entre
+`tweak` e `feature`: dispensa discovery, perguntas de escopo e review
+independente, mas exige diagnóstico objetivo e prova de regressão.
+
+```bash
+ft feature "Terminal duplica o comando ao ecoar input" --template bug --codex
+ft feature --parallel "bug A" "bug B" "bug C" -t bug --yes
+```
+
+No caminho feliz há duas delegações LLM: uma combina teste RED, correção mínima
+e o mesmo teste GREEN; a outra reconcilia apenas o PB e a FEAT existentes. O
+gate intermediário executa `make build` e `make test` uma única vez, e o gate
+final verifica o receipt sem repetir a suíte. Há um aceite humano. O limite é
+de 8 arquivos de produto/teste e 500 linhas alteradas.
+
+O modo paralelo reaproveita o planner, as reservas de PB, as waves e as
+worktrees de `ft feature --parallel`. Bugs com áreas disjuntas rodam juntos;
+dependências ou áreas sobrepostas são serializadas. Não existe runner paralelo
+específico para bugs.
+
+Sem reprodução determinística, ou diante de comportamento novo, contrato,
+auth/security, migração, dados, dependência, infraestrutura ou mudança
+transversal, o processo bloqueia e orienta reabrir com `--template feature`.
+Entradas novas de changelog começam com `#BUG`; o template `feature` exige
+`#FEAT`; `tweak` não exige changelog.
+
 ### Features paralelas (ft feature --parallel)
 
 `--parallel` recebe N demandas de uma vez e orquestra um batch de ciclos
@@ -630,6 +660,7 @@ ciclo específico quando há mais de um ativo.
 
 ```bash
 ft feature --parallel "Busca por telefone" "Dark mode" "Exportar CSV" -t feature
+ft feature --parallel "Falha A" "Falha B" "Falha C" -t bug
 ft feature --parallel "Ajuste o label" "Reduza o padding" -t tweak
 ft feature --parallel --input demandas.md -t feature      # seções '## ' ou blocos '---'
 ft feature --parallel ... --engines claude:opus,codex:gpt-5.3@high   # engines por feature

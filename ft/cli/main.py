@@ -1130,17 +1130,48 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
-    runner = get_runner(
-        llm_engine=resolve_llm_engine(args),
-        llm_model=resolve_llm_model(args),
-        llm_effort=resolve_llm_effort(args),
-        verbose=getattr(args, "verbose", False),
-        cycle=getattr(args, "cycle", None),
-    )
-    if getattr(args, "report", False):
-        runner.status_report()
-    else:
-        runner.status(full=getattr(args, "full", False))
+    def _runner_for(cycle):
+        return get_runner(
+            llm_engine=resolve_llm_engine(args),
+            llm_model=resolve_llm_model(args),
+            llm_effort=resolve_llm_effort(args),
+            verbose=getattr(args, "verbose", False),
+            cycle=cycle,
+        )
+
+    def _print_status(runner):
+        if getattr(args, "report", False):
+            runner.status_report()
+        else:
+            runner.status(full=getattr(args, "full", False))
+
+    requested = getattr(args, "cycle", None)
+    if requested is None:
+        # Vários ciclos abertos sem --cycle: um bloco de status rotulado por
+        # ciclo, em vez de erro — mesmo contrato do multi-status pré-registry.
+        # A pré-resolução espelha _select_cycle_for_command, mas trata a
+        # ambiguidade como fan-out em vez de SystemExit.
+        from ft.runs import AmbiguousCycleError, select_cycle
+
+        location = find_project_root().resolve()
+        owner = canonical_project_root(location)
+        implicit = location.name if paths.is_worktree_path(location) else None
+        try:
+            select_cycle(owner, implicit, include_terminal=True)
+        except AmbiguousCycleError as error:
+            from ft.engine import ui as _ui
+
+            for index, cycle_id in enumerate(error.cycle_ids):
+                if index:
+                    print()
+                print(_ui.header(f"Ciclo: {cycle_id}"))
+                _print_status(_runner_for(cycle_id))
+            return
+        except Exception:
+            # Sem ciclo/erros de seleção: o caminho normal abaixo reporta
+            # com a mensagem canônica.
+            pass
+    _print_status(_runner_for(requested))
 
 
 def _truncate_visible(s: str, width: int, reset: str = "") -> str:

@@ -4,7 +4,34 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## Unreleased
+## [v0.14.0] - 2026-07-14
+
+### Template fastfy — adoção de repositório legado
+- Novo template runnable `ft run . --template fastfy`: transforma um repo que
+  ainda não é Fast Track em projeto FT completo num único ciclo — levanta o
+  código/histórico Git, esclarece dúvidas com o stakeholder (loop
+  survey ⇄ questions), aprova o plano de adoção e constrói a documentação
+  canônica: PRD as-is, TECH_STACK, PROJECT_BACKLOG (entregas como PB done,
+  dívidas como deferred/P2 com decisão), FEATURES com evidência real no
+  código e CHANGELOG reconstruído de tags/`git log` com entrada `#FEAT` da
+  adoção.
+- Harness de validação como única alteração de código: Makefile com targets
+  `build`/`test`/`run` (e `url` quando há interface) delegando aos comandos
+  reais do legado, mais smoke test mínimo por default quando o repo não tem
+  testes (ajustável no gate de escopo). Baseline determinística usa os mesmos
+  validators do preflight do template `feature`, garantindo por construção
+  que o projeto adotado segue direto para o fluxo incremental.
+- Revisão independente anti-invenção (toda FEAT-* precisa de evidência
+  verificada; harness não pode ser stub) e aceite do stakeholder com
+  serve.sh tolerante a legado (sem exigir `/health`; no-op para interface
+  internal).
+- `ft init --adopt`: adoção de diretório legado na CLI — cria o repositório
+  Git quando não existe e aceita arquivos não commitados; somente o scaffold
+  `.ft/` é commitado e a CLI avisa para commitar o legado antes de `ft run`.
+- Templates aceitam produto na raiz: `product_root: "."` (Makefile na raiz)
+  vira fallback quando não há `project//src/Makefile` — em `product.sh`,
+  `validate_feature.py` e no receipt de validação, preservando a preferência
+  pelos layouts existentes.
 
 ### ft run/continue --parallel — paralelismo intra-processo via parallel_group
 - `ft run --parallel [--max-parallel N]` habilita o fan-out de nodes marcados
@@ -81,6 +108,11 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   legítimo sem transformar a feature concorrente em `blocked`.
 - Novo módulo `ft/engine/process_update.py`; cobertura em
   `tests/engine/test_process_update.py`.
+
+### Correções
+- **process update**: pins de digest de processos legados voltam a ser
+  aceitos, evitando falso drift em forks materializados antes do snapshot
+  base.
 
 ## [v0.13.5] - 2026-07-13
 

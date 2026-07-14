@@ -705,7 +705,7 @@ nodes:
   - id: ft.delivery.01.entrypoint
     type: build
     title: "Criar Entry Point HTTP"
-    description: "Garantir que o servidor HTTP sobe corretamente: uvicorn na porta configurada do projeto (settings/.env — nunca hardcodar porta), middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
+    description: "Garantir que o servidor HTTP sobe corretamente: use o servidor da stack escolhida em docs/tech_stack.md, na porta configurada do projeto (settings/.env — nunca hardcodar porta), middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
     sprint: sprint-05-delivery
     executor: claude
     outputs:

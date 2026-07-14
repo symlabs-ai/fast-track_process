@@ -7,14 +7,9 @@ on_gate_pass, on_gate_fail, on_deliver).
 
 from __future__ import annotations
 
-import os
 import stat
-import subprocess
-import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-import pytest
 import yaml
 
 from ft.engine.hooks import (
@@ -25,7 +20,7 @@ from ft.engine.hooks import (
 )
 
 
-def _register_default_process(root: Path, name: str = "test-hooks") -> Path:
+def _register_process(root: Path, name: str = "test-hooks") -> Path:
     from ft.engine.layout import ensure_project_layout, register_project_process
 
     ensure_project_layout(root)
@@ -41,8 +36,8 @@ def _register_default_process(root: Path, name: str = "test-hooks") -> Path:
         process_name=name,
         process_path=process,
         template_id=name,
-        entrypoint="init",
-        set_default=True,
+        entrypoint="run",
+        set_default=False,
     )
     return process_dir
 
@@ -53,26 +48,30 @@ def _register_default_process(root: Path, name: str = "test-hooks") -> Path:
 
 class TestLoadEnvironment:
     def test_returns_empty_when_no_file(self, tmp_path):
-        result = load_environment(str(tmp_path))
+        process_dir = _register_process(tmp_path)
+        result = load_environment(str(tmp_path), process_dir=process_dir)
         assert result == {}
 
     def test_loads_yaml(self, tmp_path):
-        env_file = _register_default_process(tmp_path) / "environment.yml"
+        process_dir = _register_process(tmp_path)
+        env_file = process_dir / "environment.yml"
         env_file.write_text("hooks:\n  on_init:\n    - ./scripts/setup.sh\n")
-        result = load_environment(str(tmp_path))
+        result = load_environment(str(tmp_path), process_dir=process_dir)
         assert "hooks" in result
         assert result["hooks"]["on_init"] == ["./scripts/setup.sh"]
 
     def test_returns_empty_for_invalid_yaml(self, tmp_path):
-        env_file = _register_default_process(tmp_path) / "environment.yml"
+        process_dir = _register_process(tmp_path)
+        env_file = process_dir / "environment.yml"
         env_file.write_text("just a string")
-        result = load_environment(str(tmp_path))
+        result = load_environment(str(tmp_path), process_dir=process_dir)
         assert result == {}
 
     def test_returns_empty_for_null_yaml(self, tmp_path):
-        env_file = _register_default_process(tmp_path) / "environment.yml"
+        process_dir = _register_process(tmp_path)
+        env_file = process_dir / "environment.yml"
         env_file.write_text("")
-        result = load_environment(str(tmp_path))
+        result = load_environment(str(tmp_path), process_dir=process_dir)
         assert result == {}
 
 
@@ -106,7 +105,8 @@ class TestGetHooks:
 
 class TestRunHooks:
     def test_returns_empty_when_no_hooks(self, tmp_path):
-        results = run_hooks("on_init", str(tmp_path))
+        process_dir = _register_process(tmp_path)
+        results = run_hooks("on_init", str(tmp_path), process_dir=process_dir)
         assert results == []
 
     def test_runs_successful_script(self, tmp_path):
@@ -179,7 +179,13 @@ class TestRunHooks:
 
     def test_no_event_returns_empty(self, tmp_path):
         env = {"hooks": {"on_deliver": ["./x.sh"]}}
-        results = run_hooks("on_init", str(tmp_path), environment=env)
+        process_dir = tmp_path / ".ft" / "process" / "unit"
+        results = run_hooks(
+            "on_init",
+            str(tmp_path),
+            environment=env,
+            process_dir=process_dir,
+        )
         assert results == []
 
 
@@ -205,7 +211,7 @@ class TestHooksAllPassed:
 class TestRunnerHooksIntegration:
     def _make_project(self, tmp_path):
         """Create minimal project with environment.yml and a simple process."""
-        process_dir = _register_default_process(tmp_path)
+        process_dir = _register_process(tmp_path)
         (tmp_path / "docs").mkdir()
         (tmp_path / "runtime" / "state").mkdir(parents=True)
 

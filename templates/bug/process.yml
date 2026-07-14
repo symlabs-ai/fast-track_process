@@ -1,14 +1,14 @@
 # Bug — correção focal com prova RED→GREEN
 #
-# Template do entrypoint `ft feature`: reutiliza worktrees, batches e waves do
-# orquestrador existente. O processo por bug permanece deliberadamente curto.
+# Template universal de `ft run`: o processo por bug permanece
+# deliberadamente curto e focal.
 
 id: bug
 version: "1.0.0"
 title: "Bug — Diagnóstico, Regressão e Correção"
 
 execution_policy:
-  entrypoint: feature
+  entrypoint: run
   template: bug
   materialization: copy_once
   runtime_source: local_only
@@ -16,6 +16,11 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/bug/process.yml
   merge_command: ft close --merge full
+
+input_policy:
+  required: true
+  destination: docs/feature-request.md
+  prompt: "Descreva o bug reproduzível a corrigir"
 
 parallel_policy:
   planner_timeout_seconds: 120
@@ -144,7 +149,7 @@ nodes:
       nova capacidade, mudança de contrato, auth/security, migration, reparo
       de dados, dependência/lockfile, infraestrutura ou correção transversal,
       não faça correção parcial. Escreva `Resultado: ESCALATE` no relatório e
-      recomende `ft feature --template feature`.
+      recomende `ft run . --template feature`.
 
       Crie docs/bug-report.md com frontmatter:
         backlog_item: PB-NNN

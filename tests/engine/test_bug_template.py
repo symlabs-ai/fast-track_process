@@ -80,13 +80,12 @@ def _project(tmp_path: Path) -> Path:
     _write(
         tmp_path,
         ".ft/manifest.yml",
-        "schema_version: 2\n"
-        "default_process: bug\n"
+        "schema_version: 3\n"
         "processes:\n"
         "  bug:\n"
         "    path: .ft/process/bug/process.yml\n"
         "    template: bug\n"
-        "    entrypoint: feature\n",
+        "    entrypoint: run\n",
     )
     _write(
         tmp_path,
@@ -261,8 +260,7 @@ def _prepare_reconcile(root: Path, baseline_changelog: str) -> None:
 
 def test_bug_catalog_entrypoint_and_exact_graph_contract() -> None:
     validate_template_is_pristine(TEMPLATE)
-    assert available_templates(entrypoint="feature") == ["bug", "feature", "tweak"]
-    assert "bug" not in available_templates(entrypoint="init")
+    assert {"bug", "feature", "tweak"} <= set(available_templates())
 
     graph = load_graph(PROCESS)
     report = validate_process(graph, VALIDATOR_REGISTRY)
@@ -286,7 +284,7 @@ def test_bug_catalog_entrypoint_and_exact_graph_contract() -> None:
     assert [node.id for node in graph.nodes.values() if node.type == "human_gate"] == [
         "bug.acceptance"
     ]
-    assert graph.meta["execution_policy"]["entrypoint"] == "feature"
+    assert graph.meta["execution_policy"]["entrypoint"] == "run"
     assert graph.meta["execution_policy"]["template"] == "bug"
     assert graph.meta["parallel_policy"] == {
         "planner_timeout_seconds": 120,

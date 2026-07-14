@@ -2,6 +2,6 @@ run_mode: isolated
 max_gate_retries: 0
 max_auto_fix: 0
 
-# O comando `ft feature` deve sempre criar uma worktree externa. Este arquivo é
+# O comando `ft run . --template feature` sempre cria uma worktree externa. Este arquivo é
 # resolvido a partir do processo local `.ft/process/feature/`, nunca do template
 # global.

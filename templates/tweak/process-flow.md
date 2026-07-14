@@ -16,5 +16,5 @@ tweak.preflight (determinístico, <10 s)
 
 Não existem nodes de discovery, review ou reconcile. O processo não mantém
 backlog/catálogo porque uma mudança que exige esse trabalho já é uma feature.
-Com `ft feature --parallel ... --template tweak`, o planejador comum do comando
-tem budget total de 120 s e então reutiliza exatamente este mesmo grafo por ciclo.
+Com `ft run . --template tweak --parallel`, grupos paralelos declarados no YAML
+reutilizam exatamente este mesmo grafo. Outros ciclos continuam independentes.

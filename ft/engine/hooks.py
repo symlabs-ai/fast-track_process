@@ -25,13 +25,10 @@ def _selected_process_dir(
     elif process_path is not None:
         selected = Path(process_path).parent
     else:
-        # Local import avoids making layout import hooks through runner startup.
-        from ft.engine.layout import resolve_project_process
-
-        default_process = resolve_project_process(root)
-        if default_process is None:
-            raise ValueError("processo default local não encontrado no manifesto")
-        selected = default_process.parent
+        raise ValueError(
+            "process_path ou process_dir é obrigatório; "
+            "não existe template principal no manifesto V3"
+        )
 
     return selected if selected.is_absolute() else root / selected
 

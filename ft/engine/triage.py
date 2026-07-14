@@ -413,7 +413,7 @@ def present_adaptation_proposal(
     lines.append(f"\n  {ui.DIM}Processo: {original_node_count} → {adapted_node_count} nodes{ui.RESET}")
     lines.append(f"\n  {ui.BOLD_WHITE}Aprovar adaptação?{ui.RESET}")
     lines.append(f"    {ui.BOLD_CYAN}ft approve{ui.RESET} — aplicar adaptação e iniciar")
-    lines.append(f"    {ui.BOLD_CYAN}ft reject{ui.RESET}  — usar processo padrão sem mudanças")
+    lines.append(f"    {ui.BOLD_CYAN}ft reject{ui.RESET}  — manter o template selecionado sem mudanças")
     lines.append("")
 
     return "\n".join(lines)

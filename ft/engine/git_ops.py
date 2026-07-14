@@ -123,7 +123,6 @@ def auto_commit(
 
 
 _KNOWLEDGE_PATHS = (
-    "docs/",
     ".ft/process/",
     ".ft/manifest.yml",
     ".ft/.gitignore",
@@ -156,7 +155,7 @@ def stage_knowledge(project_root: str = ".") -> tuple[bool, bool, str]:
     if status.returncode != 0:
         return False, False, f"commit_knowledge FAIL: {status.stderr.strip()[:200]}"
     if not status.stdout.strip():
-        return True, False, "commit_knowledge: docs/ e .ft/process/ sem mudanças"
+        return True, False, "commit_knowledge: catálogo de templates sem mudanças"
 
     staged = subprocess.run(
         ["git", "add", "--", *_KNOWLEDGE_PATHS],
@@ -183,7 +182,7 @@ def commit_staged_knowledge(
             "commit",
             *_commit_policy_flags(verify_hooks),
             "-m",
-            f"chore: {label} — docs/ e .ft/process/",
+            f"chore: {label} — .ft/process/",
         ],
         cwd=cwd,
         capture_output=True,

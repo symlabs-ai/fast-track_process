@@ -20,7 +20,6 @@ from ft.engine import read_only_explore as explore
 
 def _args(**overrides) -> Namespace:
     values = {
-        "process": None,
         "verbose": False,
         "request": "explique o grafo",
         "finish": False,
@@ -35,6 +34,7 @@ def _args(**overrides) -> Namespace:
         "gemini": None,
         "opencode": None,
         "bypass_human_gates": False,
+        "cycle": None,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -188,7 +188,7 @@ def test_parser_aceita_argv_claude_atual_da_f02(tmp_path, monkeypatch):
     project = tmp_path / "project"
     (project / ".ft").mkdir(parents=True)
     (project / ".ft" / "manifest.yml").write_text(
-        "schema_version: 2\nprocesses: {}\ndefaults: {}\n",
+        "schema_version: 3\nprocesses: {}\ndefaults: {}\n",
         encoding="utf-8",
     )
     captured: dict[str, object] = {}
@@ -219,7 +219,7 @@ def test_argv_f02_e_cancelamento_externo_recolhem_provider(tmp_path):
     project = tmp_path / "project"
     (project / ".ft").mkdir(parents=True)
     (project / ".ft" / "manifest.yml").write_text(
-        "schema_version: 2\nprocesses: {}\ndefaults: {}\n",
+        "schema_version: 3\nprocesses: {}\ndefaults: {}\n",
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
@@ -299,7 +299,13 @@ def test_argv_f02_e_cancelamento_externo_recolhem_provider(tmp_path):
 def test_cmd_standalone_stream_json_emite_protocolo(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli_main, "find_project_root", lambda: tmp_path)
     monkeypatch.setattr(cli_main, "canonical_project_root", lambda root: Path(root))
-    monkeypatch.setattr(cli_main, "_active_exploration_runtime", lambda root: False)
+    monkeypatch.setattr(
+        cli_main,
+        "_active_exploration_cycle",
+        lambda *_args, **_kwargs: pytest.fail(
+            "stream-json deve selecionar standalone sem consultar ciclos"
+        ),
+    )
     monkeypatch.setattr(
         cli_main,
         "manifest_llm_defaults",
@@ -332,7 +338,13 @@ def test_cmd_standalone_stream_json_emite_protocolo(tmp_path, monkeypatch, capsy
 def test_cmd_standalone_preserva_exit_code_do_executor(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli_main, "find_project_root", lambda: tmp_path)
     monkeypatch.setattr(cli_main, "canonical_project_root", lambda root: Path(root))
-    monkeypatch.setattr(cli_main, "_active_exploration_runtime", lambda root: False)
+    monkeypatch.setattr(
+        cli_main,
+        "_active_exploration_cycle",
+        lambda *_args, **_kwargs: pytest.fail(
+            "stream-json deve selecionar standalone sem consultar ciclos"
+        ),
+    )
     monkeypatch.setattr(cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None))
     monkeypatch.setattr(
         explore,
@@ -349,7 +361,7 @@ def test_cmd_standalone_preserva_exit_code_do_executor(tmp_path, monkeypatch, ca
     assert events[-1]["text"] == "parcial"
 
 
-def test_node_exploration_preserva_fluxo_legado_sem_override(tmp_path, monkeypatch):
+def test_node_exploration_preserva_fluxo_do_ciclo_sem_override(tmp_path, monkeypatch):
     class State:
         exploration_log = []
 
@@ -365,10 +377,20 @@ def test_node_exploration_preserva_fluxo_legado_sem_override(tmp_path, monkeypat
             self.requests.append(request)
 
     runner = Runner()
+    selected: list[str | None] = []
+
+    def fake_get_runner(*_args, **kwargs):
+        selected.append(kwargs.get("cycle"))
+        return runner
+
     monkeypatch.setattr(cli_main, "find_project_root", lambda: tmp_path)
     monkeypatch.setattr(cli_main, "canonical_project_root", lambda root: Path(root))
-    monkeypatch.setattr(cli_main, "_active_exploration_runtime", lambda root: True)
-    monkeypatch.setattr(cli_main, "get_runner", lambda *args, **kwargs: runner)
+    monkeypatch.setattr(
+        cli_main,
+        "_active_exploration_cycle",
+        lambda root, requested=None: "cycle-01-feature",
+    )
+    monkeypatch.setattr(cli_main, "get_runner", fake_get_runner)
     monkeypatch.setattr(
         explore,
         "run_read_only_explore",
@@ -378,12 +400,19 @@ def test_node_exploration_preserva_fluxo_legado_sem_override(tmp_path, monkeypat
     cli_main.cmd_explore(_args(request="pedido legado"))
 
     assert runner.requests == ["pedido legado"]
+    assert selected == ["cycle-01-feature"]
 
 
 def test_standalone_prevalece_sobre_node_exploration_ativo(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_main, "find_project_root", lambda: tmp_path)
     monkeypatch.setattr(cli_main, "canonical_project_root", lambda root: Path(root))
-    monkeypatch.setattr(cli_main, "_active_exploration_runtime", lambda root: True)
+    monkeypatch.setattr(
+        cli_main,
+        "_active_exploration_cycle",
+        lambda *_args, **_kwargs: pytest.fail(
+            "--standalone deve prevalecer sem consultar ciclos"
+        ),
+    )
     monkeypatch.setattr(cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None))
     monkeypatch.setattr(
         cli_main,

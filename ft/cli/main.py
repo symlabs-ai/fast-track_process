@@ -9,39 +9,23 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
+from pathlib import Path
 import re
 import sys
 
 import yaml
 
-# Sequências ANSI (para higienizar texto do estado antes de exibir).
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-
-def _oneline(s: str | None, limit: int = 100) -> str:
-    """Colapsa para UMA linha (sem \\n) e sem ANSI, truncado. Necessário para
-    texto livre do estado (ex. blocked_reason, um dump de review multi-linha)
-    que, cru, quebraria o heartbeat sobrescrito com \\r e vazaria a cor."""
-    if not s:
-        return ""
-    s = " ".join(_ANSI_RE.sub("", str(s)).split())
-    return s[:limit] + ("…" if len(s) > limit else "")
-from pathlib import Path
-
 from ft.engine import paths
 from ft.engine.layout import (
     canonical_project_root,
-    ensure_project_layout,
     latest_cycle_artifact,
     manifest_llm_defaults,
     migrate_legacy_layout,
     process_digest,
     read_manifest,
-    register_project_process,
     resolve_project_process,
     update_manifest_llm_defaults,
     validate_local_process_path,
-    validate_template_is_pristine,
 )
 from ft.engine.llm_capabilities import discover_llm_capabilities
 from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
@@ -60,6 +44,20 @@ from ft.engine.validators.artifacts import (
     implemented_backlog_covered_by_features,
     project_backlog_summary,
 )
+
+
+# Sequências ANSI (para higienizar texto do estado antes de exibir).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _oneline(s: str | None, limit: int = 100) -> str:
+    """Colapsa para UMA linha (sem \\n) e sem ANSI, truncado. Necessário para
+    texto livre do estado (ex. blocked_reason, um dump de review multi-linha)
+    que, cru, quebraria o heartbeat sobrescrito com \\r e vazaria a cor."""
+    if not s:
+        return ""
+    s = " ".join(_ANSI_RE.sub("", str(s)).split())
+    return s[:limit] + ("…" if len(s) > limit else "")
 
 
 def add_llm_engine_flags(parser):
@@ -203,12 +201,12 @@ def _template_entrypoint(template_dir: Path) -> str:
     return str(policy.get("entrypoint") or "init")
 
 
-def available_templates(entrypoint: str | None = "init") -> list[str]:
-    """Descobre templates por entrypoint sem acoplar o CLI a nomes concretos.
+def available_templates(entrypoint: str | None = "run") -> list[str]:
+    """Discover templates for the universal run entrypoint or a tool workflow."""
+    if entrypoint in {None, "run"}:
+        from ft.templates import TemplateCatalog
 
-    O default preserva a semântica histórica do catálogo usado por ``ft init``.
-    Passe ``None`` para inspecionar o catálogo global completo.
-    """
+        return list(TemplateCatalog(engine_root() / "templates").names())
     templates_root = engine_root() / "templates"
     if not templates_root.is_dir():
         return []
@@ -221,185 +219,10 @@ def available_templates(entrypoint: str | None = "init") -> list[str]:
     )
 
 
-def resolve_feature_template(template: object = None) -> str:
-    """Resolve one incremental template while preserving ``feature`` as default.
-
-    Template discovery remains driven by ``execution_policy.entrypoint``.  This
-    keeps ``ft feature`` generic: adding a lightweight process does not create a
-    second command or a parallel orchestration fork.
-    """
-    selected = str(template or "feature")
-    available = available_templates("feature")
-    if selected not in available:
-        choices = ", ".join(available) if available else "nenhum"
-        raise ValueError(
-            f"template '{selected}' não pertence ao entrypoint feature. "
-            f"Templates disponíveis: {choices}"
-        )
-    return selected
-
-
-def _print_template_options(entrypoint: str = "init") -> None:
+def _print_template_options(entrypoint: str = "run") -> None:
     available = available_templates(entrypoint)
     if available:
         print(f"  Templates disponíveis: {', '.join(available)}")
-
-
-def materialize_process_template(
-    template_name: str,
-    project_root: Path,
-    *,
-    entrypoint: str,
-    set_default: bool = False,
-) -> Path:
-    """Materialize one process while excluding concurrent bundle updates."""
-    from ft.engine.layout import _manifest_write_lock
-
-    root = project_root.resolve()
-    with _manifest_write_lock(root):
-        return _materialize_process_template_locked(
-            template_name,
-            root,
-            entrypoint=entrypoint,
-            set_default=set_default,
-        )
-
-
-def _materialize_process_template_locked(
-    template_name: str,
-    project_root: Path,
-    *,
-    entrypoint: str,
-    set_default: bool = False,
-) -> Path:
-    """Copy one global template into a named local process exactly once.
-
-    The returned path is always project-owned. Existing local forks are never
-    overwritten, even when the global template changes later.
-    """
-    import shutil
-    from ft.engine.layout import _assert_no_exclusive_startup
-
-    root = project_root.resolve()
-    _assert_no_exclusive_startup(root)
-    for guarded in (
-        paths.project_ft_dir(root),
-        paths.project_manifest(root),
-        paths.project_process_dir(root),
-        paths.project_cycles_dir(root),
-    ):
-        if guarded.is_symlink():
-            raise ValueError(
-                f"layout local não pode conter link simbólico: {guarded}"
-            )
-    process_catalog = paths.project_process_dir(root).resolve()
-    try:
-        process_catalog.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("catálogo local .ft/process/ escapa da raiz do projeto") from exc
-    available = available_templates(entrypoint)
-    if template_name not in available:
-        choices = ", ".join(available) if available else "nenhum"
-        raise ValueError(
-            f"template '{template_name}' não pertence ao entrypoint {entrypoint}. "
-            f"Templates disponíveis: {choices}"
-        )
-
-    source = engine_root() / "templates" / template_name
-    validate_template_is_pristine(source)
-    source_process = _template_process_file(source)
-    if source_process is None:
-        raise ValueError(f"template '{template_name}' não contém process.yml")
-
-    destination = paths.project_named_process_dir(root, template_name)
-    local_process = paths.project_named_process_file(root, template_name)
-    if destination.is_symlink():
-        raise ValueError(
-            f"processo local não pode ser link simbólico: {destination.relative_to(root)}"
-        )
-    if destination.exists():
-        if not local_process.is_file():
-            raise ValueError(
-                f"processo local parcial em {destination.relative_to(root)}; "
-                "remova ou corrija o diretório antes de tentar novamente"
-            )
-        if local_process.is_symlink():
-            raise ValueError(
-                f"processo local não pode ser link simbólico: {local_process.relative_to(root)}"
-            )
-        local_entrypoint = _template_entrypoint(destination)
-        try:
-            local_payload = yaml.safe_load(local_process.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError) as exc:
-            raise ValueError(f"processo local inválido em {local_process}: {exc}") from exc
-        local_policy = (
-            local_payload.get("execution_policy", {})
-            if isinstance(local_payload, dict)
-            else {}
-        )
-        declared_template = (
-            local_policy.get("template") if isinstance(local_policy, dict) else None
-        )
-        if local_entrypoint != entrypoint or (
-            declared_template is not None and str(declared_template) != template_name
-        ):
-            raise ValueError(
-                f"fork local incompatível em {local_process.relative_to(root)}: "
-                f"esperado template={template_name}, entrypoint={entrypoint}"
-            )
-        register_project_process(
-            root,
-            process_name=template_name,
-            process_path=local_process,
-            template_id=template_name,
-            entrypoint=entrypoint,
-            source_digest=process_digest(source_process),
-            set_default=set_default,
-        )
-        print(f"  Processo local preservado: {local_process.relative_to(root)}")
-        return local_process
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        destination.mkdir()
-        shutil.copy2(source_process, local_process)
-        for child in source.iterdir():
-            # docs/ and src/ are product seeds, not part of the process bundle.
-            if child == source_process or child.name in {"docs", "src"}:
-                continue
-            if child.is_symlink():
-                raise ValueError(f"template contém link simbólico não permitido: {child}")
-            target = destination / child.name
-            if child.is_dir():
-                shutil.copytree(child, target)
-            else:
-                shutil.copy2(child, target)
-    except Exception:
-        if destination.exists():
-            shutil.rmtree(destination)
-        raise
-
-    # Templates de init legados usam o path flat. Ao materializá-los como um
-    # processo nomeado, torne todas as referências runtime locais ao fork.
-    from ft.engine import process_update as _process_update
-
-    _process_update.rewrite_local_refs(destination, template_name)
-
-    # Ancestral dos merges futuros de `ft process update`: o estado global
-    # recém-integrado, em coordenadas locais.
-    _process_update.write_base_snapshot(destination)
-
-    register_project_process(
-        root,
-        process_name=template_name,
-        process_path=local_process,
-        template_id=template_name,
-        entrypoint=entrypoint,
-        source_digest=process_digest(source_process),
-        set_default=set_default,
-    )
-    print(f"  Template '{template_name}' materializado em {local_process.relative_to(root)}")
-    return local_process
 
 
 def _guard_engine_repo(root: Path) -> None:
@@ -411,88 +234,23 @@ def _guard_engine_repo(root: Path) -> None:
         return
     if root.resolve() == engine_root().resolve():
         print("ERRO: este é o repositório do ft engine/template — não pode ser usado como projeto.")
-        print("  Crie um projeto novo: ft init <nome> --template <template>")
+        print("  Crie um projeto novo: ft init <nome>")
         _print_template_options()
-        print("  Ou rode em outro diretório: ft run <path-do-projeto>")
+        print("  Depois execute: ft run <path-do-projeto> --template <template>")
         print("  (override para desenvolvimento do engine: FT_ALLOW_ENGINE_REPO=1)")
         sys.exit(1)
 
 
-def copy_template(template_name: str, project_root: Path) -> Path:
-    """Materialize an init template under the metadata writer barrier."""
-    from ft.engine.layout import (
-        _assert_no_exclusive_startup,
-        _manifest_write_lock,
-    )
-
-    root = project_root.resolve()
-    with _manifest_write_lock(root):
-        _assert_no_exclusive_startup(root)
-        return _copy_template_locked(template_name, root)
-
-
-def _copy_template_locked(template_name: str, project_root: Path) -> Path:
-    """Materialize an init template as the named default process."""
-    import shutil
-
-    available = available_templates()
-    src_dir = engine_root() / "templates" / template_name
-    if template_name not in available:
-        print(f"ERRO: template '{template_name}' não encontrado.")
-        _print_template_options()
-        sys.exit(1)
-
-    try:
-        validate_template_is_pristine(src_dir)
-    except ValueError as exc:
-        print(f"ERRO: {exc}")
-        sys.exit(1)
-
-    dest = materialize_process_template(
-        template_name,
-        project_root,
-        entrypoint="init",
-        set_default=True,
-    )
-
-    # Copiar subdirs do template (docs/, src/, scripts/)
-    for subdir in ("docs", "src", "scripts"):
-        template_sub = src_dir / subdir
-        if template_sub.is_dir():
-            if subdir == "scripts":
-                # Scripts belong to the named process bundle copied above.
-                continue
-            dest_sub = project_root / subdir
-            dest_sub.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(template_sub, dest_sub, dirs_exist_ok=True)
-
-    return dest
-
-
-def _copy_agents_md(project_root: Path) -> None:
-    """Copia o playbook AGENTS.md do engine para a raiz do projeto (não sobrescreve)."""
-    import shutil
-    from ft.engine.layout import (
-        _assert_no_exclusive_startup,
-        _manifest_write_lock,
-    )
-
-    root = project_root.resolve()
-    with _manifest_write_lock(root):
-        _assert_no_exclusive_startup(root)
-        src = engine_root() / "AGENTS.md"
-        dst = root / "AGENTS.md"
-        if src.exists() and not dst.exists():
-            shutil.copy(src, dst)
-            print("  AGENTS.md (playbook do condutor) copiado para o projeto")
-
-
-def _run_environment_script(project_root: Path, script: str) -> bool:
-    """Run an optional script adjacent to the default local process."""
+def _run_environment_script(
+    project_root: Path,
+    template: str,
+    script: str,
+) -> bool:
+    """Run an optional script adjacent to one explicit local template."""
     import subprocess
 
     project_root = project_root.resolve()
-    process_path = find_process_yaml(project_root)
+    process_path = resolve_project_process(project_root, template)
     if process_path is None:
         return False
     script_path = process_path.parent / "scripts" / script
@@ -522,7 +280,7 @@ def find_project_root() -> Path:
     """Encontra a raiz do projeto subindo até o layout .ft versionado."""
     current = Path.cwd()
     for parent in [current, *current.parents]:
-        if paths.project_manifest(parent).is_file() or (parent / "process").is_dir():
+        if paths.project_manifest(parent).is_file():
             return parent
     return current
 
@@ -779,11 +537,6 @@ def cmd_llm_defaults(args) -> None:
     _print_llm_json(capabilities, compact)
 
 
-def find_process_yaml(root: Path) -> Path | None:
-    """Return the default project-owned process declared by the manifest."""
-    return resolve_project_process(root)
-
-
 def _resolve_pinned_process(root: Path, raw_path: str) -> Path:
     """Resolve a state-owned process path strictly inside the local catalog."""
     relative = Path(raw_path)
@@ -918,97 +671,6 @@ def _state_data(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _open_status_targets(root: Path) -> list[tuple[str, str | None]]:
-    """Return open runtimes that ``ft status`` should render together.
-
-    The local runtime remains authoritative when the command is executed from
-    inside a worktree.  From the owning checkout, continuous mode (when it
-    represents a real cycle) and every real external worktree runtime are
-    returned in stable order.
-    The second tuple item is the value accepted by ``get_runner(cycle=...)``;
-    ``None`` identifies continuous mode.
-    """
-    if paths.is_worktree_path(root):
-        return []
-
-    targets: list[tuple[str, str | None]] = []
-    continuous = paths.continuous_state_path(root)
-    if continuous.is_file() and _state_represents_runtime(_state_data(continuous)):
-        targets.append(("continuous", None))
-
-    wt_home = paths.worktrees_home(root)
-    if not wt_home.is_dir():
-        return targets
-
-    worktrees = sorted(
-        [entry for entry in wt_home.iterdir() if entry.is_dir() and _is_cycle_dir(entry)],
-        key=_cycle_num,
-    )
-    for worktree in worktrees:
-        state_path = worktree / "state" / "engine_state.yml"
-        if state_path.is_file() and _state_represents_runtime(_state_data(state_path)):
-            targets.append((worktree.name, worktree.name))
-    return targets
-
-
-def _find_latest_state(root: Path) -> Path:
-    """Encontra o state mais recente.
-
-    Um runtime continuous ativo preserva a prioridade histórica. Um continuous
-    inativo, porém, não pode ocultar uma worktree ativa mais recente.
-    """
-    # Dentro de uma worktree, o ciclo local sempre vence. Procurar pelo nome
-    # do diretório pode selecionar outro ciclo ativo do mesmo projeto.
-    local_worktree_state = root / "state" / "engine_state.yml"
-    if paths.is_worktree_path(root) and local_worktree_state.exists():
-        return local_worktree_state
-
-    # 1. Continuous mode ativo: runtime fora do repositório.
-    continuous = paths.continuous_state_path(root)
-    if continuous.exists() and _is_active_state_data(_state_data(continuous)):
-        return continuous
-
-    # 2. Worktrees externos (~/.ft/worktrees/<project>/). Somente uma worktree
-    # ativa deve superar o fallback continuous histórico.
-    wt_home = paths.worktrees_home(root)
-    wt_states: list[Path] = []
-    if wt_home.is_dir():
-        wt_dirs = sorted(
-            [d for d in wt_home.iterdir() if d.is_dir() and _is_cycle_dir(d)],
-            key=_cycle_num, reverse=True,
-        )
-        wt_states = [
-            wd / "state" / "engine_state.yml"
-            for wd in wt_dirs
-            if (wd / "state" / "engine_state.yml").exists()
-        ]
-        for state in wt_states:
-            if _is_active_state_data(_state_data(state)):
-                return state
-
-    # 3. Sem ciclo ativo, preserve runtimes reais (por exemplo, uma worktree
-    # concluída aguardando `ft close`). Um continuous apenas pristine não pode
-    # ocultar essa worktree nem ressuscitar o processo default do projeto.
-    for state in wt_states:
-        if _state_represents_runtime(_state_data(state)):
-            return state
-    if continuous.exists() and _state_represents_runtime(_state_data(continuous)):
-        return continuous
-
-    # 4. Compatibilidade interna: callers que criam um ciclo ainda precisam de
-    # um path-destino quando não existe runtime. Comandos de ciclo validam esse
-    # fallback antes de construir o runner.
-    if continuous.exists():
-        return continuous
-    if wt_states:
-        return wt_states[0]
-
-    # Sem ciclo existente, comandos de leitura usam o runtime continuous.
-    # Criar um cycle-01 vazio aqui faria a chamada seguinte tratá-lo como
-    # worktree real, embora ele não tenha o processo versionado do projeto.
-    return paths.continuous_state_path(root)
-
-
 def _latest_archived_cycle(root: Path) -> tuple[Path, dict] | None:
     """Retorna o ciclo fechado mais recente para contexto de leitura."""
     archive_home = paths.project_cycles_dir(root)
@@ -1047,45 +709,8 @@ def _print_no_active_cycle(root: Path) -> None:
     print(_ui.dim("Use `ft runs` para consultar ciclos ativos e arquivados."))
 
 
-def _print_active_feature_batch(root: Path, *, full: bool = False) -> bool:
-    """Renderiza um batch paralelo aberto antes/entre seus ciclos."""
-    from ft.engine import feature_batch as _feature_batch
-    from ft.engine import ui as _ui
-
-    # Dentro de uma worktree, o runtime local continua autoritativo mesmo que
-    # o checkout principal tenha um batch paralelo aberto.
-    if paths.is_worktree_path(root):
-        return False
-    batch = _feature_batch.latest_active_batch(root)
-    if batch is None:
-        return False
-
-    phase = "plan" if batch.status in {"planning", "planned"} else "execution"
-    status = {
-        "planned": "aguardando confirmação do plano",
-        "paused": "paused",
-    }.get(batch.status, batch.status)
-
-    print(_ui.header(f"Batch paralelo: {batch.batch_id}"))
-    print(_ui.info(f"Batch: {batch.batch_id}"))
-    print(_ui.info(f"Fase: {phase}"))
-    print(_ui.info(f"Status: {status}"))
-    print(_ui.info(f"Template: {batch.template}"))
-    if batch.planner_engine:
-        print(_ui.info(f"LLM engine: {batch.planner_engine}"))
-    if batch.planner_model:
-        print(_ui.info(f"LLM model: {batch.planner_model}"))
-    if batch.planner_effort:
-        print(_ui.info(f"LLM effort: {batch.planner_effort}"))
-    print(_ui.info(f"Demandas: {len(batch.features)}"))
-    if full:
-        for feature in batch.features:
-            print(_ui.dim(f"{feature.feature_id} [{feature.status}] {feature.title}"))
-    return True
-
-
 def _ensure_runtime_selected(args, runner=None) -> bool:
-    """Impede comandos de ciclo de fabricarem estado a partir do processo default."""
+    """Validate that a command selected one concrete, pinned cycle."""
     if runner is not None:
         state = runner.state_mgr.load()
         data = vars(state) if hasattr(state, "__dict__") else {}
@@ -1095,27 +720,46 @@ def _ensure_runtime_selected(args, runner=None) -> bool:
         root = Path(runner_root) if runner_root else find_project_root()
         _print_no_active_cycle(root)
         return False
-    root = find_project_root()
-    explicit_cycle = getattr(args, "cycle", None)
-    if explicit_cycle:
-        explicit_state = (
-            paths.worktrees_home(root)
-            / str(explicit_cycle)
-            / "state"
-            / "engine_state.yml"
-        )
-        # Preserve o erro detalhado de get_runner para ciclo inexistente.
-        if not explicit_state.is_file():
-            return True
-        if _state_represents_runtime(_state_data(explicit_state)):
-            return True
-        _print_no_active_cycle(root)
-        return False
-    state_path = _find_latest_state(root)
-    if state_path.is_file() and _state_represents_runtime(_state_data(state_path)):
-        return True
-    _print_no_active_cycle(root)
-    return False
+    _select_cycle_for_command(
+        find_project_root(),
+        getattr(args, "cycle", None),
+    )
+    return True
+
+
+def _select_cycle_for_command(root: Path, requested: str | None = None):
+    """Select exactly one open cycle and render domain errors without traceback.
+
+    There is deliberately no "latest" fallback.  From the owning checkout one
+    cycle can be inferred; two or more require ``--cycle``.  From inside a run
+    worktree, that worktree is the implicit explicit selection.
+    """
+    from ft.runs import (
+        AmbiguousCycleError,
+        CycleNotFoundError,
+        CycleNotReadyError,
+        NoCycleError,
+        select_cycle,
+    )
+
+    location = Path(root).resolve()
+    owner = canonical_project_root(location)
+    selected = requested
+    if selected is None and paths.is_worktree_path(location):
+        selected = location.name
+    try:
+        return select_cycle(owner, selected, include_terminal=True)
+    except (
+        AmbiguousCycleError,
+        CycleNotFoundError,
+        CycleNotReadyError,
+        NoCycleError,
+    ) as exc:
+        from ft.engine import ui as _ui
+
+        print(_ui.fail(str(exc)))
+        print(_ui.info("Use `ft runs` para listar os ciclos disponíveis."))
+        raise SystemExit(2) from exc
 
 
 def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
@@ -1187,144 +831,6 @@ def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
         print(_ui.info(f"API health check: timeout/erro ({e}) — continuando"))
 
 
-def _seed_from_previous(src: Path, dst: Path) -> int:
-    """Copia artefatos do run anterior para o novo run.
-
-    Usa allowlist — só copia outputs conhecidos de projeto.
-    Nunca copia: state/, seed/, process/, node_modules/, dist/,
-    arquivos de configuração do engine (pyproject.toml, CHANGELOG.md, etc).
-    Retorna quantidade de itens copiados.
-    """
-    import shutil as _shutil
-
-    # Allowlist de diretórios de output que fazem sentido propagar
-    SEED_DIRS = {"frontend", "backend", "src", "lib", "tests", "docs"}
-    # Sub-dirs do docs/ que NÃO devem ser propagados (artefatos visuais de ciclo)
-    EXCLUDE_DOCS_SUBDIRS = {"screenshots", "e2e", "final"}
-
-    count = 0
-    for item in src.iterdir():
-        if item.name.startswith("."):
-            continue
-        target = dst / item.name
-
-        if item.is_dir() and item.name in SEED_DIRS:
-            if item.name == "docs":
-                # Seed docs/ excluindo screenshots e artefatos visuais
-                target.mkdir(exist_ok=True)
-                for sub in item.iterdir():
-                    if sub.name in EXCLUDE_DOCS_SUBDIRS:
-                        continue
-                    sub_target = target / sub.name
-                    if sub.is_dir():
-                        _shutil.copytree(sub, sub_target, dirs_exist_ok=True)
-                    else:
-                        _shutil.copy2(sub, sub_target)
-                count += 1
-            else:
-                _shutil.copytree(item, target, dirs_exist_ok=True,
-                                 ignore=_shutil.ignore_patterns(
-                                     "node_modules", "dist", "__pycache__", ".git", "*.pyc"
-                                 ))
-                count += 1
-        # Arquivos raiz: não copiar nada (pyproject.toml, CHANGELOG.md, etc
-        # são artefatos do engine ou do ciclo anterior, não outputs do projeto)
-
-    return count
-
-
-def _next_run_dir(project_root: Path) -> Path:
-    """Calcula e cria o próximo diretório de run em ~/.ft/worktrees/<project>/.
-
-    Propaga CLAUDE.md e .claude/ da raiz para o run dir
-    (útil para integrações de ambiente opt-in).
-    Copia artefatos do run anterior (seed de código).
-    """
-    import shutil as _shutil
-
-    wt_home = _worktrees_home(project_root)
-    next_num = _next_cycle_num(project_root)
-    run_dir = wt_home / f"cycle-{next_num:02d}"
-    # Se já existe (colisão), incrementar
-    while run_dir.exists():
-        next_num += 1
-        run_dir = wt_home / f"cycle-{next_num:02d}"
-    run_dir.mkdir(parents=True)
-
-    # Propagar CLAUDE.md e .claude/ para o run dir (gateway + settings)
-    claude_md = project_root / "CLAUDE.md"
-    if claude_md.exists():
-        _shutil.copy(claude_md, run_dir / "CLAUDE.md")
-    claude_dir = project_root / ".claude"
-    if claude_dir.is_dir():
-        dst = run_dir / ".claude"
-        if not dst.exists():
-            _shutil.copytree(claude_dir, dst)
-
-    # Propagar docs/ do projeto para o run dir (LLM roda com CWD=run dir)
-    # Nova estrutura: docs/ é o padrão; seed/ é fallback legado
-    docs_dir = project_root / "docs"
-    seed_dir = project_root / "seed"
-    if docs_dir.is_dir():
-        _shutil.copytree(docs_dir, run_dir / "docs", dirs_exist_ok=True)
-    elif seed_dir.is_dir():
-        # Legado: copiar seed/ como docs/ no run dir
-        _shutil.copytree(seed_dir, run_dir / "docs", dirs_exist_ok=True)
-
-    # Propagar metadados versionados do ft para o run dir.
-    project_ft = paths.project_ft_dir(project_root)
-    if project_ft.is_dir():
-        _shutil.copytree(project_ft, paths.project_ft_dir(run_dir), dirs_exist_ok=True)
-
-    # Seed de código do run anterior — buscar em worktrees externos.
-    existing_wt = sorted(
-        [d for d in wt_home.iterdir() if d.is_dir() and d != run_dir and _is_cycle_dir(d)],
-        key=_cycle_num,
-    )
-    prev_run = (existing_wt or [None])[-1]
-    if prev_run:
-        count = _seed_from_previous(prev_run, run_dir)
-        if count:
-            print(f"  Seed: {count} artefatos copiados de {prev_run.name}/ → {run_dir.name}/")
-
-    return run_dir
-
-
-def _next_cycle_num(project_root: Path) -> int:
-    """Retorna o próximo número considerando runtime e histórico versionado."""
-    max_num = 0
-
-    # Worktrees externos (~/.ft/worktrees/<project>/)
-    wt_home = paths.worktrees_home(project_root)
-    if wt_home.is_dir():
-        for d in wt_home.iterdir():
-            if d.is_dir() and _is_cycle_dir(d):
-                max_num = max(max_num, _cycle_num_strict(d) or 0)
-
-    cycles_dir = paths.project_cycles_dir(project_root)
-    if cycles_dir.is_dir():
-        for d in cycles_dir.iterdir():
-            if d.is_dir() and _is_cycle_dir(d):
-                max_num = max(max_num, _cycle_num_strict(d) or 0)
-
-    # Ledger persistente: o close remove os dirs dos ciclos encerrados; sem isto
-    # a numeração regride (ex.: cycle-02 fechado → censo de dirs sugere 02 de novo).
-    ledger = wt_home / ".cycles"
-    if ledger.exists():
-        for tok in ledger.read_text().split():
-            if tok.isdigit():
-                max_num = max(max_num, int(tok))
-
-    return max_num + 1
-
-
-def _worktrees_home(project_root: Path) -> Path:
-    """Retorna <ft_home>/worktrees/<project_name>/. Cria se não existir."""
-    home = paths.worktrees_home(project_root)
-    home.mkdir(parents=True, exist_ok=True)
-    return home
-
-
 def _validate_cycle_name(name: str | None) -> str | None:
     """Valida nome explícito de ciclo informado pelo usuário."""
     if name is None:
@@ -1337,20 +843,6 @@ def _validate_cycle_name(name: str | None) -> str | None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", name):
         raise ValueError("nome de ciclo deve usar apenas letras, números, '.', '_' ou '-'")
     return name
-
-
-def _record_cycle_ledger(project_root: Path, cycle_name: str) -> None:
-    """Registra o número do ciclo no ledger quando o nome segue cycle-NN."""
-    num = _cycle_num_strict(Path(cycle_name))
-    if num is None:
-        return
-    try:
-        ledger = _worktrees_home(project_root) / ".cycles"
-        nums = set(ledger.read_text().split()) if ledger.exists() else set()
-        nums.add(f"{num:02d}")
-        ledger.write_text("\n".join(sorted(nums)) + "\n")
-    except OSError:
-        pass
 
 
 def _single_fix_target_path(instruction: str, root: Path) -> str | None:
@@ -1438,107 +930,6 @@ def _try_apply_opencode_arena_board_fix(runner, instruction: str) -> str | None:
     return "arena canvas atualizado com data-testid=arena-board em " + ", ".join(changed)
 
 
-def _engine_from_last_cycle(project_root: Path) -> str | None:
-    """Lê o llm_engine do ciclo runtime mais recente."""
-    import yaml as _yaml
-
-    wt_home = paths.worktrees_home(project_root)
-    candidates: list[Path] = []
-
-    if wt_home.is_dir():
-        candidates += sorted(
-            [d / "state" / "engine_state.yml" for d in wt_home.iterdir()
-             if d.is_dir() and _is_cycle_dir(d)],
-            key=lambda p: p.stat().st_mtime if p.exists() else 0,
-            reverse=True,
-        )
-
-    for state_file in candidates:
-        if state_file.exists():
-            try:
-                data = _yaml.safe_load(state_file.read_text()) or {}
-                engine = data.get("llm_engine")
-                if engine:
-                    return engine
-            except Exception:
-                pass
-    return None
-
-
-def _setup_worktree(project_root: Path, name: str) -> Path:
-    """Cria a worktree sem concorrer com uma substituição de processo."""
-    from ft.engine.layout import _manifest_write_lock
-
-    with _manifest_write_lock(project_root):
-        return _setup_worktree_locked(project_root, name)
-
-
-def _setup_worktree_locked(project_root: Path, name: str) -> Path:
-    """Cria um git worktree para rodar um ciclo em isolamento total.
-
-    Cria: ~/.ft/worktrees/<project>/<name>
-    Branch: <name>
-
-    O nome é usado exatamente como passado — sem prefixo automático.
-
-    Retorna o path do worktree criado.
-    """
-    import subprocess as _sp
-    import shutil as _shutil
-
-    git_dir = project_root / ".git"
-    if not git_dir.exists():
-        raise RuntimeError(
-            f"Projeto não é um repositório git: {project_root}\n"
-            "  Execute: git init && git add -A && git commit -m 'init'\n"
-            "  Ou use ft run sem --worktree"
-        )
-
-    # Garantir que há pelo menos um commit (worktree precisa de HEAD)
-    result = _sp.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=project_root, capture_output=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            "Repositório sem commits — faça um commit inicial antes de usar --worktree"
-        )
-
-    branch_name = name
-    worktree_dir = _worktrees_home(project_root) / branch_name
-
-    # Verificar conflito de branch/diretório
-    if worktree_dir.exists():
-        raise RuntimeError(f"Worktree já existe: {worktree_dir}\nEscolha outro nome ou remova o existente.")
-    branches_result = _sp.run(
-        ["git", "branch", "--list", branch_name],
-        cwd=project_root, capture_output=True, text=True,
-    )
-    if branches_result.stdout.strip():
-        raise RuntimeError(f"Branch '{branch_name}' já existe. Escolha outro nome ou delete a branch.")
-
-    # Criar worktree
-    result = _sp.run(
-        ["git", "worktree", "add", str(worktree_dir), "-b", branch_name],
-        cwd=project_root, capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git worktree add falhou:\n{result.stderr}")
-
-    # Copiar .claude/ (não está no git) para o worktree
-    claude_src = project_root / ".claude"
-    if claude_src.is_dir():
-        claude_dst = worktree_dir / ".claude"
-        if not claude_dst.exists():
-            _shutil.copytree(claude_src, claude_dst)
-
-    print(f"  Worktree: {worktree_dir} (branch: {branch_name})")
-    return worktree_dir
-
-
-
-
-
 def _worktree_root_from_state(state_path: Path) -> Path | None:
     """Se o state mora dentro de um worktree, retorna o root desse worktree."""
     # state_path é algo como ~/.ft/worktrees/<proj>/cycle-NN/state/engine_state.yml
@@ -1561,34 +952,17 @@ def _worktree_root_from_state(state_path: Path) -> Path | None:
 
 
 def get_runner(
-    process: str | None = None,
     llm_engine: str | None = None,
     llm_model: str | None = None,
     verbose: bool = False,
     cycle: str | None = None,
     llm_effort: str | None = None,
 ) -> StepRunner:
-    root = canonical_project_root(find_project_root())
-    if cycle:
-        # Estados de execução existem somente no FT_HOME.
-        wt_home = paths.worktrees_home(root)
-        wt_path = wt_home / cycle / "state" / "engine_state.yml"
-
-        if wt_path.exists():
-            state_path = wt_path
-        else:
-            print(f"ERRO: Ciclo '{cycle}' não encontrado")
-            print(f"  Worktrees: {wt_home}")
-            sys.exit(1)
-    else:
-        state_path = _find_latest_state(root)
-
-    # Resolver effective_root: se o state mora num worktree, operar lá — não na main
-    effective_root = root
-    if state_path:
-        wt_root = _worktree_root_from_state(state_path)
-        if wt_root:
-            effective_root = wt_root
+    location = find_project_root()
+    root = canonical_project_root(location)
+    record = _select_cycle_for_command(location, cycle)
+    state_path = record.state_path
+    effective_root = record.worktree
 
     pinned_path = None
     pinned_digest = None
@@ -1603,18 +977,9 @@ def get_runner(
             pinned_digest = state_payload.get("process_digest")
             pinned_immutable = bool(state_payload.get("process_immutable", False))
 
-    # Um ciclo novo pode receber override local; retomadas usam sempre o path pinado.
+    # Every run is immutable and resumes exclusively from its pinned template.
     if pinned_path:
         process_path = _resolve_pinned_process(effective_root, str(pinned_path))
-        if process:
-            requested = Path(process)
-            if not requested.is_absolute():
-                requested = effective_root / requested
-            if requested.resolve() != process_path.resolve():
-                raise ValueError(
-                    "o ciclo já está fixado em outro processo local; "
-                    f"use {pinned_path}"
-                )
         if pinned_digest:
             payload = yaml.safe_load(process_path.read_text(encoding="utf-8")) or {}
             execution = payload.get("execution_policy", {}) if isinstance(payload, dict) else {}
@@ -1631,20 +996,11 @@ def get_runner(
                 raise ValueError(
                     f"processo local do ciclo divergiu do digest fixado: {pinned_path}"
                 )
-    elif process:
-        process_path = validate_local_process_path(
-            effective_root,
-            process,
-            require_registered=True,
-        )
     else:
-        process_path = find_process_yaml(effective_root)
-        if not process_path:
-            print("ERRO: processo default local não encontrado no manifesto")
-            print("  Projeto novo: ft init --template <template>")
-            _print_template_options()
-            print("  Projeto antigo: ft migrate-layout .")
-            sys.exit(1)
+        raise ValueError(
+            f"ciclo {record.name} não fixa process_path; "
+            "migre ou recrie o ciclo com `ft run --template <T>`"
+        )
 
     return StepRunner(
         process_path=process_path,
@@ -1659,191 +1015,55 @@ def get_runner(
 
 
 def cmd_init(args):
-    import os
+    """Initialize, diagnose, or repair the common project workspace."""
+    from ft.engine import ui as _ui
+    from ft.project import bootstrap_project, check_project, repair_project
 
-    template = getattr(args, "template", None)
-    if not template:
-        available = available_templates()
-        choices = ", ".join(available) if available else "nenhum"
-        raise ValueError(
-            f"--template é obrigatório no ft init. Templates disponíveis: {choices}"
-        )
+    raw_target = Path(getattr(args, "name", None) or ".").expanduser()
+    root = raw_target if raw_target.is_absolute() else Path.cwd() / raw_target
+    root = root.resolve()
+    _guard_engine_repo(root)
 
-    # Se nome fornecido, criar/entrar na pasta antes de qualquer coisa
-    name = getattr(args, "name", None)
-    if name:
-        target = Path.cwd() / name
-        target.mkdir(parents=True, exist_ok=True)
-        os.chdir(target)
-        print(f"  → Projeto: {target}")
+    def print_issues(issues) -> None:
+        for issue in issues:
+            marker = "AVISO" if issue.severity == "warning" else "ERRO"
+            suffix = f" ({issue.path})" if issue.path else ""
+            print(f"  {marker} [{issue.code}] {issue.message}{suffix}")
 
-    # Copiar o template informado se o processo ainda não existe.
-    root = find_project_root()
-    _guard_engine_repo(root)  # revalida após chdir para <nome>
-    guarded_layout_paths = (
-        paths.project_ft_dir(root),
-        paths.project_manifest(root),
-        paths.project_process_dir(root),
-        paths.project_cycles_dir(root),
-    )
-    symbolic = next((path for path in guarded_layout_paths if path.is_symlink()), None)
-    if symbolic is not None:
-        raise ValueError(f"layout local não pode conter link simbólico: {symbolic}")
-    if paths.project_manifest(root).exists() or paths.project_manifest(root).is_symlink():
-        raise ValueError(
-            f"projeto já inicializado em {root}; ft init só pode ser usado uma vez"
-        )
-    if getattr(args, "process", None):
-        raise ValueError(
-            "ft init não aceita --process; use --template para materializar "
-            "um processo local versionado"
-        )
-    if not find_process_yaml(root):
-        copy_template(template, root)
-
-    # Criar somente metadata versionável; ft init nunca cria estado de execução.
-    (root / "docs").mkdir(exist_ok=True)
-    (root / "src").mkdir(exist_ok=True)
-    defaults = {
-        "llm_engine": resolve_llm_engine(args),
-        "llm_model": resolve_llm_model(args),
-        "llm_effort": resolve_llm_effort(args),
-    }
-    ensure_project_layout(root, defaults=defaults)
-
-    # Playbook do condutor — todo projeto novo ganha uma cópia
-    _copy_agents_md(root)
-
-    if os.environ.get("SYM_GATEWAY_PROJECT_KEY"):
-        if _run_environment_script(root, "register_gateway.sh"):
-            print("  Ambiente externo provisionado pelo processo default local")
-        else:
-            print("  SYM_GATEWAY_PROJECT_KEY definida, mas register_gateway.sh não existe no processo default")
-
-    process_path = find_process_yaml(root)
-    if not process_path or not process_path.exists():
-        print("  Estrutura criada sem processo. Use: ft init --template <template>")
-        _print_template_options()
+    if getattr(args, "check", False):
+        result = check_project(root)
+        print(f"  Projeto: {result.root}")
+        print(f"  Status: {result.status}")
+        print_issues(result.issues)
+        if not result.healthy:
+            print(_ui.info("Reparo seguro disponível: ft init --fix"))
+            raise SystemExit(1)
         return
 
-    from ft.engine.graph import load_graph
-    graph = load_graph(process_path)
-    sprints = graph.get_sprints()
-    if sprints:
-        print(f"  Sprints: {', '.join(sprints)}")
-    first = graph.first_node()
-    total = len([node for node in graph.nodes.values() if node.type != "end"])
-    print(f"  Processo: {graph.meta.get('title', graph.meta.get('id', '?'))}")
-    print(f"  Primeiro: {first.id} ({first.title})")
-    print(f"  Total: {total} steps")
-    print("  Projeto inicializado sem estado de execução.")
-
-
-def cmd_feature(args):
-    """Start one incremental feature in a dedicated external worktree."""
-    import subprocess as _sp
-
-    if getattr(args, "process", None):
-        raise ValueError(
-            "ft feature não aceita --process; use --template para materializar o processo local"
-        )
-
-    # Batch paralelo: N demandas orquestradas em waves (ft/cli/feature_parallel.py).
-    if getattr(args, "parallel", False) or getattr(args, "resume", None):
-        from ft.cli.feature_parallel import run_parallel_batch
-
-        run_parallel_batch(args)
+    if getattr(args, "fix", False):
+        result = repair_project(root)
+        print(f"  Projeto: {result.root}")
+        for action in result.actions:
+            print(f"  ✓ {action}")
+        print_issues(result.remaining)
+        if result.backup_dir:
+            print(f"  Backup/relatório: {result.backup_dir}")
+        if result.errors:
+            print(_ui.fail("Reparo incompleto; os erros acima exigem intervenção."))
+            raise SystemExit(1)
+        print(_ui.success("Workspace Fast Track saudável."))
         return
 
-    demand = getattr(args, "demand", None)
-    if isinstance(demand, list):
-        if len(demand) > 1:
-            raise ValueError("múltiplas demandas exigem ft feature --parallel")
-        demand = demand[0] if demand else None
-
-    root = find_project_root().resolve()
-    if not paths.project_manifest(root).is_file() or find_process_yaml(root) is None:
-        raise ValueError(
-            "ft feature exige um projeto já inicializado; "
-            "execute ft init <nome> --template <template> primeiro"
-        )
-    _warn_process_drift(root, str(getattr(args, "template", None) or "feature"))
-
-    input_file = getattr(args, "feature_input", None)
-    if demand and input_file:
-        raise ValueError("informe a demanda posicional ou --input FILE, não ambos")
-    if not demand and not input_file:
-        try:
-            demand = input("Descreva a feature: ").strip()
-        except (EOFError, KeyboardInterrupt, OSError):
-            demand = ""
-        if not demand:
-            raise ValueError(
-                "informe uma demanda posicional, --input FILE ou responda ao prompt"
-            )
-    if input_file:
-        source = Path(input_file).expanduser()
-        if not source.is_absolute():
-            source = Path.cwd() / source
-        if not source.is_file():
-            raise FileNotFoundError(f"arquivo de demanda não encontrado: {source}")
-        request_text = source.read_text(encoding="utf-8")
+    result = bootstrap_project(root)
+    print(f"  Projeto: {result.root}")
+    for action in result.actions:
+        print(f"  ✓ {action}")
+    if result.status == "unchanged":
+        print(_ui.success("Workspace Fast Track já estava inicializado e saudável."))
     else:
-        request_text = str(demand)
-    if not request_text.strip():
-        raise ValueError("a demanda da feature não pode ser vazia")
-
-    inside = _sp.run(
-        ["git", "rev-parse", "--is-inside-work-tree"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    head = _sp.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    if inside.returncode != 0 or head.returncode != 0:
-        raise RuntimeError("ft feature exige um repositório Git com commit inicial")
-    dirty = _sp.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    if dirty.stdout.strip():
-        raise RuntimeError(
-            "commite as mudanças do checkout principal antes de iniciar a feature:\n"
-            + dirty.stdout.strip()
-        )
-
-    active = _check_active_run(root)
-    if active and not getattr(args, "force", False):
-        raise RuntimeError(
-            f"já existe um ciclo ativo: {active}. Use ft continue ou --force"
-        )
-
-    template = resolve_feature_template(getattr(args, "template", None))
-    local_process = materialize_process_template(
-        template,
-        root,
-        entrypoint="feature",
-    )
-
-    run_args = argparse.Namespace(**vars(args))
-    run_args.project = str(root)
-    run_args.process = local_process.relative_to(root).as_posix()
-    run_args.template = None
-    run_args.from_project = None
-    run_args.hipotese = None
-    run_args.demand_input = None
-    run_args.worktree = None
-    run_args._require_git_worktree = True
-    run_args._request_text = request_text
-    run_args._request_path = "docs/feature-request.md"
-    cmd_run(run_args)
+        print(_ui.success("Workspace Fast Track inicializado."))
+    print("  Nenhum template foi selecionado. Inicie um ciclo com:")
+    print("    ft run . --template <template>")
 
 
 def cmd_continue(args):
@@ -1851,7 +1071,7 @@ def cmd_continue(args):
     sys.stdout.reconfigure(line_buffering=True)
     if not _ensure_runtime_selected(args):
         return
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     from ft.engine.state import StateLockError
@@ -1871,7 +1091,11 @@ def cmd_continue(args):
             print(_ui.fail("Ciclo concluído reaberto: evidência final contradiz o PRD."))
             print(_ui.info("Estado atual: BLOCKED. Corrija o processo/produto pelo fluxo ft antes de fechar novamente."))
             return
-        print(_ui.warn("Ciclo já concluído — nada a retomar. Para um novo ciclo: ft run . --force"))
+        template = getattr(state, "template_id", None) or "<template>"
+        print(_ui.warn(
+            "Ciclo já concluído — nada a retomar. Novo ciclo: "
+            f"ft run . --template {template}"
+        ))
         return
     # Inicializar estado só se nunca rodou
     if state.current_node is None:
@@ -1892,50 +1116,17 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
-    root = find_project_root()
-    explicit_cycle = getattr(args, "cycle", None)
-    targets = [] if explicit_cycle else _open_status_targets(root)
-    if not explicit_cycle and not targets:
-        if _print_active_feature_batch(root, full=getattr(args, "full", False)):
-            return
-    if not _ensure_runtime_selected(args):
-        return
-
-    def _runner_for(cycle: str | None):
-        return get_runner(
-            args.process,
-            llm_engine=resolve_llm_engine(args),
-            llm_model=resolve_llm_model(args),
-            llm_effort=resolve_llm_effort(args),
-            verbose=getattr(args, "verbose", False),
-            cycle=cycle,
-        )
-
-    def _print_status(runner) -> None:
-        if getattr(args, "report", False):
-            runner.status_report()
-        else:
-            runner.status(full=getattr(args, "full", False))
-
-    if len(targets) > 1:
-        from ft.engine import ui as _ui
-
-        def _print_labeled_target(target: tuple[str, str | None]) -> None:
-            label, cycle = target
-            print(_ui.header(f"Ciclo: {label}"))
-            _print_status(_runner_for(cycle))
-
-        # O primeiro bloco também é rotulado. Mantê-lo fora do loop dos
-        # separadores evita que a condição visual entre blocos controle, por
-        # acidente, a presença do primeiro cabeçalho.
-        first, *remaining = targets
-        _print_labeled_target(first)
-        for target in remaining:
-            print()
-            _print_labeled_target(target)
-        return
-
-    _print_status(_runner_for(explicit_cycle))
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
+    if getattr(args, "report", False):
+        runner.status_report()
+    else:
+        runner.status(full=getattr(args, "full", False))
 
 
 def _truncate_visible(s: str, width: int, reset: str = "") -> str:
@@ -2266,7 +1457,7 @@ def _cycle_completion_report(runner) -> list[str]:
         "",
         "  Comandos úteis:",
         f"    ft status --cycle {cycle_name} --full",
-        f"    ft runs",
+        "    ft runs",
         f"    cd {root} && make -C project build && make -C project test",
         f"    cd {root} && python -m pytest project/tests/e2e -q",
         "",
@@ -2303,7 +1494,6 @@ def cmd_log(args):
     lines = args.lines if args.lines is not None else 30
 
     runner = get_runner(
-        args.process,
         llm_engine=resolve_llm_engine(args),
         llm_model=resolve_llm_model(args),
         llm_effort=resolve_llm_effort(args),
@@ -2625,7 +1815,7 @@ def cmd_runs(args):
         ts = "—"
         log = cycle / "cycle-log.md" if archived else next(cycle.glob("*_log.md"), None)
         if log and log.is_file():
-            lines = [l for l in log.read_text().splitlines() if l.startswith("| 2")]
+            lines = [line for line in log.read_text().splitlines() if line.startswith("| 2")]
             if lines:
                 last = lines[-1].split("|")
                 ts = last[1].strip()[11:16] if len(last) > 1 else "—"
@@ -2694,7 +1884,7 @@ def cmd_runs(args):
 
 
 def cmd_approve(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -2707,7 +1897,7 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
     retry = not args.no_retry
@@ -2722,14 +1912,26 @@ def cmd_reject(args):
         runner.run(mode="mvp")
 
 
-def _active_exploration_runtime(root: Path) -> bool:
-    """True somente para o modo legado atualmente parado num node exploration."""
+def _active_exploration_cycle(
+    root: Path,
+    requested: str | None = None,
+) -> str | None:
+    """Return an unambiguous cycle currently stopped in exploration."""
+    from ft.runs import CycleRegistry
 
-    state_path = _find_latest_state(root)
-    if not state_path.is_file():
-        return False
-    state = _state_data(state_path)
-    return str(state.get("node_status") or "") == "exploring"
+    owner = canonical_project_root(root)
+    registry = CycleRegistry(owner)
+    if requested is not None:
+        record = _select_cycle_for_command(root, requested)
+        return record.name if record.status == "exploring" else None
+    exploring = [
+        record
+        for record in registry.open_cycles(include_terminal=False)
+        if record.status == "exploring"
+    ]
+    if len(exploring) > 1:
+        _select_cycle_for_command(root, None)
+    return exploring[0].name if exploring else None
 
 
 def _explicit_explore_selection(args) -> tuple[str | None, str | None]:
@@ -2785,16 +1987,21 @@ def cmd_explore(args):
     root = canonical_project_root(find_project_root())
     stream_json = bool(getattr(args, "stream_json", False))
     force_standalone = bool(getattr(args, "standalone", False) or stream_json)
-    if not force_standalone and _active_exploration_runtime(root):
+    exploration_cycle = (
+        None
+        if force_standalone
+        else _active_exploration_cycle(root, getattr(args, "cycle", None))
+    )
+    if exploration_cycle:
         # Compatibilidade integral: quando o grafo possui uma exploração ativa,
         # request/finish/skip continuam usando estado, logs e worktree históricos.
         explicit_agent, explicit_model = _explicit_explore_selection(args)
         runner = get_runner(
-            args.process,
             llm_engine=explicit_agent,
             llm_model=explicit_model,
             llm_effort=resolve_llm_effort(args),
             verbose=getattr(args, "verbose", False),
+            cycle=exploration_cycle,
         )
         runner._bypass_human_gates = resolve_bypass_human_gates(args)
         if getattr(args, "finish", False):
@@ -2914,11 +2121,6 @@ def cmd_evolve(args):
     from ft.engine import ui as _ui
 
     sys.stdout.reconfigure(line_buffering=True)
-    if getattr(args, "process", None):
-        raise ValueError(
-            "ft evolve não aceita --process; use --template para escolher o playbook"
-        )
-
     root = find_project_root().resolve()
 
     include_project = bool(getattr(args, "project_target", False))
@@ -3116,8 +2318,8 @@ def cmd_process_candidates(args):
     project_root = find_project_root()
     try:
         runner = get_runner(
-            getattr(args, "process", None),
             verbose=getattr(args, "verbose", False),
+            cycle=getattr(args, "cycle", None),
         )
         root = Path(runner.project_root)
     except (FileNotFoundError, RuntimeError, ValueError):
@@ -3317,54 +2519,11 @@ def _process_update_runtime_guard(
                 f"{active.description} usa '{active.process_name}'"
             )
 
-    # Um batch pode reservar o template para workers que ainda nem possuem
-    # engine_state.yml. O guard precisa vê-lo antes da próxima wave nascer.
-    from ft.engine import feature_batch as _feature_batch
-
-    parallel_home = _feature_batch.parallel_home(root)
-    batch_ids = (
-        sorted(
-            directory.name
-            for directory in parallel_home.iterdir()
-            if directory.is_dir()
-            and (directory / _feature_batch.BATCH_FILENAME).is_file()
-        )
-        if parallel_home.is_dir()
-        else []
-    )
-    for batch_id in batch_ids:
-        try:
-            batch = _feature_batch.load_batch(root, batch_id)
-        except (AttributeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
-            blockers.append(
-                f"batch {batch_id}: estado paralelo inválido; processo desconhecido"
-            )
-        else:
-            if batch.status in _feature_batch.ACTIVE_BATCH_STATUSES:
-                template = str(batch.template or "").strip()
-                if not template:
-                    blockers.append(
-                        f"batch {batch.batch_id} ({batch.status}): processo desconhecido"
-                    )
-                elif template in target_names:
-                    blockers.append(
-                        f"batch {batch.batch_id} ({batch.status}): reserva o processo "
-                        f"'{template}'"
-                    )
-                else:
-                    disjoint.append(
-                        f"batch {batch.batch_id} ({batch.status}) reserva '{template}'"
-                    )
-            elif batch.status not in {"done", "failed"}:
-                blockers.append(
-                    f"batch {batch.batch_id}: status desconhecido '{batch.status}'"
-                )
-
     if blockers:
         details = "\n".join(f"  - {item}" for item in blockers)
         targets = ", ".join(sorted(target_names))
         raise RuntimeError(
-            "ft process update bloqueado por ciclo ativo ou batch com possível "
+            "ft process update bloqueado por ciclo ativo com possível "
             f"sobreposição aos processos [{targets}]:\n{details}\n"
             "Encerre/ pause o runtime concorrente ou atualize somente um "
             "processo comprovadamente disjunto."
@@ -3570,12 +2729,12 @@ def cmd_process_update(args):
         sys.exit(1)
 
 
-def cmd_close(args):
+def _cmd_close_locked_body(args, merge_lock):
     """Encerra o ciclo ativo: merge interativo + remove worktree + limpa branch."""
     import subprocess as _sp
     from ft.engine import ui as _ui
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
     state = runner.state_mgr.load()
@@ -3709,13 +2868,15 @@ def cmd_close(args):
     merge_ok = True
     if merge_strategy:
         # Via CLI flags (não-interativo)
-        merge_ok = runner.merge_on_close(merge_strategy, merge_paths)
+        with merge_lock.suspend():
+            merge_ok = runner.merge_on_close(merge_strategy, merge_paths)
     else:
         # Prompt interativo
         wt = runner._detect_worktree()
         if wt:
             strategy, paths = _prompt_merge_strategy(work)
-            merge_ok = runner.merge_on_close(strategy, paths)
+            with merge_lock.suspend():
+                merge_ok = runner.merge_on_close(strategy, paths)
         # Se não é worktree, nada a mergear
 
     if merge_ok is False:
@@ -3772,23 +2933,27 @@ def cmd_close(args):
     print("    4. Exercite o fluxo novo do ciclo de verdade — 'passou no worktree' não implica 'funciona no projeto'")
 
 
+def cmd_close(args):
+    """Serialize merge/removal while independent runs keep executing."""
+    from ft.runs import close_merge_lock
+
+    owner = canonical_project_root(find_project_root())
+    with close_merge_lock(owner) as merge_lock:
+        _cmd_close_locked_body(args, merge_lock)
+
+
 def cmd_graph(args):
     if not _ensure_runtime_selected(args):
         return
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False))
+    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     runner.status(full=True)
 
 
 def _validate_project_structure(root: Path) -> tuple[list[str], list[str]]:
-    """Valida estrutura base do projeto (docs/, .ft/process/, src/).
+    """Valida a estrutura comum do workspace e o catálogo local.
     Retorna (errors, warnings)."""
     errors = []
     warnings = []
-
-    required_dirs = ["docs", "src"]
-    for d in required_dirs:
-        if not (root / d).is_dir():
-            errors.append(f"diretório '{d}/' ausente")
 
     manifest_path = paths.project_manifest(root)
     if not manifest_path.is_file():
@@ -3796,9 +2961,6 @@ def _validate_project_structure(root: Path) -> tuple[list[str], list[str]]:
     else:
         try:
             manifest = read_manifest(root)
-            default_name = manifest.get("default_process")
-            if not isinstance(default_name, str) or not default_name:
-                errors.append("default_process ausente no manifesto v2")
             processes = manifest.get("processes", {})
             if isinstance(processes, dict):
                 for process_name in processes:
@@ -3806,15 +2968,8 @@ def _validate_project_structure(root: Path) -> tuple[list[str], list[str]]:
                         errors.append(
                             f"processo '{process_name}' ausente ou fora do path canônico"
                         )
-            if find_process_yaml(root) is None:
-                errors.append("processo default registrado não existe")
         except ValueError as exc:
             errors.append(str(exc))
-
-    # Warnings para docs opcionais mas esperados
-    for doc in ["docs/PRD.md", "docs/TECH_STACK.md"]:
-        if not (root / doc).exists():
-            warnings.append(f"'{doc}' não encontrado")
 
     return errors, warnings
 
@@ -3832,7 +2987,7 @@ def cmd_validate(args):
     struct_errors, struct_warnings = _validate_project_structure(root)
     structure_passed = len(struct_errors) == 0
     if structure_passed:
-        print("  \u2705 Estrutura: docs/, .ft/process/, src/ presentes")
+        print("  \u2705 Estrutura: manifesto V3 e catálogo local válidos")
     else:
         for e in struct_errors:
             print(f"  \u274c {e}")
@@ -3844,15 +2999,13 @@ def cmd_validate(args):
 
     # --- Validação do YAML ---
     print()
-    if args.process:
-        process_path = Path(args.process)
-        if not process_path.is_absolute():
-            process_path = root / process_path
-    else:
-        process_path = find_process_yaml(root)
-        if not process_path:
-            print("ERRO: processo default local não encontrado no manifesto")
-            sys.exit(1)
+    process_path = resolve_project_process(root, str(args.template))
+    if not process_path:
+        print(
+            f"ERRO: template local não materializado: {args.template}. "
+            f"Use `ft run . --template {args.template}` para materializá-lo."
+        )
+        sys.exit(1)
 
     rel = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
     print(f"Validando {rel}...\n")
@@ -3877,15 +3030,13 @@ def cmd_lint_process(args):
 
     root = find_project_root()
 
-    if args.process:
-        process_path = Path(args.process)
-        if not process_path.is_absolute():
-            process_path = root / process_path
-    else:
-        process_path = find_process_yaml(root)
-        if not process_path:
-            print("ERRO: processo default local não encontrado no manifesto")
-            sys.exit(1)
+    process_path = resolve_project_process(root, str(args.template))
+    if not process_path:
+        print(
+            f"ERRO: template local não materializado: {args.template}. "
+            f"Use `ft run . --template {args.template}` para materializá-lo."
+        )
+        sys.exit(1)
 
     yaml_content = process_path.read_text()
     rel_path = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
@@ -3959,7 +3110,7 @@ def cmd_lint_process(args):
 
     if not violations:
         print("  \u2705 Nenhuma especificidade de projeto detectada")
-        print(f"\n  Resultado: PASS")
+        print("\n  Resultado: PASS")
         sys.exit(0)
 
     errors = [v for v in violations if v.get("level") == "error"]
@@ -3993,7 +3144,7 @@ def cmd_retry(args):
     """Reseta o estado blocked do node atual e retenta sem aplicar correção."""
     from ft.engine import ui as _ui
 
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
+    runner = get_runner(llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         llm_effort=resolve_llm_effort(args),
                         verbose=getattr(args, "verbose", False),
@@ -4035,10 +3186,11 @@ def cmd_fix(args):
     from ft.engine import ui as _ui
 
     instruction = args.instruction
-    runner = get_runner(args.process, llm_engine=resolve_llm_engine(args),
+    runner = get_runner(llm_engine=resolve_llm_engine(args),
                         llm_model=resolve_llm_model(args),
                         llm_effort=resolve_llm_effort(args),
-                        verbose=getattr(args, "verbose", False))
+                        verbose=getattr(args, "verbose", False),
+                        cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
 
@@ -4217,31 +3369,18 @@ def cmd_fix(args):
         print(_ui.fail(f"LLM não conseguiu aplicar: {result.output[:300]}"))
 
 
-def cmd_abort(args):
+def _cmd_abort_locked_body(args):
     """Aborta o ciclo: descarta worktree e branch sem merge nenhum."""
-    import shutil
     import subprocess as _sp
     from ft.engine import ui as _ui
 
     root = find_project_root()
-    work = Path(root)
+    cycle = _select_cycle_for_command(root, getattr(args, "cycle", None))
+    work = cycle.worktree
     git_file = work / ".git"
     is_git_worktree = git_file.exists() and git_file.is_file()
-
-    # Se o comando veio da raiz principal, localizar o ciclo externo ativo.
     if not is_git_worktree:
-        state_path = _find_latest_state(root)
-        if state_path.exists() and paths.is_worktree_path(state_path):
-            work = state_path.parent.parent
-            git_file = work / ".git"
-            is_git_worktree = git_file.exists() and git_file.is_file()
-
-    is_plain_worktree = paths.is_worktree_path(work) and (work / "state").is_dir()
-
-    if not is_git_worktree and not is_plain_worktree:
-        print(_ui.fail("Não está numa worktree — nada para abortar."))
-        print(_ui.dim("Use ft cancel para cancelar um run em modo continuous no repo principal."))
-        return
+        raise RuntimeError(f"ciclo {cycle.name} não possui worktree Git válida")
 
     original_root = None
     branch = ""
@@ -4265,7 +3404,7 @@ def cmd_abort(args):
     print(_ui.dim(f"  Worktree: {work}"))
     if branch:
         print(_ui.dim(f"  Branch:   {branch}"))
-    print(_ui.dim(f"  Nenhum merge será feito — todo código será perdido."))
+    print(_ui.dim("  Nenhum merge será feito — todo código será perdido."))
     print()
     if not getattr(args, "force", False):
         confirm = input("Confirma? [s/N]: ").strip().lower()
@@ -4293,10 +3432,6 @@ def cmd_abort(args):
         else:
             print(_ui.fail(f"Erro ao remover worktree: {result.stderr.strip()[:200]}"))
             return
-    else:
-        shutil.rmtree(work)
-        print(_ui.success(f"Worktree removido: {work.name}"))
-
     # Remover branch
     if branch and original_root is not None:
         result = _sp.run(
@@ -4309,6 +3444,14 @@ def cmd_abort(args):
     print(_ui.success("Ciclo abortado. Nenhum merge realizado."))
 
 
+def cmd_abort(args):
+    from ft.runs import close_merge_lock
+
+    owner = canonical_project_root(find_project_root())
+    with close_merge_lock(owner):
+        _cmd_abort_locked_body(args)
+
+
 def cmd_cancel(args):
     """Cancela o run ativo com justificativa."""
     from datetime import datetime
@@ -4318,11 +3461,8 @@ def cmd_cancel(args):
     root = find_project_root()
     reason = args.reason
 
-    # Encontrar o run ativo
-    state_path = _find_latest_state(root)
-    if not state_path.exists():
-        print(_ui.warn("Nenhum run ativo encontrado."))
-        return
+    cycle = _select_cycle_for_command(root, getattr(args, "cycle", None))
+    state_path = cycle.state_path
 
     outcome: dict[str, object] = {}
 
@@ -4452,7 +3592,7 @@ def cmd_cancel(args):
         print(_ui.warn("LLM não disponível — relatório base salvo sem análise"))
 
     print(_ui.dim(f"Relatório: {cancel_report_display}"))
-    print(_ui.info("Para iniciar um novo run: ft run ."))
+    print(_ui.info("Para iniciar um novo run: ft run . --template <T>"))
 
 
 def cmd_setup_env(args):
@@ -4466,19 +3606,52 @@ def cmd_setup_env(args):
         print("      export SYM_GATEWAY_ADMIN_KEY=sk-sym_...  # opcional")
         sys.exit(1)
     project_root = Path(args.project).resolve() if args.project else find_project_root()
-    if not _run_environment_script(project_root, "register_gateway.sh"):
-        print("  ✗ register_gateway.sh não encontrado ao lado do processo default")
-        print("    Use um template de ambiente, por exemplo: ft init --template symgateway")
+    if not _run_environment_script(
+        project_root,
+        str(args.template),
+        "register_gateway.sh",
+    ):
+        print(
+            "  ✗ register_gateway.sh não encontrado ao lado do template "
+            f"{args.template}"
+        )
+        print("    Materialize-o primeiro: ft run . --template symgateway")
         sys.exit(1)
     print(f"  Projeto: {project_root}")
 
 
 def cmd_migrate_layout(args):
-    """Migra explicitamente um projeto do layout process/ para .ft/process/."""
+    """Migrate legacy layouts or remove V2's default process selection."""
     from ft.engine import ui as _ui
+    from ft.engine.layout import _read_manifest_file
+    from ft.project import migrate_v2_manifest
 
     project_root = Path(args.project).resolve()
     _guard_engine_repo(project_root)
+    manifest_path = paths.project_manifest(project_root)
+    if manifest_path.is_file():
+        # Read structure without applying the current-layout validator first:
+        # schema V1 and hybrid V2 are precisely the inputs this command exists
+        # to migrate.  Only a canonical named V2 manifest takes the narrow
+        # manifest-only path; every flat/hybrid form goes to the layout mover.
+        manifest = _read_manifest_file(manifest_path)
+        has_legacy_layout_keys = any(
+            key in manifest for key in ("process", "template", "origin_template")
+        )
+        if (
+            manifest.get("schema_version") == 2
+            and not has_legacy_layout_keys
+        ):
+            result = migrate_v2_manifest(project_root, dry_run=args.dry_run)
+            prefix = "Planejado" if args.dry_run else "Migrado"
+            print(_ui.success(f"{prefix}: {project_root}"))
+            for action in result.actions:
+                print(_ui.info(action))
+            if result.backup_path:
+                print(_ui.dim(f"Backup: {result.backup_path}"))
+            if args.dry_run:
+                print(_ui.dim("Nenhum arquivo foi alterado."))
+            return
     actions = migrate_legacy_layout(
         project_root,
         dry_run=args.dry_run,
@@ -4516,7 +3689,7 @@ def _normalize_hipotese(
     ok_sections, _ = has_sections(rel, ["Problema", "Oportunidade"], project_root=str(project_root))
 
     if ok_exists and ok_lines and ok_sections:
-        print(f"  hipotese.md validada — formato OK")
+        print("  hipotese.md validada — formato OK")
         return
 
     missing = []
@@ -4552,16 +3725,16 @@ Ao final diga DONE."""
                              llm_effort=llm_effort)
 
     if not result.success:
-        print(f"  AVISO: LLM não conseguiu corrigir hipotese.md — o processo vai solicitar reescrita")
+        print("  AVISO: LLM não conseguiu corrigir hipotese.md — o processo vai solicitar reescrita")
         return
 
     # Re-validar após correção
     ok_lines2, _ = min_lines(rel, 10, project_root=str(project_root))
     ok_sections2, _ = has_sections(rel, ["Problema", "Oportunidade"], project_root=str(project_root))
     if ok_lines2 and ok_sections2:
-        print(f"  hipotese.md corrigida e validada")
+        print("  hipotese.md corrigida e validada")
     else:
-        print(f"  AVISO: hipotese.md ainda fora do formato após correção — o processo vai solicitar reescrita")
+        print("  AVISO: hipotese.md ainda fora do formato após correção — o processo vai solicitar reescrita")
 
 
 def _resolve_run_mode(
@@ -4660,21 +3833,6 @@ def _cleanup_pristine_runs(project_root: Path) -> int:
                 shutil.rmtree(cycle_dir)
                 removed += 1
     return removed
-
-
-def _copy_plain_run_seed(source_root: Path, run_dir: Path) -> None:
-    """Seed para modo isolated sem git/worktree: copia contexto mínimo para o run dir."""
-    import shutil
-
-    for dirname in ("docs", ".ft", ".opencode"):
-        src = source_root / dirname
-        if src.is_dir():
-            shutil.copytree(src, run_dir / dirname, dirs_exist_ok=True)
-
-    for filename in ("AGENTS.md", "opencode.json", "opencode.jsonc"):
-        src = source_root / filename
-        if src.is_file():
-            shutil.copy2(src, run_dir / filename)
 
 
 @dataclass(frozen=True)
@@ -5020,12 +4178,6 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
     return records
 
 
-def _check_active_run(project_root: Path) -> str | None:
-    """Retorna a descrição do primeiro ciclo ativo, para callers legados."""
-    records = _active_run_records(project_root)
-    return records[0].description if records else None
-
-
 def _is_pid_alive(pid: int) -> bool:
     """Verifica se um PID está rodando."""
     try:
@@ -5036,57 +4188,26 @@ def _is_pid_alive(pid: int) -> bool:
 
 
 def _select_run_process(args, project_root: Path) -> tuple[Path, Path | None]:
-    """Resolve/materializa o processo sem atravessar um update concorrente."""
-    from ft.engine.layout import (
-        _assert_no_exclusive_startup,
-        _manifest_write_lock,
-    )
+    """Resolve ``--template`` local-first and materialize it exactly once."""
+    from ft.templates import resolve_template
 
     root = project_root.resolve()
-    with _manifest_write_lock(root):
-        _assert_no_exclusive_startup(root)
-        process_override = (
-            Path(args.process) if getattr(args, "process", None) else None
+    template = str(getattr(args, "template", "") or "").strip()
+    if not template:
+        raise ValueError("--template é obrigatório")
+    resolved = resolve_template(root, template)
+    selected = resolved.process_file.resolve()
+    relative = selected.relative_to(root)
+    if resolved.materialized:
+        print(f"  Template materializado: {relative}")
+    else:
+        print(f"  Template local: {relative}")
+    if resolved.source_drift:
+        print(
+            "  AVISO: o catálogo global mudou; o fork local foi preservado "
+            "sem sobrescrita"
         )
-        selected_template = getattr(args, "template", None)
-        if process_override and selected_template:
-            raise ValueError("use --process ou --template, não ambos")
-        if process_override:
-            process_override = validate_local_process_path(
-                root,
-                process_override,
-                require_registered=True,
-            )
-        selected = process_override
-        if selected_template:
-            selected = resolve_project_process(root, str(selected_template))
-            if selected is None and find_process_yaml(root) is not None:
-                selected = materialize_process_template(
-                    str(selected_template),
-                    root,
-                    entrypoint="init",
-                )
-        if selected is None:
-            selected = find_process_yaml(root)
-        if not selected or not selected.exists():
-            if selected_template:
-                selected = copy_template(str(selected_template), root)
-                _copy_agents_md(root)
-            else:
-                from ft.engine import ui as _ui
-
-                print(_ui.fail("processo default local não encontrado no manifesto"))
-                print(_ui.info("Projeto novo: ft init --template <template>"))
-                _print_template_options()
-                print(_ui.info("Projeto antigo: ft migrate-layout ."))
-                sys.exit(1)
-
-        selected = selected.resolve()
-        try:
-            relative = selected.relative_to(root)
-        except ValueError:
-            relative = None
-        return selected, relative
+    return selected, relative
 
 
 @dataclass(frozen=True)
@@ -5109,322 +4230,114 @@ def _prepare_run_runtime(
     process_path_at_root: Path,
     process_relative: Path | None,
     explicit_cycle_name: str | None,
-    inherited_engine: str | None,
+    inherited_engine: str | None = None,
 ) -> _PreparedRunRuntime:
-    """Cria o snapshot e reserva o runtime na mesma transação do update.
-
-    A reserva torna o startup visível antes de soltar o flock. Hooks Git e
-    criação de worktree usam uma reserva exclusiva curta; após o handoff para
-    state, triage, health-check e LLM não bloqueiam processos disjuntos.
-    """
-    from ft.engine.git_ops import (
-        commit_staged_knowledge,
-        stage_knowledge,
-        verify_hooks_from_process_meta,
-    )
-    from ft.engine.layout import (
-        _assert_no_exclusive_startup,
-        _manifest_write_lock,
-    )
+    """Create one immutable Git worktree without blocking other active runs."""
+    from ft.runs import RunCoordinator
 
     root = source_project_root.resolve()
-    requires_git_worktree = bool(getattr(args, "_require_git_worktree", False))
+    if process_relative is None:
+        raise ValueError("o template precisa estar materializado em .ft/process/")
 
-    with _manifest_write_lock(root):
-        _assert_no_exclusive_startup(root)
-        # A seleção preliminar pode ter ocorrido antes de um update. Reabra o
-        # path já sob o lock para que graph, scripts e snapshot venham todos da
-        # mesma versão do bundle.
-        selected = (
-            (root / process_relative).resolve()
-            if process_relative is not None
-            else process_path_at_root.resolve()
-        )
-        if not selected.is_file():
-            raise RuntimeError(
-                "o processo local mudou durante o startup; rode o comando novamente"
-            )
-        if process_relative is not None:
-            selected = validate_local_process_path(
-                root,
-                process_relative,
-                require_registered=True,
-            )
-
-        process_payload = yaml.safe_load(selected.read_text(encoding="utf-8")) or {}
-        if not isinstance(process_payload, dict):
-            raise ValueError(f"processo inválido: {selected}")
-        execution_policy = process_payload.get("execution_policy", {})
-        if (
-            isinstance(execution_policy, dict)
-            and execution_policy.get("runtime_source") == "local_only"
-        ):
-            process_catalog = paths.project_process_dir(root).resolve()
-            try:
-                process_catalog.relative_to(root)
-                selected.relative_to(process_catalog)
-            except ValueError as exc:
-                raise ValueError(
-                    "este processo exige uma cópia local em .ft/process/; "
-                    "não execute o template global diretamente"
-                ) from exc
-
-        if requires_git_worktree:
-            if process_relative is None:
-                raise ValueError(
-                    "ft feature executa somente processos copiados dentro do projeto"
-                )
-            try:
-                selected.relative_to(paths.project_process_dir(root).resolve())
-            except ValueError as exc:
-                raise ValueError(
-                    "ft feature exige processo local em .ft/process/"
-                ) from exc
-
-        if explicit_cycle_name and (
-            paths.worktrees_home(root) / explicit_cycle_name
-        ).exists():
-            from ft.engine import ui as _ui
-
-            print(_ui.fail(
-                f"Ciclo já existe: {paths.worktrees_home(root) / explicit_cycle_name}"
-            ))
-            print(_ui.dim("Escolha outro --cycle-name ou remova o ciclo existente."))
-            sys.exit(1)
-
-        # Antes de qualquer cleanup destrutivo, procure uma reserva de startup.
-        # Outro processo pode estar com o flock temporariamente suspenso dentro
-        # de `git worktree add`; tocar naquele diretório quebraria a criação.
-        active_records = _active_run_records(root)
-        startup_home = paths.startup_reservations_home(root).resolve()
-        unforceable = next(
-            (
-                record
-                for record in active_records
-                if not record.isolated
-                or record.state_path.parent.resolve() == startup_home
-            ),
-            None,
-        )
-        if unforceable is not None:
-            raise RuntimeError(
-                "já existe um startup/runtime continuous que compartilha este "
-                f"checkout: {unforceable.description}; --force não é seguro"
-            )
-
-        _cleanup_pristine_runs(root)
-        active_records = _active_run_records(root)
-        if active_records and not getattr(args, "force", False):
-            from ft.engine import ui as _ui
-
-            active = active_records[0].description
-            print(_ui.fail(f"Já existe um ciclo ativo: {active}"))
-            print(_ui.warn("Use: ft continue"))
-            print(_ui.dim(
-                "Para forçar novo ciclo mesmo assim: ft run . --force"
-            ))
-            sys.exit(1)
-
-        if explicit_cycle_name and getattr(args, "worktree", None):
-            from ft.engine import ui as _ui
-
-            print(_ui.fail("Use --cycle-name ou --worktree, não ambos."))
-            sys.exit(1)
-
-        run_mode = _resolve_run_mode(root, selected)
-        if requires_git_worktree and run_mode != "isolated":
-            raise RuntimeError("ft feature exige run_mode: isolated")
-
-        manifest_engine, manifest_model, manifest_effort = manifest_llm_defaults(root)
-        effective_engine = (
-            resolve_llm_engine(args)
-            or manifest_engine
-            or inherited_engine
-            or os.environ.get("FT_LLM_ENGINE", "").strip().lower()
-            or "claude"
-        )
-
-        prework_reservation = (
-            paths.continuous_startup_path(root)
-            if run_mode == "continuous"
-            else paths.startup_reservation_path(root)
-        )
-        _write_startup_reservation(
-            prework_reservation,
-            process_relative,
-            isolated=run_mode != "continuous",
-        )
-
-        # Capture o índice sob o lock, mas execute hooks com o flock suspenso.
-        # Como hooks podem ler todo o checkout, a reserva fica sem identidade
-        # de processo apenas nessa janela e bloqueia qualquer update mutante.
-        ok, staged, detail = stage_knowledge(str(root))
-        if staged:
-            with _suspend_startup_exclusively(
-                root,
-                prework_reservation,
-                process_relative,
-                isolated=run_mode != "continuous",
-            ):
-                ok, detail = commit_staged_knowledge(
-                    str(root),
-                    label="pré-run snapshot",
-                    verify_hooks=verify_hooks_from_process_meta(process_payload),
-                )
-        print(f"  {detail}")
-        if requires_git_worktree and not ok:
-            raise RuntimeError(detail)
-
-        if requires_git_worktree:
-            import subprocess as _sp
-
-            inside = _sp.run(
-                ["git", "rev-parse", "--is-inside-work-tree"],
-                cwd=root,
-                capture_output=True,
-                text=True,
-            )
-            head = _sp.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=root,
-                capture_output=True,
-                text=True,
-            )
-            if inside.returncode != 0 or head.returncode != 0:
-                raise RuntimeError(
-                    "ft feature exige um repositório Git com commit inicial"
-                )
-            dirty = _sp.run(
-                ["git", "status", "--porcelain", "--untracked-files=all"],
-                cwd=root,
-                capture_output=True,
-                text=True,
-            )
-            if dirty.stdout.strip():
-                raise RuntimeError(
-                    "o checkout principal possui mudanças fora do snapshot; "
-                    "commite ou descarte-as antes de iniciar a feature:\n"
-                    + dirty.stdout.strip()
-                )
-
-        project_root = root
-        worktree_name = getattr(args, "worktree", None)
-        outer_worktree_used = False
-        if worktree_name:
-            wt_name = (
-                worktree_name
-                if isinstance(worktree_name, str) and worktree_name != "True"
-                else f"cycle-{_next_cycle_num(project_root):02d}"
-            )
-            with _suspend_startup_exclusively(
-                root,
-                prework_reservation,
-                process_relative,
-                isolated=run_mode != "continuous",
-            ):
-                project_root = _setup_worktree_locked(project_root, wt_name)
-            outer_worktree_used = True
-
-        continuous_state_existed = False
-        if run_mode == "continuous":
-            state_path = paths.continuous_state_path(project_root)
-            continuous_state_existed = state_path.exists()
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            print("  RunMode: continuous")
-        else:
-            git_ok = (project_root / ".git").exists()
-            has_commits = False
-            if git_ok:
-                import subprocess as _sp
-
-                has_commits = _sp.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=project_root,
-                    capture_output=True,
-                ).returncode == 0
-
-            if outer_worktree_used:
-                run_dir = project_root
-            elif git_ok and has_commits:
-                next_num = _next_cycle_num(project_root)
-                wt_name = explicit_cycle_name or f"cycle-{next_num:02d}"
-                with _suspend_startup_exclusively(
-                    root,
-                    prework_reservation,
-                    process_relative,
-                    isolated=True,
-                ):
-                    run_dir = _setup_worktree_locked(project_root, wt_name)
-                _record_cycle_ledger(project_root, wt_name)
-            else:
-                if getattr(args, "parallel", False):
-                    from ft.engine import ui as _ui
-
-                    print(_ui.fail(
-                        "--parallel exige que o projeto seja um repositório git "
-                        f"com ao menos um commit: {project_root}"
-                    ))
-                    print("  Execute: git init && git add -A && git commit -m 'init'")
-                    print("  Ou rode sem --parallel.")
-                    sys.exit(1)
-                wt_home = _worktrees_home(project_root)
-                next_num = _next_cycle_num(project_root)
-                cycle_name = explicit_cycle_name or (
-                    f"cycle-{next_num:02d}-{effective_engine or 'run'}"
-                )
-                run_dir = wt_home / cycle_name
-                if run_dir.exists():
-                    from ft.engine import ui as _ui
-
-                    print(_ui.fail(f"Ciclo já existe: {run_dir}"))
-                    print(_ui.dim(
-                        "Escolha outro --cycle-name ou remova o ciclo existente."
-                    ))
-                    sys.exit(1)
-                run_dir.mkdir(parents=True, exist_ok=True)
-                _copy_plain_run_seed(project_root, run_dir)
-                _record_cycle_ledger(project_root, cycle_name)
-
-            state_path = run_dir / "state" / "engine_state.yml"
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            _write_startup_reservation(state_path, process_relative)
-            _release_startup_reservation(root, prework_reservation)
-            project_root = run_dir
-            print(f"  RunMode: isolated → {run_dir}")
-
-        return _PreparedRunRuntime(
-            project_root=project_root,
-            state_path=state_path,
-            run_mode=run_mode,
-            effective_engine=effective_engine,
-            process_path_at_root=selected,
-            process_relative=process_relative,
-            manifest_model=manifest_model,
-            manifest_effort=manifest_effort,
-            continuous_state_existed=continuous_state_existed,
-        )
+    manifest_engine, manifest_model, manifest_effort = manifest_llm_defaults(root)
+    effective_engine = (
+        resolve_llm_engine(args)
+        or manifest_engine
+        or os.environ.get("FT_LLM_ENGINE", "").strip().lower()
+        or "claude"
+    )
+    prepared = RunCoordinator(root).prepare(
+        template_id=str(args.template),
+        process_path=process_path_at_root,
+        process_digest=process_digest(process_path_at_root),
+        requested_cycle=explicit_cycle_name,
+    )
+    print(f"  RunMode: isolated → {prepared.worktree}")
+    return _PreparedRunRuntime(
+        project_root=prepared.worktree,
+        state_path=prepared.state_path,
+        run_mode="isolated",
+        effective_engine=effective_engine,
+        process_path_at_root=process_path_at_root,
+        process_relative=process_relative,
+        manifest_model=manifest_model,
+        manifest_effort=manifest_effort,
+        continuous_state_existed=False,
+    )
 
 
 def cmd_run(args):
-    """Bootstrap completo: cria projeto, provisiona ambiente, inicia e roda até MVP."""
+    """Materialize one template and execute it in a new isolated cycle."""
     import sys
     sys.stdout.reconfigure(line_buffering=True)
 
     source_project_root = Path(args.project).resolve()
     project_root = source_project_root
-    project_root.mkdir(parents=True, exist_ok=True)
+    if not project_root.is_dir():
+        raise ValueError(
+            f"projeto inexistente: {project_root}. Execute `ft init {args.project}` primeiro"
+        )
     _guard_engine_repo(project_root)
+    if not paths.project_manifest(project_root).is_file():
+        raise ValueError(
+            f"repositório Fast Track não inicializado em {project_root}; execute `ft init`"
+        )
 
-    # O bundle nasce no snapshot do ciclo. A seleção é protegida para nunca
-    # observar o intervalo backup→recópia de um process update concorrente.
-    process_path_at_root, process_relative = _select_run_process(
-        args,
-        source_project_root,
+    # Materialization changes only versioned FT metadata.  It is committed
+    # before the cycle snapshot, while the short project-preparation lock keeps
+    # two concurrent starts from observing a half-published catalog update.
+    from ft.engine.git_ops import (
+        commit_staged_knowledge,
+        stage_knowledge,
+        verify_hooks_from_process_meta,
     )
+    from ft.runs import RunCoordinator, project_prep_lock
 
-    (project_root / "docs").mkdir(parents=True, exist_ok=True)
-    (project_root / "src").mkdir(parents=True, exist_ok=True)
-    ensure_project_layout(project_root)
+    coordinator = RunCoordinator(project_root)
+    with project_prep_lock(project_root) as preparation:
+        coordinator.preflight()
+        process_path_at_root, process_relative = _select_run_process(
+            args,
+            source_project_root,
+        )
+        process_payload = yaml.safe_load(
+            process_path_at_root.read_text(encoding="utf-8")
+        ) or {}
+        if not isinstance(process_payload, dict):
+            raise ValueError(f"template inválido: {process_path_at_root}")
+        ok, staged, detail = stage_knowledge(str(project_root))
+        if not ok:
+            raise RuntimeError(detail)
+        if staged:
+            # Preserve the project lease while arbitrary Git hooks run.  Peer
+            # startups wait; descendants spawned by a hook fail fast instead
+            # of deadlocking their parent commit.
+            with preparation.suspend():
+                ok, detail = commit_staged_knowledge(
+                    str(project_root),
+                    label=f"materialize template {args.template}",
+                    verify_hooks=verify_hooks_from_process_meta(process_payload),
+                )
+            if not ok:
+                raise RuntimeError(detail)
+        print(f"  {detail}")
+        coordinator.preflight()
+
+    # Resolve and validate input before allocating a cycle, so a missing
+    # required request never leaves an unused branch/worktree behind.
+    from ft.templates import load_input_policy
+
+    input_policy = load_input_policy(process_path_at_root)
+    input_file = getattr(args, "demand_input", None)
+    if input_file is not None:
+        input_file = Path(input_file).expanduser()
+        if not input_file.is_absolute():
+            input_file = Path.cwd() / input_file
+    acquired_input = input_policy.acquire(
+        request=getattr(args, "request", None),
+        input_file=input_file,
+        prompt_fn=lambda prompt: input(f"{prompt}: "),
+    )
 
     try:
         explicit_cycle_name = _validate_cycle_name(getattr(args, "cycle_name", None))
@@ -5433,23 +4346,29 @@ def cmd_run(args):
         print(_ui.fail(f"--cycle-name inválido: {e}"))
         sys.exit(1)
 
-    inherited_engine = _engine_from_last_cycle(project_root)
     prepared = _prepare_run_runtime(
         args,
         source_project_root=source_project_root,
         process_path_at_root=process_path_at_root,
         process_relative=process_relative,
         explicit_cycle_name=explicit_cycle_name,
-        inherited_engine=inherited_engine,
     )
     project_root = prepared.project_root
     state_path = prepared.state_path
-    run_mode = prepared.run_mode
     _effective_engine = prepared.effective_engine
     process_path_at_root = prepared.process_path_at_root
     process_relative = prepared.process_relative
     manifest_model = prepared.manifest_model
     manifest_effort = prepared.manifest_effort
+
+    if acquired_input is not None:
+        input_text, _input_source = acquired_input
+        staged_input = input_policy.stage(project_root, request=input_text)
+        if staged_input is not None:
+            print(
+                "  Input do template: "
+                f"{staged_input.destination.relative_to(project_root)}"
+            )
 
     # Resolver YAML do processo dentro do ambiente efetivo.
     if process_relative is not None and project_root != source_project_root:
@@ -5457,26 +4376,7 @@ def cmd_run(args):
     elif process_path_at_root.is_file():
         process_path = process_path_at_root
     else:
-        process_path = find_process_yaml(project_root)
-        if not process_path:
-            print("ERRO: worktree sem processo default v2; confirme o commit inicial")
-            sys.exit(1)
-
-    request_text = getattr(args, "_request_text", None)
-    request_path = getattr(args, "_request_path", None)
-    if request_text is not None:
-        relative_request = Path(request_path or "docs/feature-request.md")
-        if (
-            relative_request.is_absolute()
-            or ".." in relative_request.parts
-            or not relative_request.parts
-            or relative_request.parts[0] != "docs"
-        ):
-            raise ValueError(f"path de demanda inválido: {relative_request}")
-        target = project_root / relative_request
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(str(request_text).rstrip() + "\n", encoding="utf-8")
-        print(f"  Demanda da feature: {relative_request}")
+        raise RuntimeError("a worktree não contém o template pinado")
 
     # Handoff é histórico de ciclo, mas precisa voltar ao contexto transitório
     # durante a execução seguinte. O close o arquiva novamente com a nova versão.
@@ -5527,7 +4427,7 @@ def cmd_run(args):
         dst = dst_docs / "plano_de_voo.md"
         if src and src.exists():
             if src.resolve() == dst.resolve():
-                print(f"  plano_de_voo.md já está em docs/ (mesmo projeto)")
+                print("  plano_de_voo.md já está em docs/ (mesmo projeto)")
             else:
                 dst_docs.mkdir(parents=True, exist_ok=True)
                 shutil.copy(src, dst)
@@ -5535,153 +4435,8 @@ def cmd_run(args):
         else:
             print(f"  AVISO: --from-project sem plano_de_voo.md em {paths.project_cycles_dir(source_project)}")
 
-    # ── Triage: classificar demanda bruta (--input) ──
-    demand_input = getattr(args, "demand_input", None)
-    if demand_input:
-        from ft.engine.triage import (
-            classify_demand, generate_hypothesis, present_triage,
-            adapt_process, validate_adapted_yaml,
-        )
-        from ft.engine import ui as _ui
-
-        src = Path(demand_input)
-        if not src.exists():
-            print(f"ERRO: arquivo de demanda não encontrado: {src}")
-            sys.exit(1)
-
-        demand_text = src.read_text()
-
-        with _ui.Spinner("Analisando demanda"):
-            classification = classify_demand(
-                demand=demand_text,
-                process_yaml_path=process_path,
-                project_root=str(project_root),
-                llm_engine=_effective_engine,
-                llm_model=llm_model,
-                llm_effort=llm_effort,
-            )
-
-        print(present_triage(classification))
-
-        # Se há perguntas → coletar respostas do stakeholder e re-classificar
-        questions = classification.get("questions", [])
-        if questions:
-            print(f"\n  {_ui.BOLD_WHITE}Responda as perguntas (uma por linha, Enter vazio para pular):{_ui.RESET}")
-            answers = []
-            for i, q in enumerate(questions, 1):
-                try:
-                    answer = input(f"    {_ui.CYAN}{i}.{_ui.RESET} ")
-                except (EOFError, KeyboardInterrupt):
-                    break
-                if answer.strip():
-                    answers.append(f"Pergunta: {q}\nResposta: {answer.strip()}")
-
-            if answers:
-                # Re-classificar com as respostas incorporadas
-                enriched_demand = demand_text + "\n\nRespostas do stakeholder:\n" + "\n".join(answers)
-                with _ui.Spinner("Re-analisando com suas respostas"):
-                    classification = classify_demand(
-                        demand=enriched_demand,
-                        process_yaml_path=process_path,
-                        project_root=str(project_root),
-                        llm_engine=_effective_engine,
-                        llm_model=llm_model,
-                        llm_effort=llm_effort,
-                    )
-                print(present_triage(classification))
-
-        # Se há requisitos de processo → propor adaptação ao stakeholder
-        process_reqs = classification.get("process", {})
-        if process_reqs.get("detected") and process_reqs.get("conflicts"):
-            from ft.engine.triage import (
-                diff_process, apply_renames_to_state, present_adaptation_proposal,
-            )
-
-            original_yaml = process_path.read_text()
-
-            with _ui.Spinner("Elaborando proposta de adaptação do processo"):
-                adapted = adapt_process(
-                    process_yaml_path=process_path,
-                    requirements=process_reqs.get("requirements", []),
-                    conflicts=process_reqs.get("conflicts", []),
-                    project_root=str(project_root),
-                    llm_engine=_effective_engine,
-                    llm_model=llm_model,
-                    llm_effort=llm_effort,
-                )
-
-            if adapted:
-                valid, report = validate_adapted_yaml(adapted)
-                if valid:
-                    # Calcular diff e mostrar proposta
-                    import yaml as _yaml
-                    orig_data = _yaml.safe_load(original_yaml)
-                    adapt_data = _yaml.safe_load(adapted)
-                    proc_diff = diff_process(original_yaml, adapted)
-
-                    print(present_adaptation_proposal(
-                        proc_diff,
-                        len(orig_data.get("nodes", [])),
-                        len(adapt_data.get("nodes", [])),
-                    ))
-
-                    # Esperar aprovação do stakeholder
-                    try:
-                        choice = input(f"  {_ui.BOLD_WHITE}>{_ui.RESET} ").strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        choice = "reject"
-
-                    if choice in ("approve", "ft approve", "sim", "s", "yes", "y", "1"):
-                        process_path.write_text(adapted)
-                        print(_ui.success("Processo adaptado e salvo"))
-
-                        # Aplicar renomeações ao state se existir
-                        if proc_diff["renames"] and state_path.exists():
-                            apply_renames_to_state(state_path, proc_diff["renames"])
-                            print(_ui.info(f"{len(proc_diff['renames'])} nodes renomeados no state"))
-
-                        # Recriar runner com o novo YAML
-                        runner = StepRunner(
-                            process_path=process_path,
-                            state_path=state_path,
-                            project_root=project_root,
-                            llm_engine=_effective_engine,
-                            llm_model=llm_model,
-                            llm_effort=llm_effort,
-                            llm_defaults_root=source_project_root,
-                            llm_engine_is_override=resolve_llm_engine(args) is not None,
-                            llm_model_is_override=resolve_llm_model(args) is not None,
-                            llm_effort_is_override=resolve_llm_effort(args) is not None,
-                            verbose=getattr(args, "verbose", False),
-                        )
-                    else:
-                        print(_ui.info("Adaptação rejeitada — usando processo padrão"))
-                else:
-                    print(report)
-                    print(_ui.warn("YAML adaptado não passou na validação — usando processo original"))
-            else:
-                print(_ui.warn("Não foi possível adaptar o processo — usando original"))
-
-        # Salvar demanda original para validação de cobertura (só na primeira run)
-        dst_docs = project_root / "docs"
-        dst_docs.mkdir(parents=True, exist_ok=True)
-        (dst_docs / "demanda.md").write_text(demand_text)
-        print(_ui.info("Demanda original salva em docs/demanda.md"))
-
-        # Gerar hipótese limpa (só produto) e salvar
-        hypothesis = generate_hypothesis(classification)
-        (dst_docs / "hipotese.md").write_text(hypothesis)
-        print(_ui.success("Hipótese gerada a partir da demanda"))
-        _normalize_hipotese(
-            dst_docs / "hipotese.md",
-            project_root,
-            llm_engine=_effective_engine,
-            llm_model=llm_model,
-            llm_effort=llm_effort,
-        )
-
     # Copiar e normalizar hipótese inicial se fornecida (pre-seed de ft.mdd.01.hipotese)
-    elif args.hipotese:
+    if args.hipotese:
         src = Path(args.hipotese)
         if not src.exists():
             print(f"ERRO: arquivo de hipótese não encontrado: {src}")
@@ -5699,37 +4454,13 @@ def cmd_run(args):
             llm_effort=llm_effort,
         )
 
-    # ft feature --parallel: o orquestrador cria o ciclo agora e executa
-    # depois via subprocess `ft continue --auto --cycle <nome>`.
-    setup_only = bool(getattr(args, "_setup_only", False))
-
     # Health check da API antes de começar
-    if not setup_only:
-        _api_health_check(project_root, _effective_engine)
+    _api_health_check(project_root, _effective_engine)
 
-    # Init + run MVP
-    try:
-        if run_mode == "continuous" and prepared.continuous_state_existed:
-            # Continuous mode with existing state: advance cycle
-            from ft.engine.cycle_manager import CycleManager
-
-            cm = CycleManager(state_path)
-            first = runner.graph.first_node()
-            cm.advance_cycle(first_node=first.id)
-            print(f"  Ciclo avançado: {cm.current_cycle()}")
-            runner._fire_hooks("on_cycle_end")
-        else:
-            runner.init_state()
-    finally:
-        if run_mode == "continuous":
-            # O state novo/avançado já está persistido antes da remoção; assim
-            # o guard nunca observa um intervalo sem reserva.
-            _release_continuous_startup(source_project_root)
+    # Initialize the pinned state and run.  Other project cycles are independent
+    # and remain free to progress in their own worktrees.
+    runner.init_state()
     apply_parallel_flags(runner, args)
-    if setup_only:
-        runner.state_mgr.release_lock()
-        print(f"  Ciclo preparado (setup-only): {project_root}")
-        return
     runner.run(mode="mvp")
 
 
@@ -5738,94 +4469,30 @@ def main():
         prog="ft",
         description="ft engine — motor deterministico de processos"
     )
-    parser.add_argument("--process", "-p", help="Path do YAML de processo")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Modo verboso: mostra output do LLM no terminal")
     sub = parser.add_subparsers(dest="command")
 
     # init
-    init = sub.add_parser("init", help="Criar o layout versionado do projeto (sem estado de execução)")
-    add_llm_engine_flags(init)
-    init.add_argument("name", nargs="?", help="Nome do projeto a criar (opcional — default: diretório atual)")
+    init = sub.add_parser(
+        "init",
+        help="Inicializar ou diagnosticar a base comum do Fast Track",
+    )
     init.add_argument(
-        "--template",
-        "-t",
-        required=True,
-        choices=available_templates(),
-        help="Template de processo a copiar",
-    )
-
-    # feature — evolução incremental em projeto já inicializado
-    feature = sub.add_parser(
-        "feature",
-        help="Implementar uma feature em worktree isolada",
-    )
-    add_llm_engine_flags(feature)
-    feature.add_argument(
-        "demand",
-        nargs="*",
-        help="Demanda incremental em texto livre (com --parallel: várias, entre aspas)",
-    )
-    feature.add_argument(
-        "--input",
-        metavar="FILE",
-        dest="feature_input",
-        help="Arquivo com a demanda (com --parallel: seções '## ' ou blocos '---')",
-    )
-    feature.add_argument(
-        "--template",
-        "-t",
-        choices=available_templates("feature"),
-        help=(
-            "Template de processo incremental a materializar "
-            "(default: feature; --resume preserva o template do batch)"
-        ),
-    )
-    feature.add_argument(
-        "--parallel",
-        action="store_true",
-        help="Orquestrar múltiplas demandas em ciclos paralelos por waves",
-    )
-    feature.add_argument(
-        "--engines",
-        metavar="LIST",
-        help="Engines por demanda em round-robin (ex: claude:opus,codex:gpt-5.3@high)",
-    )
-    feature.add_argument(
-        "--max-parallel",
-        dest="max_parallel",
-        type=int,
-        metavar="N",
-        help="Máximo de ciclos simultâneos por wave (default: 2)",
-    )
-    feature.add_argument(
-        "--yes",
-        "-y",
-        action="store_true",
-        help="Executar o plano do batch sem confirmação",
-    )
-    feature.add_argument(
-        "--resume",
+        "name",
         nargs="?",
-        const=True,
-        metavar="BATCH",
-        help="Retomar um batch paralelo (default: o mais recente)",
+        help="Diretório do projeto (default: diretório atual)",
     )
-    feature.add_argument(
-        "--force",
+    init_mode = init.add_mutually_exclusive_group()
+    init_mode.add_argument(
+        "--check",
         action="store_true",
-        help="Iniciar mesmo quando outro ciclo estiver ativo",
+        help="Diagnosticar sem alterar arquivos ou o repositório Git",
     )
-    feature.add_argument(
-        "--cycle-name",
-        metavar="NAME",
-        help="Nome explícito da worktree/ciclo",
-    )
-    feature.add_argument(
-        "--bypass-human-gates",
+    init_mode.add_argument(
+        "--fix",
         action="store_true",
-        dest="bypass_human_gates",
-        help="Pular human gates explicitamente",
+        help="Reparar com segurança uma inicialização Fast Track quebrada",
     )
 
     # resume (alias: continue para backward compat)
@@ -5926,13 +4593,16 @@ def main():
     # graph
     graph = sub.add_parser("graph", help="Mostrar grafo com status")
     add_llm_engine_flags(graph)
+    graph.add_argument("--cycle", help="Ciclo específico a consultar")
 
     # validate
-    sub.add_parser("validate", help="Validar YAML do processo")
+    validate = sub.add_parser("validate", help="Validar um template local materializado")
+    validate.add_argument("--template", "-t", required=True, metavar="TEMPLATE")
 
     # lint-process
     lp = sub.add_parser("lint-process", help="Lint semântico — detecta especificidades de projeto no YAML")
     add_llm_engine_flags(lp)
+    lp.add_argument("--template", "-t", required=True, metavar="TEMPLATE")
 
     # explore
     ex = sub.add_parser(
@@ -5963,6 +4633,7 @@ def main():
     )
     ex.add_argument("--finish", action="store_true", help="Encerrar exploração e gerar relatório")
     ex.add_argument("--skip", action="store_true", help="Pular o node de exploração sem gerar relatório")
+    ex.add_argument("--cycle", help="Ciclo específico para exploração ligada ao grafo")
 
     # evolve
     ev = sub.add_parser(
@@ -5979,7 +4650,7 @@ def main():
     ev.add_argument("--global", dest="global_target", action="store_true",
                     help="Aplicar melhorias no template global do engine")
     ev.add_argument("--cycle", metavar="NAME",
-                    help="Ciclo de onde derivar contexto (default: ativo ou último arquivado)")
+                    help="Ciclo de onde derivar contexto (omitido somente se houver exatamente um)")
     ev.add_argument("--dry-run", dest="dry_run", action="store_true",
                     help="Derivar e validar melhorias sem aplicar nos alvos")
     ev.add_argument("--yes", "-y", action="store_true",
@@ -5998,6 +4669,7 @@ def main():
     add_llm_engine_flags(fx)
     fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
     fx.add_argument("--auto", action="store_true", help="Continuar em modo MVP após correção")
+    fx.add_argument("--cycle", help="Ciclo específico a corrigir")
 
     # close
     cl = sub.add_parser("close", help="Encerrar ciclo: merge artefatos, remover worktree")
@@ -6028,6 +4700,7 @@ def main():
         "--reference",
         help="Commit/path que comprova promoção (obrigatório para promoted)",
     )
+    pc.add_argument("--cycle", help="Ciclo específico a consultar")
 
     # process (gestão dos processos locais frente aos templates globais)
     proc = sub.add_parser(
@@ -6063,18 +4736,21 @@ def main():
     ab = sub.add_parser("abort", help="Abortar ciclo: descarta worktree e branch sem merge")
     add_llm_engine_flags(ab)
     ab.add_argument("--force", action="store_true", help="Abortar sem prompt de confirmação")
+    ab.add_argument("--cycle", help="Ciclo específico a abortar")
 
     # cancel
     ca = sub.add_parser("cancel", help="Cancelar o run ativo com justificativa")
     add_llm_engine_flags(ca)
     ca.add_argument("reason", help="Motivo do cancelamento (entre aspas)")
+    ca.add_argument("--cycle", help="Ciclo específico a cancelar")
 
     # setup-env
     se = sub.add_parser(
         "setup-env",
-        help="Executar register_gateway.sh ao lado do processo default",
+        help="Executar register_gateway.sh ao lado de um template local",
     )
     se.add_argument("--project", help="Diretório do projeto (default: CWD ou raiz detectada)")
+    se.add_argument("--template", "-t", required=True, metavar="TEMPLATE")
 
     migrate = sub.add_parser(
         "migrate-layout",
@@ -6088,32 +4764,25 @@ def main():
         help="ID para arquivar os artefatos soltos do último ciclo",
     )
 
-    # run — bootstrap completo: cria projeto, provisiona, init, continue --auto
-    ru = sub.add_parser("run", help="Bootstrap completo de um novo projeto até MVP")
+    # run — materializa um template e inicia um ciclo externo independente
+    ru = sub.add_parser("run", help="Executar um template em um novo ciclo isolado")
     add_llm_engine_flags(ru)
-    ru.add_argument("project", help="Caminho do diretório do projeto (criado se não existir)")
-    ru.add_argument(
-        "--process",
-        help="YAML de um processo local registrado em .ft/process/<template>/",
-    )
+    ru.add_argument("project", help="Diretório de um projeto já inicializado")
     ru.add_argument("--from-project", metavar="PATH",
                     help="Copiar plano_de_voo.md do ciclo anterior (para retomada de ciclo)")
     ru.add_argument("--hipotese", metavar="FILE",
                     help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)")
     ru.add_argument("--input", metavar="FILE", dest="demand_input",
-                    help="Demanda bruta do usuário (texto livre — o engine classifica produto vs processo)")
+                    help="Arquivo de entrada aceito pelo template selecionado")
+    ru.add_argument("--request", metavar="TEXT",
+                    help="Demanda em texto livre aceita pelo template selecionado")
     ru.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
                     help="Pular human_gates automaticamente (LLM decide)")
-    ru.add_argument("--force", action="store_true",
-                    help="Forçar novo run mesmo se já houver um ativo")
     ru.add_argument("--cycle-name", metavar="NAME",
                     help="Nome explícito do ciclo isolado (ex: cycle-11-opencode). "
                          "Falha se o diretório já existir.")
-    ru.add_argument("--template", "-t", metavar="TEMPLATE",
-                    help="Nome do template de processo presente em templates/")
-    ru.add_argument("--worktree", metavar="NAME", nargs="?", const=True,
-                    help="Rodar em git worktree isolado (cycle-NN-NAME). "
-                         "NAME opcional: default = engine LLM ou 'run'")
+    ru.add_argument("--template", "-t", required=True, metavar="TEMPLATE",
+                    help="Template local ou global a executar")
     ru.add_argument("--auto", action="store_true",
                     help="Avançar em modo autônomo até MVP (PARA em human_gates; "
                          "para pular use --bypass-human-gates)")
@@ -6128,14 +4797,12 @@ def main():
     # Guard global: o ft opera sempre num repo de projeto, nunca no template/engine.
     # run/runs recebem o path do projeto como argumento e validam no próprio cmd_;
     # todos os demais comandos resolvem o projeto a partir do CWD.
-    if args.command not in (None, "run", "runs", "migrate-layout"):
+    if args.command not in (None, "init", "run", "runs", "migrate-layout"):
         _guard_engine_repo(find_project_root())
 
     try:
         if args.command == "init":
             cmd_init(args)
-        elif args.command == "feature":
-            cmd_feature(args)
         elif args.command in ("resume", "continue"):
             cmd_continue(args)
         elif args.command == "status":

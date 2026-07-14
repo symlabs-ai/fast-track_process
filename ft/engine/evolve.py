@@ -134,14 +134,22 @@ def find_cycle_context(
 ) -> tuple[str, Path | None, Path | None]:
     """Localiza a fonte de contexto: (label, dir_de_docs, state_file|None).
 
-    Preferência: ciclo pedido → ciclo ativo mais recente → último ciclo
-    arquivado em .ft/cycles/ → docs/ da raiz do projeto.
+    Um ciclo pedido é resolvido diretamente. Sem ``cycle``, exatamente um ciclo
+    ativo ou arquivado pode ser inferido; zero ou múltiplos ciclos são erros.
+    A seleção nunca depende de data de criação ou modificação.
     """
     root = Path(project_root).resolve()
     wt_home = paths.worktrees_home(root)
     cycles_dir = paths.project_cycles_dir(root)
 
     if cycle:
+        from ft.runs.registry import InvalidCycleName, validate_cycle_name
+
+        try:
+            cycle = validate_cycle_name(cycle)
+        except InvalidCycleName as exc:
+            raise EvolveError(str(exc)) from exc
+
         live = wt_home / cycle
         if (live / "state" / "engine_state.yml").is_file():
             return f"ciclo {cycle} (worktree)", live, live / "state" / "engine_state.yml"
@@ -150,25 +158,40 @@ def find_cycle_context(
             return f"ciclo {cycle} (arquivado)", archived, None
         raise EvolveError(f"ciclo não encontrado: {cycle}")
 
-    candidates: list[tuple[float, Path, Path]] = []
+    # Indexado por id para que um ciclo ainda presente como worktree e já
+    # arquivado conte uma única vez. Enquanto estiver ativo, o worktree é a
+    # fonte mais rica e tem precedência determinística sobre o arquivo.
+    candidates: dict[str, tuple[str, Path, Path | None]] = {}
     if wt_home.is_dir():
-        for item in wt_home.iterdir():
+        for item in sorted(wt_home.iterdir(), key=lambda entry: entry.name):
             state_file = item / "state" / "engine_state.yml"
             if item.is_dir() and state_file.is_file() and _state_is_active(state_file):
-                candidates.append((state_file.stat().st_mtime, item, state_file))
-    if candidates:
-        _, live, state_file = max(candidates, key=lambda entry: entry[0])
-        return f"ciclo {live.name} (ativo)", live, state_file
+                candidates[item.name] = (
+                    f"ciclo {item.name} (ativo)",
+                    item,
+                    state_file,
+                )
 
     if cycles_dir.is_dir():
-        archived = [item for item in cycles_dir.iterdir() if item.is_dir()]
-        if archived:
-            latest = max(archived, key=lambda item: item.stat().st_mtime)
-            return f"ciclo {latest.name} (arquivado)", latest, None
+        for item in sorted(cycles_dir.iterdir(), key=lambda entry: entry.name):
+            if item.is_dir():
+                candidates.setdefault(
+                    item.name,
+                    (f"ciclo {item.name} (arquivado)", item, None),
+                )
 
-    if (root / "docs").is_dir():
-        return "projeto (sem ciclo)", root, None
-    return "projeto (sem contexto)", None, None
+    if not candidates:
+        raise EvolveError(
+            "nenhum ciclo disponível para evolve; "
+            "inicie um ciclo com `ft run . --template <T>`"
+        )
+    if len(candidates) > 1:
+        options = ", ".join(sorted(candidates))
+        raise EvolveError(
+            "mais de um ciclo está disponível; informe --cycle. "
+            f"Opções: {options}"
+        )
+    return next(iter(candidates.values()))
 
 
 def _copy_context_tree(source: Path, destination: Path) -> list[str]:
@@ -214,7 +237,8 @@ def resolve_targets(
         project_dir = paths.project_process_dir(root)
         if not project_dir.is_dir():
             raise EvolveError(
-                "projeto sem processo local .ft/process/; rode ft init/ft feature antes"
+                "projeto sem template local em .ft/process/; "
+                "rode ft run . --template <T> antes"
             )
 
     global_dirs: dict[str, Path] = {}
@@ -264,7 +288,7 @@ def prepare_workspace(
     )
 
     try:
-        # 1. Playbook de evolução (sempre a versão global mais recente).
+        # 1. Playbook de evolução selecionado no catálogo global.
         shutil.copytree(template_dir, workspace_root / "process")
 
         # 2. Contexto read-only do ciclo.

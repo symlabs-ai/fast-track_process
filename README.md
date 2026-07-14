@@ -3,17 +3,25 @@
 Motor determinístico de processos para solo dev + AI. O pacote se chama
 `ft-engine`, mas o comando instalado é `ft`.
 
-Versão atual: **0.13.5**.
+Versão atual: **0.13.6**.
 
 ## O que é
 
-O Fast Track executa um processo definido em YAML: o Python controla grafo,
-estado, gates, worktrees e validadores; o LLM apenas constrói artefatos quando
-um node delega trabalho.
+O Fast Track executa processos definidos em YAML. Python controla grafo, estado,
+gates, worktrees e validadores; o LLM constrói artefatos somente quando um node
+delega trabalho.
 
-Projetos reais ficam fora deste repositório. Este repo é o template/engine e o
-guard bloqueia `ft init`/`ft run .` aqui, exceto com `FT_ALLOW_ENGINE_REPO=1`
-para desenvolvimento do próprio engine.
+No contrato V3, inicializar um repositório e escolher um processo são ações
+separadas:
+
+- `ft init [dir]` cria apenas a base comum do Fast Track e garante Git com HEAD;
+- `ft run <dir> --template <T>` materializa e executa o template escolhido;
+- não existe processo principal ou default;
+- ciclos com templates diferentes podem coexistir no mesmo repositório.
+
+Projetos reais ficam fora deste repositório. Este repo é o engine e o catálogo
+global; o guard bloqueia comandos de projeto aqui, exceto para manutenção
+explícita com `FT_ALLOW_ENGINE_REPO=1`.
 
 ## Instalação local
 
@@ -25,169 +33,173 @@ ft --help
 ## Criar um projeto
 
 ```bash
-ft init meu-projeto --template mvp-builder
+ft init meu-projeto
 cd meu-projeto
-git init
-git add -A
-git commit -m "chore: bootstrap fast track"
-ft run . --auto
+
+# Adicione as fontes exigidas pelo template e faça commit.
+mkdir -p docs
+$EDITOR docs/PRD.md docs/TECH_STACK.md
+git add -A && git commit -m "docs: seed product context"
+
+ft run . --template mvp-builder --auto
 ```
 
-`ft init` não escolhe um processo implicitamente: `--template` é obrigatório e
-`ft init --help` mostra os nomes compatíveis com esse entrypoint no catálogo
-instalado. Templates de outros comandos, como `feature`, não são aceitos no init.
-Se `.ft/manifest.yml` já existir, uma nova chamada a `ft init` falha.
-
-Um projeto pode manter vários processos locais. O manifesto registra o default e
-os processos nomeados; quando um entrypoint recebe `--template`, a primeira
-invocação materializa o template aplicável sob `.ft/process/<template>/` e as seguintes
-preservam a cópia versionada. O runtime nunca executa arquivos de `templates/`
-diretamente.
-
-```yaml
-schema_version: 2
-default_process: mvp-builder
-processes:
-  mvp-builder:
-    path: .ft/process/mvp-builder/process.yml
-    template: mvp-builder
-    entrypoint: init
-```
-
-## Evoluir uma feature
-
-Num produto FT já inicializado e commitado:
+`ft init` não recebe opções de seleção de template, não copia processo e não
+semeia `docs/` ou `src/`. Ele prepara `.ft/`, o manifesto, ignores e o
+repositório Git. Repeti-lo em um workspace saudável é idempotente.
 
 ```bash
-ft feature "Adicionar busca por telefone" --template feature --claude
-# ou: ft feature --input demanda.md --template feature --codex
-# bug reproduzível com teste RED→GREEN:
-ft feature "Terminal duplica o comando ao ecoar input" --template bug --codex
-# bugs independentes em workers paralelos:
-ft feature --parallel "bug A" "bug B" --template bug --codex
-# mudança pequena e focal:
-ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
+ft init --check   # diagnóstico somente leitura
+ft init --fix     # reparo conservador e explícito
 ```
 
-Na primeira chamada, o template é copiado para `.ft/process/feature/`; chamadas
-seguintes preservam esse fork local. A demanda existe apenas na worktree do
-ciclo. Perguntas, aprovação de escopo, implementação, review e aceite são
-conduzidos pelo grafo. Ao final, `ft close` valida somente o PB selecionado, faz
-merge full e remove worktree/branch.
+`--fix` reconstrói metadados e o catálogo a partir de processos locais válidos,
+sem sobrescrever forks nem ciclos. Metadados corrompidos substituídos recebem
+backup fora do projeto, sob `$FT_HOME`.
 
-Para ajustes pequenos, `--template tweak` reutiliza o mesmo entrypoint e a
-mesma worktree, mas executa somente preflight, uma implementação, um build
-curto e o aceite. Não faz discovery, review independente, E2E, reconciliação de
-backlog ou retries automáticos. Se o diff deixar de ser pequeno ou tocar áreas
-de risco, o ciclo bloqueia e orienta usar `--template feature`.
+Manifesto inicial:
 
-Para defeitos reproduzíveis, `--template bug` acrescenta as salvaguardas que
-faltam ao tweak sem carregar o discovery completo de feature: teste de regressão
-RED antes da correção, mesmo comando GREEN, build/test completo uma vez, aceite
-e atualização do PB/FEAT existente com uma entrada `#BUG` no changelog. Em
-`--parallel`, ele usa o mesmo planner, waves, reservas e worktrees do comando
-`ft feature`; não há um segundo orquestrador.
+```yaml
+schema_version: 3
+processes: {}
+```
 
-O ciclo roda em worktree externo:
+## Rodar qualquer processo
+
+`--template` é obrigatório para abrir um ciclo. Todos os tipos de trabalho usam
+o mesmo entrypoint:
+
+```bash
+ft run . --template mvp-builder --auto
+ft run . --template feature --request "Adicionar busca por telefone" --codex
+ft run . --template feature --input demanda.md --claude
+ft run . --template bug --request "Terminal duplica o eco do input" --codex
+ft run . --template tweak --request "Mudar o botão Salvar para azul" --codex
+```
+
+Não há entrypoint especializado por categoria, opção para apontar um YAML
+arbitrário ou execução sem seleção explícita de template.
+
+Na primeira chamada, o template global é copiado para
+`.ft/process/<template>/` e registrado no manifesto. Chamadas seguintes usam e
+preservam esse fork local. O engine nunca executa `templates/` diretamente.
+
+Cada template define a política de entrada. `--request` recebe uma demanda
+curta; `--input` recebe um arquivo. Combinações ausentes ou incompatíveis falham
+antes de criar worktree ou estado.
+
+## Ciclos em paralelo
+
+Cada `ft run` aloca atomicamente seu próprio id, branch, worktree e estado. Não
+existe bloqueio global de ciclo ativo nem flag para contorná-lo:
+
+```bash
+# Execute em terminais distintos.
+ft run . --template feature --request "Adicionar busca por telefone" --auto
+ft run . --template tweak --request "Reduzir padding do cabeçalho" --auto
+```
+
+Os runners avançam em paralelo mesmo usando templates diferentes. Um lock curto
+protege a preparação compartilhada; um lock de close serializa merges no checkout
+principal. `--parallel` em `ft run` é outra coisa: fan-out de nodes de um único
+processo quando o YAML declara um `parallel_group`.
+
+As worktrees ficam em:
 
 ```text
-~/.ft/worktrees/<projeto>/cycle-NN/
+$FT_HOME/worktrees/<projeto>/<cycle>/
 ```
 
-A raiz do projeto permanece limpa até `ft close` fazer o merge escolhido.
-Ao fechar, os artefatos específicos da execução são arquivados em
-`.ft/cycles/<cycle>/`; PRD, stack, critérios de UI, backlog e catálogo de features
-permanecem em `docs/`. O backlog descreve mudanças desejadas; `docs/FEATURES.md`
-descreve as capacidades efetivamente entregues.
+Ao fechar, artefatos específicos são arquivados em `.ft/cycles/<cycle>/`. Fontes
+humanas como PRD, stack, backlog e catálogo de features permanecem em `docs/`.
 
 ## Comandos principais
 
 ```bash
-ft run .                       # iniciar ciclo
-ft feature "demanda" --template feature  # evoluir capacidade existente
-ft feature "defeito" --template bug  # corrigir com regressão RED→GREEN
-ft feature --parallel "bug A" "bug B" -t bug  # bugs em waves paralelas
-ft feature "ajuste pequeno" --template tweak  # alteração focal em poucos minutos
-ft run . --auto                # avançar automaticamente até human gate/MVP/BLOCK
-ft continue                    # avançar um node
-ft continue --sprint           # avançar uma sprint
-ft continue --auto             # avançar até o próximo human gate/MVP/BLOCK
-ft status --full               # status + grafo
-ft llm-capabilities --json     # modelos/efforts anunciados pelas CLIs locais
+ft run . --template <T> [--request "..."] [--input arquivo]
+ft run . --template <T> --auto
+ft continue --cycle <id>
+ft continue --cycle <id> --sprint
+ft continue --cycle <id> --auto
+ft status --cycle <id> --full
+ft graph --cycle <id>
+ft approve "nota opcional" --cycle <id>
+ft reject "motivo objetivo" --cycle <id>
+ft fix "instrução" --cycle <id>
+ft retry --cycle <id>
+ft abort --cycle <id>
+ft close --cycle <id>
+ft runs
+
+ft llm-capabilities --json
 ft llm-defaults --agent codex --model gpt-5.6-sol --effort max --json
-ft graph                       # grafo com status
-ft approve "nota opcional"     # aprovar human gate
-ft reject "motivo objetivo"    # rejeitar e reenviar com feedback
-ft fix "instrução"             # corrigir pending_fix
-ft process-candidates          # revisar melhorias candidatas ao processo global
-ft close                       # encerrar ciclo e escolher merge
 ```
 
-O template `mvp-builder` classifica cada aprendizado de processo como `local`,
-`global_candidate` ou `rejected`. `ft close` bloqueia enquanto houver candidato
-global pendente; o mantenedor registra `promoted`, `deferred` ou `rejected` com
-`ft process-candidates PI-NNN --status ... --reason "..."`. Promoções exigem
-uma referência ao commit/path global que recebeu e validou a mudança.
+Quando há exatamente um ciclo aplicável, comandos de acompanhamento podem
+inferi-lo. Com dois ou mais, `--cycle` é obrigatório e o erro lista as opções; o
+engine nunca escolhe pela data de criação.
 
-Use `--codex`, `--claude [modelo]`, `--gemini [modelo]` ou `--opencode [modelo]`
-para escolher o executor LLM e `--effort` para selecionar um nível compatível.
-Os defaults persistentes vivem em `.ft/manifest.yml`; `ft llm-capabilities`
-descobre as opções pelas CLIs instaladas e `ft llm-defaults` valida e grava uma
-combinação sem editar o manifest por fora do engine. O default de `--opencode` é
-`pgx/zai-org_glm-4.7-flash`. Também é possível definir `FT_LLM_ENGINE=opencode`.
-Para esse modelo default, o `ft` anuncia ao OpenCode uma janela de contexto de
-200k tokens e saída de 32k tokens; sobrescreva com `FT_OPENCODE_CONTEXT_LIMIT`
-e `FT_OPENCODE_OUTPUT_LIMIT` se o servidor expuser limites diferentes.
-Por padrão, execuções OpenCode rodam em sandbox de filesystem via `bwrap`: o
-worktree fica read-only e apenas outputs/write_scope do node são writable
-(`FT_OPENCODE_SANDBOX=0` desabilita).
+`--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
+`--bypass-human-gates` delega essas decisões ao LLM.
+
+O template `mvp-builder` classifica aprendizados de processo como `local`,
+`global_candidate` ou `rejected`. Antes do close, o mantenedor decide candidatos
+pendentes com `ft process-candidates --cycle <id>` e registra a referência global
+quando promover uma mudança.
+
+## Executors LLM
+
+Use `--codex`, `--claude [modelo]`, `--gemini [modelo]` ou
+`--opencode [modelo]`, além de `--effort`, para escolher uma combinação
+compatível. Defaults persistentes vivem em `.ft/manifest.yml`.
+`ft llm-capabilities` descobre opções pelas CLIs instaladas e `ft llm-defaults`
+valida a combinação antes de gravá-la.
+
+Por padrão, OpenCode roda em sandbox de filesystem via `bwrap`: o worktree fica
+read-only e somente outputs/write_scope do node são graváveis. Use as variáveis
+`FT_OPENCODE_CONTEXT_LIMIT`, `FT_OPENCODE_OUTPUT_LIMIT` e
+`FT_OPENCODE_SANDBOX` para ajustar a integração.
 
 ## Templates
 
 | Template | Uso |
-|----------|-----|
-| `base` | Estrutura mínima com `.ft/process/base/process.yml`, `docs/` e `src/` |
-| `feature` | Evolução incremental de uma única feature em produto FT existente |
-| `mvp-builder` | Processo completo recomendado para construir um MVP do zero |
-| `fast-track-v2` | Processo V2 legado |
+|---|---|
+| `base` | Processo mínimo para composição local |
+| `feature` | Evolução incremental de uma capacidade existente |
+| `bug` | Correção focal com regressão RED→GREEN |
+| `tweak` | Mudança pequena e de baixo risco |
+| `mvp-builder` | Processo completo recomendado para um MVP |
+| `fast-track-v2` | Processo histórico V2 |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
-| `symgateway` | Exemplo de ambiente com scripts de integração SymGateway |
+| `symgateway` | Ambiente com integração SymGateway opt-in |
 
-Integrações externas pertencem ao projeto/template de ambiente. O engine chama
-scripts exclusivamente ao lado do processo selecionado,
-`.ft/process/<nome>/scripts/`.
+Integrações externas pertencem ao processo local. O engine chama scripts apenas
+ao lado do template materializado, em `.ft/process/<nome>/scripts/`.
 
-Projetos do layout anterior (`process/` ou `.ft/process/process.yml`) devem ser
-migrados explicitamente, sem ciclo/runtime ativo:
+## Migração
+
+Layouts anteriores (`process/`, `.ft/process/process.yml` ou manifesto V2) são
+migrados explicitamente, sem ciclo/runtime em mutação:
 
 ```bash
 ft migrate-layout . --dry-run
 ft migrate-layout .
 ```
 
-Use `--cycle-id <id>` para atribuir os relatórios soltos ao último ciclo conhecido.
-O migrador também importa `docs/archive/<ciclo>/` e retira runtime legado do repo,
-preservando-o como backup inativo em `$FT_HOME/migrations/`.
-Referências atuais ao processo são atualizadas; o conteúdo arquivado dos ciclos é
-preservado byte a byte. O preflight recusa colisões, manifestos inválidos e
-symlinks antes de mover qualquer fonte.
-
-O CLI detecta processos legados apenas para exigir `ft migrate-layout`; nunca os
-executa nem cria o layout v2 em paralelo.
+O migrador preserva processos, forks e histórico, converte o manifesto para V3 e
+remove somente o conceito de default. Runtime legado recebe backup inativo sob
+`$FT_HOME/migrations/`. O preflight recusa colisões e symlinks antes de mover
+qualquer fonte.
 
 ## Documentação
 
 - Guia do engine: [`docs/ft_engine_usage.md`](docs/ft_engine_usage.md)
-- Arquitetura do MVP Builder: [`docs/mvp-builder-architecture.md`](docs/mvp-builder-architecture.md)
+- Arquitetura: [`docs/mvp-builder-architecture.md`](docs/mvp-builder-architecture.md)
 - Playbook de condução: [`AGENTS.md`](AGENTS.md)
-- Templates: [`templates/`](templates/)
-- Processo legado V2: [`process/fast_track/`](process/fast_track/)
+- Catálogo global: [`templates/`](templates/)
 
 ## Validação local
 
 ```bash
 python -m pytest -q
-FT_ALLOW_ENGINE_REPO=1 ft --process templates/mvp-builder/process.yml validate
-FT_ALLOW_ENGINE_REPO=1 ft --process templates/feature/process.yml validate
-FT_ALLOW_ENGINE_REPO=1 ft --process templates/ft-ui-prototype/process.yml validate
 ```

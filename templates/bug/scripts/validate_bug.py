@@ -652,7 +652,7 @@ def _report_contract(root: Path) -> tuple[dict[str, str], str]:
     report = _read(root, REPORT_PATH)
     if re.search(r"(?mi)^\s*Resultado:\s*ESCALATE\s*$", report):
         raise BugValidationError(
-            "bug declarou ESCALATE; aborte e use ft feature --template feature"
+            "bug declarou ESCALATE; aborte e use ft run . --template feature"
         )
     if len(re.findall(r"(?mi)^\s*Resultado:\s*FIXED\s*$", report)) != 1:
         raise BugValidationError("bug-report exige exatamente `Resultado: FIXED`")

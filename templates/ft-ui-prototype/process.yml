@@ -2,11 +2,26 @@
 # Sem TDD, sem backend, sem delivery refactor.
 # Foco: demanda → scaffold → build → screenshots → guidelines review → E2E → stakeholder.
 # Toda especificidade do projeto vive em docs/ e .ft/process/scripts/.
-# Uso: ft run . [--codex|--gemini|--claude|--opencode]
+# Uso: ft run . --template ft-ui-prototype [--codex|--gemini|--claude|--opencode]
 
 id: ft_ui_prototype
 version: "3.0.0"
 title: "FT UI Prototype — Validação Visual"
+
+execution_policy:
+  entrypoint: run
+  template: ft-ui-prototype
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/ft-ui-prototype/process.yml
+  merge_command: ft close --merge full
+
+input_policy:
+  required: false
+  destination: docs/demanda.md
+  prompt: "Descreva a interface ou protótipo a validar"
 
 artifact_policy:
   canonical:

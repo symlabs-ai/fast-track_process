@@ -1,10 +1,8 @@
-"""Regressões de atomicidade dos estados de ciclo e batch."""
+"""Regressões de atomicidade dos estados de ciclo."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-import stat
 import subprocess
 import sys
 import threading
@@ -12,7 +10,6 @@ import threading
 import pytest
 import yaml
 
-from ft.engine import feature_batch as fb
 from ft.engine.cycle_manager import CycleManager
 from ft.engine.layout import _manifest_write_lock
 from ft.engine.state import (
@@ -186,51 +183,3 @@ def test_cycle_manager_refuses_to_advance_state_owned_by_live_process(
             _stdout, stderr = child.communicate(timeout=5)
             pytest.fail(f"processo auxiliar não terminou: {stderr}")
     assert child.returncode == 0, stderr
-
-
-def test_save_batch_uses_atomic_replace_and_preserves_mode(tmp_path, monkeypatch):
-    project_root = tmp_path / "project"
-    batch = fb.FeatureBatch(
-        batch_id="batch-01",
-        project_root=str(project_root),
-        template="bug",
-        features=[
-            fb.BatchFeature(feature_id="F-01", demand="bug um"),
-            fb.BatchFeature(feature_id="F-02", demand="bug dois"),
-        ],
-        waves=[["F-01", "F-02"]],
-        status="planned",
-    )
-    target = fb.save_batch(batch)
-    target.chmod(0o640)
-    batch.status = "running"
-
-    observed: dict[str, object] = {}
-    real_replace = os.replace
-
-    def inspect_replace(source, destination):
-        source_path = Path(source)
-        destination_path = Path(destination)
-        observed["old_status"] = yaml.safe_load(
-            destination_path.read_text(encoding="utf-8")
-        )["status"]
-        observed["new_status"] = yaml.safe_load(
-            source_path.read_text(encoding="utf-8")
-        )["status"]
-        observed["temporary_name"] = source_path.name
-        observed["mode"] = stat.S_IMODE(source_path.stat().st_mode)
-        real_replace(source, destination)
-
-    monkeypatch.setattr(fb.os, "replace", inspect_replace)
-    assert fb.save_batch(batch) == target
-
-    assert observed == {
-        "old_status": "planned",
-        "new_status": "running",
-        "temporary_name": observed["temporary_name"],
-        "mode": 0o640,
-    }
-    assert str(observed["temporary_name"]).startswith(".batch.yml.")
-    assert fb.load_batch(project_root, "batch-01").status == "running"
-    assert stat.S_IMODE(target.stat().st_mode) == 0o640
-    assert not list(target.parent.glob(".batch.yml.*.tmp"))

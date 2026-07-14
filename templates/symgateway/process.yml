@@ -5,6 +5,21 @@
 id: base_process
 version: 1.0.0
 
+execution_policy:
+  entrypoint: run
+  template: symgateway
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/symgateway/process.yml
+  merge_command: ft close --merge full
+
+input_policy:
+  required: false
+  destination: docs/demanda.md
+  prompt: "Descreva a demanda do projeto"
+
 artifact_policy:
   canonical:
     - docs/PRD.md

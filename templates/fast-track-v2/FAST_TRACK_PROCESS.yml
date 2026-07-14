@@ -14,6 +14,21 @@ id: fast_track_v2
 version: "0.8.20"
 title: "ForgeProcess — Fast Track V2"
 
+execution_policy:
+  entrypoint: run
+  template: fast-track-v2
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/fast-track-v2/process.yml
+  merge_command: ft close --merge full
+
+input_policy:
+  required: false
+  destination: docs/demanda.md
+  prompt: "Descreva a demanda do projeto"
+
 artifact_policy:
   canonical:
     - docs/PRD.md

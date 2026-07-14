@@ -14,6 +14,21 @@ id: mvp_builder
 version: "1.2.0"
 title: "MVP Builder — MVP Completo"
 
+execution_policy:
+  entrypoint: run
+  template: mvp-builder
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/mvp-builder/process.yml
+  merge_command: ft close --merge full
+
+input_policy:
+  required: false
+  destination: docs/demanda.md
+  prompt: "Descreva a ideia, hipótese ou demanda do MVP"
+
 artifact_policy:
   canonical:
     - docs/PRD.md

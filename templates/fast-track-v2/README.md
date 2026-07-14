@@ -18,22 +18,22 @@ Template de processo para o motor Fast Track. Inclui o ciclo completo MDD-to-MVP
 ## Uso
 
 ```bash
-ft init --template fast-track-v2
-ft run .
+ft init
+ft run . --template fast-track-v2
 ```
 
 ## Customização
 
-Copie e edite `FAST_TRACK_PROCESS.yml` no seu projeto:
+Na primeira run, o bundle é copiado uma única vez. Edite o fork local:
 
 ```
 meu-produto/
-  process/
-    FAST_TRACK_PROCESS.yml   ← customize aqui
+  .ft/process/fast-track-v2/
+    process.yml   ← customize aqui
 ```
 
 Valide após editar:
 
 ```bash
-ft validate
+ft validate --template fast-track-v2
 ```

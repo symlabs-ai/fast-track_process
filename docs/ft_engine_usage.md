@@ -1,257 +1,312 @@
 # ft engine — Guia de Uso
 
-Motor determinístico de processos para solo dev + AI.
-O Python controla o fluxo; o LLM executa apenas tarefas de construção.
-
----
+Motor determinístico de processos para solo dev + AI. Python controla o fluxo;
+o LLM executa apenas tarefas de construção.
 
 ## Conceito
 
-```
-YAML de processo → ft engine → LLM executa → validadores Python → avança
+```text
+YAML de processo → ft engine → LLM constrói → Python valida → grafo avança
 ```
 
-O engine lê um processo definido em YAML, executa cada step delegando ao LLM via CLI configurada
-(`claude`, `codex`, `gemini` ou `opencode`), valida os artefatos produzidos com verificações determinísticas (Python puro)
-e só avança se tudo passar.
-O LLM nunca decide sobre o processo — só constrói.
+O engine lê um processo YAML, delega nodes às CLIs configuradas (`claude`,
+`codex`, `gemini` ou `opencode`) e valida os artefatos com verificações
+determinísticas. O LLM não escolhe processo, ciclo ou próxima transição.
 
----
+O contrato V3 separa:
+
+- **workspace**: base comum criada por `ft init`, sem processo associado;
+- **template**: bundle global materializado copy-once em um fork local;
+- **ciclo**: execução imutavelmente ligada a um template local e a uma worktree;
+- **runtime**: estado, locks e logs sob `$FT_HOME`, fora do Git do produto.
 
 ## Instalação
 
 ```bash
-# No projeto Fast Track
 pip install -e .
-
-# Verificar
 ft --help
 ```
 
----
+O repositório do engine não é um projeto FT. Crie projetos fora dele; use
+`FT_ALLOW_ENGINE_REPO=1` apenas para manutenção do próprio engine.
 
-## Comandos
+## Iniciar o workspace
 
 ```bash
-ft init --template base    # Criar layout versionado, sem estado de execução
-ft feature "demanda" --template feature  # Evoluir produto em worktree isolada
-ft feature "defeito" --template bug  # Corrigir com teste de regressão RED→GREEN
-ft feature "ajuste pequeno" --template tweak  # Mudança focal com pipeline mínimo
-ft feature --parallel "d1" "d2" "d3" -t feature  # Batch de features em waves paralelas
-ft feature --parallel "bug 1" "bug 2" -t bug  # Batch de bugs no mesmo orquestrador
-ft migrate-layout . --cycle-id cycle-08  # Migrar process/ e atribuir artefatos soltos
-ft continue                # Avançar 1 step
-ft continue --sprint       # Avançar até fim da sprint atual
-ft continue --auto         # Modo autônomo até human gate, MVP ou BLOCK
-ft status                  # Status resumido
-ft status --full           # Grafo completo agrupado por sprint
-ft llm-capabilities --json # Descobrir modelos/efforts pelas CLIs instaladas
-ft llm-defaults --agent codex --model gpt-5.6-sol --effort max --json
-ft approve                 # Aprovar artefato pendente
-ft reject "motivo"         # Rejeitar e reenviar ao LLM com feedback
-ft reject --no-retry "m"   # Rejeitar sem retry (bloqueia)
-ft lint-process                   # Lint semântico — detecta especificidades de projeto no YAML
-ft evolve --project        # Evoluir o processo em paralelo ao ciclo (não avança steps)
+ft init meu-projeto
+cd meu-projeto
 ```
 
-`--template` é obrigatório no `ft init`. O engine não possui template default;
-os nomes compatíveis com o entrypoint `init` são descobertos do catálogo
-instalado e aparecem em `ft init --help`. Templates pertencentes a outros
-comandos não são oferecidos pelo init. Se o projeto já possui `.ft/manifest.yml`,
-o comando falha sem alterar o processo existente.
+O argumento de diretório é opcional (`.` por padrão). O comando:
 
-O layout aceita múltiplos processos. `.ft/manifest.yml` mantém o processo default
-e um registro de processos nomeados; em um projeto já inicializado,
-`ft run . --template <T>` materializa um template de `init` ainda ausente em
-`.ft/process/<T>/`. Entry points especializados, como `ft feature`, fazem o mesmo
-com seu próprio catálogo. A materialização é copy-once, e todos os comandos de um
-ciclo executam exclusivamente o path local fixado no state — nunca o catálogo
-global.
+1. garante um repositório Git com HEAD;
+2. cria `.ft/manifest.yml`, `.ft/.gitignore` e o playbook comum;
+3. não escolhe nem materializa template;
+4. não cria `docs/`, `src/`, worktree ou estado de ciclo.
+
+Em um workspace saudável, repetir `ft init` é idempotente.
+
+### Diagnóstico e reparo
+
+```bash
+ft init . --check   # somente leitura
+ft init . --fix     # reparo explícito
+```
+
+`--check` relata cada invariante e nunca escreve. `--fix` restaura arquivos
+comuns ausentes, reconstrói o catálogo a partir de `.ft/process/*/process.yml` e
+corrige metadados inequivocamente recuperáveis. Ele não sobrescreve forks locais
+nem históricos. Manifestos corrompidos substituídos recebem backup externo sob
+`$FT_HOME`; ambiguidades são recusadas com instrução manual.
+
+Manifesto inicial:
 
 ```yaml
-schema_version: 2
-default_process: mvp-builder
+schema_version: 3
+processes: {}
+```
+
+Não há seletor de processo principal. O mapa `processes` é catálogo, não fila nem
+ordem de preferência.
+
+## Abrir um ciclo
+
+Toda nova execução exige um template:
+
+```bash
+ft run . --template mvp-builder
+ft run . --template feature --request "Adicionar busca por telefone"
+ft run . --template feature --input demanda.md
+ft run . --template bug --request "Terminal duplica o eco do input"
+ft run . --template tweak --request "Mudar o botão Salvar para azul"
+```
+
+`ft run` é o único entrypoint para todos os templates. Não há comando específico
+por categoria de trabalho nem opção para fornecer um YAML arbitrário.
+
+### Resolução local-first
+
+Para `--template T`, o engine:
+
+1. usa `.ft/process/T/process.yml` quando `T` já está registrado e válido;
+2. caso contrário, copia o bundle global para `.ft/process/T/` e o registra;
+3. fixa path e digest locais no estado do novo ciclo;
+4. preserva o fork local em execuções futuras.
+
+O catálogo `templates/` nunca é executado diretamente. A materialização ocorre
+uma única vez e não copia seeds genéricos para `docs/` ou `src/`.
+
+Exemplo após duas materializações:
+
+```yaml
+schema_version: 3
 processes:
-  mvp-builder:
-    path: .ft/process/mvp-builder/process.yml
-    template: mvp-builder
-    entrypoint: init
+  feature:
+    path: .ft/process/feature/process.yml
+    template: feature
+    source_digest: sha256:...
+    base_digest: sha256:...
+  tweak:
+    path: .ft/process/tweak/process.yml
+    template: tweak
+    source_digest: sha256:...
+    base_digest: sha256:...
+defaults:
+  llm_engine: codex
 ```
 
-As chaves top-level `process`, `template` e `origin_template` pertencem ao schema
-v1 e não são gravadas por create/migrate no layout atual.
+### Política de entrada
 
-### Lint de processo
+Cada template declara se uma demanda é exigida, opcional ou proibida. A CLI
+oferece duas formas uniformes:
 
-O `ft lint-process` usa LLM para verificar se o YAML de processo está genérico — sem
-referências a projeto específico (nomes de produto, tech stack hardcoded, specs de design).
+- `--request "texto"`: demanda curta inline;
+- `--input arquivo`: conteúdo lido de um arquivo.
+
+A política é validada antes da criação do ciclo. Quando uma demanda é aceita, o
+engine a transporta para a worktree sem modificar silenciosamente as fontes do
+checkout principal.
+
+## Concorrência entre ciclos
+
+Múltiplos ciclos ativos são suportados por padrão:
 
 ```bash
-ft lint-process                                    # YAML auto-detectado
-ft lint-process --process .ft/process/base/process.yml  # YAML local registrado
-ft lint-process --gemini                            # usar Gemini como engine
+# Terminal A
+ft run . --template feature --request "Busca por telefone" --auto
+
+# Terminal B
+ft run . --template tweak --request "Reduzir padding" --auto
 ```
 
-Detecta: nomes de produto, cores/dimensões hardcoded, frameworks nos prompts, checklists
-específicas. Retorna PASS (genérico) ou FAIL (com lista de violações e sugestões).
+Cada chamada reserva atomicamente id, branch, worktree e state. Não há bloqueio
+global de “execução ativa”. Um lock curto cobre apenas preparação compartilhada,
+como reconciliação do manifesto e materialização; runners trabalham em paralelo
+depois disso.
 
-### Seleção do executor LLM
+`ft close` usa um lock separado por projeto para serializar merge e arquivamento
+no checkout principal. Esperar pelo close não bloqueia a execução de outros
+ciclos.
 
-Por padrão, o engine usa `claude`. Você pode trocar o executor por comando:
+Isso é diferente de `ft run --template <T> --parallel`: essa flag habilita
+fan-out de nodes de um único ciclo quando o YAML possui `parallel_group`.
+
+## Seleção de ciclo
+
+Comandos de acompanhamento seguem uma regra comum:
+
+- zero ciclos aplicáveis: erro;
+- exatamente um: pode ser inferido;
+- dois ou mais: `--cycle <id>` é obrigatório e o erro lista as opções.
+
+O engine nunca escolhe pela data de criação. A regra vale para `continue`,
+`status`, `graph`, `log`, `approve`, `reject`, `retry`, `fix`, `explore`,
+`abort`, `cancel`, `process-candidates` e `close`.
 
 ```bash
-ft init --template base --codex
-ft continue --codex --sprint
-ft continue --codex gpt-5.6-sol --effort max --sprint
-ft run ~/dev/projects/examples/pokemon --hipotese ~/dev/projects/examples/pokemon.md --codex
-ft run . --opencode
-ft run . --opencode anthropic/claude-sonnet-4-5
+ft runs
+ft status --cycle cycle-07 --full
+ft graph --cycle cycle-08
+ft continue --cycle cycle-07 --auto
+ft close --cycle cycle-08
 ```
 
-Ou definir o default por ambiente:
+## Comandos de condução
+
+```bash
+# Novo ciclo
+ft run . --template <T> [--request "..."] [--input arquivo]
+ft run . --template <T> --auto
+ft run . --template <T> --auto --bypass-human-gates
+
+# Avanço
+ft continue --cycle <id>
+ft continue --cycle <id> --sprint
+ft continue --cycle <id> --auto
+
+# Inspeção
+ft status --cycle <id>
+ft status --cycle <id> --full
+ft status --cycle <id> --report
+ft graph --cycle <id>
+ft log --cycle <id>
+ft runs
+
+# Gates e recuperação
+ft approve "nota opcional" --cycle <id>
+ft reject "motivo acionável" --cycle <id>
+ft reject "motivo" --no-retry --cycle <id>
+ft retry --cycle <id>
+ft fix "instrução" --cycle <id>
+ft explore "pedido livre" --cycle <id>
+ft abort --cycle <id>
+ft cancel "motivo" --cycle <id>
+
+# Encerramento
+ft process-candidates --cycle <id>
+ft close --cycle <id>
+```
+
+`--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
+`--bypass-human-gates` autoriza o LLM a decidir nesses pontos.
+
+## Seleção do executor LLM
+
+Escolha o executor no início ou ao continuar um ciclo:
+
+```bash
+ft run . --template mvp-builder --codex
+ft run . --template feature --request "Busca" --codex gpt-5.6-sol --effort max
+ft run . --template tweak --request "Ajuste" --opencode
+ft continue --cycle cycle-07 --claude --sprint
+```
+
+Ou defina o default por ambiente:
 
 ```bash
 export FT_LLM_ENGINE=opencode
 ```
 
-Quando `--opencode` é usado sem modelo explícito, o comando chama
-`opencode run -m pgx/zai-org_glm-4.7-flash "<prompt>"`.
+Quando `--opencode` é usado sem modelo explícito, o default é
+`pgx/zai-org_glm-4.7-flash`.
 
-O default escolhido no `ft init` é persistido em `.ft/manifest.yml`, nos campos
-`defaults.llm_engine`, `defaults.llm_model` e `defaults.llm_effort`. Durante uma
-execução, o executor fica no runtime em `~/.ft/runtime/<projeto>/continuous/` no modo
-continuous ou em `~/.ft/worktrees/<projeto>/cycle-NN/state/` no modo isolated.
-Assim, `status`, `approve` e `reject` continuam usando o mesmo engine nas execuções
-seguintes.
+Defaults persistentes ficam em `defaults.llm_engine`, `defaults.llm_model` e
+`defaults.llm_effort` no manifesto. Durante uma execução, a combinação fica
+fixada em `$FT_HOME/worktrees/<projeto>/<cycle>/state/`, de modo que comandos
+posteriores preservam a escolha.
 
-Para integrações que precisam refletir as CLIs realmente instaladas, use
-`ft llm-capabilities --json`. O comando não mantém cache: a cada chamada executa
-probes limitados e paralelos de Claude, Codex e OpenCode. Para trocar o default
-do projeto, `ft llm-defaults` valida a combinação contra um probe fresco e faz
-replace atômico do manifest. O valor `--effort default` remove o override e deixa
-o provider escolher seu nível nativo.
+`ft llm-capabilities --json` executa probes limitados e paralelos das CLIs
+instaladas. `ft llm-defaults --agent ... --model ... --effort ...` valida uma
+combinação com probe fresco e atualiza atomicamente o manifesto. O effort
+`default` remove o override e devolve a escolha ao provider.
 
-### Opção `--process`
-
-Selecionar explicitamente um YAML local já registrado:
-
-```bash
-ft --process .ft/process/mvp-builder/process.yml continue --sprint
-```
-
-Sem `--process`, o engine resolve `default_process` no manifesto. Mesmo com a flag,
-o YAML precisa usar `.ft/process/<nome>/process.yml` e constar em
-`processes.<nome>.path`; processos globais ou externos ao catálogo local são
-recusados. Não existe fallback para `process/` nem `.ft/process/process.yml`; use
-`ft migrate-layout .`.
-O migrador importa históricos de `docs/archive/` e preserva runtime legado fora do
-repositório, em `$FT_HOME/migrations/`, sem torná-lo um ciclo ativo.
-Também atualiza referências inequívocas nos arquivos atuais. Artefatos já movidos para
-`.ft/cycles/` não são reescritos nem sobrescritos. Execute sem ciclo/runtime ativo;
-o preflight valida o grafo, o manifesto candidato, colisões e symlinks antes de
-mover qualquer fonte.
-
-### Variáveis de ambiente
+## Variáveis de ambiente
 
 | Variável | Efeito |
-|----------|--------|
-| `FT_HOME` | Redireciona o diretório base de dados do ft (default `~/.ft`). Worktrees externos vivem em `$FT_HOME/worktrees/<projeto>/`. Usado pelos testes para isolamento. |
-| `FT_ALLOW_ENGINE_REPO` | O `ft` opera sempre num repo de projeto — **todos** os comandos são bloqueados dentro do repositório do engine/template. Esta variável libera o bloqueio, só para desenvolvimento do engine. |
-| `FT_SKIP_HEALTH_CHECK` | Pula o health check da API no início do `ft run`. |
-| `FT_LLM_ENGINE` | Engine LLM default (`claude`, `codex`, `gemini`, `opencode`). |
-| `FT_LLM_EFFORT` | Effort provider-specific herdado quando node, flag e estado não definem um valor. |
-| `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de cada turno delegado, em segundos; default 1800. |
-| `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex; reasoning `ultra` usa 3600 por default. |
-| `FT_CODEX_REASONING_EFFORT` | Override explícito do nível de raciocínio do Codex (por exemplo `ultra`). Sem a variável, o Codex usa seu `config.toml`. |
-| `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Sobrescreve a janela de contexto anunciada ao OpenCode para o modelo selecionado. O default de `pgx/zai-org_glm-4.7-flash` é 200000. |
-| `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Sobrescreve o limite de saída anunciado ao OpenCode. O default de `pgx/zai-org_glm-4.7-flash` é 32768. |
-| `FT_OPENCODE_PROVIDER_TIMEOUT` / `FT_OPENCODE_TIMEOUT` | Define `provider.options.timeout` no OpenCode, em milissegundos. |
-| `FT_OPENCODE_CHUNK_TIMEOUT` / `FT_OPENCODE_PROVIDER_CHUNK_TIMEOUT` | Define `provider.options.chunkTimeout` no OpenCode, em milissegundos, para cortar streams sem novos chunks. |
-| `FT_OPENCODE_HEADER_TIMEOUT` / `FT_OPENCODE_PROVIDER_HEADER_TIMEOUT` | Define `provider.options.headerTimeout` no OpenCode, em milissegundos. |
-| `FT_OPENCODE_SANDBOX` | Controla o sandbox de filesystem do OpenCode via `bwrap` (default ligado). O worktree fica read-only e só os outputs/write_scope do node são montados como writable. Use `0` para desabilitar. |
-| `FT_OPENCODE_DENY_EDIT_TOOLS` | Opt-in: nega ferramentas nativas de edição do OpenCode em nodes de código e força o modo legado de escrita indireta. |
-| `FT_OPENCODE_BUNDLE_MODE` | Opt-in: força nodes de código OpenCode a responderem por bundle XML `<ft_file>`, materializado pelo engine. Use para diagnóstico ou nodes pequenos. |
-| `FT_OPENCODE_SCRIPT_MODE` | Opt-in: força nodes de código OpenCode a responderem com um script Bash materializado pelo engine. |
-| `FT_OPENCODE_DEBUG` | Ativa `opencode run --print-logs --log-level DEBUG`. |
-| `FT_OPENCODE_PRINT_LOGS` / `FT_OPENCODE_LOG_LEVEL` / `FT_OPENCODE_THINKING` | Ajustes finos de log do OpenCode sem ativar todo o modo debug. |
+|---|---|
+| `FT_HOME` | Runtime, worktrees, locks e backups; default `~/.ft` |
+| `FT_ALLOW_ENGINE_REPO` | Libera manutenção dentro do repo do engine |
+| `FT_SKIP_HEALTH_CHECK` | Pula health check da API no início do run |
+| `FT_LLM_ENGINE` | Executor default (`claude`, `codex`, `gemini`, `opencode`) |
+| `FT_LLM_EFFORT` | Effort herdado quando node, flag e state não definem valor |
+| `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de cada turno delegado, em segundos |
+| `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex |
+| `FT_CODEX_REASONING_EFFORT` | Override explícito do reasoning do Codex |
+| `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Janela anunciada ao OpenCode |
+| `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Limite de saída do OpenCode |
+| `FT_OPENCODE_PROVIDER_TIMEOUT` / `FT_OPENCODE_TIMEOUT` | Timeout total do provider, em ms |
+| `FT_OPENCODE_CHUNK_TIMEOUT` / `FT_OPENCODE_PROVIDER_CHUNK_TIMEOUT` | Timeout entre chunks, em ms |
+| `FT_OPENCODE_HEADER_TIMEOUT` / `FT_OPENCODE_PROVIDER_HEADER_TIMEOUT` | Timeout de headers, em ms |
+| `FT_OPENCODE_SANDBOX` | Sandbox `bwrap`; worktree read-only e outputs/write_scope graváveis |
+| `FT_OPENCODE_DENY_EDIT_TOOLS` | Opt-in do modo legado sem ferramentas nativas de edição |
+| `FT_OPENCODE_BUNDLE_MODE` | Opt-in de materialização por bundle XML |
+| `FT_OPENCODE_SCRIPT_MODE` | Opt-in de materialização por script Bash |
+| `FT_OPENCODE_DEBUG` | Logs detalhados da CLI OpenCode |
 
-### Governança de melhorias do processo
+## Governança de melhorias do processo
 
-No template `mvp-builder`, `ft.handoff.05.process_evolve` gera o relatório
-humano `docs/process-improvements.md` e o contrato estruturado
-`docs/process-improvements.yml`. Todo achado recebe ID `PI-NNN` e uma das
-classificações:
+No `mvp-builder`, `ft.handoff.05.process_evolve` gera
+`docs/process-improvements.md` e `docs/process-improvements.yml`. Cada achado
+recebe ID `PI-NNN` e uma classificação:
 
-- `local`: pertence ao fork `.ft/process/mvp-builder/process.yml` daquele projeto;
-- `global_candidate`: deve ser revisado para promoção no engine/template;
+- `local`: pertence ao fork local daquele projeto;
+- `global_candidate`: merece revisão para o catálogo do engine;
 - `rejected`: foi analisado e não deve ser aplicado.
 
-Uma melhoria só pode ser `global_candidate` quando for independente de domínio,
-não contiver identificadores do produto, for configurável, tiver evidência
-verificada no ciclo e for retrocompatível. O validator
-`process_improvements_classified` bloqueia classificações inconsistentes.
-
-O ciclo nunca escreve no checkout do engine. Após atualizar e testar o global,
-o mantenedor registra a disposição no artefato do ciclo:
+Um candidato global precisa ser independente de domínio, configurável,
+retrocompatível e verificado no ciclo. O ciclo nunca escreve no checkout do
+engine. Depois de aplicar e testar a mudança global, registre a disposição:
 
 ```bash
-ft process-candidates
-ft process-candidates PI-001 \
+ft process-candidates PI-001 --cycle cycle-07 \
   --status promoted \
   --reason "Aplicado e validado pela suíte do engine" \
   --reference "commit abc123 templates/mvp-builder/process.yml"
 
-ft process-candidates PI-002 --status deferred --reason "Precisa de outro ciclo real"
-ft process-candidates PI-003 --status rejected --reason "Regra específica do produto"
+ft process-candidates PI-002 --cycle cycle-07 \
+  --status deferred --reason "Precisa de outro ciclo real"
 ```
 
-`ft close` recusa candidatos `pending`. `--force` permite ignorar a governança
-somente de forma explícita. Ao fechar, os dois relatórios são arquivados em
-`.ft/cycles/<cycle>/` com a decisão e a referência preservadas.
+O close recusa candidatos globais pendentes. Os relatórios e decisões são
+arquivados em `.ft/cycles/<cycle>/`.
 
-### Evolução de processo (ft evolve)
+## Evolução de processo
 
-`ft evolve` evolui o processo usando o contexto do ciclo — sem avançar nenhum
-step. Ele roda em paralelo ao ciclo: o playbook executa num workspace
-descartável em `$FT_HOME/runtime/<projeto>/evolve/evolve-NN/` (nunca em
-`worktrees/`, então um evolve jamais aparece em `ft runs` nem bloqueia
-`ft run`/`ft feature`).
+`ft evolve` melhora forks ou templates sem avançar nodes. Como pode haver vários
+ciclos, forneça explicitamente `--cycle` quando quiser usar evidências de uma
+execução:
 
 ```bash
-ft evolve --project                       # Melhorar o fork local .ft/process/
-ft evolve --global                        # Melhorar o template global do engine
-ft evolve --project --global              # Ambos
-ft evolve "reduzir retries no build" --project   # Com diretriz do stakeholder
-ft evolve --project --cycle cycle-07      # Contexto de um ciclo específico
-ft evolve --project --dry-run             # Derivar e validar sem aplicar
-ft evolve --project --yes                 # Aplicar sem confirmação
-ft evolve --project -t evolve_process     # Playbook explícito (default)
+ft evolve --project --cycle cycle-07
+ft evolve --global --cycle cycle-07
+ft evolve "reduzir retries no build" --project --cycle cycle-07
+ft evolve --project --cycle cycle-07 --dry-run
 ```
 
-Fluxo:
-
-1. **Contexto** — copia read-only os artefatos do ciclo ativo mais recente
-   (ou `--cycle`, ou o último arquivado em `.ft/cycles/`): retro, handoff,
-   process-improvements, relatórios e o `engine_state.yml` do ciclo.
-2. **Staging** — copia integralmente os alvos para o workspace:
-   `targets/project/` (fork `.ft/process/` da raiz do projeto) e/ou
-   `targets/global/<template>/` (template global resolvido pelo manifesto).
-3. **Playbook** — o template `evolve_process` (entrypoint `evolve`) roda no
-   workspace via runner normal: `evolve.analyze` deriva melhorias `EV-NN`
-   com evidência obrigatória; `evolve.apply` edita somente o staging e
-   escreve `report/evolution-report.md`.
-4. **Apply determinístico** — todo `process.yml` staged precisa passar no
-   validador de grafo e templates globais precisam continuar pristine; só
-   então o CLI mostra o diff e espelha o staging nos alvos reais. As
-   mudanças ficam uncommitted para revisão via `git diff`.
-
-`--global` exige um checkout git do engine e aplica direto no working tree
-de `templates/` — a promoção continua sendo decisão do mantenedor no commit.
-Mudanças no fork local vão para a raiz do projeto (nunca para dentro de um
-ciclo), então o ciclo em andamento não é afetado; o próximo ciclo nasce do
-processo evoluído.
-
----
+O playbook roda em workspace descartável sob `$FT_HOME`, valida todo
+`process.yml` staged e mostra o diff antes da aplicação. Mudanças no fork local
+afetam somente ciclos futuros; promoção global continua sendo decisão explícita
+do mantenedor.
 
 ## Formato do YAML de processo
 
@@ -260,26 +315,29 @@ id: meu_processo
 version: "1.0.0"
 title: "Meu Processo"
 
+# A política de entrada é validada antes da criação do ciclo.
+input_policy:
+  required: true
+  destination: docs/feature-request.md
+  prompt: "Descreva a demanda a implementar"
+
 artifact_policy:
   canonical: [docs/PRD.md, docs/PROJECT_BACKLOG.md, docs/FEATURES.md]
   cycle: [docs/task_list.md, docs/acceptance-report.md, docs/handoff.md]
 
 nodes:
   - id: step.01.discovery
-    type: discovery          # discovery | document | build | test_red | test_green
-                             # refactor | gate | decision | review | end
+    type: discovery
     title: "Capturar requisitos"
-    executor: llm_coach      # llm_coach | llm_coder | python
-    sprint: sprint-01        # opcional — agrupa nodes por sprint
+    executor: llm_coach
+    sprint: sprint-01
     outputs:
       - docs/requisitos.md
-    requires_approval: true  # opcional — pausa para ft approve
+    requires_approval: true
     validators:
       - file_exists: docs/requisitos.md
       - min_lines: 20
-      - has_sections:
-          - Problema
-          - Solucao
+      - has_sections: [Problema, Solucao]
     next: step.02.prd
 
   - id: step.02.prd
@@ -287,8 +345,7 @@ nodes:
     title: "Escrever PRD"
     executor: llm_coach
     sprint: sprint-01
-    outputs:
-      - docs/PRD.md
+    outputs: [docs/PRD.md]
     validators:
       - file_exists: docs/PRD.md
       - min_user_stories: 3
@@ -309,120 +366,78 @@ nodes:
     title: "Processo concluído"
 ```
 
----
+## Regras de design de processo
 
-## Regras de Design de Processo
+O YAML é pura orquestração. Ele define:
 
-O YAML de processo é **pura orquestração**. Ele define a sequência de passos, quem executa
-cada um (LLM coach, LLM coder, python), e quais validators rodam. Nada mais.
+- sequência e transições;
+- executor de cada node;
+- validadores determinísticos;
+- política de entrada e de artefatos;
+- referências a arquivos que o LLM deve ler.
 
-### O que o YAML define
-
-- **Sequência**: quais nodes existem e em que ordem executam
-- **Executor**: quem roda cada node (llm_coach, llm_coder, python)
-- **Validators**: quais verificações determinísticas rodam após cada node
-- **Artifact policy**: quais outputs permanecem canônicos e quais são arquivados por ciclo
-- **Hotspots de customização**: referências a arquivos que o LLM deve ler e seguir
-
-### O que o YAML NÃO define
-
-- Design, layout, cores, dimensões, specs visuais
-- Requisitos funcionais, user stories, regras de negócio
-- Tech stack, frameworks, dependências, linguagens
-- Nomes de projeto, domínio, contexto específico
-
-### Onde vive a especificidade do projeto
-
-Toda informação específica do projeto vive nos documentos visíveis em `docs/`. Relatórios
-de execução passam por `docs/` durante o run e são arquivados pelo `ft close`:
+Ele não deve hardcodar design, regras de negócio, tech stack, nome de produto ou
+contexto de um projeto. Essa especificidade fica em fontes visíveis como:
 
 | Artefato | Conteúdo |
-|----------|----------|
-| `docs/PRD.md` | O que construir — visão, user stories, requisitos |
-| `docs/PROJECT_BACKLOG.md` | Backlog canônico derivado do PRD; ciclos consomem itens daqui |
-| `docs/FEATURES.md` | Capacidades entregues; cada `FEAT-*` referencia `PB-*` concluído e evidência |
-| `.ft/cycles/<cycle>/task_list.md` | Quebra técnica arquivada ao fechar o ciclo |
-| `docs/ui_criteria.md` | Como deve parecer — telas, componentes, estados e evidências |
-| `docs/tech_stack.md` | Com que tecnologia — framework, linguagens, dependências |
+|---|---|
+| `docs/PRD.md` | visão, user stories e requisitos |
+| `docs/PROJECT_BACKLOG.md` | mudanças desejadas e decisões |
+| `docs/FEATURES.md` | capacidades entregues e evidências |
+| `docs/ui_criteria.md` | telas, componentes e estados |
+| `docs/tech_stack.md` | frameworks, linguagens e dependências |
+| `.ft/cycles/<cycle>/task_list.md` | quebra técnica arquivada |
 
-### Como o YAML referencia especificidades
-
-Os prompts nos nodes referenciam artefatos por caminho, nunca duplicam conteúdo:
+Prompts referenciam caminhos em vez de duplicar conteúdo:
 
 ```yaml
-# ERRADO — polui o YAML com especificidades do projeto
 prompt: |
-  Implemente o layout VS Code com Activity Bar (40px) + Drawer retrátil.
-  Use Svelte + Vite. Cores: fundo #0a0a1a, acento #f0c040.
-  Grafo SVG com nodes 180×60px e arestas bezier.
-
-# CERTO — o YAML só orquestra, a LLM lê os artefatos
-prompt: |
-  Implemente a interface completa do projeto.
-  LEIA OBRIGATORIAMENTE:
-    - docs/PRD.md              (user stories — todas são obrigatórias)
-    - docs/tech_stack.md       (stack decidido)
-    - seed/ui_guidelines.md    (especificações visuais completas)
-  Siga TODAS as especificações dos artefatos acima.
+  Implemente a interface do projeto.
+  Leia obrigatoriamente docs/PRD.md, docs/tech_stack.md e
+  docs/ui_criteria.md. Siga os contratos dessas fontes.
 ```
 
-### Hotspots de customização
-
-O processo disponibiliza pontos de flexibilização:
-
-1. **Hooks para scripts**: `env_setup`, `on_init` — executam shell scripts do projeto
-2. **Hooks para LLM**: prompts que dizem "leia arquivo X e siga" — a LLM extrai o que precisa
-3. **Validators genéricos**: `file_exists`, `has_sections`, `command_succeeds` — verificam estrutura e resultados estruturados, não conteúdo Markdown
-
-### Teste de genericidade
-
-Um processo YAML bem desenhado deve funcionar para **qualquer projeto do mesmo tipo**
-trocando apenas os artefatos em `seed/`. Se precisa editar o YAML para mudar de projeto,
-a especificidade vazou para o processo.
-
----
+Hotspots legítimos incluem hooks de shell (`env_setup`, `on_init`), prompts que
+referenciam arquivos e validadores genéricos. Um processo bem desenhado funciona
+para qualquer projeto do mesmo tipo trocando apenas as fontes de conhecimento.
 
 ## Tipos de node
 
 | Tipo | Executor | Descrição |
-|------|----------|-----------|
-| `discovery` | llm_coach | Captura hipótese/contexto; suporta hyper-mode |
-| `document` | llm_coach | Produz documento markdown |
-| `build` | llm_coder | Implementa código (TDD implícito) |
-| `test_red` | llm_coder | TDD red — escreve testes que devem **falhar** |
-| `test_green` | llm_coder | TDD green — implementa código para testes passarem |
-| `refactor` | llm_coder | Refatora mantendo testes verdes |
-| `gate` | python | Validação pura Python — sem LLM |
-| `decision` | python | Branch condicional baseado em estado |
-| `review` | llm_coder | Sprint Expert Gate — veredicto APPROVED/REJECTED |
-| `end` | — | Marca fim do processo |
-
----
+|---|---|---|
+| `discovery` | `llm_coach` | Captura hipótese/contexto; suporta hyper-mode |
+| `document` | `llm_coach` | Produz documento Markdown |
+| `build` | `llm_coder` | Implementa código |
+| `test_red` | `llm_coder` | Escreve teste que deve falhar |
+| `test_green` | `llm_coder` | Implementa para o teste passar |
+| `refactor` | `llm_coder` | Refatora mantendo testes verdes |
+| `gate` | `python` | Validação pura Python |
+| `human_gate` | humano/LLM | Decisão explícita de stakeholder |
+| `decision` | `python` | Branch condicional pelo state |
+| `review` | `llm_coder` | Veredicto estruturado |
+| `end` | — | Marca conclusão |
 
 ## Validadores disponíveis
 
 ### Artefatos
-| Validador | Uso | Descrição |
-|-----------|-----|-----------|
-| `file_exists` | `file_exists: path/to/file.md` | Arquivo existe |
-| `min_lines` | `min_lines: 20` | Mínimo de linhas (usa `outputs[0]`) |
-| `has_sections` | `has_sections: [A, B, C]` | Seções presentes |
-| `min_user_stories` | `min_user_stories: 3` | Mínimo de US no formato `### US-` |
-| `demand_coverage` | `demand_coverage: {prd_path: docs/PRD.md, demand_path: docs/demanda.md}` | Cobertura determinística da demanda por keywords normalizadas |
-| `project_backlog_valid` | `project_backlog_valid: {path: docs/PROJECT_BACKLOG.md}` | Backlog tem IDs, prioridade e status válidos |
-| `task_list_references_backlog` | `task_list_references_backlog: {task_path: docs/task_list.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Task list do ciclo referencia itens do backlog |
-| `backlog_pending_decisions` | `backlog_pending_decisions: {path: docs/PROJECT_BACKLOG.md}` | P0/P1 não ficam abertos sem decisão explícita |
-| `backlog_referenced_decisions` | `backlog_referenced_decisions: {references_path: docs/feature.md, reference_field: backlog_item}` | Valida somente os PBs selecionados pelo artefato do ciclo |
-| `features_catalog_valid` | `features_catalog_valid: {path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Catálogo tem schema, IDs, lifecycle, origem entregue e evidência válidos |
-| `implemented_backlog_covered_by_features` | `implemented_backlog_covered_by_features: {features_path: docs/FEATURES.md, backlog_path: docs/PROJECT_BACKLOG.md}` | Todo item de feature/US entregue está representado por algum `FEAT-*` |
 
-`command_succeeds` aceita a forma composta com `command`, `timeout` e um
-`resume_command` opcional. O comando alternativo é usado somente ao recuperar
-uma delegação órfã; nos demais caminhos, inclusive retries normais, o engine
-continua executando `command`. Isso permite verificar um receipt já gravado sem
-repetir a suíte completa que o produziu. Se o comando de retomada falhar, o
-engine executa `command` uma única vez antes de considerar nova delegação; sem
-`resume_command`, não há uma segunda execução:
+| Validador | Uso | Descrição |
+|---|---|---|
+| `file_exists` | `file_exists: path/to/file.md` | Arquivo existe |
+| `min_lines` | `min_lines: 20` | Mínimo de linhas no primeiro output |
+| `has_sections` | `has_sections: [A, B]` | Seções presentes |
+| `min_user_stories` | `min_user_stories: 3` | Mínimo de histórias `### US-` |
+| `demand_coverage` | mapa de paths | Cobertura determinística da demanda |
+| `project_backlog_valid` | path do backlog | IDs, prioridade e status válidos |
+| `task_list_references_backlog` | paths | Task list referencia backlog |
+| `backlog_pending_decisions` | path | P0/P1 sem decisão são recusados |
+| `backlog_referenced_decisions` | paths/campo | Valida PBs selecionados pelo ciclo |
+| `features_catalog_valid` | paths | Catálogo e origens entregues válidos |
+| `implemented_backlog_covered_by_features` | paths | Entregas têm `FEAT-*` correspondente |
+
+`command_succeeds` aceita `command`, `timeout` e `resume_command`. O alternativo
+é usado ao recuperar uma delegação órfã; se falhar, o comando completo roda uma
+única vez:
 
 ```yaml
 validators:
@@ -432,341 +447,224 @@ validators:
       timeout: 300
 ```
 
-### Testes
-| Validador | Uso | Descrição |
-|-----------|-----|-----------|
-| `tests_pass` | `tests_pass: true` | pytest passa |
-| `tests_fail` | `tests_fail: true` | pytest falha (red phase) |
-| `coverage_min` | `coverage_min: 80` | Cobertura global mínima |
-| `coverage_per_file` | `coverage_per_file: 85` | Cobertura mínima por arquivo |
-| `tests_exist` | `tests_exist: tests/` | Existem arquivos de teste |
+### Testes, código e gates
 
-### Código
-| Validador | Uso | Descrição |
-|-----------|-----|-----------|
-| `lint_clean` | `lint_clean: true` | ruff check sem erros |
-| `format_check` | `format_check: true` | ruff format --check |
-| `no_todo_fixme` | `no_todo_fixme: true` | Sem TODO/FIXME |
+| Grupo | Validadores |
+|---|---|
+| Testes | `tests_pass`, `tests_fail`, `coverage_min`, `coverage_per_file`, `tests_exist` |
+| Código | `lint_clean`, `format_check`, `no_todo_fixme` |
+| Gates | `gate_delivery`, `gate_smoke`, `gate_mvp` |
+| Review | `no_large_files`, `no_print_statements`, `changed_files_have_tests` |
 
-### Gates compostos
-| Validador | Uso | Descrição |
-|-----------|-----|-----------|
-| `gate_delivery` | `gate_delivery: true` | outputs existem + testes passam |
-| `gate_smoke` | `gate_smoke: true` | testes + smoke cmd opcional |
-| `gate_mvp` | `gate_mvp: {required_docs: [...], min_coverage: 70}` | docs + testes + cobertura |
-
-### Review
-| Validador | Uso | Descrição |
-|-----------|-----|-----------|
-| `no_large_files` | `no_large_files: 500` | Arquivos < N linhas |
-| `no_print_statements` | `no_print_statements: true` | Sem print() em src/ |
-| `changed_files_have_tests` | `changed_files_have_tests: true` | Arquivos modificados têm testes |
-
----
-
-## TDD Loop
-
-Sequência canônica:
+## TDD loop
 
 ```yaml
 - id: tdd.red
   type: test_red
   executor: llm_coder
-  sprint: sprint-02-tdd
-  outputs:
-    - tests/test_feature.py
-  validators:
-    - file_exists: tests/test_feature.py
-    - tests_fail: true          # ← DEVE falhar (red)
+  outputs: [tests/test_feature.py]
+  validators: [{tests_fail: true}]
   next: tdd.green
 
 - id: tdd.green
   type: test_green
   executor: llm_coder
-  sprint: sprint-02-tdd
-  outputs:
-    - src/feature.py
-  validators:
-    - file_exists: src/feature.py
-    - tests_pass: true          # ← DEVE passar (green)
+  outputs: [src/feature.py]
+  validators: [{tests_pass: true}]
   next: tdd.refactor
 
 - id: tdd.refactor
   type: refactor
   executor: llm_coder
-  sprint: sprint-02-tdd
-  outputs:
-    - src/feature.py
-  validators:
-    - tests_pass: true
-    - lint_clean: true
+  outputs: [src/feature.py]
+  validators: [{tests_pass: true}, {lint_clean: true}]
   next: gate.delivery
 ```
 
-O engine faz **auto-commit** após PASS em cada fase:
-- `red:` → commit dos testes
-- `green:` → commit da implementação
-- `refactor:` → commit da refatoração
-
----
+O engine faz auto-commit após PASS: `red:` para testes, `green:` para
+implementação e `refactor:` para refatoração.
 
 ## Sprint workflow
 
 ```bash
-# Rodar sprint por sprint
-ft init --template base
-ft continue --sprint    # sprint-01-discovery
-ft approve              # aprovar artefatos pendentes
-ft continue --sprint    # sprint-02-tdd
-ft continue --sprint    # sprint-03-quality
-...
+ft run . --template mvp-builder
+ft continue --cycle cycle-01 --sprint
+ft approve --cycle cycle-01
+ft continue --cycle cycle-01 --sprint
 
-# Ou modo autônomo
-ft continue --auto      # roda até human gate, MVP ou BLOCK
+# ou
+ft continue --cycle cycle-01 --auto
 ```
 
-O sprint report é gerado automaticamente ao cruzar boundaries de sprint.
+O sprint report é gerado ao cruzar boundaries. Quando documentos já existem em
+`docs/`, o hyper-mode enriquece nodes `discovery` e `document` com esse contexto.
 
----
+## Templates do catálogo
 
-## Hyper-mode
+### `mvp-builder`
 
-Quando docs existem em `docs/`, o engine automaticamente enriquece o
-prompt com contexto dos documentos existentes (evita repetição, foca em completar).
-
-Ativa automaticamente para nodes de tipo `discovery` e `document`.
-
----
-
-## Processo MVP Builder
-
-O template recomendado está em `templates/mvp-builder/process.yml` e é copiado
-para `.ft/process/mvp-builder/process.yml` em projetos novos:
+Processo completo de MVP. Materialize e execute com:
 
 ```bash
-ft init meu-projeto --template mvp-builder
-cd meu-projeto
-git init && git add -A && git commit -m "chore: bootstrap fast track"
-ft run . --auto
+ft run . --template mvp-builder --auto
 ```
 
-### Paralelismo intra-processo (`--parallel`)
+Com `--parallel`, nodes do mesmo `parallel_group` rodam em worktrees internas e
+fazem fan-in validado. Somente nodes LLM com outputs disjuntos podem participar;
+gates, decisions e dependências cruzadas são recusados pelo validador do grafo.
+`--max-parallel N` limita os workers. Sem a flag, os grupos permanecem
+sequenciais.
 
-`ft run . --auto --parallel` habilita o fan-out dos nodes marcados com
-`parallel_group` no `process.yml`: cada membro do grupo roda num git worktree
-isolado e o engine faz merge + validação no fan-in, avançando na ordem do YAML.
-A escolha persiste em `engine_state.yml`, então `ft continue`, `ft approve
---auto` e `ft retry` a respeitam sem re-passar flags; use `ft continue
---no-parallel` para desligar num run já iniciado e `--max-parallel N` para
-ajustar os worktrees simultâneos (default: 2).
+### `feature`
 
-Regras de um `parallel_group` (verificadas por `ft validate`): só nodes com
-executor LLM, outputs disjuntos entre os membros e nenhum node de controle
-(gate, human_gate, decision). Membros não podem ler o output uns dos outros —
-os worktrees nascem do mesmo commit base. O template mvp-builder marca dois
-grupos: `plan-docs` (api_contract, ui_criteria, test_data) e
-`handoff-analysis` (prd_rewrite, critical_analysis). Sem `--parallel` os
-grupos rodam sequencialmente, como antes.
-
-O processo V2 continua disponível como template histórico e, quando escolhido,
-usa seu próprio bundle `.ft/process/fast-track-v2/process.yml`.
-
----
-
-## Processo Feature
-
-O template incremental está em `templates/feature/`. Seu contrato é implementar
-uma única capacidade em produto existente, com discovery interativo, worktree
-isolada, testes/build obrigatórios, aceite humano e merge por `ft close`.
-
-O entrypoint é:
+Implementa uma capacidade em produto existente, com elucidação de escopo,
+aprovação, implementação, review, testes e aceite:
 
 ```bash
-ft feature "Adicionar busca por telefone" --template feature --claude
-# ou: ft feature --input demanda.md --template feature --codex
-# sem demanda/--input, o comando solicita a descrição no terminal
+ft run . --template feature --request "Adicionar busca por telefone" --codex
+ft run . --template feature --input demanda.md --codex
 ```
 
-Na primeira execução, o diretório global é materializado em
-`.ft/process/feature/`; somente essa cópia local pode ser executada. O state fixa
-path e digest dentro da worktree, então `continue`, `approve`, `reject`, `status`
-e `close` retomam o mesmo processo sem redescobrir o default. Rejeições retornam
-ao node de correção e percorrem novamente os gates intermediários. O `close`
-valida apenas o `backlog_item` de `docs/feature.md` e aplica merge full.
+O state fixa path e digest do fork local. Rejeições retornam ao node de correção
+e percorrem novamente os gates. O close valida o item de backlog selecionado.
+Entradas novas de changelog começam com `#FEAT`.
 
-### Tweaks rápidos
+### `bug`
 
-`tweak` é outro template do mesmo entrypoint `ft feature`, não um comando novo:
+Correção focal para defeito reproduzível. Exige diagnóstico, teste RED,
+correção mínima, o mesmo teste GREEN, build/test e aceite:
 
 ```bash
-ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
-ft feature --parallel "Ajuste o label" "Reduza o padding" -t tweak --yes
+ft run . --template bug --request "Terminal duplica o eco do input" --codex
 ```
 
-No caminho feliz ele faz um preflight determinístico, uma delegação com budget
-total de 1800 segundos, exatamente um check focal comprovado, um `make build`
-curto e o aceite humano. O escopo é limitado a 4 arquivos, 160 linhas e 256 kB
-por arquivo/patch; não há discovery, review, reconcile, suíte completa ou E2E.
-No modo paralelo, o planner compartilhado tem 120 segundos no total para suas
-tentativas; preparação, worktrees e waves continuam a cargo do orquestrador
-normal de `ft feature --parallel`.
-Para impedir hooks globais de recriarem uma pipeline longa, apenas os commits
-automáticos deste template neutralizam `core.hooksPath` e usam
-`--no-verify --no-gpg-sign`; os checks focais, o build e os limites de escopo
-continuam obrigatórios.
+Use `feature` quando houver comportamento novo, contrato, auth/security,
+migração, dados, dependência, infraestrutura ou mudança transversal. Entradas de
+changelog começam com `#BUG`.
 
-O grafo executa preflight determinístico, uma única delegação de implementação,
-build/smoke curto e aceite humano. Não há discovery, review independente, suíte
-E2E/full, reconciliação de `PROJECT_BACKLOG`/`FEATURES`, reserva de PB ou retry
-automático. O fechamento ainda faz merge full da worktree. Um diff grande ou
-uma mudança em dependências, migrações, autenticação, contratos ou infraestrutura
-é bloqueado e deve ser reaberto com `--template feature`.
+### `tweak`
 
-`approve`, `reject`, `retry` e `close` aceitam `--cycle <nome>` para mirar um
-ciclo específico quando há mais de um ativo.
-
-### Bugs focais com regressão
-
-`bug` é um terceiro template do entrypoint `ft feature`. Ele fica entre
-`tweak` e `feature`: dispensa discovery, perguntas de escopo e review
-independente, mas exige diagnóstico objetivo e prova de regressão.
+Mudança pequena e de baixo risco, com implementação única, check focal, build
+curto e aceite:
 
 ```bash
-ft feature "Terminal duplica o comando ao ecoar input" --template bug --codex
-ft feature --parallel "bug A" "bug B" "bug C" -t bug --yes
+ft run . --template tweak --request "Mudar o botão Salvar para azul" --codex
 ```
 
-No caminho feliz há duas delegações LLM: uma combina teste RED, correção mínima
-e o mesmo teste GREEN; a outra reconcilia apenas o PB e a FEAT existentes. O
-gate intermediário executa `make build` e `make test` uma única vez, e o gate
-final verifica o receipt sem repetir a suíte. Há um aceite humano. O limite é
-de 8 arquivos de produto/teste e 500 linhas alteradas.
+Não executa discovery completo, review independente ou E2E full. Limites de
+arquivos, linhas, patch e áreas de risco impedem que um ajuste pequeno vire uma
+mudança transversal; nesses casos, abra outro ciclo com `feature`.
 
-O modo paralelo reaproveita o planner, as reservas de PB, as waves e as
-worktrees de `ft feature --parallel`. Bugs com áreas disjuntas rodam juntos;
-dependências ou áreas sobrepostas são serializadas. Não existe runner paralelo
-específico para bugs.
+### Outros
 
-Sem reprodução determinística, ou diante de comportamento novo, contrato,
-auth/security, migração, dados, dependência, infraestrutura ou mudança
-transversal, o processo bloqueia e orienta reabrir com `--template feature`.
-Entradas novas de changelog começam com `#BUG`; o template `feature` exige
-`#FEAT`; `tweak` não exige changelog.
+`base` fornece grafo mínimo; `ft-ui-prototype` cobre prototipagem de UI;
+`symgateway` demonstra integração externa opt-in; `fast-track-v2` preserva o
+processo histórico. Todos usam o mesmo comando de run e viram forks locais.
 
-### Features paralelas (ft feature --parallel)
-
-`--parallel` recebe N demandas de uma vez e orquestra um batch de ciclos
-`feature`, paralelizando tanto quanto possível:
+## Encerramento e artefatos
 
 ```bash
-ft feature --parallel "Busca por telefone" "Dark mode" "Exportar CSV" -t feature
-ft feature --parallel "Falha A" "Falha B" "Falha C" -t bug
-ft feature --parallel "Ajuste o label" "Reduza o padding" -t tweak
-ft feature --parallel --input demandas.md -t feature      # seções '## ' ou blocos '---'
-ft feature --parallel ... --engines claude:opus,codex:gpt-5.3@high   # engines por feature
-ft feature --parallel ... --max-parallel 3 --yes          # 3 ciclos simultâneos, sem confirmação
-ft feature --parallel --resume                             # retomar o batch mais recente
+ft close --cycle cycle-07 --merge full
+ft close --cycle cycle-08 --merge docs
+ft close --cycle cycle-09 --merge selective --merge-paths "src/a tests/a"
+ft close --cycle cycle-10 --keep-worktree
 ```
 
-Fluxo do orquestrador:
+O lock de close serializa merges. A política do processo mantém artefatos
+canônicos em `docs/` e arquiva relatórios específicos em
+`.ft/cycles/<cycle>/`. Estado e logs brutos nunca são mergeados.
 
-1. **Plano** — um planner LLM analisa as demandas e o projeto (catálogo,
-   backlog, árvore de arquivos) e declara, por feature, as áreas de CÓDIGO
-   tocadas e as dependências reais (`plan.yml`, schema validado). O ENGINE
-   computa as waves deterministicamente: níveis topológicos por dependência
-   e, dentro do nível, features com áreas sobrepostas não rodam juntas.
-   O plano é apresentado para aprovação (`--yes` pula).
-2. **Execução por wave** — os ciclos da wave são criados sequencialmente
-   (worktree + state, sem executar nodes) e executados em paralelo via
-   `ft continue --auto --cycle <nome>` com log por feature em
-   `$FT_HOME/runtime/<projeto>/parallel/<batch>/logs/`. `--engines` atribui
-   executor/modelo/effort por feature em round-robin (`engine[:model][@effort]`);
-   uma linha `engine:` na seção do `--input` tem prioridade.
-3. **Gates inline** — cada ciclo para nos human gates (PV-9: auto ≠ bypass) e
-   o orquestrador apresenta cada gate pendente neste terminal:
-   `[a]provar / [r]ejeitar / [d]epois / [p]ausar`. `--bypass-human-gates`
-   propaga o bypass para todos os ciclos. Ciclos bloqueados oferecem
-   `[r]etentar / [f]alhar / [p]ausar`; rate limit re-spawna sozinho (até 3x).
-4. **Close por wave** — ao final da wave, cada ciclo done é fechado com merge
-   full em ordem estável; a wave seguinte nasce do HEAD já mergeado. Conflito
-   de merge pausa o batch preservando worktree e branch; resolva e rode
-   `ft feature --parallel --resume`. Features com dependência falhada são
-   marcadas `skipped`.
+Depois do merge, reinstale dependências alteradas, limpe caches antigos,
+reinicie serviços no checkout promovido, confira as rotas principais e exerça a
+capacidade entregue antes de demonstrá-la.
 
-O estado do batch (`batch.yml`) é persistido a cada transição — qualquer
-interrupção é retomável com `--resume [batch-id]`.
+## Migração V2 → V3
 
----
+Layouts com `process/`, bundle flat ou manifesto anterior exigem migração
+explícita e sem runtime em mutação:
 
-## Estrutura de arquivos
-
+```bash
+ft migrate-layout . --dry-run
+ft migrate-layout .
 ```
+
+O preflight valida grafo, contenção, colisões e symlinks antes de escrever. A
+migração preserva todos os processos e ciclos, converte o manifesto para schema
+V3 e elimina o seletor default sem promover substituto. Históricos em
+`docs/archive/` são importados; runtime legado recebe backup inativo em
+`$FT_HOME/migrations/`. Conteúdo em `.ft/cycles/` nunca é reescrito.
+
+Use `ft init --check`/`--fix` para saúde de um workspace já V3; reparo não é
+migração.
+
+## Estrutura do engine e do projeto
+
+```text
 ft/
   engine/
-    graph.py          # DAG parser — YAML → nodes → resolve_next
-    state.py          # StateManager — único escritor de engine_state.yml
-    runner.py         # StepRunner — loop principal
-    delegate.py       # LLM executor via Claude/Codex CLI
-    git_ops.py        # auto_commit após PASS
-    parallel.py       # ParallelRunner — worktrees + fan-out/fan-in
-    stakeholder.py    # hyper-mode, approval/rejection helpers
+    graph.py          # YAML → DAG
+    state.py          # escrita do engine_state.yml
+    runner.py         # loop determinístico
+    delegate.py       # executores LLM
+    git_ops.py        # commits após PASS
+    parallel.py       # fan-out/fan-in de nodes
     validators/
-      artifacts.py    # file_exists, min_lines, has_sections, ...
-      tests.py        # tests_pass, tests_fail, coverage_*
-      code.py         # lint_clean, format_check, ...
-      gates.py        # gate_delivery, gate_smoke, gate_mvp
-      review.py       # no_large_files, no_print_statements, ...
-  cli/
-    main.py           # argparse CLI — ft init/feature/continue/status/approve/reject
-~/.ft/worktrees/<projeto>/cycle-NN/
-  state/
-    engine_state.yml  # Estado do ciclo em modo isolated (NUNCA editar manualmente)
-<projeto>/
-  docs/                # PRD, stack, UI criteria, backlog e catálogo de features visíveis
-  .ft/
-    manifest.yml
-    process/
-      mvp-builder/
-        process.yml    # Processo default deste exemplo
-        environment.yml
-        scripts/
-      feature/
-        process.yml    # Processo incremental materializado copy-once
-        environment.yml
-        scripts/
-    cycles/
-      cycle-NN/        # Task list, evidências, retro e handoff duráveis
-templates/
-  mvp-builder/
-    process.yml        # Template recomendado
-```
+  cli/main.py         # CLI pública
+  project/            # bootstrap, diagnóstico e reparo
+  templates/          # resolução/materialização local-first
+  runs/               # locks, alocação e seleção de ciclos
 
----
+$FT_HOME/worktrees/<projeto>/<cycle>/
+  state/engine_state.yml
+
+<projeto>/.ft/
+  manifest.yml
+  process/<template>/process.yml
+  cycles/<cycle>/
+
+templates/<template>/process.yml
+```
 
 ## Troubleshooting
 
 **`ft: command not found`**
+
 ```bash
 pip install -e .
-# ou: python -m ft.cli.main
+# ou
+python -m ft.cli.main
+```
+
+**Workspace inconsistente**
+
+```bash
+ft init . --check
+ft init . --fix
+```
+
+**Comando ambíguo**
+
+```bash
+ft runs
+ft status --cycle <id>
 ```
 
 **BLOCKED após validação**
+
 ```bash
-ft status    # ver motivo do block
-ft retry     # retentar o node atual
+ft status --cycle <id>
+ft retry --cycle <id>
 ```
 
-**Artefato rejeitado pelo stakeholder**
+**Artefato rejeitado**
+
 ```bash
-ft reject "feedback específico"    # reenvia ao LLM com o motivo
-ft reject --no-retry "motivo"      # bloqueia sem retry
+ft reject "feedback específico" --cycle <id>
+ft reject "motivo" --no-retry --cycle <id>
 ```
 
 **LLM não encontrado**
-O engine usa a CLI selecionada (`claude` por default, ou `codex`, `gemini` e `opencode`
-via flag/`FT_LLM_ENGINE`).
-Certifique-se de que o binário escolhido está instalado:
+
 ```bash
 claude --version
 codex --version

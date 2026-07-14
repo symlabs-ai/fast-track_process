@@ -1,7 +1,7 @@
 # Feature — Evolução Incremental de Produto
 #
 # Este arquivo global nunca é executado diretamente. Na primeira invocação de
-# `ft feature --template feature`, o engine materializa todo o diretório em
+# `ft run . --template feature`, o engine materializa todo o diretório em
 # `.ft/process/feature/` e executa somente a cópia local versionada.
 
 id: feature
@@ -9,7 +9,7 @@ version: "1.2.0"
 title: "Feature — Evolução Incremental"
 
 execution_policy:
-  entrypoint: feature
+  entrypoint: run
   template: feature
   materialization: copy_once
   runtime_source: local_only
@@ -17,6 +17,11 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/feature/process.yml
   merge_command: ft close --merge full
+
+input_policy:
+  required: true
+  destination: docs/feature-request.md
+  prompt: "Descreva a feature a implementar"
 
 correction_policy:
   follow_graph_after_retry: true

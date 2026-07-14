@@ -206,9 +206,8 @@ def _stop_owned_process(token: str) -> None:
 
 
 def test_feature_template_is_discoverable_and_pristine():
-    assert available_templates(entrypoint="feature") == ["bug", "feature", "tweak"]
-    assert "bug" not in available_templates(entrypoint="init")
-    assert "feature" not in available_templates()
+    assert {"bug", "feature", "tweak"} <= set(available_templates())
+    assert "feature" in available_templates()
     validate_template_is_pristine(TEMPLATE)
 
 
@@ -220,7 +219,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert graph.meta["id"] == "feature"
     assert graph.meta["version"] == "1.2.0"
     assert graph.meta["execution_policy"] == {
-        "entrypoint": "feature",
+        "entrypoint": "run",
         "template": "feature",
         "materialization": "copy_once",
         "runtime_source": "local_only",

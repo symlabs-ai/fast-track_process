@@ -1,10 +1,12 @@
 # Tweak
 
-Processo ultraleve do entrypoint `ft feature` para alterações pequenas e locais:
-cor, espaçamento, texto, ícone ou comportamento simples sem mudança de contrato.
+Processo ultraleve de `ft run --template tweak` para alterações pequenas e
+locais: cor, espaçamento, texto, ícone ou comportamento simples sem mudança de
+contrato.
 
 ```bash
-ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
+ft run . --template tweak \
+  --request "Mude a cor do botão Salvar para azul" --codex
 ```
 
 Meta operacional: **3–10 minutos** no caminho feliz. O grafo faz um preflight
@@ -14,8 +16,8 @@ completa ou E2E por padrão. Retries e auto-fixes automáticos estão desligados
 A delegação tem budget total de 1800 segundos (30 min), inclusive backoff
 interno: o modelo/effort escolhido pelo usuário é preservado, mas não pode
 ocupar uma hora.
-No modo `--parallel`, o planejador já existente compartilha um único budget de
-120 segundos entre suas tentativas; não há um segundo orquestrador para tweak.
+`--parallel` continua disponível para grupos paralelos declarados dentro do
+grafo. Ciclos `tweak` distintos também podem rodar simultaneamente.
 
 ## Limites
 
@@ -40,7 +42,7 @@ limites. Nesse caso, descarte a worktree e rode o processo normal:
 
 ```bash
 ft abort
-ft feature "<mesma demanda>" --template feature --codex
+ft run . --template feature --request "<mesma demanda>" --codex
 ```
 
 O tweak não cria PB/FEAT nem altera PROJECT_BACKLOG, FEATURES ou CHANGELOG. Seu

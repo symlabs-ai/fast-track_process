@@ -3,17 +3,19 @@
 from argparse import Namespace
 import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from ft.cli import main as cli_main
-from ft.engine import feature_batch as fb
 from ft.engine.delegate import DelegateResult
 from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import EngineState
+from ft.project.bootstrap import bootstrap_project
+from ft.templates.input_policy import InputPolicyError
 
 
 class FakeRunner:
@@ -59,16 +61,16 @@ class FakeRunner:
 def _args(project: Path, **overrides) -> Namespace:
     base = {
         "project": str(project),
-        "process": None,
         "from_project": None,
         "hipotese": None,
         "demand_input": None,
+        "request": None,
         "bypass_human_gates": False,
-        "force": True,
         "cycle_name": None,
         "template": "base",
-        "worktree": None,
         "auto": True,
+        "parallel": False,
+        "max_parallel": None,
         "claude": None,
         "codex": None,
         "gemini": None,
@@ -80,20 +82,16 @@ def _args(project: Path, **overrides) -> Namespace:
     return Namespace(**base)
 
 
-def _valid_hypothesis() -> str:
-    return "\n".join([
-        "# Hipótese",
-        "Contexto inicial.",
-        "## Problema",
-        "Linha 1 do problema.",
-        "Linha 2 do problema.",
-        "Linha 3 do problema.",
-        "## Oportunidade",
-        "Linha 1 da oportunidade.",
-        "Linha 2 da oportunidade.",
-        "Linha 3 da oportunidade.",
-        "Linha 4 da oportunidade.",
-    ])
+def _bootstrap_run_project(project: Path) -> None:
+    bootstrap_project(project)
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=project, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=project,
+        check=True,
+    )
 
 
 def _write_local_process(
@@ -101,9 +99,8 @@ def _write_local_process(
     content: str,
     *,
     name: str = "plain-project",
-    defaults: dict | None = None,
 ) -> Path:
-    ensure_project_layout(project, defaults=defaults)
+    ensure_project_layout(project)
     process = project / ".ft" / "process" / name / "process.yml"
     process.parent.mkdir(parents=True, exist_ok=True)
     process.write_text(content)
@@ -112,236 +109,100 @@ def _write_local_process(
         process_name=name,
         process_path=process,
         template_id=name,
-        entrypoint="init",
-        set_default=True,
+        entrypoint="run",
+        set_default=False,
     )
     return process
 
 
 class TestRunInputs:
-    def test_run_rejects_process_outside_local_named_catalog(self, tmp_path):
-        project = tmp_path / "project"
-        _write_local_process(
-            project,
-            "id: local\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n",
-        )
-        external = tmp_path / "global-template" / "process.yml"
-        external.parent.mkdir()
-        external.write_text(
-            "id: external\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n"
-        )
-
-        with pytest.raises(ValueError, match="deve estar dentro de .ft/process"):
-            cli_main.cmd_run(
-                _args(project, process=str(external), template=None)
-            )
-
-    def test_run_input_uses_effective_llm_engine(self, tmp_path):
+    def test_run_request_is_staged_only_in_worktree_and_uses_llm_override(
+        self, tmp_path, monkeypatch
+    ):
         FakeRunner.instances = []
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        demand = tmp_path / "demanda.md"
-        demand.write_text("Quero criar tarefas e filtrar por status.\n")
+        _bootstrap_run_project(project)
+        request = "Adicionar busca por telefone."
 
         with (
             patch("ft.cli.main.StepRunner", FakeRunner),
-            patch("ft.engine.triage.classify_demand") as classify,
-            patch("ft.engine.triage.generate_hypothesis", return_value=_valid_hypothesis()),
+            patch("ft.cli.main._api_health_check"),
         ):
-            classify.return_value = {"questions": [], "process": {}}
-
-            cli_main.cmd_run(
-                _args(project, demand_input=str(demand), codex=True, effort="max")
-            )
-
-        assert classify.call_args.kwargs["llm_engine"] == "codex"
-        assert classify.call_args.kwargs["llm_effort"] == "max"
-        assert FakeRunner.instances[-1].llm_engine == "codex"
-        assert FakeRunner.instances[-1].llm_effort == "max"
-        assert FakeRunner.instances[-1].run_mode == "mvp"
-        run_root = FakeRunner.instances[-1].project_root
-        assert (run_root / "docs" / "demanda.md").exists()
-        assert (run_root / "docs" / "hipotese.md").exists()
-
-    def test_run_hipotese_uses_default_engine_without_name_error(self, tmp_path):
-        FakeRunner.instances = []
-        project = tmp_path / "project"
-        hipotese = tmp_path / "hipotese.md"
-        hipotese.write_text(_valid_hypothesis())
-
-        with patch("ft.cli.main.StepRunner", FakeRunner):
-            cli_main.cmd_run(_args(project, hipotese=str(hipotese)))
-
-        assert FakeRunner.instances[-1].llm_engine == "claude"
-        assert FakeRunner.instances[-1].run_mode == "mvp"
-        run_root = FakeRunner.instances[-1].project_root
-        assert (run_root / "docs" / "hipotese.md").exists()
-
-    def test_run_input_uses_opencode_engine_and_model(self, tmp_path):
-        FakeRunner.instances = []
-        project = tmp_path / "project"
-        demand = tmp_path / "demanda.md"
-        demand.write_text("Quero criar tarefas e filtrar por status.\n")
-
-        with (
-            patch("ft.cli.main.StepRunner", FakeRunner),
-            patch("ft.engine.triage.classify_demand") as classify,
-            patch("ft.engine.triage.generate_hypothesis", return_value=_valid_hypothesis()),
-        ):
-            classify.return_value = {"questions": [], "process": {}}
-
             cli_main.cmd_run(
                 _args(
                     project,
+                    template="feature",
+                    request=request,
+                    codex=True,
+                    effort="max",
+                )
+            )
+
+        runner = FakeRunner.instances[-1]
+        assert runner.llm_engine == "codex"
+        assert runner.llm_effort == "max"
+        assert runner.run_mode == "mvp"
+        assert (runner.project_root / "docs" / "feature-request.md").read_text() == request
+        assert not (project / "docs" / "feature-request.md").exists()
+
+    def test_run_input_file_is_staged_and_uses_opencode_model(
+        self, tmp_path, monkeypatch
+    ):
+        FakeRunner.instances = []
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        _bootstrap_run_project(project)
+        demand = tmp_path / "demanda.md"
+        demand.write_text("Corrigir o eco duplicado do terminal.\n")
+
+        with (
+            patch("ft.cli.main.StepRunner", FakeRunner),
+            patch("ft.cli.main._api_health_check"),
+        ):
+            cli_main.cmd_run(
+                _args(
+                    project,
+                    template="bug",
                     demand_input=str(demand),
                     opencode="pgx/zai-org_glm-4.7-flash",
                 )
             )
 
-        assert classify.call_args.kwargs["llm_engine"] == "opencode"
-        assert FakeRunner.instances[-1].llm_engine == "opencode"
-        assert FakeRunner.instances[-1].llm_model == "pgx/zai-org_glm-4.7-flash"
+        runner = FakeRunner.instances[-1]
+        assert runner.llm_engine == "opencode"
+        assert runner.llm_model == "pgx/zai-org_glm-4.7-flash"
+        assert (runner.project_root / "docs" / "feature-request.md").read_text() == (
+            demand.read_text()
+        )
 
-    def test_run_uses_versioned_engine_default_without_init_state(self, tmp_path, monkeypatch):
+    def test_run_rejects_request_and_input_before_allocating_cycle(
+        self, tmp_path, monkeypatch
+    ):
         FakeRunner.instances = []
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
-        _write_local_process(
-            project,
-            """
-id: plain_project
-version: "1.0.0"
-nodes:
-  - id: start
-    type: end
-    title: End
-""",
-            defaults={"llm_engine": "opencode", "llm_effort": "high"},
-        )
+        _bootstrap_run_project(project)
+        demand = tmp_path / "demanda.md"
+        demand.write_text("Demanda em arquivo.\n")
 
-        with patch("ft.cli.main.StepRunner", FakeRunner):
-            cli_main.cmd_run(_args(project, template=None))
-
-        assert FakeRunner.instances[-1].llm_engine == "opencode"
-        assert FakeRunner.instances[-1].llm_effort == "high"
-        assert FakeRunner.instances[-1].project_root.name == "cycle-01-opencode"
-
-    def test_run_without_git_executes_inside_plain_isolated_run_dir(self, tmp_path, monkeypatch):
-        FakeRunner.instances = []
-        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
-        project = tmp_path / "project"
-        _write_local_process(
-            project,
-            """
-id: plain_project
-version: "1.0.0"
-nodes:
-  - id: start
-    type: build
-    title: Start
-    executor: python
-    next: end
-  - id: end
-    type: end
-    title: End
-""",
-        )
-
-        with patch("ft.cli.main.StepRunner", FakeRunner):
-            cli_main.cmd_run(_args(project, opencode=True, template=None))
-
-        run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01-opencode"
-        assert FakeRunner.instances[-1].project_root == run_dir
-        assert FakeRunner.instances[-1].process_path == (
-            run_dir / ".ft" / "process" / "plain-project" / "process.yml"
-        )
-        assert (run_dir / ".ft" / "process" / "plain-project" / "process.yml").exists()
-
-    def test_run_without_git_accepts_explicit_cycle_name(self, tmp_path, monkeypatch):
-        FakeRunner.instances = []
-        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
-        project = tmp_path / "project"
-        _write_local_process(
-            project,
-            """
-id: plain_project
-version: "1.0.0"
-nodes:
-  - id: start
-    type: build
-    title: Start
-    executor: python
-    next: end
-  - id: end
-    type: end
-    title: End
-""",
-        )
-
-        with patch("ft.cli.main.StepRunner", FakeRunner):
+        with (
+            patch("ft.cli.main.StepRunner", FakeRunner),
+            pytest.raises(InputPolicyError, match="--input ou --request"),
+        ):
             cli_main.cmd_run(
                 _args(
                     project,
-                    opencode=True,
-                    cycle_name="cycle-11-opencode",
-                    template=None,
+                    template="feature",
+                    demand_input=str(demand),
+                    request="Demanda inline.",
                 )
             )
 
-        run_dir = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
-        assert FakeRunner.instances[-1].project_root == run_dir
-        assert (run_dir / ".ft" / "process" / "plain-project" / "process.yml").exists()
-        assert (tmp_path / "ft-home" / "worktrees" / "project" / ".cycles").read_text() == "11\n"
-
-    def test_run_rejects_existing_explicit_cycle_name(self, tmp_path, monkeypatch):
-        FakeRunner.instances = []
-        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
-        project = tmp_path / "project"
-        _write_local_process(
-            project,
-            """
-id: plain_project
-version: "1.0.0"
-nodes:
-  - id: start
-    type: end
-    title: End
-""",
-        )
-        existing = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-11-opencode"
-        existing.mkdir(parents=True)
-
-        with patch("ft.cli.main.StepRunner", FakeRunner):
-            try:
-                cli_main.cmd_run(
-                    _args(
-                        project,
-                        opencode=True,
-                        cycle_name="cycle-11-opencode",
-                        template=None,
-                    )
-                )
-            except SystemExit as exc:
-                assert exc.code == 1
-            else:
-                raise AssertionError("cmd_run should reject existing explicit cycle name")
-
         assert FakeRunner.instances == []
-
-    def test_run_rejects_invalid_explicit_cycle_name(self, tmp_path, monkeypatch):
-        FakeRunner.instances = []
-        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
-        project = tmp_path / "project"
-
-        with patch("ft.cli.main.StepRunner", FakeRunner):
-            try:
-                cli_main.cmd_run(_args(project, opencode=True, cycle_name="../bad"))
-            except SystemExit as exc:
-                assert exc.code == 1
-            else:
-                raise AssertionError("cmd_run should reject unsafe cycle name")
-
-        assert FakeRunner.instances == []
-
+        worktrees = tmp_path / "ft-home" / "worktrees" / "project"
+        if worktrees.exists():
+            assert not list(worktrees.glob("cycle-*"))
 
 class TestExplore:
     def test_explore_request_and_finish_write_logs_under_llm_logs(self, tmp_path):
@@ -398,7 +259,7 @@ class TestSetupEnv:
         script.chmod(0o755)
         monkeypatch.setenv("SYM_GATEWAY_PROJECT_KEY", "sk-sym_test")
 
-        cli_main.cmd_setup_env(Namespace(project=str(project)))
+        cli_main.cmd_setup_env(Namespace(project=str(project), template="setup"))
 
         assert marker.exists()
 
@@ -417,7 +278,7 @@ class TestSetupEnv:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("SYM_GATEWAY_PROJECT_KEY", "sk-sym_test")
 
-        cli_main.cmd_setup_env(Namespace(project="project"))
+        cli_main.cmd_setup_env(Namespace(project="project", template="setup"))
 
         assert (project / "configured-from-cwd.txt").exists()
 
@@ -465,7 +326,7 @@ class TestActiveRunDetection:
         self._write_state(cycle / "state" / "engine_state.yml")
         (cycle / "cycle-01_log.md").write_text("| INIT | PASS |\n")
 
-        assert cli_main._check_active_run(project) is None
+        assert cli_main._active_run_records(project) == []
 
         assert cli_main._cleanup_pristine_runs(project) == 1
         assert not cycle.exists()
@@ -487,9 +348,11 @@ class TestActiveRunDetection:
         cycle = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01"
         self._write_state(cycle / "state" / "engine_state.yml", completed=True)
 
-        active = cli_main._check_active_run(project)
+        active = cli_main._active_run_records(project)
 
-        assert active == "cycle-01 (ft.start.route — ready)"
+        assert [record.description for record in active] == [
+            "cycle-01 (ft.start.route — ready)"
+        ]
         assert cli_main._cleanup_pristine_runs(project) == 0
         assert cycle.exists()
 
@@ -502,9 +365,11 @@ class TestActiveRunDetection:
         state = cycle / "state" / "engine_state.yml"
         state.write_text(state.read_text().replace("node_status: ready", "node_status: cancelled"))
 
-        assert cli_main._check_active_run(project) is None
+        assert cli_main._active_run_records(project) == []
 
-    def test_find_latest_state_prefers_active_over_newer_cancelled(self, tmp_path, monkeypatch):
+    def test_selection_never_prefers_latest_cycle(self, tmp_path, monkeypatch):
+        from ft.runs import AmbiguousCycleError, select_cycle
+
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
         project.mkdir()
@@ -517,7 +382,11 @@ class TestActiveRunDetection:
             cancelled_state.read_text().replace("node_status: ready", "node_status: cancelled")
         )
 
-        assert cli_main._find_latest_state(project) == active / "state" / "engine_state.yml"
+        with pytest.raises(AmbiguousCycleError):
+            select_cycle(project)
+        assert select_cycle(project, "cycle-01").state_path == (
+            active / "state" / "engine_state.yml"
+        )
 
 
 class TestStatusMultipleCycles:
@@ -571,7 +440,7 @@ class TestStatusMultipleCycles:
 
         return factory
 
-    def test_status_without_cycle_renders_every_open_runtime(
+    def test_status_without_cycle_fails_on_multiple_open_runtimes(
         self, tmp_path, monkeypatch, capsys
     ):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
@@ -579,27 +448,17 @@ class TestStatusMultipleCycles:
         project.mkdir()
         self._write_open_state(project, "cycle-14-f-03")
         self._write_open_state(project, "cycle-13-f-01")
-        calls: list[dict] = []
-
-        with (
-            patch.object(cli_main, "find_project_root", return_value=project),
-            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
-        ):
-            cli_main.cmd_status(self._args(full=True))
+        with patch.object(cli_main, "find_project_root", return_value=project):
+            with pytest.raises(SystemExit) as excinfo:
+                cli_main.cmd_status(self._args(full=True))
 
         output = capsys.readouterr().out
-        first_header = output.index("Ciclo: cycle-13-f-01")
-        first_status = output.index("status:cycle-13-f-01")
-        second_header = output.index("Ciclo: cycle-14-f-03")
-        second_status = output.index("status:cycle-14-f-03")
-        assert first_header < first_status < second_header < second_status
-        assert output.count("Ciclo:") == 2
-        assert calls == [
-            {"cycle": "cycle-13-f-01", "method": "status", "full": True},
-            {"cycle": "cycle-14-f-03", "method": "status", "full": True},
-        ]
+        assert excinfo.value.code == 2
+        assert "informe --cycle" in output
+        assert "cycle-13-f-01" in output
+        assert "cycle-14-f-03" in output
 
-    def test_status_report_is_propagated_to_every_open_runtime(
+    def test_status_report_targets_one_explicit_runtime(
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
@@ -613,10 +472,9 @@ class TestStatusMultipleCycles:
             patch.object(cli_main, "find_project_root", return_value=project),
             patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
         ):
-            cli_main.cmd_status(self._args(report=True))
+            cli_main.cmd_status(self._args(cycle="cycle-14-f-03", report=True))
 
         assert calls == [
-            {"cycle": "cycle-13-f-01", "method": "report"},
             {"cycle": "cycle-14-f-03", "method": "report"},
         ]
 
@@ -626,16 +484,6 @@ class TestStatusMultipleCycles:
         project.mkdir()
         self._write_open_state(project, "cycle-13-f-01")
         self._write_open_state(project, "cycle-14-f-03")
-        fb.save_batch(
-            fb.FeatureBatch(
-                batch_id="batch-04",
-                project_root=str(project),
-                template="tweak",
-                features=[fb.BatchFeature("F-01", "Ajustar cor")],
-                waves=[],
-                status="planning",
-            )
-        )
         calls: list[dict] = []
 
         with (
@@ -646,7 +494,6 @@ class TestStatusMultipleCycles:
 
         output = capsys.readouterr().out
         assert "Ciclo:" not in output
-        assert "Batch paralelo" not in output
         assert calls == [
             {"cycle": "cycle-13-f-01", "method": "status", "full": False}
         ]
@@ -670,142 +517,20 @@ class TestStatusMultipleCycles:
         assert "Ciclo:" not in output
         assert calls == [{"cycle": None, "method": "status", "full": False}]
 
-    def test_status_without_runtime_preserves_no_active_output(
+    def test_status_without_runtime_is_an_error(
         self, tmp_path, monkeypatch, capsys
     ):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
         project.mkdir()
 
-        with (
-            patch.object(cli_main, "find_project_root", return_value=project),
-            patch.object(cli_main, "get_runner") as get_runner,
-        ):
-            cli_main.cmd_status(self._args())
+        with patch.object(cli_main, "find_project_root", return_value=project):
+            with pytest.raises(SystemExit) as excinfo:
+                cli_main.cmd_status(self._args())
 
         output = capsys.readouterr().out
-        assert "Status: nenhum ciclo ativo" in output
-        get_runner.assert_not_called()
-
-    @pytest.mark.parametrize("batch_status", ["planning", "planned"])
-    def test_status_shows_parallel_batch_while_planner_has_no_cycle(
-        self, tmp_path, monkeypatch, capsys, batch_status
-    ):
-        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
-        project = tmp_path / "project"
-        project.mkdir()
-        batch = fb.FeatureBatch(
-            batch_id="batch-04",
-            project_root=str(project),
-            template="tweak",
-            features=[
-                fb.BatchFeature("F-01", "Ajustar cor"),
-                fb.BatchFeature("F-02", "Ajustar label"),
-                fb.BatchFeature("F-03", "Ajustar teclado"),
-            ],
-            waves=[],
-            status=batch_status,
-            planner_engine="codex",
-            planner_model="gpt-5.6-sol",
-            planner_effort="high",
-        )
-        fb.save_batch(batch)
-
-        with (
-            patch.object(cli_main, "find_project_root", return_value=project),
-            patch.object(cli_main, "get_runner") as get_runner,
-        ):
-            cli_main.cmd_status(self._args())
-
-        output = capsys.readouterr().out
-        assert "Batch paralelo: batch-04" in output
-        assert "Fase: plan" in output
-        assert "Template: tweak" in output
-        assert "LLM engine: codex" in output
-        assert "LLM model: gpt-5.6-sol" in output
-        assert "LLM effort: high" in output
-        assert "Demandas: 3" in output
-        assert "nenhum ciclo ativo" not in output.lower()
-        get_runner.assert_not_called()
-
-    def test_open_cycles_keep_precedence_over_parallel_batch_planning(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
-        project = tmp_path / "project"
-        project.mkdir()
-        self._write_open_state(project, "cycle-13-f-01")
-        self._write_open_state(project, "cycle-14-f-03")
-        fb.save_batch(
-            fb.FeatureBatch(
-                batch_id="batch-04",
-                project_root=str(project),
-                template="tweak",
-                features=[fb.BatchFeature("F-01", "Ajustar cor")],
-                waves=[],
-                status="planning",
-            )
-        )
-        calls: list[dict] = []
-
-        with (
-            patch.object(cli_main, "find_project_root", return_value=project),
-            patch.object(
-                cli_main,
-                "get_runner",
-                side_effect=self._fake_runner_factory(calls),
-            ),
-        ):
-            cli_main.cmd_status(self._args())
-
-        output = capsys.readouterr().out
-        assert "Batch paralelo" not in output
-        assert output.count("Ciclo:") == 2
-        assert [call["cycle"] for call in calls] == [
-            "cycle-13-f-01",
-            "cycle-14-f-03",
-        ]
-
-    def test_local_worktree_status_keeps_precedence_over_batch_planning(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        ft_home = tmp_path / "ft-home"
-        monkeypatch.setenv("FT_HOME", str(ft_home))
-        worktree = ft_home / "worktrees" / "project" / "cycle-13-f-01"
-        local_state = worktree / "state" / "engine_state.yml"
-        local_state.parent.mkdir(parents=True)
-        local_state.write_text(
-            "process_id: feature\n"
-            "current_node: feature.discovery\n"
-            "node_status: delegated\n",
-            encoding="utf-8",
-        )
-        fb.save_batch(
-            fb.FeatureBatch(
-                batch_id="batch-04",
-                project_root=str(worktree),
-                template="tweak",
-                features=[fb.BatchFeature("F-01", "Ajustar cor")],
-                waves=[],
-                status="planning",
-            )
-        )
-        calls: list[dict] = []
-
-        with (
-            patch.object(cli_main, "find_project_root", return_value=worktree),
-            patch.object(
-                cli_main,
-                "get_runner",
-                side_effect=self._fake_runner_factory(calls),
-            ),
-        ):
-            cli_main.cmd_status(self._args())
-
-        output = capsys.readouterr().out
-        assert "Batch paralelo" not in output
-        assert calls == [{"cycle": None, "method": "status", "full": False}]
-
+        assert excinfo.value.code == 2
+        assert "nenhum ciclo" in output
 
 class TestApiHealthCheck:
     def test_opencode_skips_anthropic_health_check(self, tmp_path, monkeypatch):
@@ -818,10 +543,10 @@ class TestApiHealthCheck:
 
 
 class TestAbort:
-    def test_abort_from_project_root_removes_plain_external_worktree(self, tmp_path, monkeypatch):
+    def test_abort_rejects_non_git_runtime(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "service_mate_15"
-        (project / "process").mkdir(parents=True)
+        ensure_project_layout(project)
         monkeypatch.chdir(project)
 
         cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01-opencode"
@@ -845,9 +570,10 @@ class TestAbort:
             opencode=None,
             verbose=False,
         )
-        cli_main.cmd_abort(args)
+        with pytest.raises(RuntimeError, match="worktree Git válida"):
+            cli_main.cmd_abort(args)
 
-        assert not cycle.exists()
+        assert cycle.exists()
         assert other_cycle.exists()
 
 

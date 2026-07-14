@@ -151,13 +151,13 @@ def _report(root: Path, changed_paths: list[str], focal_command: str) -> None:
 
 def test_tweak_graph_has_one_bounded_llm_node_and_no_heavy_phases():
     validate_template_is_pristine(TEMPLATE)
-    assert "tweak" in available_templates(entrypoint="feature")
-    assert "tweak" not in available_templates(entrypoint="init")
+    assert "tweak" in available_templates()
 
     graph = load_graph(PROCESS)
     report = validate_process(graph, VALIDATOR_REGISTRY)
 
     assert report.passed, [issue.message for issue in report.errors]
+    assert graph.meta["execution_policy"]["entrypoint"] == "run"
     assert list(graph.nodes) == [
         "tweak.preflight",
         "tweak.implement",

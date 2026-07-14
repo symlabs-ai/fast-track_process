@@ -1,7 +1,6 @@
 # Tweak — alteração pequena, direta e deliberadamente limitada
 #
-# Este template pertence ao entrypoint `ft feature`, mas não executa o processo
-# completo de feature. Ele existe para mudanças locais e de baixo risco que
+# Template universal de `ft run` para mudanças locais e de baixo risco que
 # precisam de minutos, não de uma rodada de discovery/review/reconcile.
 
 id: tweak
@@ -9,7 +8,7 @@ version: "1.0.1"
 title: "Tweak — Mudança Pequena e Direta"
 
 execution_policy:
-  entrypoint: feature
+  entrypoint: run
   template: tweak
   materialization: copy_once
   runtime_source: local_only
@@ -18,7 +17,12 @@ execution_policy:
   local_process_path: .ft/process/tweak/process.yml
   merge_command: ft close --merge full
 
-# O orquestrador continua sendo o mesmo de `ft feature --parallel`; o processo
+input_policy:
+  required: true
+  destination: docs/feature-request.md
+  prompt: "Descreva o ajuste pequeno e focal"
+
+# O coordenador universal de runs fornece isolamento e concorrência; o processo
 # declara apenas seus budgets externos para preservar o contrato ultraleve.
 parallel_policy:
   planner_timeout_seconds: 120
@@ -116,7 +120,7 @@ nodes:
 
       Se a mudança real ultrapassar qualquer limite, NÃO altere o produto.
       Explique `Resultado: ESCALATE` em docs/tweak-report.md e recomende abortar
-      este ciclo e usar `ft feature --template feature`.
+      este ciclo e usar `ft run . --template feature`.
 
       Ao concluir, crie docs/tweak-report.md com:
       - a linha exata `Resultado: IMPLEMENTED`;

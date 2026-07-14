@@ -121,14 +121,17 @@ def test_run_hooks_resolves_scripts_next_to_selected_process(tmp_path):
     assert results == [("./scripts/selected.sh", True, "feature")]
 
 
-def test_run_hooks_rejects_legacy_flat_process_directory_default(tmp_path):
+def test_run_hooks_requires_explicit_process_selection(tmp_path):
     scripts_dir = tmp_path / ".ft" / "process" / "scripts"
     scripts_dir.mkdir(parents=True)
     script = scripts_dir / "legacy.sh"
     script.write_text("#!/bin/sh\nprintf legacy\n")
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
-    with pytest.raises(ValueError, match="processo default local"):
+    with pytest.raises(
+        ValueError,
+        match="process_path ou process_dir é obrigatório; não existe template principal",
+    ):
         run_hooks(
             "on_init",
             tmp_path,

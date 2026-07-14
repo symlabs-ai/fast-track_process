@@ -28,7 +28,12 @@ import yaml
 from ft.engine import paths
 
 
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
+LEGACY_NAMED_LAYOUT_VERSION = 2
+CYCLE_RECORD_VERSION = 2
+V2_RUN_COMPATIBILITY_FIELD = "v2_run_compatibility"
+V2_RUN_COMPATIBILITY_VERSION = 1
+V2_RUN_COMPATIBLE_ENTRYPOINTS = frozenset({"feature", "init"})
 _MANIFEST_THREAD_LOCKS: dict[Path, threading.RLock] = {}
 _MANIFEST_THREAD_LOCKS_GUARD = threading.Lock()
 _MANIFEST_LOCK_STATE = threading.local()
@@ -147,11 +152,18 @@ def _manifest_requires_migration(manifest: dict[str, Any]) -> bool:
     )
 
 
-def _validate_v2_manifest(manifest: dict[str, Any], path: Path) -> None:
+def _validate_manifest(manifest: dict[str, Any], path: Path) -> None:
+    """Validate a named-process manifest.
+
+    Version 2 remains readable during the V3 rollout so existing projects can
+    be inspected and migrated without first mutating them.  Version 3 removes
+    ``default_process``: process selection belongs to each run, never to the
+    repository.
+    """
     if not manifest:
         return
     version = manifest.get("schema_version")
-    if version != LAYOUT_VERSION:
+    if version not in (LEGACY_NAMED_LAYOUT_VERSION, LAYOUT_VERSION):
         if _manifest_requires_migration(manifest) or version is None:
             raise LayoutMigrationRequired(
                 f"layout v1 detectado em {path}; execute ft migrate-layout ."
@@ -162,7 +174,8 @@ def _validate_v2_manifest(manifest: dict[str, Any], path: Path) -> None:
         )
     if "process" in manifest or "template" in manifest or "origin_template" in manifest:
         raise ManifestError(
-            f"manifest v2 contém chaves legadas em {path}; execute ft migrate-layout ."
+            f"manifest nomeado contém chaves legadas em {path}; "
+            "execute ft migrate-layout ."
         )
     processes = manifest.get("processes", {})
     if not isinstance(processes, dict):
@@ -199,7 +212,12 @@ def _validate_v2_manifest(manifest: dict[str, Any], path: Path) -> None:
     if not isinstance(defaults, dict):
         raise ManifestError(f"manifest inválido em {path}: defaults deve ser mapping")
     default_name = manifest.get("default_process")
-    if default_name is not None:
+    if version == LAYOUT_VERSION and default_name is not None:
+        raise ManifestError(
+            f"manifest v3 não aceita default_process em {path}; "
+            "selecione o template explicitamente em cada run"
+        )
+    if version == LEGACY_NAMED_LAYOUT_VERSION and default_name is not None:
         if not isinstance(default_name, str) or not default_name.strip():
             raise ManifestError(
                 f"manifest inválido em {path}: default_process deve ser nome não vazio"
@@ -209,6 +227,58 @@ def _validate_v2_manifest(manifest: dict[str, Any], path: Path) -> None:
                 f"manifest inválido em {path}: default_process '{default_name}' "
                 "não está registrado em processes"
             )
+
+
+def _validate_v2_manifest(manifest: dict[str, Any], path: Path) -> None:
+    """Compatibility alias for callers predating the V3 manifest."""
+    _validate_manifest(manifest, path)
+
+
+def _mark_v2_run_compatible_records(processes: dict[str, Any]) -> None:
+    """Attach the exact V2 execution bridge without touching process bundles."""
+    for name, raw_record in processes.items():
+        if not isinstance(raw_record, dict):
+            continue
+        entrypoint = raw_record.get("entrypoint")
+        if entrypoint not in V2_RUN_COMPATIBLE_ENTRYPOINTS:
+            continue
+        marker = {
+            "version": V2_RUN_COMPATIBILITY_VERSION,
+            "legacy_entrypoint": entrypoint,
+        }
+        existing = raw_record.get(V2_RUN_COMPATIBILITY_FIELD)
+        if existing is not None and existing != marker:
+            raise ManifestError(
+                f"processes.{name}.{V2_RUN_COMPATIBILITY_FIELD} colide com a "
+                "ponte V2→V3 esperada"
+            )
+        raw_record[V2_RUN_COMPATIBILITY_FIELD] = marker
+
+
+def _manifest_for_v3_write(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Return an isolated V3 copy, preserving catalog records and defaults.
+
+    Named V2 manifests may still reach old storage helpers.  When that
+    happens, retain their legacy entrypoint verbatim and add the same narrow
+    compatibility marker used by the explicit migration command.  The local
+    process bundle remains byte-identical and undergoes policy validation when
+    selected by ``ft run --template``.
+    """
+    source_version = manifest.get("schema_version")
+    normalized = dict(manifest)
+    normalized["schema_version"] = LAYOUT_VERSION
+    normalized.pop("default_process", None)
+    raw_processes = normalized.setdefault("processes", {})
+    if not isinstance(raw_processes, dict):
+        raise ManifestError("manifest inválido: processes deve ser mapping")
+    processes = {
+        name: dict(record) if isinstance(record, dict) else record
+        for name, record in raw_processes.items()
+    }
+    normalized["processes"] = processes
+    if source_version == LEGACY_NAMED_LAYOUT_VERSION:
+        _mark_v2_run_compatible_records(processes)
+    return normalized
 
 
 # Caches e artefatos gerados nunca fazem parte de um bundle de processo —
@@ -293,7 +363,12 @@ def process_digest(process_file: str | Path) -> str | None:
             ) from exc
         relative = relative_name(candidate)
         payload = resolved.read_bytes()
-        mode = stat.S_IMODE(resolved.stat().st_mode)
+        # Git persists only the executable bit for regular files.  Normalize
+        # rw/umask differences so a freshly checked-out worktree has the same
+        # bundle digest as its owning checkout while executable changes remain
+        # part of the immutable cycle pin.
+        raw_mode = stat.S_IMODE(resolved.stat().st_mode)
+        mode = 0o755 if raw_mode & 0o111 else 0o644
         header = f"{len(relative)}:{relative}:{mode:o}:{len(payload)}:".encode("utf-8")
         digest.update(header)
         digest.update(payload)
@@ -410,7 +485,11 @@ def resolve_project_process(
     project_root: str | Path,
     process_name: str | None = None,
 ) -> Path | None:
-    """Resolve a project-owned process without consulting the global catalog."""
+    """Resolve a project-owned process without consulting the global catalog.
+
+    V3 callers must select a name explicitly.  Reading the V2 default remains
+    supported only as a migration bridge for old cycle/tooling code.
+    """
     root = Path(project_root).resolve()
     manifest_path = paths.project_manifest(root)
     manifest = _read_manifest_file(manifest_path)
@@ -421,10 +500,48 @@ def resolve_project_process(
             )
         return None
     _validate_v2_manifest(manifest, manifest_path)
-    selected = process_name or manifest.get("default_process")
+    selected = process_name
+    if selected is None and manifest.get("schema_version") == LEGACY_NAMED_LAYOUT_VERSION:
+        selected = manifest.get("default_process")
     if not isinstance(selected, str) or not selected.strip():
         return None
     return _manifest_process_path(root, manifest, selected)
+
+
+def get_project_process_record(
+    project_root: str | Path,
+    process_name: str,
+) -> dict[str, Any] | None:
+    """Return one registered process record by explicit name."""
+    # Validate names even when the manifest is absent so callers get the same
+    # safety contract as path construction and registration.
+    paths.project_named_process_dir(Path("."), process_name)
+    manifest = read_manifest(project_root)
+    processes = manifest.get("processes", {})
+    if not isinstance(processes, dict):
+        return None
+    record = processes.get(process_name)
+    return dict(record) if isinstance(record, dict) else None
+
+
+def iter_project_process_records(
+    project_root: str | Path,
+) -> tuple[tuple[str, dict[str, Any]], ...]:
+    """Return a deterministic snapshot of every registered process record."""
+    manifest = read_manifest(project_root)
+    processes = manifest.get("processes", {})
+    if not isinstance(processes, dict):
+        return ()
+    return tuple(
+        (name, dict(record))
+        for name, record in sorted(processes.items())
+        if isinstance(name, str) and isinstance(record, dict)
+    )
+
+
+def list_project_processes(project_root: str | Path) -> tuple[str, ...]:
+    """List registered process names without selecting a default."""
+    return tuple(name for name, _record in iter_project_process_records(project_root))
 
 
 @contextmanager
@@ -697,7 +814,8 @@ def register_project_process(
                 f"manifest inválido em {manifest_path}: arquivo vazio; "
                 "execute ft migrate-layout . ou restaure o manifesto v2"
             )
-        _validate_v2_manifest(manifest, manifest_path)
+        _validate_manifest(manifest, manifest_path)
+        manifest = _manifest_for_v3_write(manifest)
         processes = manifest.setdefault("processes", {})
         if not isinstance(processes, dict):
             raise ManifestError("manifest inválido: processes deve ser mapping")
@@ -713,8 +831,8 @@ def register_project_process(
         if not record.get("base_digest"):
             record["base_digest"] = process_digest(process_file)
         processes[process_name] = record
-        if set_default:
-            manifest["default_process"] = process_name
+        # ``set_default`` is accepted while old integrations migrate, but V3
+        # deliberately has no repository-level process selection.
         _atomic_write_manifest(manifest_path, manifest)
     return manifest_path
 
@@ -736,7 +854,9 @@ def refresh_process_digests(
     manifest_path = paths.project_manifest(root)
     with _manifest_write_lock(root):
         _assert_no_exclusive_startup(root)
-        manifest = _read_yaml(manifest_path)
+        manifest = _read_manifest_file(manifest_path)
+        _validate_manifest(manifest, manifest_path)
+        manifest = _manifest_for_v3_write(manifest)
         processes = manifest.get("processes")
         if not isinstance(processes, dict) or not isinstance(
             processes.get(process_name), dict
@@ -781,7 +901,8 @@ def _ensure_project_layout_locked(
         _assert_project_local_path(root, guarded)
     manifest = _read_manifest_file(manifest_path)
     if manifest:
-        _validate_v2_manifest(manifest, manifest_path)
+        _validate_manifest(manifest, manifest_path)
+        manifest = _manifest_for_v3_write(manifest)
     elif paths.legacy_flat_process_file(root).exists() or (root / "process").exists():
         raise LayoutMigrationRequired(
             f"layout v1 detectado em {root}; execute ft migrate-layout ."
@@ -798,7 +919,7 @@ def _ensure_project_layout_locked(
     if not keep.exists():
         keep.write_text("", encoding="utf-8")
 
-    manifest["schema_version"] = LAYOUT_VERSION
+    manifest = _manifest_for_v3_write(manifest)
     manifest.setdefault("processes", {})
     if defaults:
         current = manifest.setdefault("defaults", {})
@@ -817,7 +938,7 @@ def read_manifest(project_root: str | Path) -> dict[str, Any]:
     manifest_path = paths.project_manifest(project_root)
     manifest = _read_manifest_file(manifest_path)
     if manifest:
-        _validate_v2_manifest(manifest, manifest_path)
+        _validate_manifest(manifest, manifest_path)
     return manifest
 
 
@@ -920,7 +1041,8 @@ def _update_manifest_llm_defaults_locked(
             f"manifest inválido em {manifest_path}: arquivo vazio; "
             "execute ft migrate-layout . ou restaure o manifesto v2"
         )
-    _validate_v2_manifest(manifest, manifest_path)
+    _validate_manifest(manifest, manifest_path)
+    manifest = _manifest_for_v3_write(manifest)
     existing_defaults = manifest.get("defaults")
     if existing_defaults is None:
         defaults: dict[str, Any] = {}
@@ -1295,7 +1417,7 @@ def _write_imported_cycle_record(cycle_dir: Path, cycle_id: str) -> None:
         )
         return
     record = {
-        "schema_version": LAYOUT_VERSION,
+        "schema_version": CYCLE_RECORD_VERSION,
         "id": cycle_id,
         "status": "done",
         "imported_at": datetime.now(timezone.utc).isoformat(),
@@ -1386,7 +1508,7 @@ def archive_cycle_artifacts(
     selected_process = _safe_manifest_process_path(root, selected_process_path)
     timestamp = datetime.now(timezone.utc).isoformat()
     record = {
-        "schema_version": LAYOUT_VERSION,
+        "schema_version": CYCLE_RECORD_VERSION,
         "id": cycle_id,
         "status": (
             "done"
@@ -1859,7 +1981,21 @@ def _rewrite_named_bundle(bundle: Path, process_name: str) -> int:
     return changed
 
 
-def _v2_manifest_from_legacy(
+def _declared_legacy_entrypoint(process_file: Path | None) -> str | None:
+    """Read a supported entrypoint when a legacy graph declares one."""
+    if process_file is None or not process_file.is_file():
+        return None
+    payload = _read_yaml(process_file)
+    policy = payload.get("execution_policy")
+    if not isinstance(policy, dict):
+        return None
+    entrypoint = policy.get("entrypoint")
+    if entrypoint == "run" or entrypoint in V2_RUN_COMPATIBLE_ENTRYPOINTS:
+        return str(entrypoint)
+    return None
+
+
+def _v3_manifest_from_legacy(
     manifest: dict[str, Any],
     *,
     root: Path,
@@ -1873,7 +2009,7 @@ def _v2_manifest_from_legacy(
         if key not in {"schema_version", "process", "template", "origin_template", "processes"}
     }
     migrated["schema_version"] = LAYOUT_VERSION
-    migrated["default_process"] = default_name
+    migrated.pop("default_process", None)
     new_processes: dict[str, Any] = {}
     normalized_sources: dict[str, object] = {}
     old_processes = manifest.get("processes", {})
@@ -1887,10 +2023,16 @@ def _v2_manifest_from_legacy(
                 name = default_name
                 record["path"] = default_process.relative_to(root).as_posix()
                 record.setdefault("entrypoint", "init")
+                declared_entrypoint = _declared_legacy_entrypoint(digest_source)
             else:
                 expected = paths.project_named_process_file(root, name)
+                declared_entrypoint = _declared_legacy_entrypoint(expected)
                 if expected.is_file():
                     record["path"] = expected.relative_to(root).as_posix()
+            if declared_entrypoint is not None:
+                record["entrypoint"] = declared_entrypoint
+            if record.get("entrypoint") == "run":
+                record.pop(V2_RUN_COMPATIBILITY_FIELD, None)
             if name in normalized_sources and normalized_sources[name] != raw_name:
                 raise ManifestError(
                     "manifest legado possui nomes de processo que colidem após "
@@ -1906,13 +2048,23 @@ def _v2_manifest_from_legacy(
         origin = None
     template_name = _canonical_legacy_process_name(origin) or default_name
     default_record = dict(new_processes.get(default_name, {}))
+    declared_default_entrypoint = _declared_legacy_entrypoint(
+        digest_source or default_process
+    )
     default_record.update({
         "path": default_process.relative_to(root).as_posix(),
         "template": default_record.get("template") or template_name,
-        "entrypoint": default_record.get("entrypoint") or "init",
+        "entrypoint": (
+            declared_default_entrypoint
+            or default_record.get("entrypoint")
+            or "init"
+        ),
     })
+    if default_record.get("entrypoint") == "run":
+        default_record.pop(V2_RUN_COMPATIBILITY_FIELD, None)
     default_record["base_digest"] = process_digest(digest_source or default_process)
     new_processes[default_name] = default_record
+    _mark_v2_run_compatible_records(new_processes)
     migrated["processes"] = new_processes
     return migrated
 
@@ -1936,7 +2088,7 @@ def _migrate_legacy_layout(
     dry_run: bool,
     cycle_id: str,
 ) -> list[str]:
-    """Migrate a singular v1 process bundle into the uniform named v2 catalog."""
+    """Migrate old layouts into the uniform named V3 catalog."""
     root = Path(project_root).resolve()
     legacy_process = root / "process"
     catalog = paths.project_process_dir(root)
@@ -1960,27 +2112,45 @@ def _migrate_legacy_layout(
 
     manifest = _read_manifest_file(manifest_path)
     schema_version = manifest.get("schema_version")
-    if schema_version not in (None, 1, LAYOUT_VERSION):
+    if schema_version not in (
+        None,
+        1,
+        LEGACY_NAMED_LAYOUT_VERSION,
+        LAYOUT_VERSION,
+    ):
         raise ManifestError(
             f"schema_version não suportado em {manifest_path}: {schema_version!r}; "
             "migração automática recusada"
         )
-    is_v2 = manifest.get("schema_version") == LAYOUT_VERSION
+    is_current = manifest.get("schema_version") == LAYOUT_VERSION
+    is_v2 = manifest.get("schema_version") == LEGACY_NAMED_LAYOUT_VERSION
     has_legacy_manifest_keys = any(
         key in manifest for key in ("process", "template", "origin_template")
     )
+    if is_current and not has_legacy_manifest_keys:
+        _validate_manifest(manifest, manifest_path)
+        if flat_process.exists() or legacy_process.exists():
+            raise FileExistsError(
+                "layout v3 coexiste com processo flat/legado; remova a ambiguidade"
+            )
+        return ["layout v3 canônico já presente"]
     if is_v2 and not has_legacy_manifest_keys:
-        _validate_v2_manifest(manifest, manifest_path)
+        _validate_manifest(manifest, manifest_path)
         if flat_process.exists() or legacy_process.exists():
             raise FileExistsError(
                 "layout v2 coexiste com processo flat/legado; remova a ambiguidade"
             )
-        return ["layout v2 canônico já presente"]
-    if is_v2 and has_legacy_manifest_keys and not (
+        candidate = _manifest_for_v3_write(manifest)
+        _validate_manifest(candidate, manifest_path)
+        if dry_run:
+            return ["manifest v2 -> v3 (default_process removido)"]
+        _atomic_write_manifest(manifest_path, candidate)
+        return ["manifest v2 -> v3 (default_process removido)"]
+    if (is_current or is_v2) and has_legacy_manifest_keys and not (
         flat_process.is_file() or legacy_process.is_dir()
     ):
         raise ManifestError(
-            "manifesto híbrido v2 contém chaves legadas, mas não existe processo "
+            "manifesto híbrido contém chaves legadas, mas não existe processo "
             "flat para migrar; remova process/template/origin_template manualmente"
         )
 
@@ -2021,14 +2191,14 @@ def _migrate_legacy_layout(
         f"{source_label} -> .ft/process/{default_name}/"
     )
 
-    candidate_manifest = _v2_manifest_from_legacy(
+    candidate_manifest = _v3_manifest_from_legacy(
         manifest,
         root=root,
         default_name=default_name,
         default_process=canonical,
         digest_source=source_process,
     )
-    _validate_v2_manifest(candidate_manifest, manifest_path)
+    _validate_manifest(candidate_manifest, manifest_path)
     for process_name in candidate_manifest.get("processes", {}):
         if process_name == default_name:
             continue
@@ -2127,7 +2297,7 @@ def _migrate_legacy_layout(
             f"{rewritten_count} arquivo(s) do bundle atualizados para o path nomeado"
         )
 
-    migrated_manifest = _v2_manifest_from_legacy(
+    migrated_manifest = _v3_manifest_from_legacy(
         manifest,
         root=root,
         default_name=default_name,

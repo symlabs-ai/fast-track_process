@@ -16,10 +16,11 @@ import pytest
 import yaml
 
 from ft.cli import main as cli_main
-from ft.engine import feature_batch as fb
 from ft.engine import paths
 from ft.engine import process_update as pu
 from ft.engine.layout import process_digest, read_manifest
+from ft.project.bootstrap import bootstrap_project
+from ft.templates.materialize import resolve_template
 
 _REAL_ENGINE = cli_main.engine_root()
 
@@ -41,12 +42,10 @@ def fake_engine(tmp_path, monkeypatch):
 @pytest.fixture
 def project(tmp_path, fake_engine):
     root = tmp_path / "project"
-    root.mkdir()
-    cli_main.copy_template("base", root)
-    (root / "docs").mkdir(exist_ok=True)
-    (root / "src").mkdir(exist_ok=True)
-    cli_main.materialize_process_template("feature", root, entrypoint="feature")
-    cli_main.materialize_process_template("bug", root, entrypoint="feature")
+    bootstrap_project(root)
+    catalog = fake_engine / "templates"
+    resolve_template(root, "feature", catalog_root=catalog)
+    resolve_template(root, "bug", catalog_root=catalog)
     return root
 
 
@@ -111,25 +110,6 @@ def _write_active_state(
     return state
 
 
-def _write_active_batch(
-    root: Path,
-    *,
-    batch_id: str = "batch-01",
-    template: str = "feature",
-    status: str = "paused",
-) -> Path:
-    feature = fb.BatchFeature(feature_id="F-01", demand="demanda em andamento")
-    batch = fb.FeatureBatch(
-        batch_id=batch_id,
-        project_root=str(root),
-        template=template,
-        features=[feature],
-        waves=[[feature.feature_id]],
-        status=status,
-    )
-    return fb.save_batch(batch)
-
-
 def _customize_local(root: Path, marker: str = "# fork-local") -> Path:
     script = root / ".ft" / "process" / "feature" / "scripts" / "product.sh"
     script.write_text(
@@ -178,7 +158,7 @@ def test_named_tweak_process_uses_same_update_pipeline(
         """id: tweak
 version: '1.0.0'
 execution_policy:
-  entrypoint: feature
+  entrypoint: run
   template: tweak
 close_policy:
   backlog:
@@ -197,12 +177,14 @@ nodes:
 """,
         encoding="utf-8",
     )
-    local = cli_main.materialize_process_template(
-        "tweak", project, entrypoint="feature"
-    )
+    local = resolve_template(
+        project,
+        "tweak",
+        catalog_root=fake_engine / "templates",
+    ).process_file
     initial = _scan(project, fake_engine, name="tweak")
     assert initial.state == pu.STATE_IN_SYNC
-    assert initial.entrypoint == "feature"
+    assert initial.entrypoint == "run"
 
     process.write_text(
         process.read_text(encoding="utf-8") + "\n# tweak global evoluiu\n",
@@ -647,80 +629,6 @@ def test_cli_cas_aborts_if_local_bundle_changes_before_apply(
     assert "# concurrent-local-change" in content
     assert "# global-bug-update" not in content
     assert not pu.backup_dir_for(project, "bug").exists()
-
-
-def test_cli_allows_bug_update_while_feature_batch_is_paused(
-    project, fake_engine, monkeypatch
-):
-    _evolve_global(fake_engine, name="bug")
-    _write_active_batch(project, template="feature", status="paused")
-    monkeypatch.chdir(project)
-
-    cli_main.cmd_process_update(_update_args(name="bug", yes=True))
-
-    assert _scan(project, fake_engine, name="bug").state == pu.STATE_IN_SYNC
-
-
-def test_cli_blocks_feature_update_while_feature_batch_is_paused(
-    project, fake_engine, monkeypatch
-):
-    _evolve_global(fake_engine, name="feature")
-    _write_active_batch(project, template="feature", status="paused")
-    monkeypatch.chdir(project)
-
-    with pytest.raises(RuntimeError, match="batch|ciclo ativo"):
-        cli_main.cmd_process_update(_update_args(name="feature", yes=True))
-
-    assert _scan(project, fake_engine, name="feature").state == pu.STATE_FAST_FORWARD
-
-
-def test_cli_running_feature_batch_allows_disjoint_bug_update(
-    project, fake_engine, monkeypatch
-):
-    _evolve_global(fake_engine, name="bug")
-    _write_active_batch(project, template="feature", status="running")
-    monkeypatch.chdir(project)
-
-    cli_main.cmd_process_update(_update_args(name="bug", yes=True))
-
-    assert _scan(project, fake_engine, name="bug").state == pu.STATE_IN_SYNC
-
-
-def test_cli_running_feature_batch_blocks_feature_update(
-    project, fake_engine, monkeypatch
-):
-    _evolve_global(fake_engine, name="feature")
-    _write_active_batch(project, template="feature", status="running")
-    monkeypatch.chdir(project)
-
-    with pytest.raises(RuntimeError, match="batch|ciclo ativo"):
-        cli_main.cmd_process_update(_update_args(name="feature", yes=True))
-
-    assert _scan(project, fake_engine, name="feature").state == pu.STATE_FAST_FORWARD
-
-
-def test_cli_older_running_batch_is_not_hidden_by_newer_done_batch(
-    project, fake_engine, monkeypatch
-):
-    _evolve_global(fake_engine, name="bug")
-    _write_active_batch(
-        project,
-        batch_id="batch-01",
-        template="bug",
-        status="running",
-    )
-    _write_active_batch(
-        project,
-        batch_id="batch-02",
-        template="feature",
-        status="done",
-    )
-    monkeypatch.chdir(project)
-
-    with pytest.raises(RuntimeError, match="batch|ciclo ativo"):
-        cli_main.cmd_process_update(_update_args(name="bug", yes=True))
-
-    assert _scan(project, fake_engine, name="bug").state == pu.STATE_FAST_FORWARD
 
 
 def test_cli_unknown_process_fails(project, monkeypatch, capsys):

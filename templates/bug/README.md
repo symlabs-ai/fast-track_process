@@ -1,21 +1,24 @@
 # Template `bug`
 
-Processo focal do comando `ft feature` para corrigir um defeito reproduzível
+Processo focal de `ft run --template bug` para corrigir um defeito reproduzível
 com teste de regressão RED→GREEN.
 
 ```bash
-ft feature "Terminal duplica o comando ao ecoar input" --template bug --codex
+ft run . --template bug \
+  --request "Terminal duplica o comando ao ecoar input" --codex
 ```
 
-Vários bugs usam o orquestrador paralelo já existente:
+Vários bugs independentes podem ocupar ciclos paralelos:
 
 ```bash
-ft feature "bug A" "bug B" "bug C" --parallel --template bug --codex
+ft run . --template bug --request "bug A" --codex
+ft run . --template bug --request "bug B" --codex
+ft run . --template bug --request "bug C" --codex
 ```
 
-O planner agrupa bugs por áreas e dependências; worktrees sem sobreposição
-rodam juntas e as demais viram waves sequenciais. Não existe um orquestrador
-alternativo para `bug`.
+Cada comando cria sua própria worktree e fixa sua própria cópia local do
+template. A coordenação de dependências entre demandas continua sendo uma
+decisão do condutor.
 
 ## Caminho feliz
 

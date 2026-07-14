@@ -19,9 +19,10 @@ from ft.engine.git_ops import (
     verify_hooks_from_process_meta,
 )
 from ft.engine.graph import Node, ProcessGraph
-from ft.engine.layout import ensure_project_layout, register_project_process
+from ft.engine.layout import register_project_process
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import StepRunner
+from ft.project.bootstrap import bootstrap_project
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -69,6 +70,9 @@ def _process_yaml(*, verify_hooks: bool | None, build: bool = False) -> str:
         "id: commit_policy_test\n"
         "version: '1.0.0'\n"
         "title: Commit policy test\n"
+        "execution_policy:\n"
+        "  entrypoint: run\n"
+        "  template: policy\n"
         f"{policy}"
         "nodes:\n"
         f"{nodes}"
@@ -327,16 +331,17 @@ class _FakeRunner:
 def _run_args(project: Path) -> Namespace:
     return Namespace(
         project=str(project),
-        process=None,
         from_project=None,
         hipotese=None,
         demand_input=None,
+        request=None,
         bypass_human_gates=False,
-        force=True,
         cycle_name=None,
-        template=None,
-        worktree=None,
+        template="policy",
         auto=True,
+        parallel=False,
+        no_parallel=False,
+        max_parallel=None,
         claude=None,
         codex=None,
         gemini=None,
@@ -358,7 +363,9 @@ def test_pre_run_knowledge_commit_receives_selected_process_policy(
 ) -> None:
     monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
     project = tmp_path / "project"
-    ensure_project_layout(project)
+    bootstrap_project(project)
+    _git(project, "config", "user.email", "tests@example.invalid")
+    _git(project, "config", "user.name", "Tests")
     process = project / ".ft" / "process" / "policy" / "process.yml"
     process.parent.mkdir(parents=True)
     process.write_text(_process_yaml(verify_hooks=policy), encoding="utf-8")
@@ -367,9 +374,11 @@ def test_pre_run_knowledge_commit_receives_selected_process_policy(
         process_name="policy",
         process_path=process,
         template_id="policy",
-        entrypoint="init",
-        set_default=True,
+        entrypoint="run",
+        set_default=False,
     )
+    _git(project, "add", ".ft")
+    _git(project, "commit", "-qm", "add policy template")
 
     with (
         patch("ft.cli.main.StepRunner", _FakeRunner),

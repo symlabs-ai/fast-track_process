@@ -6,11 +6,11 @@ ou melhoria em um produto FT já existente.
 ## Uso
 
 ```bash
-ft feature "Adicionar busca por telefone" --template feature --claude
+ft run . --template feature --request "Adicionar busca por telefone" --claude
 # ou
-ft feature --input demanda.md --template feature --claude
+ft run . --template feature --input demanda.md --claude
 # ou, para responder à demanda no prompt
-ft feature --template feature --claude
+ft run . --template feature --claude
 ```
 
 Na primeira invocação, o engine copia este diretório para
@@ -64,9 +64,9 @@ Review usa `verify` para reaproveitar a evidência antes do aceite. Depois da
 reconciliação documental, o gate final faz uma única verificação do receipt e
 dos documentos reconciliados; qualquer mudança material exige outro `full`.
 
-Em batches paralelos, o orquestrador pode prefixar a demanda com
-`reserved_backlog_item: PB-NNN`. O discovery deve preservar essa reserva para
-que duas features da mesma wave não disputem o mesmo ID.
+Features independentes podem ocupar ciclos paralelos. Quando elas compartilham
+IDs ou áreas de produto, o condutor deve reservar os itens de backlog antes de
+iniciar os ciclos para evitar colisões no merge.
 
 ## Contrato
 
@@ -83,9 +83,9 @@ que duas features da mesma wave não disputem o mesmo ID.
 
 ## Suporte do engine
 
-Este template pertence ao entrypoint `feature` e não pode ser passado ao
-`ft init`. O comando materializa a cópia aninhada uma única vez, fixa path e
-digest no estado, segue novamente o grafo após rejeições e aplica o
+Este template pertence ao entrypoint universal `run`. O `ft init` não seleciona
+templates. `ft run --template feature` materializa a cópia aninhada uma única
+vez, fixa path e digest no estado, segue novamente o grafo após rejeições e aplica o
 `close_policy` restrito ao PB selecionado. O processo global é apenas fonte de
 materialização e nunca é executado.
 

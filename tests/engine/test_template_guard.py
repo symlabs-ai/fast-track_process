@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -41,16 +40,16 @@ class TestGuardViaCLI:
     """Guard global: todo comando (exceto --help) recusa rodar no repo do template."""
 
     @pytest.mark.parametrize("args", [
-        ["init", "--template", "base"],
+        ["init"],
         ["status"],
         ["continue"],
         ["approve"],
         ["reject", "motivo"],
         ["graph"],
-        ["validate"],
+        ["validate", "--template", "base"],
         ["close"],
         ["abort"],
-        ["run", "."],
+        ["run", ".", "--template", "base"],
         ["runs"],
     ])
     def test_command_refuses_inside_engine_repo(self, args):

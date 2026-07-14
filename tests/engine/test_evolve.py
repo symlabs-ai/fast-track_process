@@ -40,13 +40,12 @@ def project(tmp_path):
     (root / ".ft" / "manifest.yml").write_text(
         yaml.safe_dump(
             {
-                "schema_version": 2,
-                "default_process": "feature",
+                "schema_version": 3,
                 "processes": {
                     "feature": {
                         "path": ".ft/process/feature/process.yml",
                         "template": "feature",
-                        "entrypoint": "feature",
+                        "entrypoint": "run",
                     }
                 },
             }
@@ -78,6 +77,16 @@ def _active_cycle(ft_home_dir: Path, project_root: Path, name: str = "cycle-03")
     )
     (cycle / "docs").mkdir()
     (cycle / "docs" / "retro.md").write_text("# Retro\nnode X falhou 3x\n", encoding="utf-8")
+    return cycle
+
+
+def _archived_cycle(project_root: Path, name: str = "cycle-01") -> Path:
+    cycle = paths.project_cycles_dir(project_root) / name
+    cycle.mkdir(parents=True)
+    (cycle / "retro.md").write_text(
+        "# Retro arquivada\nnode X estabilizado\n",
+        encoding="utf-8",
+    )
     return cycle
 
 
@@ -147,10 +156,32 @@ def test_contexto_ignora_ciclo_terminado(ft_home, project):
     assert state is None
 
 
-def test_contexto_fallback_docs_da_raiz(ft_home, project):
-    label, source, _state = evolve.find_cycle_context(project)
-    assert label == "projeto (sem ciclo)"
-    assert source == project
+def test_contexto_sem_ciclo_falha_sem_fallback_para_docs(ft_home, project):
+    with pytest.raises(evolve.EvolveError, match="nenhum ciclo disponível"):
+        evolve.find_cycle_context(project)
+
+
+def test_contexto_multiplos_ciclos_exige_selecao(ft_home, project):
+    _active_cycle(ft_home, project, "cycle-03")
+    _archived_cycle(project, "cycle-02")
+
+    with pytest.raises(evolve.EvolveError, match="informe --cycle") as exc_info:
+        evolve.find_cycle_context(project)
+
+    message = str(exc_info.value)
+    assert "cycle-02" in message
+    assert "cycle-03" in message
+
+
+def test_contexto_explicito_seleciona_entre_multiplos(ft_home, project):
+    _active_cycle(ft_home, project, "cycle-03")
+    archived = _archived_cycle(project, "cycle-02")
+
+    label, source, state = evolve.find_cycle_context(project, cycle="cycle-02")
+
+    assert label == "ciclo cycle-02 (arquivado)"
+    assert source == archived
+    assert state is None
 
 
 def test_contexto_ciclo_explicito_inexistente(ft_home, project):
@@ -163,6 +194,13 @@ def test_contexto_ciclo_explicito_inexistente(ft_home, project):
 # ---------------------------------------------------------------------------
 
 def _workspace(project, fake_engine, ft_home, **kwargs):
+    if "cycle" not in kwargs:
+        try:
+            evolve.find_cycle_context(project)
+        except evolve.EvolveError as exc:
+            if "nenhum ciclo disponível" not in str(exc):
+                raise
+            _archived_cycle(project)
     targets = evolve.resolve_targets(
         project,
         include_project=kwargs.pop("include_project", True),
@@ -253,7 +291,10 @@ def test_workspace_nao_e_detectado_como_ciclo_ativo(ft_home, project, fake_engin
         yaml.safe_dump({"current_node": "evolve.analyze", "node_status": "running"}),
         encoding="utf-8",
     )
-    assert cli_main._check_active_run(project) is None
+    label, source, state = evolve.find_cycle_context(project)
+    assert label == "ciclo cycle-01 (arquivado)"
+    assert source == paths.project_cycles_dir(project) / "cycle-01"
+    assert state is None
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +484,8 @@ class _FakeRunner:
 
 
 @pytest.fixture()
-def cli_engine(fake_engine, monkeypatch):
+def cli_engine(fake_engine, project, monkeypatch):
+    _archived_cycle(project)
     monkeypatch.setattr(cli_main, "engine_root", lambda: fake_engine)
     monkeypatch.setattr(cli_main, "StepRunner", _FakeRunner)
     _FakeRunner.instances.clear()
@@ -486,10 +528,24 @@ def test_cmd_evolve_global_exige_git_no_engine(ft_home, project, fake_engine, cl
     assert "checkout git do engine" in capsys.readouterr().out
 
 
-def test_cmd_evolve_rejeita_process_flag(ft_home, project, fake_engine, cli_engine, monkeypatch):
+def test_cmd_evolve_multiplos_ciclos_exige_cycle(
+    ft_home,
+    project,
+    fake_engine,
+    cli_engine,
+    monkeypatch,
+    capsys,
+):
     monkeypatch.chdir(project)
-    with pytest.raises(ValueError, match="não aceita --process"):
-        cli_main.cmd_evolve(_evolve_args(process="x.yml"))
+    _active_cycle(ft_home, project, "cycle-03")
+
+    with pytest.raises(SystemExit):
+        cli_main.cmd_evolve(_evolve_args())
+
+    output = capsys.readouterr().out
+    assert "informe --cycle" in output
+    assert "cycle-01" in output
+    assert "cycle-03" in output
 
 
 def test_cmd_evolve_template_de_outro_entrypoint(ft_home, project, fake_engine, cli_engine, monkeypatch, capsys):

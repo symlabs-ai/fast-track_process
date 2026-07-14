@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
-from ft.cli import feature_parallel
-from ft.engine import feature_batch
 from ft.engine.canonical_merge import (
     _merge_changelog,
     resolve_canonical_conflicts,
@@ -295,30 +293,3 @@ def test_no_merge_in_progress_returns_failure(tmp_path):
     assert not result.success
     assert "não há merge Git em andamento" in (result.error or "")
     assert result.resolved == ()
-
-
-def test_parallel_orchestrator_validates_and_commits_canonical_resolution(tmp_path):
-    root, main_branch = _init_repo(tmp_path)
-    _begin_conflicting_merge(
-        root,
-        main_branch,
-        ours=_bug_a_changes,
-        theirs=_bug_b_changes,
-    )
-    worker = feature_batch.BatchFeature(feature_id="F-02", demand="Corrigir bug B")
-    batch = feature_batch.FeatureBatch(
-        batch_id="batch-01",
-        project_root=str(root),
-        template="bug",
-        features=[worker],
-        waves=[["F-02"]],
-    )
-
-    assert feature_parallel._finish_canonical_merge(batch, worker) is True
-
-    assert _git(root, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode != 0
-    assert not _git(root, "status", "--porcelain").stdout
-    assert _git(root, "rev-list", "--parents", "-n", "1", "HEAD").stdout.count(b" ") == 2
-    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "#BUG PB-101" in changelog
-    assert "#BUG PB-102" in changelog

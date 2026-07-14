@@ -38,8 +38,16 @@ CLAUDE.md
 .context/
 artifacts/
 runs/
+# ``ft/runs`` is source code for the concurrent run lifecycle, not runtime data.
+!/ft/runs/
+!/ft/runs/**
 state/
 project/
+# Package and tests for repository-level FT workspace management.
+!/ft/project/
+!/ft/project/**
+!/tests/project/
+!/tests/project/**
 project/state/
 project/runs/
 project/state/engine_state.yml
@@ -48,3 +56,7 @@ project/state/llm_logs/
 # Fast Track — processo estatico
 # No template: process/ esta commitado (e o fonte)
 # No projeto do cliente: ft init adiciona process/ aqui automaticamente
+
+# Reafirma caches gerados depois das exceções de pacotes acima.
+**/__pycache__/
+*.py[cod]

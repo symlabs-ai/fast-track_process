@@ -357,7 +357,7 @@ def test_explicit_migration_moves_process_history_runtime_and_loose_cycle_artifa
     assert backups[0].read_text() == "must leave repo"
 
     rerun = migrate_legacy_layout(project, cycle_id="cycle-08-claude")
-    assert rerun == ["layout v2 canônico já presente"]
+    assert rerun == ["layout v3 canônico já presente"]
 
 
 def test_migration_rejects_unsafe_cycle_id_before_moving_files(tmp_path):
@@ -371,7 +371,7 @@ def test_migration_rejects_unsafe_cycle_id_before_moving_files(tmp_path):
     assert process.exists()
 
 
-def test_migrate_flat_v1_to_named_v2_preserves_defaults_and_named_processes(
+def test_migrate_flat_v1_to_named_v3_preserves_llm_defaults_and_named_processes(
     tmp_path,
     monkeypatch,
 ):
@@ -419,8 +419,8 @@ def test_migrate_flat_v1_to_named_v2_preserves_defaults_and_named_processes(
     migrate_legacy_layout(project)
 
     manifest = yaml.safe_load((project / ".ft" / "manifest.yml").read_text())
-    assert manifest["schema_version"] == 2
-    assert manifest["default_process"] == "mvp-builder"
+    assert manifest["schema_version"] == 3
+    assert "default_process" not in manifest
     assert "process" not in manifest
     assert "template" not in manifest
     assert manifest["defaults"] == {
@@ -441,7 +441,7 @@ def test_migrate_flat_v1_to_named_v2_preserves_defaults_and_named_processes(
     migrated_script = flat / "mvp-builder" / "scripts" / "serve.sh"
     assert "/../../../.." in migrated_script.read_text()
     assert "/../../../../.." not in migrated_script.read_text()
-    assert migrate_legacy_layout(project) == ["layout v2 canônico já presente"]
+    assert migrate_legacy_layout(project) == ["layout v3 canônico já presente"]
 
 
 def test_migration_refuses_while_external_cycle_state_exists(tmp_path, monkeypatch):
@@ -461,7 +461,7 @@ def test_migration_refuses_while_external_cycle_state_exists(tmp_path, monkeypat
     assert flat.exists()
 
 
-def test_canonical_v2_migration_is_noop_even_with_external_state(tmp_path, monkeypatch):
+def test_canonical_v3_migration_is_noop_even_with_external_state(tmp_path, monkeypatch):
     ft_home = tmp_path / "ft-home"
     monkeypatch.setenv("FT_HOME", str(ft_home))
     project = tmp_path / "project"
@@ -481,7 +481,7 @@ def test_canonical_v2_migration_is_noop_even_with_external_state(tmp_path, monke
     external.parent.mkdir(parents=True)
     external.write_text("node_status: running\n")
 
-    assert migrate_legacy_layout(project) == ["layout v2 canônico já presente"]
+    assert migrate_legacy_layout(project) == ["layout v3 canônico já presente"]
 
 
 def test_migration_blocks_active_local_state_but_archives_terminal_state(
@@ -753,7 +753,7 @@ def test_migration_validates_candidate_and_future_schema_before_mutation(tmp_pat
     assert future_flat.exists()
 
 
-def test_migration_repairs_hybrid_v2_and_keeps_default_named_process_idempotent(
+def test_migration_repairs_hybrid_v2_without_choosing_a_default_process(
     tmp_path,
 ):
     project = tmp_path / "project"
@@ -771,12 +771,13 @@ def test_migration_repairs_hybrid_v2_and_keeps_default_named_process_idempotent(
     migrate_legacy_layout(project)
 
     migrated = yaml.safe_load(manifest.read_text())
-    assert migrated["default_process"] == "process"
+    assert migrated["schema_version"] == 3
+    assert "default_process" not in migrated
     assert migrated["processes"]["process"]["path"] == (
         ".ft/process/process/process.yml"
     )
     assert ".ft/process/.ft/process" not in manifest.read_text()
-    assert migrate_legacy_layout(project) == ["layout v2 canônico já presente"]
+    assert migrate_legacy_layout(project) == ["layout v3 canônico já presente"]
 
 
 def test_process_digest_ignores_generated_caches_but_tracks_runtime_bundle(tmp_path):

@@ -21,7 +21,7 @@ voltam o ciclo para trás.
 
 ```mermaid
 flowchart TD
-    start([ft feature --template feature]) --> preflight
+    start([ft run . --template feature]) --> preflight
 
     subgraph s1["Sprint feature-01-scope"]
         preflight{{"feature.preflight<br/>Preflight do Produto Existente<br/>(gate)"}}

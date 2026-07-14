@@ -317,6 +317,9 @@ def test_batch_roundtrip(tmp_path):
         waves=[["F-01"], ["F-02"]],
         current_wave=1,
         max_parallel=3,
+        planner_engine="codex",
+        planner_model="gpt-5.6-sol",
+        planner_effort="high",
     )
     fb.save_batch(batch)
     loaded = fb.load_batch(tmp_path / "proj", "batch-01")
@@ -358,6 +361,67 @@ def test_latest_batch_id(tmp_path):
         directory.mkdir(parents=True)
         (directory / fb.BATCH_FILENAME).write_text("x: 1\n", encoding="utf-8")
     assert fb.latest_batch_id(root) == "batch-02"
+
+
+def test_latest_batch_id_uses_numeric_suffix(tmp_path):
+    root = tmp_path / "proj"
+    for batch_id in ("batch-99", "batch-100"):
+        directory = fb.batch_dir(root, batch_id)
+        directory.mkdir(parents=True)
+        (directory / fb.BATCH_FILENAME).write_text("x: 1\n", encoding="utf-8")
+
+    assert fb.latest_batch_id(root) == "batch-100"
+
+
+def test_latest_active_batch_does_not_resurrect_older_paused_batch(tmp_path):
+    root = tmp_path / "proj"
+    older = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="tweak",
+        features=_features(2),
+        waves=[["F-01", "F-02"]],
+        status="paused",
+    )
+    newer = fb.FeatureBatch(
+        batch_id="batch-02",
+        project_root=str(root),
+        template="tweak",
+        features=_features(2),
+        waves=[["F-01", "F-02"]],
+        status="done",
+    )
+    fb.save_batch(older)
+    fb.save_batch(newer)
+
+    assert fb.latest_active_batch(root) is None
+
+
+def test_latest_active_batch_ignores_malformed_latest_state(tmp_path):
+    root = tmp_path / "proj"
+    older = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="tweak",
+        features=_features(2),
+        waves=[["F-01", "F-02"]],
+        status="paused",
+    )
+    fb.save_batch(older)
+    malformed = fb.batch_dir(root, "batch-02") / fb.BATCH_FILENAME
+    malformed.parent.mkdir(parents=True)
+    malformed.write_text(
+        "batch_id: batch-02\n"
+        f"project_root: {root}\n"
+        "template: tweak\n"
+        "status: planning\n"
+        "current_wave: invalid\n"
+        "waves: []\n"
+        "features: []\n",
+        encoding="utf-8",
+    )
+
+    assert fb.latest_active_batch(root) is None
 
 
 def test_batch_fora_de_worktrees(tmp_path):
@@ -560,6 +624,101 @@ def test_engine_cli_flags():
         "gpt-5.3",
         "--effort",
         "high",
+    ]
+
+
+def test_worker_engine_spec_uses_batch_default_but_feature_override_wins(tmp_path):
+    inherited = _feature("F-01", ["src/a/"])
+    overridden = _feature("F-02", ["src/b/"])
+    overridden.engine_spec = fb.EngineSpec("claude", "opus", "max")
+    batch = _batch(tmp_path, [inherited, overridden], [["F-01", "F-02"]])
+    batch.planner_engine = "codex"
+    batch.planner_model = "gpt-5.6-sol"
+    batch.planner_effort = "high"
+
+    assert fp._worker_engine_spec(batch, inherited) == fb.EngineSpec(
+        "codex", "gpt-5.6-sol", "high"
+    )
+    assert fp._worker_engine_spec(batch, overridden) == fb.EngineSpec(
+        "claude", "opus", "max"
+    )
+
+
+def test_setup_feature_cycle_propagates_persisted_batch_default(tmp_path, monkeypatch):
+    feature = _feature("F-01", ["src/ui/"])
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    batch.planner_engine = "codex"
+    batch.planner_model = "gpt-5.6-sol"
+    batch.planner_effort = "high"
+    captured = {}
+    monkeypatch.setattr(cli_main, "_next_cycle_num", lambda root: 7)
+    monkeypatch.setattr(
+        cli_main,
+        "cmd_feature",
+        lambda namespace: captured.setdefault("args", namespace),
+    )
+
+    fp._setup_feature_cycle(batch, feature, Namespace(verbose=False))
+
+    namespace = captured["args"]
+    assert namespace.codex == "gpt-5.6-sol"
+    assert namespace.effort == "high"
+    assert namespace.claude is None
+
+
+def test_resume_worker_commands_propagate_persisted_batch_default(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    feature = _feature("F-01", ["src/ui/"])
+    feature.cycle_name = "cycle-07-f-01-ui"
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    batch.status = "paused"
+    batch.planner_engine = "codex"
+    batch.planner_model = "gpt-5.6-sol"
+    batch.planner_effort = "high"
+    fb.save_batch(batch)
+    resumed = fb.load_batch(batch.project_root, batch.batch_id)
+    resumed_feature = resumed.feature("F-01")
+    spawned_commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        fp,
+        "_spawn",
+        lambda batch_arg, feature_arg, args, *, command: (
+            spawned_commands.append(command) or _DoneProc()
+        ),
+    )
+    monkeypatch.setattr(
+        fp,
+        "_cycle_state",
+        lambda root, name: ("tweak.acceptance", "awaiting_approval"),
+    )
+
+    fp._spawn_continue(
+        resumed,
+        resumed_feature,
+        Namespace(verbose=False, bypass_human_gates=False),
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt="": "a")
+    fp._handle_gate(
+        resumed,
+        resumed_feature,
+        Namespace(verbose=False, bypass_human_gates=False),
+    )
+    resumed_feature.status = "blocked"
+    monkeypatch.setattr("builtins.input", lambda prompt="": "r")
+    fp._handle_blocked(
+        resumed,
+        resumed_feature,
+        Namespace(verbose=False, bypass_human_gates=False),
+    )
+
+    flags = ["--codex", "gpt-5.6-sol", "--effort", "high"]
+    assert spawned_commands == [
+        ["continue", "--auto", "--cycle", feature.cycle_name, *flags],
+        ["approve", "--auto", "--cycle", feature.cycle_name, *flags],
+        ["retry", "--auto", "--cycle", feature.cycle_name, *flags],
     ]
 
 
@@ -1102,6 +1261,37 @@ def test_resume_preserva_template_do_batch_e_rejeita_troca(tmp_path, monkeypatch
     assert captured["template"] == "tweak"
 
 
+@pytest.mark.parametrize("status", ["planning", "failed", "invalid"])
+def test_resume_rejects_non_executable_batch_states(
+    tmp_path, monkeypatch, status, capsys
+):
+    root = tmp_path / "proj"
+    root.mkdir()
+    batch = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="tweak",
+        features=[_feature("F-01", ["src/a/"])],
+        waves=[],
+        status=status,
+    )
+    fb.save_batch(batch)
+    monkeypatch.setattr(cli_main, "find_project_root", lambda: root)
+    monkeypatch.setattr(fp.sys.stdout, "reconfigure", lambda **kwargs: None)
+    monkeypatch.setattr(
+        fp,
+        "_execute_batch",
+        lambda *args, **kwargs: pytest.fail("batch inválido foi executado"),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        fp.run_parallel_batch(Namespace(resume="batch-01", template=None))
+
+    assert exit_info.value.code == 1
+    assert "não pode ser retomado" in capsys.readouterr().out
+    assert fb.load_batch(root, "batch-01").status == status
+
+
 def _git(root: Path, *arguments: str) -> None:
     subprocess.run(
         ["git", *arguments], cwd=root, check=True, capture_output=True, text=True
@@ -1293,3 +1483,191 @@ def test_plan_batch_applies_short_planner_budget_only_to_tweak(tmp_path, monkeyp
     assert batch is not None
     assert batch.template == "tweak"
     assert captured["llm_timeout_seconds"] == fp.TWEAK_PLANNER_TIMEOUT_SECONDS
+
+
+def test_plan_batch_persists_planning_status_before_llm_returns(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = _git_project(tmp_path)
+    monkeypatch.chdir(root)
+    observed: dict[str, object] = {}
+    plan = {
+        "schema_version": fb.PLAN_SCHEMA_VERSION,
+        "features": [
+            {"id": "F-01", "areas": ["src/a/"], "depends_on": []},
+            {"id": "F-02", "areas": ["src/b/"], "depends_on": []},
+        ],
+    }
+
+    def fake_planner(*args, **kwargs):
+        batch_id = fb.latest_batch_id(root)
+        assert batch_id is not None
+        persisted = fb.load_batch(root, batch_id)
+        observed.update(persisted.to_dict())
+        return plan
+
+    monkeypatch.setattr(fp, "_run_planner", fake_planner)
+    args = Namespace(
+        demand=["Mude o botão A para azul", "Mude o botão B para verde"],
+        feature_input=None,
+        engines=None,
+        template="tweak",
+        max_parallel=2,
+        yes=True,
+        force=False,
+        verbose=False,
+        bypass_human_gates=False,
+        claude=None,
+        codex="gpt-5.6-sol",
+        gemini=None,
+        opencode=None,
+        effort="high",
+    )
+
+    batch = fp._plan_batch(args, root)
+
+    assert batch is not None
+    assert observed["status"] == "planning"
+    assert observed["template"] == "tweak"
+    assert observed["planner_engine"] == "codex"
+    assert observed["planner_model"] == "gpt-5.6-sol"
+    assert observed["planner_effort"] == "high"
+    assert len(observed["features"]) == 2
+    assert observed["waves"] == []
+    assert batch.status == "planned"
+
+
+def test_plan_batch_rejects_active_batch_but_force_allocates_new_id(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = _git_project(tmp_path)
+    monkeypatch.chdir(root)
+    existing = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="tweak",
+        features=_features(2),
+        waves=[],
+        status="planning",
+    )
+    fb.save_batch(existing)
+    plan = {
+        "schema_version": fb.PLAN_SCHEMA_VERSION,
+        "features": [
+            {"id": "F-01", "areas": ["src/a/"], "depends_on": []},
+            {"id": "F-02", "areas": ["src/b/"], "depends_on": []},
+        ],
+    }
+    monkeypatch.setattr(fp, "_run_planner", lambda *args, **kwargs: plan)
+    args = Namespace(
+        demand=["Mude o botão A para azul", "Mude o botão B para verde"],
+        feature_input=None,
+        engines=None,
+        template="tweak",
+        max_parallel=2,
+        yes=True,
+        force=False,
+        verbose=False,
+        bypass_human_gates=False,
+        claude=None,
+        codex="gpt-5.6-sol",
+        gemini=None,
+        opencode=None,
+        effort="high",
+    )
+
+    with pytest.raises(RuntimeError, match="batch paralelo ativo: batch-01"):
+        fp._plan_batch(args, root)
+
+    args.force = True
+    created = fp._plan_batch(args, root)
+
+    assert created is not None
+    assert created.batch_id == "batch-02"
+    assert fb.load_batch(root, "batch-01").status == "planning"
+
+
+@pytest.mark.parametrize(
+    ("explicit_engine", "expected_model", "expected_effort"),
+    [("codex", None, None), ("claude", "opus", "max")],
+)
+def test_plan_batch_only_inherits_manifest_defaults_for_compatible_engine(
+    tmp_path, monkeypatch, explicit_engine, expected_model, expected_effort
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = _git_project(tmp_path)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(
+        cli_main,
+        "manifest_llm_defaults",
+        lambda project_root: ("claude", "opus", "max"),
+    )
+    plan = {
+        "schema_version": fb.PLAN_SCHEMA_VERSION,
+        "features": [
+            {"id": "F-01", "areas": ["src/a/"], "depends_on": []},
+            {"id": "F-02", "areas": ["src/b/"], "depends_on": []},
+        ],
+    }
+    monkeypatch.setattr(fp, "_run_planner", lambda *args, **kwargs: plan)
+    engine_args = {"claude": None, "codex": None, "gemini": None, "opencode": None}
+    engine_args[explicit_engine] = True
+    args = Namespace(
+        demand=["Mude o botão A para azul", "Mude o botão B para verde"],
+        feature_input=None,
+        engines=None,
+        template="tweak",
+        max_parallel=2,
+        yes=True,
+        force=False,
+        verbose=False,
+        bypass_human_gates=False,
+        effort=None,
+        **engine_args,
+    )
+
+    batch = fp._plan_batch(args, root)
+
+    assert batch is not None
+    assert batch.planner_engine == explicit_engine
+    assert batch.planner_model == expected_model
+    assert batch.planner_effort == expected_effort
+
+
+@pytest.mark.parametrize("planner_error", [RuntimeError("boom"), KeyboardInterrupt()])
+def test_plan_batch_marks_persisted_batch_failed_when_planner_stops(
+    tmp_path, monkeypatch, planner_error
+):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = _git_project(tmp_path)
+    monkeypatch.chdir(root)
+
+    def fail_planner(*args, **kwargs):
+        raise planner_error
+
+    monkeypatch.setattr(fp, "_run_planner", fail_planner)
+    args = Namespace(
+        demand=["Mude o botão A para azul", "Mude o botão B para verde"],
+        feature_input=None,
+        engines=None,
+        template="tweak",
+        max_parallel=2,
+        yes=True,
+        force=False,
+        verbose=False,
+        bypass_human_gates=False,
+        claude=None,
+        codex="gpt-5.6-sol",
+        gemini=None,
+        opencode=None,
+        effort="high",
+    )
+
+    with pytest.raises(type(planner_error)):
+        fp._plan_batch(args, root)
+
+    batch_id = fb.latest_batch_id(root)
+    assert batch_id is not None
+    assert fb.load_batch(root, batch_id).status == "failed"

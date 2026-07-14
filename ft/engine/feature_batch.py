@@ -30,6 +30,10 @@ PLAN_SCHEMA_VERSION = 1
 PLAN_FILENAME = "plan.yml"
 BATCH_FILENAME = "batch.yml"
 
+# O batch existe antes do primeiro ciclo: o planner tambem e uma fase ativa
+# observavel por comandos de leitura como ``ft status``.
+ACTIVE_BATCH_STATUSES = {"planning", "planned", "running", "paused"}
+
 # Ciclo de vida de uma feature dentro do batch.
 FEATURE_STATUSES = {
     "planned",  # aguardando a wave
@@ -473,8 +477,11 @@ class FeatureBatch:
     features: list[BatchFeature]
     waves: list[list[str]]
     current_wave: int = 0
-    status: str = "planned"  # planned | running | paused | done | failed
+    status: str = "planned"  # planning | planned | running | paused | done | failed
     max_parallel: int = 2
+    planner_engine: str | None = None
+    planner_model: str | None = None
+    planner_effort: str | None = None
 
     def feature(self, feature_id: str) -> BatchFeature:
         for feature in self.features:
@@ -486,7 +493,7 @@ class FeatureBatch:
         return [self.feature(feature_id) for feature_id in self.waves[wave_index]]
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "batch_id": self.batch_id,
             "project_root": self.project_root,
             "template": self.template,
@@ -496,6 +503,13 @@ class FeatureBatch:
             "waves": [list(wave) for wave in self.waves],
             "features": [feature.to_dict() for feature in self.features],
         }
+        if self.planner_engine:
+            data["planner_engine"] = self.planner_engine
+        if self.planner_model:
+            data["planner_model"] = self.planner_model
+        if self.planner_effort:
+            data["planner_effort"] = self.planner_effort
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> "FeatureBatch":
@@ -508,6 +522,9 @@ class FeatureBatch:
             current_wave=int(data.get("current_wave") or 0),
             status=str(data.get("status") or "planned"),
             max_parallel=int(data.get("max_parallel") or 2),
+            planner_engine=data.get("planner_engine") or None,
+            planner_model=data.get("planner_model") or None,
+            planner_effort=data.get("planner_effort") or None,
         )
 
 
@@ -565,6 +582,28 @@ def latest_batch_id(project_root: str | Path) -> str | None:
         for item in home.iterdir()
         if item.is_dir() and (item / BATCH_FILENAME).is_file()
     ]
-    if not candidates:
+    numeric = [
+        (int(match.group(1)), candidate)
+        for candidate in candidates
+        if (match := re.fullmatch(r"batch-(\d+)", candidate))
+    ]
+    if numeric:
+        return max(numeric)[1]
+    return max(candidates) if candidates else None
+
+
+def latest_active_batch(project_root: str | Path) -> FeatureBatch | None:
+    """Retorna o batch mais recente somente quando ele ainda está aberto.
+
+    Um batch novo substitui o anterior como execução corrente. Não procure
+    retroativamente por batches pausados: isso faria um batch abandonado
+    reaparecer no ``ft status`` depois que seu sucessor terminasse.
+    """
+    batch_id = latest_batch_id(project_root)
+    if batch_id is None:
         return None
-    return max(candidates)
+    try:
+        batch = load_batch(project_root, batch_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
+        return None
+    return batch if batch.status in ACTIVE_BATCH_STATUSES else None

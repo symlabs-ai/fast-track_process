@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from ft.cli import main as cli_main
+from ft.engine import feature_batch as fb
 from ft.engine.delegate import DelegateResult
 from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner, ValidationResult
@@ -624,6 +625,16 @@ class TestStatusMultipleCycles:
         project.mkdir()
         self._write_open_state(project, "cycle-13-f-01")
         self._write_open_state(project, "cycle-14-f-03")
+        fb.save_batch(
+            fb.FeatureBatch(
+                batch_id="batch-04",
+                project_root=str(project),
+                template="tweak",
+                features=[fb.BatchFeature("F-01", "Ajustar cor")],
+                waves=[],
+                status="planning",
+            )
+        )
         calls: list[dict] = []
 
         with (
@@ -634,6 +645,7 @@ class TestStatusMultipleCycles:
 
         output = capsys.readouterr().out
         assert "Ciclo:" not in output
+        assert "Batch paralelo" not in output
         assert calls == [
             {"cycle": "cycle-13-f-01", "method": "status", "full": False}
         ]
@@ -673,6 +685,125 @@ class TestStatusMultipleCycles:
         output = capsys.readouterr().out
         assert "Status: nenhum ciclo ativo" in output
         get_runner.assert_not_called()
+
+    @pytest.mark.parametrize("batch_status", ["planning", "planned"])
+    def test_status_shows_parallel_batch_while_planner_has_no_cycle(
+        self, tmp_path, monkeypatch, capsys, batch_status
+    ):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        batch = fb.FeatureBatch(
+            batch_id="batch-04",
+            project_root=str(project),
+            template="tweak",
+            features=[
+                fb.BatchFeature("F-01", "Ajustar cor"),
+                fb.BatchFeature("F-02", "Ajustar label"),
+                fb.BatchFeature("F-03", "Ajustar teclado"),
+            ],
+            waves=[],
+            status=batch_status,
+            planner_engine="codex",
+            planner_model="gpt-5.6-sol",
+            planner_effort="high",
+        )
+        fb.save_batch(batch)
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(cli_main, "get_runner") as get_runner,
+        ):
+            cli_main.cmd_status(self._args())
+
+        output = capsys.readouterr().out
+        assert "Batch paralelo: batch-04" in output
+        assert "Fase: plan" in output
+        assert "Template: tweak" in output
+        assert "LLM engine: codex" in output
+        assert "LLM model: gpt-5.6-sol" in output
+        assert "LLM effort: high" in output
+        assert "Demandas: 3" in output
+        assert "nenhum ciclo ativo" not in output.lower()
+        get_runner.assert_not_called()
+
+    def test_open_cycles_keep_precedence_over_parallel_batch_planning(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+        project = tmp_path / "project"
+        project.mkdir()
+        self._write_open_state(project, "cycle-13-f-01")
+        self._write_open_state(project, "cycle-14-f-03")
+        fb.save_batch(
+            fb.FeatureBatch(
+                batch_id="batch-04",
+                project_root=str(project),
+                template="tweak",
+                features=[fb.BatchFeature("F-01", "Ajustar cor")],
+                waves=[],
+                status="planning",
+            )
+        )
+        calls: list[dict] = []
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(
+                cli_main,
+                "get_runner",
+                side_effect=self._fake_runner_factory(calls),
+            ),
+        ):
+            cli_main.cmd_status(self._args())
+
+        output = capsys.readouterr().out
+        assert "Batch paralelo" not in output
+        assert output.count("Ciclo:") == 2
+        assert [call["cycle"] for call in calls] == [
+            "cycle-13-f-01",
+            "cycle-14-f-03",
+        ]
+
+    def test_local_worktree_status_keeps_precedence_over_batch_planning(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        ft_home = tmp_path / "ft-home"
+        monkeypatch.setenv("FT_HOME", str(ft_home))
+        worktree = ft_home / "worktrees" / "project" / "cycle-13-f-01"
+        local_state = worktree / "state" / "engine_state.yml"
+        local_state.parent.mkdir(parents=True)
+        local_state.write_text(
+            "process_id: feature\n"
+            "current_node: feature.discovery\n"
+            "node_status: delegated\n",
+            encoding="utf-8",
+        )
+        fb.save_batch(
+            fb.FeatureBatch(
+                batch_id="batch-04",
+                project_root=str(worktree),
+                template="tweak",
+                features=[fb.BatchFeature("F-01", "Ajustar cor")],
+                waves=[],
+                status="planning",
+            )
+        )
+        calls: list[dict] = []
+
+        with (
+            patch.object(cli_main, "find_project_root", return_value=worktree),
+            patch.object(
+                cli_main,
+                "get_runner",
+                side_effect=self._fake_runner_factory(calls),
+            ),
+        ):
+            cli_main.cmd_status(self._args())
+
+        output = capsys.readouterr().out
+        assert "Batch paralelo" not in output
+        assert calls == [{"cycle": None, "method": "status", "full": False}]
 
 
 class TestApiHealthCheck:

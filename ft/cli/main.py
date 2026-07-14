@@ -1002,6 +1002,43 @@ def _print_no_active_cycle(root: Path) -> None:
     print(_ui.dim("Use `ft runs` para consultar ciclos ativos e arquivados."))
 
 
+def _print_active_feature_batch(root: Path, *, full: bool = False) -> bool:
+    """Renderiza um batch paralelo aberto antes/entre seus ciclos."""
+    from ft.engine import feature_batch as _feature_batch
+    from ft.engine import ui as _ui
+
+    # Dentro de uma worktree, o runtime local continua autoritativo mesmo que
+    # o checkout principal tenha um batch paralelo aberto.
+    if paths.is_worktree_path(root):
+        return False
+    batch = _feature_batch.latest_active_batch(root)
+    if batch is None:
+        return False
+
+    phase = "plan" if batch.status in {"planning", "planned"} else "execution"
+    status = {
+        "planned": "aguardando confirmação do plano",
+        "paused": "paused",
+    }.get(batch.status, batch.status)
+
+    print(_ui.header(f"Batch paralelo: {batch.batch_id}"))
+    print(_ui.info(f"Batch: {batch.batch_id}"))
+    print(_ui.info(f"Fase: {phase}"))
+    print(_ui.info(f"Status: {status}"))
+    print(_ui.info(f"Template: {batch.template}"))
+    if batch.planner_engine:
+        print(_ui.info(f"LLM engine: {batch.planner_engine}"))
+    if batch.planner_model:
+        print(_ui.info(f"LLM model: {batch.planner_model}"))
+    if batch.planner_effort:
+        print(_ui.info(f"LLM effort: {batch.planner_effort}"))
+    print(_ui.info(f"Demandas: {len(batch.features)}"))
+    if full:
+        for feature in batch.features:
+            print(_ui.dim(f"{feature.feature_id} [{feature.status}] {feature.title}"))
+    return True
+
+
 def _ensure_runtime_selected(args, runner=None) -> bool:
     """Impede comandos de ciclo de fabricarem estado a partir do processo default."""
     if runner is not None:
@@ -1794,6 +1831,12 @@ def cmd_continue(args):
 
 
 def cmd_status(args):
+    root = find_project_root()
+    explicit_cycle = getattr(args, "cycle", None)
+    targets = [] if explicit_cycle else _open_status_targets(root)
+    if not explicit_cycle and not targets:
+        if _print_active_feature_batch(root, full=getattr(args, "full", False)):
+            return
     if not _ensure_runtime_selected(args):
         return
 
@@ -1813,8 +1856,6 @@ def cmd_status(args):
         else:
             runner.status(full=getattr(args, "full", False))
 
-    explicit_cycle = getattr(args, "cycle", None)
-    targets = [] if explicit_cycle else _open_status_targets(find_project_root())
     if len(targets) > 1:
         from ft.engine import ui as _ui
 

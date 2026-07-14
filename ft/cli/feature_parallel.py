@@ -18,6 +18,7 @@ Contratos com o resto do engine:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import re
 import subprocess
 import sys
@@ -37,6 +38,7 @@ TWEAK_PLANNER_TIMEOUT_SECONDS = 120
 _TERMINAL = {"merged", "failed", "skipped"}
 _EXTERNAL_CLOSE_CANDIDATES = {"setup", "running", "gate", "blocked", "done"}
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_RESUMABLE_BATCH_STATUSES = {"planned", "running", "paused"}
 
 
 def _rate_limit_respawn_limit(batch: fb.FeatureBatch) -> int:
@@ -85,6 +87,14 @@ def run_parallel_batch(args) -> None:
         if batch.status == "done":
             print(ui.warn(f"Batch {batch.batch_id} já concluído."))
             return
+        if batch.status not in _RESUMABLE_BATCH_STATUSES:
+            print(
+                ui.fail(
+                    f"Batch {batch.batch_id} não pode ser retomado no estado "
+                    f"'{batch.status}'. Inicie um novo batch."
+                )
+            )
+            sys.exit(1)
         print(
             ui.header(
                 f"Retomando batch {batch.batch_id} (wave {batch.current_wave + 1}/{len(batch.waves)})"
@@ -286,7 +296,8 @@ def _print_plan(batch: fb.FeatureBatch) -> None:
         print(f"\n  Wave {wave_index}:")
         for feature_id in wave:
             feature = batch.feature(feature_id)
-            engine = feature.engine_spec.label if feature.engine_spec else "default"
+            worker_engine = _worker_engine_spec(batch, feature)
+            engine = worker_engine.label if worker_engine else "default"
             deps = f"  ← {', '.join(feature.depends_on)}" if feature.depends_on else ""
             print(f"    {feature.feature_id} [{engine}] {feature.title}{deps}")
             if feature.areas:
@@ -307,38 +318,83 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
 
     template = cli.resolve_feature_template(getattr(args, "template", None))
 
-    batch_id = fb.new_batch_id(root)
+    manifest_engine, manifest_model, manifest_effort = cli.manifest_llm_defaults(root)
+    requested_engine = cli.resolve_llm_engine(args)
+    requested_model = cli.resolve_llm_model(args)
+    requested_effort = cli.resolve_llm_effort(args)
+    planner_engine = requested_engine or manifest_engine or "claude"
+    manifest_is_compatible = (
+        requested_engine is None or requested_engine == manifest_engine
+    )
+    planner_model = requested_model or (
+        manifest_model if manifest_is_compatible else None
+    )
+    planner_effort = requested_effort or (
+        manifest_effort if manifest_is_compatible else None
+    )
+
+    # O planner faz parte do processo e pode levar alguns minutos. Persista o
+    # batch antes da delegacao para que ``ft status`` nao afirme que nao ha
+    # trabalho ativo durante essa janela anterior a criacao dos ciclos. A
+    # alocacao fica sob flock para que dois planners nao reutilizem o mesmo ID
+    # nem atravessem simultaneamente a verificacao de exclusividade.
+    parallel_home = fb.parallel_home(root)
+    parallel_home.mkdir(parents=True, exist_ok=True)
+    lock_path = parallel_home / ".allocation.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        active_batch = fb.latest_active_batch(root)
+        if active_batch is not None and not getattr(args, "force", False):
+            raise RuntimeError(
+                f"já existe um batch paralelo ativo: {active_batch.batch_id} "
+                f"({active_batch.status}). Retome-o com --resume "
+                "ou use --force para iniciar outro."
+            )
+        batch_id = fb.new_batch_id(root)
+        batch = fb.FeatureBatch(
+            batch_id=batch_id,
+            project_root=str(root),
+            template=template,
+            features=features,
+            waves=[],
+            status="planning",
+            max_parallel=max(1, int(getattr(args, "max_parallel", None) or 2)),
+            planner_engine=planner_engine,
+            planner_model=planner_model,
+            planner_effort=planner_effort,
+        )
+        fb.save_batch(batch)
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
     batch_directory = fb.batch_dir(root, batch_id)
     (batch_directory / "logs").mkdir(parents=True, exist_ok=True)
-    _write_planner_context(root, batch_directory, features)
 
-    manifest_engine, manifest_model, manifest_effort = cli.manifest_llm_defaults(root)
-    planner_engine = cli.resolve_llm_engine(args) or manifest_engine or "claude"
-    planner_model = cli.resolve_llm_model(args) or manifest_model
-    planner_effort = cli.resolve_llm_effort(args) or manifest_effort
+    try:
+        _write_planner_context(root, batch_directory, features)
+        print(
+            ui.info(
+                f"Planejando {len(features)} features (planner: {planner_engine})…"
+            )
+        )
+        plan = _run_planner(
+            batch_directory,
+            features,
+            llm_engine=planner_engine,
+            llm_model=planner_model,
+            llm_effort=planner_effort,
+            llm_timeout_seconds=(
+                TWEAK_PLANNER_TIMEOUT_SECONDS if template == "tweak" else None
+            ),
+        )
+        fb.apply_plan(plan, features)
+        waves = fb.compute_waves(features)
+    except BaseException:
+        batch.status = "failed"
+        fb.save_batch(batch)
+        raise
 
-    print(ui.info(f"Planejando {len(features)} features (planner: {planner_engine})…"))
-    plan = _run_planner(
-        batch_directory,
-        features,
-        llm_engine=planner_engine,
-        llm_model=planner_model,
-        llm_effort=planner_effort,
-        llm_timeout_seconds=(
-            TWEAK_PLANNER_TIMEOUT_SECONDS if template == "tweak" else None
-        ),
-    )
-    fb.apply_plan(plan, features)
-    waves = fb.compute_waves(features)
-
-    batch = fb.FeatureBatch(
-        batch_id=batch_id,
-        project_root=str(root),
-        template=template,
-        features=features,
-        waves=waves,
-        max_parallel=max(1, int(getattr(args, "max_parallel", None) or 2)),
-    )
+    batch.waves = waves
+    batch.status = "planned"
     fb.save_batch(batch)
     _print_plan(batch)
 
@@ -369,6 +425,27 @@ def _engine_cli_flags(spec: fb.EngineSpec | None) -> list[str]:
     if spec.effort:
         flags.extend(["--effort", spec.effort])
     return flags
+
+
+def _worker_engine_spec(
+    batch: fb.FeatureBatch, feature: fb.BatchFeature
+) -> fb.EngineSpec | None:
+    """Resolve o executor efetivo preservado pelo plano do batch.
+
+    Uma atribuição explícita da feature (arquivo de demandas ou ``--engines``)
+    continua tendo precedência. Sem override, os workers reutilizam a seleção
+    global que o batch já resolveu e persistiu para o planner, inclusive após
+    ``--resume``.
+    """
+    if feature.engine_spec is not None:
+        return feature.engine_spec
+    if not batch.planner_engine:
+        return None
+    return fb.EngineSpec(
+        engine=batch.planner_engine,
+        model=batch.planner_model,
+        effort=batch.planner_effort,
+    )
 
 
 def _cycle_state(root: Path, cycle_name: str) -> tuple[str, str]:
@@ -655,11 +732,12 @@ def _setup_feature_cycle(
         effort=None,
         _setup_only=True,
     )
-    if feature.engine_spec is not None:
+    worker_engine = _worker_engine_spec(batch, feature)
+    if worker_engine is not None:
         setattr(
-            namespace, feature.engine_spec.engine, feature.engine_spec.model or True
+            namespace, worker_engine.engine, worker_engine.model or True
         )
-        namespace.effort = feature.engine_spec.effort
+        namespace.effort = worker_engine.effort
 
     cli.cmd_feature(namespace)
     feature.cycle_name = cycle_name
@@ -691,7 +769,7 @@ def _spawn_continue(
     batch: fb.FeatureBatch, feature: fb.BatchFeature, args
 ) -> subprocess.Popen:
     command = ["continue", "--auto", "--cycle", str(feature.cycle_name)]
-    command += _engine_cli_flags(feature.engine_spec)
+    command += _engine_cli_flags(_worker_engine_spec(batch, feature))
     if getattr(args, "bypass_human_gates", False):
         command.append("--bypass-human-gates")
     return _spawn(batch, feature, args, command=command)
@@ -708,7 +786,8 @@ def _print_board(batch: fb.FeatureBatch, wave_ids: list[str]) -> None:
     )
     for feature_id in wave_ids:
         feature = batch.feature(feature_id)
-        engine = feature.engine_spec.label if feature.engine_spec else "default"
+        worker_engine = _worker_engine_spec(batch, feature)
+        engine = worker_engine.label if worker_engine else "default"
         node = "-"
         if feature.cycle_name:
             node, _ = _cycle_state(root, feature.cycle_name)
@@ -768,7 +847,7 @@ def _handle_gate(
                     continue
                 command.append(message)
             command += ["--auto", "--cycle", str(feature.cycle_name)]
-            command += _engine_cli_flags(feature.engine_spec)
+            command += _engine_cli_flags(_worker_engine_spec(batch, feature))
             feature.status = "running"
             feature.detail = ""
             return _spawn(batch, feature, args, command=command)
@@ -781,7 +860,7 @@ def _handle_gate(
                 print(ui.warn("  Motivo obrigatório."))
                 continue
             command = ["reject", reason, "--cycle", str(feature.cycle_name)]
-            command += _engine_cli_flags(feature.engine_spec)
+            command += _engine_cli_flags(_worker_engine_spec(batch, feature))
             feature.status = "running"
             feature.detail = "rejeitado — retrabalhando"
             return _spawn(batch, feature, args, command=command)
@@ -813,7 +892,7 @@ def _handle_blocked(
             answer = "p"
         if answer in {"r", "retentar", "retry"}:
             command = ["retry", "--auto", "--cycle", str(feature.cycle_name)]
-            command += _engine_cli_flags(feature.engine_spec)
+            command += _engine_cli_flags(_worker_engine_spec(batch, feature))
             feature.status = "running"
             feature.detail = "retry"
             return _spawn(batch, feature, args, command=command)

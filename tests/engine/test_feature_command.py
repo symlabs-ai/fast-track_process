@@ -95,6 +95,14 @@ def _write_backlog(root: Path, selected_status: str = "accepted") -> None:
     )
 
 
+def test_incremental_catalog_exposes_feature_and_tweak_templates():
+    incremental = cli_main.available_templates("feature")
+    assert incremental == sorted(incremental)
+    assert {"feature", "tweak"} <= set(incremental)
+    assert cli_main.resolve_feature_template(None) == "feature"
+    assert cli_main.resolve_feature_template("tweak") == "tweak"
+
+
 def test_materialize_feature_template_is_complete_and_copy_once(tmp_path):
     root = _initialized_project(tmp_path / "project", git=False)
 
@@ -216,6 +224,62 @@ def test_feature_builds_run_args_from_input_file(tmp_path, monkeypatch):
     assert run_args._request_path == "docs/feature-request.md"
     assert run_args._require_git_worktree is True
     assert Path(run_args.project) == root
+
+
+def test_feature_without_template_preserves_feature_default(tmp_path, monkeypatch):
+    root = _initialized_project(tmp_path / "project")
+    monkeypatch.chdir(root)
+
+    with patch("ft.cli.main.cmd_run") as run:
+        cli_main.cmd_feature(_feature_args(template=None))
+
+    run_args = run.call_args.args[0]
+    assert run_args.process == ".ft/process/feature/process.yml"
+    manifest = yaml.safe_load(paths.project_manifest(root).read_text(encoding="utf-8"))
+    assert manifest["processes"]["feature"]["entrypoint"] == "feature"
+
+
+def test_feature_selects_any_incremental_template_without_new_orchestrator(
+    tmp_path, monkeypatch
+):
+    root = _initialized_project(tmp_path / "project")
+    fake_engine = tmp_path / "engine"
+    template = fake_engine / "templates" / "tweak"
+    template.mkdir(parents=True)
+    (template / "process.yml").write_text(
+        """id: tweak
+version: '1.0.0'
+execution_policy:
+  entrypoint: feature
+  template: tweak
+close_policy:
+  backlog:
+    mode: none
+  merge: full
+nodes:
+  - id: tweak.end
+    type: end
+    title: Fim
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_main, "engine_root", lambda: fake_engine)
+    monkeypatch.chdir(root)
+
+    with patch("ft.cli.main.cmd_run") as run:
+        cli_main.cmd_feature(_feature_args(template="tweak"))
+
+    run_args = run.call_args.args[0]
+    assert run_args.process == ".ft/process/tweak/process.yml"
+    assert run_args._request_text == "Adicionar busca por telefone"
+    manifest = yaml.safe_load(paths.project_manifest(root).read_text(encoding="utf-8"))
+    assert manifest["default_process"] == "base"
+    record = manifest["processes"]["tweak"]
+    assert record["path"] == ".ft/process/tweak/process.yml"
+    assert record["template"] == "tweak"
+    assert record["entrypoint"] == "feature"
+    assert record["source_digest"] == process_digest(template / "process.yml")
+    assert record["base_digest"].startswith("sha256:")
 
 
 def test_feature_runs_selected_local_process_inside_external_worktree(tmp_path, monkeypatch):
@@ -481,6 +545,33 @@ def test_feature_close_rejects_merge_that_violates_policy(tmp_path):
         cli_main.cmd_close(_close_args(merge="none"))
 
     assert runner.merge_calls == []
+
+
+def test_close_backlog_mode_none_skips_only_backlog_governance(tmp_path):
+    work = tmp_path / "cycle"
+    _write_backlog(work, selected_status="in_progress")
+    runner = _CloseRunner(work)
+    runner.graph.meta["close_policy"]["backlog"] = {"mode": "none"}
+
+    with patch("ft.cli.main.get_runner", return_value=runner):
+        cli_main.cmd_close(_close_args())
+
+    assert runner.merge_calls == [("full", None)]
+
+
+@pytest.mark.parametrize("mode", ["typo", ["none"]])
+def test_close_rejects_unknown_backlog_mode_even_without_backlog(
+    tmp_path, capsys, mode
+):
+    work = tmp_path / "cycle"
+    runner = _CloseRunner(work)
+    runner.graph.meta["close_policy"]["backlog"] = {"mode": mode}
+
+    with patch("ft.cli.main.get_runner", return_value=runner):
+        cli_main.cmd_close(_close_args())
+
+    assert runner.merge_calls == []
+    assert "mode desconhecido" in capsys.readouterr().out
 
 
 def _write_rejection_graph(root: Path) -> Path:

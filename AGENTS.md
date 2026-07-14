@@ -72,6 +72,7 @@ Templates disponíveis (`templates/` no repo do engine):
 |----------|-----|
 | `base` | Estrutura mínima com `.ft/process/base/process.yml`, docs seed e `src/` |
 | `feature` | Evolução incremental de uma única feature em produto já entregue; destinado ao comando `ft feature` |
+| `tweak` | Mudança pequena e focal, com uma implementação e salvaguardas mínimas; use com `ft feature --template tweak` |
 | `mvp-builder` | Processo completo de MVP (MDD → TDD → E2E → stakeholder), recomendado — só o `process.yml`; escreva os docs |
 | `fast-track-v2` | Processo V2 legado |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
@@ -126,6 +127,8 @@ Use o entrypoint incremental em vez de iniciar outro ciclo completo de MVP:
 ft feature "Adicionar busca por telefone" --template feature --claude
 # ou
 ft feature --input demanda.md --template feature --codex
+# ajuste pequeno, sem o pipeline completo de feature
+ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
 ```
 
 O comando exige projeto inicializado, repositório Git com HEAD e checkout limpo.
@@ -134,6 +137,12 @@ esse fork local. A demanda é gravada somente na worktree. O processo pode pergu
 para elucidar o escopo, exige aprovação antes do código, repete implementação e
 review após rejeições e encerra com `ft close` em merge full. P0/P1 alheios não
 bloqueiam o close: apenas o `backlog_item` selecionado precisa estar aceito.
+
+Para mudanças estritamente pequenas, `tweak` usa o mesmo comando, preparação,
+worktree, paralelismo e controles de ciclo do `ft feature`, mas vai direto à
+implementação. Ele não executa discovery, review independente, E2E completo ou
+reconciliação de backlog/catálogo. O diff é limitado e áreas de risco são
+recusadas; nesses casos, reinicie a demanda com `--template feature`.
 
 ## 2. Rodar o ciclo
 

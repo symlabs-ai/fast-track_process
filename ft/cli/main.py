@@ -219,6 +219,24 @@ def available_templates(entrypoint: str | None = "init") -> list[str]:
     )
 
 
+def resolve_feature_template(template: object = None) -> str:
+    """Resolve one incremental template while preserving ``feature`` as default.
+
+    Template discovery remains driven by ``execution_policy.entrypoint``.  This
+    keeps ``ft feature`` generic: adding a lightweight process does not create a
+    second command or a parallel orchestration fork.
+    """
+    selected = str(template or "feature")
+    available = available_templates("feature")
+    if selected not in available:
+        choices = ", ".join(available) if available else "nenhum"
+        raise ValueError(
+            f"template '{selected}' não pertence ao entrypoint feature. "
+            f"Templates disponíveis: {choices}"
+        )
+    return selected
+
+
 def _print_template_options(entrypoint: str = "init") -> None:
     available = available_templates(entrypoint)
     if available:
@@ -1717,14 +1735,7 @@ def cmd_feature(args):
             f"já existe um ciclo ativo: {active}. Use ft continue ou --force"
         )
 
-    template = getattr(args, "template", None)
-    if not template:
-        available = available_templates("feature")
-        choices = ", ".join(available) if available else "nenhum"
-        raise ValueError(
-            f"--template é obrigatório no ft feature. Templates disponíveis: {choices}"
-        )
-    template = str(template)
+    template = resolve_feature_template(getattr(args, "template", None))
     local_process = materialize_process_template(
         template,
         root,
@@ -3298,7 +3309,19 @@ def cmd_close(args):
         if not isinstance(backlog_policy, dict):
             backlog_policy = {}
         backlog_mode = backlog_policy.get("mode", "global")
-        if backlog_mode == "referenced" or backlog_file.exists():
+        if not isinstance(backlog_mode, str) or backlog_mode not in {
+            "global",
+            "referenced",
+            "none",
+        }:
+            print(_ui.fail("Backlog do produto não está pronto para fechar este ciclo."))
+            print(_ui.warn(
+                f"close_policy.backlog.mode desconhecido: {backlog_mode}"
+            ))
+            return
+        if backlog_mode != "none" and (
+            backlog_mode == "referenced" or backlog_file.exists()
+        ):
             if backlog_mode == "referenced":
                 references_path = backlog_policy.get("references_path")
                 if not references_path:
@@ -3327,10 +3350,6 @@ def cmd_close(args):
             elif backlog_mode == "global":
                 backlog_ok, backlog_detail = backlog_pending_decisions(
                     project_root=str(work)
-                )
-            else:
-                backlog_ok, backlog_detail = False, (
-                    f"close_policy.backlog.mode desconhecido: {backlog_mode}"
                 )
             if not backlog_ok:
                 print(_ui.fail("Backlog do produto não está pronto para fechar este ciclo."))
@@ -4480,8 +4499,12 @@ def cmd_run(args):
 
     # A materialização e o conhecimento precisam estar no HEAD antes do
     # worktree nascer; mudanças posteriores na raiz nunca são usadas pelo ciclo.
-    from ft.engine.git_ops import commit_knowledge
-    ok, detail = commit_knowledge(str(source_project_root), label="pré-run snapshot")
+    from ft.engine.git_ops import commit_knowledge, verify_hooks_from_process_meta
+    ok, detail = commit_knowledge(
+        str(source_project_root),
+        label="pré-run snapshot",
+        verify_hooks=verify_hooks_from_process_meta(process_payload),
+    )
     print(f"  {detail}")
     if requires_git_worktree and not ok:
         raise RuntimeError(detail)
@@ -4918,7 +4941,10 @@ def main():
         "--template",
         "-t",
         choices=available_templates("feature"),
-        help="Template de processo incremental a materializar",
+        help=(
+            "Template de processo incremental a materializar "
+            "(default: feature; --resume preserva o template do batch)"
+        ),
     )
     feature.add_argument(
         "--parallel",

@@ -55,6 +55,9 @@ class Node:
     optional: bool = False
     # Override provider-specific de reasoning effort para este node
     llm_effort: str | None = None
+    # Budget total de uma delegacao, incluindo retries/backoff internos.
+    # None preserva o timeout global historico do provider.
+    llm_timeout_seconds: int | None = None
     # Hyper-mode por node. None preserva os defaults historicos do engine;
     # lista vazia desabilita a carga de docs para aquele node.
     hyper_mode_docs: list[str] | None = None
@@ -245,6 +248,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             llm_engine=node_raw.get("llm_engine"),
             llm_model=node_raw.get("llm_model"),
             llm_effort=node_raw.get("llm_effort"),
+            llm_timeout_seconds=node_raw.get("llm_timeout_seconds"),
             no_pre_seed=node_raw.get("no_pre_seed", False),
             preserve_outputs_on_reentry=node_raw.get(
                 "preserve_outputs_on_reentry", False

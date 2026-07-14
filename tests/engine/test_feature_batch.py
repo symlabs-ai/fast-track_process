@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -164,6 +165,77 @@ def test_validate_plan_area_absoluta():
     assert any("F-02" in error for error in errors)
 
 
+def test_tweak_planner_shares_one_short_budget_across_retry(tmp_path, monkeypatch):
+    from ft.engine import delegate as delegate_module
+
+    features = _features(2)
+    batch_directory = tmp_path / "batch"
+    (batch_directory / "logs").mkdir(parents=True)
+    calls: list[int | None] = []
+
+    def fake_delegate(**kwargs):
+        calls.append(kwargs.get("llm_timeout_seconds"))
+        if len(calls) == 1:
+            return SimpleNamespace(success=False)
+        (batch_directory / fb.PLAN_FILENAME).write_text(
+            yaml.safe_dump(
+                _plan(
+                    [
+                        {"id": "F-01", "areas": ["src/a/"], "depends_on": []},
+                        {"id": "F-02", "areas": ["src/b/"], "depends_on": []},
+                    ]
+                )
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(success=True)
+
+    monkeypatch.setattr(delegate_module, "delegate_to_llm", fake_delegate)
+    monotonic = iter([100.0, 100.0, 110.0])
+    monkeypatch.setattr(fp.time, "monotonic", lambda: next(monotonic))
+
+    plan = fp._run_planner(
+        batch_directory,
+        features,
+        llm_engine="codex",
+        llm_model="gpt-5.6-sol",
+        llm_effort="max",
+        llm_timeout_seconds=120,
+    )
+
+    assert plan["schema_version"] == fb.PLAN_SCHEMA_VERSION
+    assert calls == [120, 110]
+
+
+def test_tweak_planner_does_not_round_subsecond_budget_up(tmp_path, monkeypatch):
+    from ft.engine import delegate as delegate_module
+
+    features = _features(2)
+    batch_directory = tmp_path / "batch"
+    (batch_directory / "logs").mkdir(parents=True)
+    calls: list[int | None] = []
+
+    def fake_delegate(**kwargs):
+        calls.append(kwargs.get("llm_timeout_seconds"))
+        return SimpleNamespace(success=False)
+
+    monkeypatch.setattr(delegate_module, "delegate_to_llm", fake_delegate)
+    monotonic = iter([100.0, 100.0, 219.5])
+    monkeypatch.setattr(fp.time, "monotonic", lambda: next(monotonic))
+
+    with pytest.raises(fb.FeatureBatchError, match="budget/2 tentativas"):
+        fp._run_planner(
+            batch_directory,
+            features,
+            llm_engine="codex",
+            llm_model="gpt-5.6-sol",
+            llm_effort="max",
+            llm_timeout_seconds=120,
+        )
+
+    assert calls == [120]
+
+
 # ---------------------------------------------------------------------------
 # Waves
 # ---------------------------------------------------------------------------
@@ -308,6 +380,15 @@ def _batch(tmp_path, features, waves) -> fb.FeatureBatch:
         features=features,
         waves=waves,
     )
+
+
+def test_tweak_parallel_disables_outer_rate_limit_respawns(tmp_path):
+    tweak = _batch(tmp_path, [_feature("F-01", ["src/a/"])], [["F-01"]])
+    tweak.template = "tweak"
+    feature = _batch(tmp_path, [_feature("F-01", ["src/a/"])], [["F-01"]])
+
+    assert fp._rate_limit_respawn_limit(tweak) == 0
+    assert fp._rate_limit_respawn_limit(feature) == fp.MAX_RATE_LIMIT_RESPAWNS
 
 
 def _repo_with_external_cycle_close(
@@ -561,6 +642,38 @@ def test_execute_persiste_reserva_antes_do_primeiro_setup(tmp_path, monkeypatch)
     persisted = fb.load_batch(root, batch.batch_id)
     assert persisted.feature("F-01").status == "planned"
     assert persisted.feature("F-01").reserved_backlog_item == "PB-005"
+
+
+def test_execute_template_sem_backlog_nao_reserva_pb(tmp_path, monkeypatch):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    feature = _feature("F-01", ["src/a/"])
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    batch.template = "tweak"
+    root = Path(batch.project_root)
+    process = tmp_path / "engine" / "templates" / "tweak" / "process.yml"
+    process.parent.mkdir(parents=True)
+    process.write_text(
+        "close_policy:\n  backlog:\n    mode: none\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_main, "engine_root", lambda: tmp_path / "engine")
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "PROJECT_BACKLOG.md").write_text(
+        "| PB-004 | existente |\n", encoding="utf-8"
+    )
+    fb.save_batch(batch)
+
+    def interrupted_setup(*args, **kwargs):
+        raise RuntimeError("setup interrompido")
+
+    monkeypatch.setattr(fp, "_setup_feature_cycle", interrupted_setup)
+
+    with pytest.raises(RuntimeError, match="setup interrompido"):
+        fp._execute_batch(batch, Namespace(verbose=False))
+
+    persisted = fb.load_batch(root, batch.batch_id)
+    assert persisted.template == "tweak"
+    assert persisted.feature("F-01").reserved_backlog_item is None
 
 
 def test_skip_orphans(tmp_path):
@@ -937,6 +1050,58 @@ def test_cmd_feature_parallel_roteia_para_orquestrador(monkeypatch):
     assert called["args"] is args
 
 
+def test_setup_parallel_propaga_template_tweak_sem_orquestrador_alternativo(
+    tmp_path, monkeypatch
+):
+    feature = _feature("F-01", ["src/ui/"])
+    batch = _batch(tmp_path, [feature], [["F-01"]])
+    batch.template = "tweak"
+    captured = {}
+    monkeypatch.setattr(cli_main, "_next_cycle_num", lambda root: 7)
+    monkeypatch.setattr(
+        cli_main,
+        "cmd_feature",
+        lambda namespace: captured.setdefault("args", namespace),
+    )
+
+    fp._setup_feature_cycle(batch, feature, Namespace(verbose=False))
+
+    namespace = captured["args"]
+    assert namespace.template == "tweak"
+    assert namespace.force is True
+    assert namespace._setup_only is True
+    assert feature.status == "setup"
+    assert feature.cycle_name.startswith("cycle-07-f-01-")
+
+
+def test_resume_preserva_template_do_batch_e_rejeita_troca(tmp_path, monkeypatch):
+    root = tmp_path / "proj"
+    root.mkdir()
+    batch = fb.FeatureBatch(
+        batch_id="batch-01",
+        project_root=str(root),
+        template="tweak",
+        features=[_feature("F-01", ["src/a/"])],
+        waves=[["F-01"]],
+        status="paused",
+    )
+    fb.save_batch(batch)
+    monkeypatch.setattr(cli_main, "find_project_root", lambda: root)
+    monkeypatch.setattr(fp.sys.stdout, "reconfigure", lambda **kwargs: None)
+
+    with pytest.raises(ValueError, match="usa o template 'tweak'"):
+        fp.run_parallel_batch(Namespace(resume="batch-01", template="feature"))
+
+    captured = {}
+    monkeypatch.setattr(
+        fp,
+        "_execute_batch",
+        lambda loaded, args: captured.setdefault("template", loaded.template),
+    )
+    fp.run_parallel_batch(Namespace(resume="batch-01", template=None))
+    assert captured["template"] == "tweak"
+
+
 def _git(root: Path, *arguments: str) -> None:
     subprocess.run(
         ["git", *arguments], cwd=root, check=True, capture_output=True, text=True
@@ -1086,3 +1251,45 @@ def test_primeiro_batch_planeja_sem_sujar_checkout_e_materializa_no_setup(
         ).stdout
         == ""
     )
+
+
+def test_plan_batch_applies_short_planner_budget_only_to_tweak(tmp_path, monkeypatch):
+    monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
+    root = _git_project(tmp_path)
+    monkeypatch.chdir(root)
+    captured: dict[str, object] = {}
+    plan = {
+        "schema_version": fb.PLAN_SCHEMA_VERSION,
+        "features": [
+            {"id": "F-01", "areas": ["src/a/"], "depends_on": []},
+            {"id": "F-02", "areas": ["src/b/"], "depends_on": []},
+        ],
+    }
+
+    def fake_planner(*args, **kwargs):
+        captured.update(kwargs)
+        return plan
+
+    monkeypatch.setattr(fp, "_run_planner", fake_planner)
+    args = Namespace(
+        demand=["Mude o botão A para azul", "Mude o botão B para verde"],
+        feature_input=None,
+        engines=None,
+        template="tweak",
+        max_parallel=2,
+        yes=True,
+        force=False,
+        verbose=False,
+        bypass_human_gates=False,
+        claude=None,
+        codex=None,
+        gemini=None,
+        opencode=None,
+        effort=None,
+    )
+
+    batch = fp._plan_batch(args, root)
+
+    assert batch is not None
+    assert batch.template == "tweak"
+    assert captured["llm_timeout_seconds"] == fp.TWEAK_PLANNER_TIMEOUT_SECONDS

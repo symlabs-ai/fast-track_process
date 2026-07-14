@@ -188,7 +188,7 @@ def _stop_owned_process(token: str) -> None:
 
 
 def test_feature_template_is_discoverable_and_pristine():
-    assert available_templates(entrypoint="feature") == ["feature"]
+    assert available_templates(entrypoint="feature") == ["feature", "tweak"]
     assert "feature" not in available_templates()
     validate_template_is_pristine(TEMPLATE)
 

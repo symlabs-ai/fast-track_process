@@ -438,6 +438,51 @@ class TestApproveReject:
 
 
 class TestDelegationDisplay:
+    def test_node_llm_timeout_is_forwarded_to_delegate(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: timeout_process
+version: "1.0.0"
+title: Timeout
+nodes:
+  - id: implement
+    type: document
+    title: Implement
+    executor: claude
+    llm_timeout_seconds: 37
+    outputs: [docs/out.md]
+    validators:
+      - file_exists: docs/out.md
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        def delegated(**kwargs):
+            (project_root / "docs").mkdir()
+            (project_root / "docs/out.md").write_text("done\n", encoding="utf-8")
+            return DelegateResult(True, "DONE", ["docs/out.md"], [])
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegated
+        ) as delegate_mock:
+            runner._run_llm_step(runner.graph.get_node("implement"))
+
+        assert delegate_mock.call_args.kwargs["llm_timeout_seconds"] == 37
+
     def test_delegation_message_uses_effective_llm_engine(self, tmp_path, capsys):
         project_root = tmp_path / "project"
         docs = project_root / "docs"

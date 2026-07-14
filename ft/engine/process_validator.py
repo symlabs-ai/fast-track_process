@@ -75,6 +75,50 @@ def validate_process(graph: ProcessGraph, validator_registry: dict[str, Any] | N
 
 def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
     """Verifica schema: tipos, executors, campos obrigatórios."""
+    commit_policy = graph.meta.get("commit_policy")
+    if commit_policy is not None:
+        if not isinstance(commit_policy, dict):
+            report.add_error(None, "commit_policy deve ser um mapping")
+        elif "verify_hooks" in commit_policy and not isinstance(
+            commit_policy["verify_hooks"], bool
+        ):
+            report.add_error(
+                None,
+                "commit_policy.verify_hooks deve ser booleano",
+            )
+
+    close_policy = graph.meta.get("close_policy")
+    if close_policy is not None:
+        if not isinstance(close_policy, dict):
+            report.add_error(None, "close_policy deve ser um mapping")
+        else:
+            backlog_policy = close_policy.get("backlog")
+            if backlog_policy is not None:
+                if not isinstance(backlog_policy, dict):
+                    report.add_error(
+                        None, "close_policy.backlog deve ser um mapping"
+                    )
+                else:
+                    backlog_mode = backlog_policy.get("mode", "global")
+                    if not isinstance(backlog_mode, str) or backlog_mode not in {
+                        "global",
+                        "referenced",
+                        "none",
+                    }:
+                        report.add_error(
+                            None,
+                            "close_policy.backlog.mode deve ser global, "
+                            "referenced ou none",
+                        )
+                    if backlog_mode == "referenced" and not (
+                        isinstance(backlog_policy.get("references_path"), str)
+                        and backlog_policy["references_path"].strip()
+                    ):
+                        report.add_error(
+                            None,
+                            "close_policy.backlog.references_path é obrigatório "
+                            "no modo referenced",
+                        )
     for node in graph.nodes.values():
         if not node.id:
             report.add_error(None, "nó sem id")
@@ -88,6 +132,15 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
             report.add_error(
                 node.id,
                 "preserve_outputs_on_reentry deve ser booleano",
+            )
+        if node.llm_timeout_seconds is not None and (
+            isinstance(node.llm_timeout_seconds, bool)
+            or not isinstance(node.llm_timeout_seconds, int)
+            or node.llm_timeout_seconds <= 0
+        ):
+            report.add_error(
+                node.id,
+                "llm_timeout_seconds deve ser um inteiro positivo",
             )
         for field_name in ("hyper_mode_docs", "hyper_mode_full_docs"):
             value = getattr(node, field_name)

@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import time
 
 import pytest
@@ -20,7 +21,10 @@ from ft.engine.delegate import (
     _is_opencode_internal_log_line,
     _opencode_capture_command,
     _prepare_opencode_sandbox_mounts,
+    _run_opencode_script,
     _stop_process_tree,
+    _stream_process_output,
+    _supervised_command,
     _wait_for_process,
     _wrap_opencode_sandbox_command,
     DEFAULT_OPENCODE_CONTEXT_LIMIT,
@@ -53,6 +57,11 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("FT_CODEX_EXECUTOR_TIMEOUT", "5400")
 
         assert _executor_timeout_seconds("codex") == 5400
+
+    @pytest.mark.parametrize("value", [0, -1, True, 1.5, "10"])
+    def test_delegate_rejects_invalid_llm_timeout_before_spawn(self, value):
+        with pytest.raises(ValueError, match="llm_timeout_seconds"):
+            delegate_to_llm(task="x", llm_timeout_seconds=value)
 
     def test_builds_claude_command_with_bypass(self):
         cmd = _build_executor_command("claude", "faça algo", "/tmp/proj", 7)
@@ -613,6 +622,320 @@ class TestBuildExecutorCommand:
         assert "campos `path`, `oldString`, `newString`" in prompt
         assert "nunca use `filePath`" in prompt
 
+    def test_llm_timeout_caps_one_executor_attempt(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/bin/sh\nsleep 5\nprintf 'DONE\\n'\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+
+        started = time.monotonic()
+        result = delegate_to_llm(
+            task="demora",
+            project_root=str(tmp_path),
+            llm_engine="opencode",
+            llm_timeout_seconds=1,
+        )
+        elapsed = time.monotonic() - started
+
+        assert result.success is False
+        assert "[LLM_DEADLINE]" in result.output
+        assert elapsed < 3
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    def test_llm_timeout_reaps_detached_executor_writer(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        marker = tmp_path / "late-deadline-marker"
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/bin/sh\n"
+            "setsid sh -c \"trap '' TERM HUP; sleep 1.5; "
+            f"printf late > {str(marker)!r}\" "
+            "</dev/null >/dev/null 2>&1 &\n"
+            "sleep 10\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+
+        started = time.monotonic()
+        result = delegate_to_llm(
+            task="demora com filho destacado",
+            project_root=str(tmp_path),
+            llm_engine="opencode",
+            llm_timeout_seconds=1,
+        )
+        elapsed = time.monotonic() - started
+        time.sleep(0.7)
+
+        assert result.success is False
+        assert "[LLM_DEADLINE]" in result.output
+        assert elapsed < 4
+        assert not marker.exists()
+
+    def test_llm_timeout_includes_rate_limit_backoff_and_prevents_retry(
+        self, tmp_path, monkeypatch
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        count = tmp_path / "calls"
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/bin/sh\n"
+            f"n=$(cat {str(count)!r} 2>/dev/null || printf 0)\n"
+            f"printf '%s' $((n + 1)) > {str(count)!r}\n"
+            "printf 'rate limit exceeded\\n'\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_RATE_LIMIT_BACKOFF", "60")
+
+        started = time.monotonic()
+        result = delegate_to_llm(
+            task="rate limited",
+            project_root=str(tmp_path),
+            llm_engine="opencode",
+            llm_timeout_seconds=1,
+        )
+        elapsed = time.monotonic() - started
+
+        assert result.success is False
+        assert result.rate_limited is False
+        assert "[LLM_DEADLINE]" in result.output
+        assert count.read_text(encoding="utf-8") == "1"
+        assert elapsed < 3
+
+    def test_opencode_script_receives_only_remaining_llm_budget(
+        self, tmp_path, monkeypatch
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('set -euo pipefail')\n"
+            "print(\"printf 'ok\\\\n'\")\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_SCRIPT_MODE", "1")
+        monkeypatch.delenv("FT_OPENCODE_BUNDLE_MODE", raising=False)
+
+        with (
+            patch(
+                "ft.engine.delegate.time.monotonic",
+                side_effect=[0.0, 2.0, 3.0],
+            ),
+            patch(
+                "ft.engine.delegate._wait_for_process",
+                side_effect=lambda proc, **_kwargs: (proc.wait(), False),
+            ),
+            patch(
+                "ft.engine.delegate._run_opencode_script",
+                return_value=(True, "ok\n"),
+            ) as script_runner,
+        ):
+            result = delegate_to_llm(
+                task="gere script",
+                project_root=str(tmp_path),
+                llm_engine="opencode",
+                opencode_deny_edit_tools=True,
+                llm_timeout_seconds=10,
+            )
+
+        assert result.success is True
+        assert script_runner.call_args.kwargs["timeout_seconds"] == 7.0
+
+    def test_opencode_script_is_not_started_after_llm_budget_expires(
+        self, tmp_path, monkeypatch
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('set -euo pipefail')\n"
+            "print(\"printf 'ok\\\\n'\")\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_SCRIPT_MODE", "1")
+        monkeypatch.delenv("FT_OPENCODE_BUNDLE_MODE", raising=False)
+
+        with (
+            patch(
+                "ft.engine.delegate.time.monotonic",
+                side_effect=[0.0, 1.0, 11.0],
+            ),
+            patch(
+                "ft.engine.delegate._wait_for_process",
+                side_effect=lambda proc, **_kwargs: (proc.wait(), False),
+            ),
+            patch("ft.engine.delegate._run_opencode_script") as script_runner,
+        ):
+            result = delegate_to_llm(
+                task="gere script",
+                project_root=str(tmp_path),
+                llm_engine="opencode",
+                opencode_deny_edit_tools=True,
+                llm_timeout_seconds=10,
+            )
+
+        assert result.success is False
+        assert "[LLM_DEADLINE]" in result.output
+        script_runner.assert_not_called()
+
+    def test_opencode_script_without_llm_budget_keeps_legacy_timeout(self, tmp_path):
+        with patch("ft.engine.delegate.subprocess.Popen") as popen:
+            process = popen.return_value
+            process.communicate.return_value = ("ok\n", "")
+            process.returncode = 0
+            ok, output = _run_opencode_script(
+                "set -euo pipefail\nprintf 'ok\\n'\n",
+                project_root=str(tmp_path),
+                allowed_paths=None,
+                env={},
+                log_path=None,
+                runtime_dir=None,
+            )
+
+        assert ok is True
+        assert output == "ok\n"
+        process.communicate.assert_called_once_with(timeout=1800.0)
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    def test_opencode_script_reaps_detached_writer_before_success(self, tmp_path):
+        marker = tmp_path / "late-script-marker"
+        script = (
+            "setsid sh -c \"trap '' TERM; sleep 0.3; "
+            f"printf late > {str(marker)!r}\" "
+            "</dev/null >/dev/null 2>&1 &\n"
+            "printf 'ok\\n'\n"
+        )
+
+        ok, output = _run_opencode_script(
+            script,
+            project_root=str(tmp_path),
+            allowed_paths=None,
+            env=os.environ.copy(),
+            log_path=None,
+            runtime_dir=None,
+            timeout_seconds=2,
+        )
+        time.sleep(0.5)
+
+        assert ok is True
+        assert output == "ok\n"
+        assert not marker.exists()
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    def test_opencode_script_timeout_reaps_detached_writer_with_bounded_cleanup(
+        self, tmp_path
+    ):
+        marker = tmp_path / "late-timeout-marker"
+        script = (
+            "setsid sh -c \"trap '' TERM; sleep 1; "
+            f"printf late > {str(marker)!r}\" "
+            "</dev/null >/dev/null 2>&1 &\n"
+            "sleep 10\n"
+        )
+
+        started = time.monotonic()
+        ok, output = _run_opencode_script(
+            script,
+            project_root=str(tmp_path),
+            allowed_paths=None,
+            env=os.environ.copy(),
+            log_path=None,
+            runtime_dir=None,
+            timeout_seconds=0.2,
+        )
+        elapsed = time.monotonic() - started
+        time.sleep(1.1)
+
+        assert ok is False
+        assert "[TIMEOUT]" in output
+        assert elapsed < 4
+        assert not marker.exists()
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    def test_delegate_reaps_detached_executor_writer_before_success(
+        self, tmp_path, monkeypatch
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        marker = tmp_path / "late-executor-marker"
+        fake = bin_dir / "opencode"
+        fake.write_text(
+            "#!/bin/sh\n"
+            "setsid sh -c \"trap '' TERM; sleep 0.3; "
+            f"printf late > {str(marker)!r}\" "
+            "</dev/null >/dev/null 2>&1 &\n"
+            "printf 'DONE\\n'\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+
+        result = delegate_to_llm(
+            task="mudança focal",
+            project_root=str(tmp_path),
+            llm_engine="opencode",
+            llm_timeout_seconds=2,
+        )
+        time.sleep(0.5)
+
+        assert result.success is True
+        assert not marker.exists()
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    def test_transcript_reconciliation_reaps_detached_executor_writer(self, tmp_path):
+        marker = tmp_path / "late-reconcile-marker"
+        fake = tmp_path / "fake-claude.py"
+        fake.write_text(
+            "import json, subprocess, time\n"
+            f"print(json.dumps({{'type': 'system', 'subtype': 'init', "
+            f"'session_id': 'sid', 'cwd': {str(tmp_path)!r}}}), flush=True)\n"
+            "subprocess.Popen([\n"
+            "    'setsid', 'sh', '-c',\n"
+            f"    \"trap '' TERM; sleep 1.3; printf late > {str(marker)!r}\",\n"
+            "], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+            "stderr=subprocess.DEVNULL)\n"
+            "time.sleep(10)\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            _supervised_command([sys.executable, str(fake)]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+
+        with (
+            patch("ft.engine.delegate._STALL_RECONCILE_SECS", 0),
+            patch("ft.engine.delegate._transcript_terminal_output", return_value="DONE"),
+        ):
+            output = _stream_process_output(proc, "claude", stream_prefix="test")
+        time.sleep(0.5)
+
+        assert "DONE" in output
+        assert not marker.exists()
+
     def test_delegate_opencode_file_bundle_tolerates_extra_text(self, tmp_path, monkeypatch):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -832,6 +1155,7 @@ class TestDelegateWithFeedback:
                 max_turns=12,
                 log_path="/tmp/proj/run.jsonl",
                 stream_prefix="codex>",
+                llm_timeout_seconds=77,
             )
 
         assert result is expected
@@ -845,6 +1169,7 @@ class TestDelegateWithFeedback:
         assert kwargs["max_turns"] == 12
         assert kwargs["log_path"] == "/tmp/proj/run.jsonl"
         assert kwargs["stream_prefix"] == "codex>"
+        assert kwargs["llm_timeout_seconds"] == 77
 
     def test_forwards_opencode_read_denies_to_delegate(self):
         expected = DelegateResult(

@@ -40,6 +40,7 @@ def _make_graph(nodes_raw: list[dict], meta: dict | None = None) -> ProcessGraph
             hyper_mode_preview_lines=n.get("hyper_mode_preview_lines"),
             hyper_mode_full_max_lines=n.get("hyper_mode_full_max_lines"),
             context_profile=n.get("context_profile"),
+            llm_timeout_seconds=n.get("llm_timeout_seconds"),
         ))
     return ProcessGraph(nodes, meta or {"id": "test", "version": "1.0.0"})
 
@@ -52,6 +53,47 @@ class TestStructure:
         ])
         report = validate_process(graph)
         assert report.passed
+
+    def test_close_policy_allows_explicit_backlog_none(self):
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "title": "Start", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ],
+            meta={
+                "id": "test",
+                "version": "1.0.0",
+                "close_policy": {"backlog": {"mode": "none"}},
+            },
+        )
+
+        assert validate_process(graph).passed
+
+    @pytest.mark.parametrize(
+        "backlog_policy",
+        [
+            "none",
+            {"mode": "unknown"},
+            {"mode": ["none"]},
+            {"mode": "referenced"},
+        ],
+    )
+    def test_close_policy_rejects_unsafe_backlog_configuration(
+        self, backlog_policy
+    ):
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "title": "Start", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ],
+            meta={
+                "id": "test",
+                "version": "1.0.0",
+                "close_policy": {"backlog": backlog_policy},
+            },
+        )
+
+        assert not validate_process(graph).passed
 
     def test_invalid_type_error(self):
         graph = _make_graph([
@@ -107,6 +149,37 @@ class TestStructure:
             "preserve_outputs_on_reentry deve ser booleano" in error.message
             for error in report.errors
         )
+
+    @pytest.mark.parametrize("value", [0, -1, True, 1.5, "600"])
+    def test_llm_timeout_seconds_must_be_positive_integer(self, value):
+        graph = _make_graph([
+            {
+                "id": "start",
+                "type": "build",
+                "title": "Start",
+                "llm_timeout_seconds": value,
+                "next": "end",
+            },
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+
+        report = validate_process(graph)
+
+        assert any("llm_timeout_seconds" in error.message for error in report.errors)
+
+    def test_llm_timeout_seconds_accepts_positive_integer(self):
+        graph = _make_graph([
+            {
+                "id": "start",
+                "type": "build",
+                "title": "Start",
+                "llm_timeout_seconds": 600,
+                "next": "end",
+            },
+            {"id": "end", "type": "end", "title": "End"},
+        ])
+
+        assert validate_process(graph).passed
 
     @pytest.mark.parametrize("value", ["", True, "feature_delta.unknown"])
     def test_invalid_context_profile_is_rejected(self, value):
@@ -333,6 +406,7 @@ class TestRealProcess:
     @pytest.mark.parametrize("template", [
         "templates/base/process.yml",
         "templates/feature/process.yml",
+        "templates/tweak/process.yml",
         "templates/mvp-builder/process.yml",
         "templates/ft-ui-prototype/process.yml",
     ])

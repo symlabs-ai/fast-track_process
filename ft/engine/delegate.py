@@ -11,6 +11,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -265,18 +266,25 @@ def _paths_have_content(paths: list[Path]) -> bool:
     return True
 
 
-def _stop_process_tree(proc: subprocess.Popen, terminate_timeout: int = 5, kill_timeout: int = 5) -> None:
+def _stop_process_tree(
+    proc: subprocess.Popen,
+    terminate_timeout: int | float = 5,
+    kill_timeout: int | float = 5,
+    *,
+    process_group: int | None = None,
+) -> None:
     """Encerra o processo e, quando possível, todo o process group dele."""
-    if proc.poll() is not None:
+    if proc.poll() is not None and process_group is None:
         return
 
-    use_group = False
-    pgid: int | None = None
-    try:
-        pgid = os.getpgid(proc.pid)
-        use_group = pgid != os.getpgrp()
-    except OSError:
-        pass
+    pgid = process_group
+    use_group = pgid is not None
+    if pgid is None:
+        try:
+            pgid = os.getpgid(proc.pid)
+            use_group = pgid != os.getpgrp()
+        except OSError:
+            pass
 
     try:
         if use_group and pgid is not None:
@@ -284,31 +292,20 @@ def _stop_process_tree(proc: subprocess.Popen, terminate_timeout: int = 5, kill_
         else:
             proc.terminate()
     except ProcessLookupError:
-        return
+        pass
 
     try:
         proc.wait(timeout=terminate_timeout)
     except subprocess.TimeoutExpired:
         pass
 
-    should_kill = proc.poll() is None
-    if use_group and pgid is not None:
-        try:
-            os.killpg(pgid, 0)
-            should_kill = True
-        except OSError:
-            should_kill = proc.poll() is None
-
-    if not should_kill:
-        return
-
     try:
         if use_group and pgid is not None:
             os.killpg(pgid, signal.SIGKILL)
-        else:
+        elif proc.poll() is None:
             proc.kill()
     except ProcessLookupError:
-        return
+        pass
 
     try:
         proc.wait(timeout=kill_timeout)
@@ -316,9 +313,17 @@ def _stop_process_tree(proc: subprocess.Popen, terminate_timeout: int = 5, kill_
         pass
 
 
+def _supervised_command(cmd: list[str]) -> list[str]:
+    """Wrap one command in an isolated Linux subreaper supervisor."""
+    if not sys.platform.startswith("linux"):
+        return cmd
+    supervisor = Path(__file__).with_name("process_supervisor.py")
+    return [sys.executable, str(supervisor), "--", *cmd]
+
+
 def _wait_for_process(
     proc: subprocess.Popen,
-    timeout: int,
+    timeout: float,
     early_success_paths: list[Path] | None = None,
     early_success_grace: int = 20,
     activity: dict[str, float] | None = None,
@@ -328,18 +333,20 @@ def _wait_for_process(
     if not hasattr(proc, "poll"):
         return proc.wait(timeout=timeout), False
 
-    started = time.time()
+    started = time.monotonic()
+    started_wall = time.time()
     satisfied_since: float | None = None
     while True:
         returncode = proc.poll()
         if returncode is not None:
             return returncode, False
-        now = time.time()
-        if now - started > timeout:
+        now = time.monotonic()
+        elapsed = now - started
+        if elapsed >= timeout:
             raise subprocess.TimeoutExpired(proc.args, timeout)
         if idle_timeout and activity:
-            last_activity = activity.get("last", started)
-            if now - last_activity > idle_timeout:
+            last_activity = activity.get("last", started_wall)
+            if time.time() - last_activity > idle_timeout:
                 raise ExecutorIdleTimeout(proc.args, idle_timeout)
         if early_success_paths and _paths_have_content(early_success_paths):
             if satisfied_since is None:
@@ -349,7 +356,7 @@ def _wait_for_process(
                 return 0, True
         else:
             satisfied_since = None
-        time.sleep(1)
+        time.sleep(min(1.0, max(0.01, timeout - elapsed)))
 
 
 def _wrap_opencode_sandbox_command(
@@ -927,6 +934,7 @@ def _run_opencode_script(
     env: dict[str, str],
     log_path: str | None,
     runtime_dir: str | None,
+    timeout_seconds: float | None = None,
 ) -> tuple[bool, str]:
     """Executa o Bash script gerado pelo OpenCode e retorna output combinado."""
     invalid = _validate_opencode_script(script)
@@ -960,17 +968,50 @@ def _run_opencode_script(
         with Path(log_path).open("a", encoding="utf-8") as f:
             f.write(header)
 
+    effective_timeout = 1800.0 if timeout_seconds is None else timeout_seconds
+    proc: subprocess.Popen[str] | None = None
     try:
-        result = subprocess.run(
-            cmd,
+        proc = subprocess.Popen(
+            _supervised_command(cmd),
             cwd=project_root,
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=1800,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired as exc:
-        output = _timeout_stream_text(exc.stdout) + _timeout_stream_text(exc.stderr) + "\n[TIMEOUT] Script excedeu 1800 segundos.\n"
+        stdout, stderr = proc.communicate(timeout=effective_timeout)
+        returncode = proc.returncode
+    except subprocess.TimeoutExpired as initial_timeout:
+        assert proc is not None
+        _stop_process_tree(
+            proc,
+            terminate_timeout=2,
+            kill_timeout=1,
+            process_group=proc.pid,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=1)
+        except subprocess.TimeoutExpired as cleanup_timeout:
+            stdout = _timeout_stream_text(cleanup_timeout.stdout) or _timeout_stream_text(
+                initial_timeout.stdout
+            )
+            stderr = _timeout_stream_text(cleanup_timeout.stderr) or _timeout_stream_text(
+                initial_timeout.stderr
+            )
+            for pipe in (proc.stdout, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
+        shown_timeout = (
+            "1800"
+            if timeout_seconds is None
+            else f"{effective_timeout:.2f}".rstrip("0").rstrip(".")
+        )
+        output = (
+            _timeout_stream_text(stdout)
+            + _timeout_stream_text(stderr)
+            + f"\n[TIMEOUT] Script excedeu {shown_timeout} segundos.\n"
+        )
         if log_path:
             with Path(log_path).open("a", encoding="utf-8") as f:
                 f.write(output)
@@ -983,12 +1024,12 @@ def _run_opencode_script(
             except OSError:
                 pass
 
-    output = (result.stdout or "") + (result.stderr or "")
+    output = (stdout or "") + (stderr or "")
     if log_path:
         with Path(log_path).open("a", encoding="utf-8") as f:
             f.write(output)
     _cleanup_empty_placeholders(mounts)
-    return result.returncode == 0, output
+    return returncode == 0, output
 
 
 def _parse_opencode_file_bundle(text: str) -> tuple[dict[str, str], str | None]:
@@ -1452,7 +1493,7 @@ def _stream_process_output(
                     synth = _reconcile_from_transcript("pipe sem dados, sessão concluída")
                     if synth is not None:
                         chunks.append(synth)
-                        proc.kill()
+                        _stop_process_tree(proc, process_group=proc.pid)
                         break
                     last_data = time.time()  # não re-checar a cada 1s
                 continue
@@ -1581,6 +1622,7 @@ def delegate_to_llm(
     opencode_capture_output_path: str | None = None,
     raw_output: bool = False,
     llm_effort: str | None = None,
+    llm_timeout_seconds: int | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -1588,6 +1630,18 @@ def delegate_to_llm(
     O LLM recebe um prompt restritivo: so pode escrever nos paths permitidos,
     nao pode editar ft_state.yml, nao pode tomar decisoes de processo.
     """
+    if llm_timeout_seconds is not None and (
+        isinstance(llm_timeout_seconds, bool)
+        or not isinstance(llm_timeout_seconds, int)
+        or llm_timeout_seconds <= 0
+    ):
+        raise ValueError("llm_timeout_seconds deve ser um inteiro positivo")
+    deadline = (
+        time.monotonic() + llm_timeout_seconds
+        if llm_timeout_seconds is not None
+        else None
+    )
+
     paths_str = ", ".join(allowed_paths) if allowed_paths else "src/, tests/, docs/"
     opencode_capture_mode = bool(
         llm_engine.lower().strip() == "opencode" and opencode_capture_output_path
@@ -1874,16 +1928,42 @@ REGRAS:
             with Path(log_path).open("a", encoding="utf-8") as f:
                 f.write(message)
 
+    def _remaining_budget() -> float | None:
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
+    def _deadline_message() -> str:
+        return (
+            "\n[LLM_DEADLINE] Budget total da delegacao excedeu "
+            f"{llm_timeout_seconds} segundos.\n"
+        )
+
     def _stop_process(proc: subprocess.Popen) -> None:
-        _stop_process_tree(proc)
+        _stop_process_tree(
+            proc,
+            terminate_timeout=2,
+            kill_timeout=1,
+            process_group=proc.pid,
+        )
 
     def _run_executor_attempt() -> tuple[int, bool, str, str | None]:
         """Executa uma tentativa do executor. failure_kind: idle | timeout | None."""
+        remaining = _remaining_budget()
+        if remaining is not None and remaining <= 0:
+            msg = _deadline_message()
+            _append_log(msg)
+            return 124, False, msg, "deadline"
+        attempt_timeout = float(executor_timeout)
+        deadline_limited = remaining is not None and remaining < attempt_timeout
+        if deadline_limited:
+            attempt_timeout = max(0.01, remaining)
+
         # Chamar executor em modo nao-interativo, com streaming para arquivo.
         # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
         # de nvm/node quebrava os nodes de frontend (worker sem npm reporta BLOCKED).
         proc = subprocess.Popen(
-            cmd,
+            _supervised_command(cmd),
             cwd=project_root,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1918,7 +1998,7 @@ REGRAS:
         try:
             returncode, early_success = _wait_for_process(
                 proc,
-                timeout=executor_timeout,
+                timeout=attempt_timeout,
                 early_success_paths=early_success_paths,
                 early_success_grace=early_success_grace,
                 activity=activity,
@@ -1933,15 +2013,28 @@ REGRAS:
         except subprocess.TimeoutExpired:
             _stop_process(proc)
             reader.join(timeout=5)
-            msg = f"\n[TIMEOUT] Executor excedeu {executor_timeout} segundos.\n"
+            if deadline_limited:
+                msg = _deadline_message()
+                failure_kind = "deadline"
+            else:
+                msg = f"\n[TIMEOUT] Executor excedeu {executor_timeout} segundos.\n"
+                failure_kind = "timeout"
             _append_log(msg)
-            return 124, False, output_holder["output"] + msg, "timeout"
+            return 124, False, output_holder["output"] + msg, failure_kind
         except BaseException:
             _stop_process(proc)
             reader.join(timeout=5)
             raise
 
         reader.join(timeout=5)
+        if reader.is_alive():
+            _stop_process(proc)
+            if proc.stdout is not None:
+                proc.stdout.close()
+            reader.join(timeout=1)
+            msg = "\n[STREAM_TIMEOUT] Saída do executor não foi encerrada.\n"
+            _append_log(msg)
+            return 124, False, output_holder["output"] + msg, "timeout"
         early_success_msg = ""
         if early_success:
             early_success_msg = (
@@ -1961,6 +2054,7 @@ REGRAS:
         return raw
 
     try:
+        deadline_exhausted = False
         idle_attempt = 0
         while True:
             returncode, _early_success, raw_output, failure_kind = _run_executor_attempt()
@@ -1991,12 +2085,20 @@ REGRAS:
             for attempt, wait in enumerate(_backoff_schedule, start=1):
                 print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
                       f"Aguardando {wait}s antes da tentativa {attempt}/{len(_backoff_schedule)}…")
+                remaining = _remaining_budget()
+                if remaining is not None and wait >= remaining:
+                    deadline_exhausted = True
+                    returncode = 124
+                    output = _deadline_message()
+                    _append_log(output)
+                    break
                 time.sleep(wait)
                 rc2, _early_success2, raw2, failure2 = _run_executor_attempt()
                 out2 = _extract_output(raw2, llm_engine)
                 if failure2:
                     output = out2
                     returncode = rc2
+                    deadline_exhausted = failure2 == "deadline"
                     break
                 if not _RATE_LIMIT_PATTERNS.search(out2):
                     output = out2
@@ -2068,14 +2170,39 @@ REGRAS:
                 success = False
                 output = script
             else:
-                script_ok, script_output = _run_opencode_script(
-                    script,
-                    project_root=project_root,
-                    allowed_paths=allowed_paths,
-                    env=_env,
-                    log_path=log_path,
-                    runtime_dir=sandbox_tmp.name if sandbox_tmp is not None else None,
-                )
+                remaining = _remaining_budget()
+                if remaining is not None and remaining <= 0:
+                    deadline_exhausted = True
+                    script_ok = False
+                    script_output = _deadline_message()
+                    _append_log(script_output)
+                else:
+                    script_deadline_limited = (
+                        remaining is not None and remaining < 1800.0
+                    )
+                    script_ok, script_output = _run_opencode_script(
+                        script,
+                        project_root=project_root,
+                        allowed_paths=allowed_paths,
+                        env=_env,
+                        log_path=log_path,
+                        runtime_dir=(
+                            sandbox_tmp.name if sandbox_tmp is not None else None
+                        ),
+                        timeout_seconds=(
+                            min(1800.0, remaining)
+                            if remaining is not None
+                            else None
+                        ),
+                    )
+                    if (
+                        script_deadline_limited
+                        and not script_ok
+                        and "[TIMEOUT]" in script_output
+                    ):
+                        deadline_exhausted = True
+                        script_output += _deadline_message()
+                        _append_log(_deadline_message())
                 success = returncode == 0 and script_ok
                 if success:
                     output = (
@@ -2091,7 +2218,11 @@ REGRAS:
         else:
             token = _final_protocol_token(output)
             success = returncode == 0 and token != "BLOCKED"
-        rate_limited = (not success) and bool(_RATE_LIMIT_PATTERNS.search(output))
+        rate_limited = (
+            not deadline_exhausted
+            and (not success)
+            and bool(_RATE_LIMIT_PATTERNS.search(output))
+        )
         _cleanup_delegate_runtime()
     except BaseException:
         _cleanup_delegate_runtime()
@@ -2279,6 +2410,7 @@ def delegate_with_feedback(
     opencode_early_success_paths: list[str] | None = None,
     opencode_capture_output_path: str | None = None,
     llm_effort: str | None = None,
+    llm_timeout_seconds: int | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -2306,4 +2438,5 @@ Nao modifique o que ja esta funcionando."""
         opencode_deny_edit_tools=opencode_deny_edit_tools,
         opencode_early_success_paths=opencode_early_success_paths,
         opencode_capture_output_path=opencode_capture_output_path,
+        llm_timeout_seconds=llm_timeout_seconds,
     )

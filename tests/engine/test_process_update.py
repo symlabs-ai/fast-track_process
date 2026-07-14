@@ -104,6 +104,55 @@ def test_materialize_creates_base_snapshot(project):
     assert not (snapshot / pu.BASE_SNAPSHOT_DIR).exists()
 
 
+def test_named_tweak_process_uses_same_update_pipeline(
+    project, fake_engine, monkeypatch
+):
+    template = fake_engine / "templates" / "tweak"
+    template.mkdir()
+    process = template / "process.yml"
+    process.write_text(
+        """id: tweak
+version: '1.0.0'
+execution_policy:
+  entrypoint: feature
+  template: tweak
+close_policy:
+  backlog:
+    mode: none
+  merge: full
+nodes:
+  - id: tweak.apply
+    type: build
+    title: Aplicar
+    executor: codex
+    outputs: [src/]
+    next: tweak.end
+  - id: tweak.end
+    type: end
+    title: Fim
+""",
+        encoding="utf-8",
+    )
+    local = cli_main.materialize_process_template(
+        "tweak", project, entrypoint="feature"
+    )
+    initial = _scan(project, fake_engine, name="tweak")
+    assert initial.state == pu.STATE_IN_SYNC
+    assert initial.entrypoint == "feature"
+
+    process.write_text(
+        process.read_text(encoding="utf-8") + "\n# tweak global evoluiu\n",
+        encoding="utf-8",
+    )
+    assert _scan(project, fake_engine, name="tweak").state == pu.STATE_FAST_FORWARD
+
+    monkeypatch.chdir(project)
+    cli_main.cmd_process_update(_update_args(name="tweak", yes=True))
+
+    assert "# tweak global evoluiu" in local.read_text(encoding="utf-8")
+    assert _scan(project, fake_engine, name="tweak").state == pu.STATE_IN_SYNC
+
+
 def test_scan_is_read_only(project, fake_engine):
     local = project / ".ft" / "process" / "feature"
     shutil.rmtree(local / pu.BASE_SNAPSHOT_DIR)

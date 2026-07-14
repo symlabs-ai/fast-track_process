@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import os
 import re
+import signal
 import subprocess
 import unicodedata
 from pathlib import Path
@@ -1700,6 +1702,98 @@ def bash_passes(script: str, project_root: str = ".") -> tuple[bool, str]:
     return False, f"bash_passes FAIL: {script} saiu com código {result.returncode}\n{preview}"
 
 
+def _stop_command_process_group(
+    process: subprocess.Popen[str],
+    *,
+    terminate_timeout: float = 0.25,
+    kill_timeout: float = 1.0,
+) -> None:
+    """Terminate a timed-out shell and every descendant in its process group."""
+    if os.name == "posix":
+        # `_run_shell_command` starts a new session, so the shell PID is also
+        # its process-group ID.  Signal the group even if the shell exits after
+        # SIGTERM: a child may still be alive and holding the capture pipes.
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+        try:
+            process.wait(timeout=terminate_timeout)
+        except subprocess.TimeoutExpired:
+            pass
+
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:  # pragma: no cover - the engine test/runtime target is POSIX
+        try:
+            process.terminate()
+            process.wait(timeout=terminate_timeout)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+
+    try:
+        process.wait(timeout=kill_timeout)
+    except subprocess.TimeoutExpired:
+        # Defensive fallback for platforms without POSIX process groups.
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=kill_timeout)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _run_shell_command(
+    command: str,
+    project_root: str,
+    timeout: int | float,
+) -> subprocess.CompletedProcess[str]:
+    """Run a pipefail shell in an isolated group and reap it on timeout."""
+    process = subprocess.Popen(
+        ["bash", "-o", "pipefail", "-c", command],
+        cwd=project_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _stop_command_process_group(process)
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            # The process group has already received SIGKILL.  Closing the
+            # capture ends any remaining inherited descriptors defensively.
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+            stdout = exc.output or ""
+            stderr = exc.stderr or ""
+        raise subprocess.TimeoutExpired(
+            process.args,
+            timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+    return subprocess.CompletedProcess(
+        process.args,
+        process.returncode,
+        stdout,
+        stderr,
+    )
+
+
 def command_succeeds(
     command: str,
     project_root: str = ".",
@@ -1719,13 +1813,7 @@ def command_succeeds(
         return False, "command_succeeds FAIL: timeout deve ser um número positivo"
 
     try:
-        result = subprocess.run(
-            ["bash", "-o", "pipefail", "-c", command],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        result = _run_shell_command(command, project_root, timeout)
     except subprocess.TimeoutExpired:
         return False, (
             f"command_succeeds FAIL: comando excedeu {timeout:g}s: {command[:60]}"
@@ -1759,12 +1847,10 @@ def command_succeeds(
     if not output and "--silent" in command:
         diagnostic_command = command.replace("--silent", "")
         try:
-            diagnostic = subprocess.run(
-                ["bash", "-o", "pipefail", "-c", diagnostic_command],
-                cwd=project_root,
-                capture_output=True,
-                text=True,
-                timeout=120,
+            diagnostic = _run_shell_command(
+                diagnostic_command,
+                project_root,
+                timeout,
             )
             diagnostic_output = (diagnostic.stdout + diagnostic.stderr).strip()
             if diagnostic_output:

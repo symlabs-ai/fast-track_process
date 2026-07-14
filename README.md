@@ -61,6 +61,8 @@ Num produto FT já inicializado e commitado:
 ```bash
 ft feature "Adicionar busca por telefone" --template feature --claude
 # ou: ft feature --input demanda.md --template feature --codex
+# mudança pequena e focal:
+ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
 ```
 
 Na primeira chamada, o template é copiado para `.ft/process/feature/`; chamadas
@@ -68,6 +70,12 @@ seguintes preservam esse fork local. A demanda existe apenas na worktree do
 ciclo. Perguntas, aprovação de escopo, implementação, review e aceite são
 conduzidos pelo grafo. Ao final, `ft close` valida somente o PB selecionado, faz
 merge full e remove worktree/branch.
+
+Para ajustes pequenos, `--template tweak` reutiliza o mesmo entrypoint e a
+mesma worktree, mas executa somente preflight, uma implementação, um build
+curto e o aceite. Não faz discovery, review independente, E2E, reconciliação de
+backlog ou retries automáticos. Se o diff deixar de ser pequeno ou tocar áreas
+de risco, o ciclo bloqueia e orienta usar `--template feature`.
 
 O ciclo roda em worktree externo:
 
@@ -86,6 +94,7 @@ descreve as capacidades efetivamente entregues.
 ```bash
 ft run .                       # iniciar ciclo
 ft feature "demanda" --template feature  # evoluir capacidade existente
+ft feature "ajuste pequeno" --template tweak  # alteração focal em poucos minutos
 ft run . --auto                # avançar automaticamente até human gate/MVP/BLOCK
 ft continue                    # avançar um node
 ft continue --sprint           # avançar uma sprint

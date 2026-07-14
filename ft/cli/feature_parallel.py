@@ -32,10 +32,16 @@ from ft.engine import paths
 POLL_SECONDS = 5
 RATE_LIMIT_RETRY_SECONDS = 60
 MAX_RATE_LIMIT_RESPAWNS = 3
+TWEAK_PLANNER_TIMEOUT_SECONDS = 120
 
 _TERMINAL = {"merged", "failed", "skipped"}
 _EXTERNAL_CLOSE_CANDIDATES = {"setup", "running", "gate", "blocked", "done"}
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+
+def _rate_limit_respawn_limit(batch: fb.FeatureBatch) -> int:
+    """Tweak keeps its no-automatic-retry contract in parallel batches too."""
+    return 0 if batch.template == "tweak" else MAX_RATE_LIMIT_RESPAWNS
 
 
 def _cli():
@@ -70,6 +76,12 @@ def run_parallel_batch(args) -> None:
             print(ui.fail("Nenhum batch encontrado para retomar."))
             sys.exit(1)
         batch = fb.load_batch(root, str(batch_id))
+        requested_template = getattr(args, "template", None)
+        if requested_template and str(requested_template) != batch.template:
+            raise ValueError(
+                f"batch {batch.batch_id} usa o template '{batch.template}'; "
+                f"--template {requested_template} não pode trocar o processo na retomada"
+            )
         if batch.status == "done":
             print(ui.warn(f"Batch {batch.batch_id} já concluído."))
             return
@@ -209,14 +221,26 @@ def _run_planner(
     llm_engine: str,
     llm_model: str | None,
     llm_effort: str | None,
+    llm_timeout_seconds: int | None = None,
 ) -> dict:
-    """Roda o planner e valida o plano; uma retentativa com feedback."""
+    """Roda o planner e valida o plano; uma retentativa dentro do mesmo budget."""
     from ft.engine.delegate import delegate_to_llm
 
     plan_path = batch_directory / fb.PLAN_FILENAME
     task = _planner_task(features)
     feedback = ""
+    deadline = (
+        time.monotonic() + llm_timeout_seconds
+        if llm_timeout_seconds is not None
+        else None
+    )
     for attempt in (1, 2):
+        remaining_timeout = None
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining < 1:
+                break
+            remaining_timeout = int(remaining)
         result = delegate_to_llm(
             task=task + feedback,
             project_root=str(batch_directory),
@@ -224,6 +248,7 @@ def _run_planner(
             llm_engine=llm_engine,
             llm_model=llm_model,
             llm_effort=llm_effort,
+            llm_timeout_seconds=remaining_timeout,
             log_path=str(batch_directory / "logs" / f"planner_{attempt:02d}.log"),
         )
         if not result.success:
@@ -244,7 +269,7 @@ def _run_planner(
             errors
         )
     raise fb.FeatureBatchError(
-        "planner não produziu um plan.yml válido após 2 tentativas; "
+        "planner não produziu um plan.yml válido dentro do budget/2 tentativas; "
         f"inspecione {batch_directory / 'logs'}"
     )
 
@@ -280,14 +305,7 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
 
     _preflight(root, args)
 
-    template = str(getattr(args, "template", None) or "feature")
-    available = cli.available_templates("feature")
-    if template not in available:
-        choices = ", ".join(available) if available else "nenhum"
-        raise ValueError(
-            f"template '{template}' não pertence ao entrypoint feature. "
-            f"Templates disponíveis: {choices}"
-        )
+    template = cli.resolve_feature_template(getattr(args, "template", None))
 
     batch_id = fb.new_batch_id(root)
     batch_directory = fb.batch_dir(root, batch_id)
@@ -306,6 +324,9 @@ def _plan_batch(args, root: Path) -> fb.FeatureBatch | None:
         llm_engine=planner_engine,
         llm_model=planner_model,
         llm_effort=planner_effort,
+        llm_timeout_seconds=(
+            TWEAK_PLANNER_TIMEOUT_SECONDS if template == "tweak" else None
+        ),
     )
     fb.apply_plan(plan, features)
     waves = fb.compute_waves(features)
@@ -558,6 +579,41 @@ def _reserve_wave_backlog_items(
         feature.reserved_backlog_item = reservation
         used.add(reservation)
         next_number += 1
+
+
+def _batch_backlog_mode(batch: fb.FeatureBatch) -> str:
+    """Read backlog governance from the selected process metadata.
+
+    Prefer the project-owned fork after materialization.  Before the first
+    setup, fall back to the global catalog entry.  Any missing or malformed
+    metadata fails conservatively to the historical ``global`` mode, so legacy
+    batches keep their reservations.
+    """
+    cli = _cli()
+    root = Path(batch.project_root)
+    candidates = [
+        paths.project_named_process_file(root, batch.template),
+        cli.engine_root() / "templates" / batch.template / "process.yml",
+    ]
+    for process_path in candidates:
+        if not process_path.is_file() or process_path.is_symlink():
+            continue
+        try:
+            payload = yaml.safe_load(process_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        close_policy = payload.get("close_policy")
+        if not isinstance(close_policy, dict):
+            continue
+        backlog_policy = close_policy.get("backlog")
+        if not isinstance(backlog_policy, dict):
+            continue
+        mode = backlog_policy.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            return mode.strip()
+    return "global"
 
 
 def _feature_request_text(feature: fb.BatchFeature) -> str:
@@ -829,13 +885,14 @@ def _run_wave(batch: fb.FeatureBatch, args) -> None:
                     # Rate limit: o run pausa preservando o node como ready.
                     count = rate_respawns.get(feature_id, 0) + 1
                     rate_respawns[feature_id] = count
-                    if count > MAX_RATE_LIMIT_RESPAWNS:
+                    respawn_limit = _rate_limit_respawn_limit(batch)
+                    if count > respawn_limit:
                         feature.status = "blocked"
                         feature.detail = "rate limit persistente"
                     else:
                         feature.status = "setup"
                         feature.detail = (
-                            f"rate limit — respawn {count}/{MAX_RATE_LIMIT_RESPAWNS}"
+                            f"rate limit — respawn {count}/{respawn_limit}"
                         )
                         next_spawn_at[feature_id] = (
                             time.monotonic() + RATE_LIMIT_RETRY_SECONDS
@@ -982,8 +1039,9 @@ def _execute_batch(batch: fb.FeatureBatch, args) -> None:
         )
 
         # Setup sequencial (git não aceita corrida na criação de worktrees).
-        _reserve_wave_backlog_items(batch, wave_ids)
-        # A reserva precisa sobreviver mesmo se um setup for interrompido.
+        if _batch_backlog_mode(batch) != "none":
+            _reserve_wave_backlog_items(batch, wave_ids)
+        # A decisão/reserva precisa sobreviver mesmo se o setup for interrompido.
         fb.save_batch(batch)
         for feature in pending:
             if feature.status == "planned":

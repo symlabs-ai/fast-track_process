@@ -1,4 +1,4 @@
-"""Deterministic, bounded context profiles for incremental feature work.
+"""Deterministic, bounded context profiles for incremental product work.
 
 Profiles are intentionally narrower than HyperMode.  They read an explicit
 allowlist, inject a stable feedback sentinel and never discover files by
@@ -14,9 +14,11 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Mapping
+import unicodedata
 
 
 FEATURE_DELTA_PREFIX = "feature_delta."
+TWEAK_PROFILE = "tweak.direct"
 CONTEXT_BEGIN = "<FT_CONTEXT_PROFILE>"
 CONTEXT_END = "</FT_CONTEXT_PROFILE>"
 
@@ -32,6 +34,20 @@ _DELTA_TEXT_SUFFIXES = frozenset({
     ".xml", ".yaml", ".yml",
 })
 _DELTA_ROOTS = frozenset({"project", "src", "test", "tests"})
+_TWEAK_UI_RE = re.compile(
+    r"(?<![a-z0-9_])(?:"
+    r"ui|ux|front-?end|interface|screen|tela|pagina|page|button|botao|"
+    r"color|cor|css|style|estilo|layout|icon|icone|label|rotulo|tooltip|"
+    r"modal|menu|sidebar|navbar|visual|theme|tema|spacing|espacamento|"
+    r"typography|tipografia|responsive|form|formulario"
+    r")(?![a-z0-9_])"
+)
+_TWEAK_API_RE = re.compile(
+    r"(?<![a-z0-9_])(?:"
+    r"api|endpoint|graphql|webhook|http|rest|payload|request|response|"
+    r"rota|route|controller|controlador|schema"
+    r")(?![a-z0-9_])|\b(?:api contract|contrato da api)\b"
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +60,11 @@ class ContextProfileSpec:
     include_product_manifest: bool = False
     include_allowlisted_delta: bool = False
     priority_paths: tuple[str, ...] = ()
+    conditional_paths: tuple[str, ...] = ()
+    max_section_chars: int = 8_000
+    manifest_max_paths: int = 400
+    git_namespace: str = "feature-delta"
+    delta_before_manifest: bool = False
 
 
 @dataclass(frozen=True)
@@ -173,7 +194,43 @@ FEATURE_DELTA_PROFILES: Mapping[str, ContextProfileSpec] = {
     ),
 }
 
-KNOWN_CONTEXT_PROFILES = frozenset(FEATURE_DELTA_PROFILES)
+TWEAK_PROFILES: Mapping[str, ContextProfileSpec] = {
+    TWEAK_PROFILE: ContextProfileSpec(
+        name=TWEAK_PROFILE,
+        max_chars=24_000,
+        paths=(
+            "docs/feature-request.md",
+            "docs/tweak-baseline.yml",
+            *_TECH_STACK_PATHS,
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+        ),
+        include_changed_delta=True,
+        include_product_manifest=True,
+        priority_paths=(
+            "docs/feature-request.md",
+            "docs/tweak-baseline.yml",
+            *_TECH_STACK_PATHS,
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+        ),
+        conditional_paths=(
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+        ),
+        max_section_chars=4_000,
+        manifest_max_paths=120,
+        git_namespace="tweak",
+        delta_before_manifest=True,
+    ),
+}
+
+CONTEXT_PROFILES: Mapping[str, ContextProfileSpec] = {
+    **FEATURE_DELTA_PROFILES,
+    **TWEAK_PROFILES,
+}
+
+KNOWN_CONTEXT_PROFILES = frozenset(CONTEXT_PROFILES)
 HYPER_MODE_FIELDS = (
     "hyper_mode_docs",
     "hyper_mode_full_docs",
@@ -195,7 +252,14 @@ def _safe_candidate(root: Path, relative: str) -> Path | None:
         return None
     if _is_forbidden_path(relative):
         return None
-    candidate = root / path
+    candidate = root
+    for part in path.parts:
+        candidate = candidate / part
+        # A lexical allowlist must not be redirectable through a symlink, even
+        # when its resolved target remains inside the checkout (for example a
+        # canonical doc pointing at .ft/cycles history).
+        if candidate.is_symlink():
+            return None
     try:
         candidate.resolve().relative_to(root)
     except (OSError, ValueError):
@@ -387,11 +451,60 @@ def _tech_stack_selection(root: Path) -> tuple[tuple[str, ...], str | None]:
     return (), None
 
 
+def _normalized_relevance_text(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in decomposed if not unicodedata.combining(char)).lower()
+
+
+def _tweak_conditional_paths(root: Path) -> frozenset[str]:
+    """Select optional UI/API docs from the immutable request and baseline only."""
+    request = ""
+    request_path = _safe_candidate(root, "docs/feature-request.md")
+    if request_path is not None:
+        request_result = _read_bounded_text(request_path, 12_000)
+        if request_result is not None:
+            request = request_result[0]
+
+    classification = ""
+    baseline_path = _safe_candidate(root, "docs/tweak-baseline.yml")
+    if baseline_path is not None:
+        baseline_result = _read_bounded_text(baseline_path, 4_000)
+        if baseline_result is not None:
+            match = re.search(
+                r"(?mi)^\s*classification\s*:\s*['\"]?([a-z_]+)",
+                baseline_result[0],
+            )
+            if match:
+                classification = match.group(1).lower()
+
+    normalized = _normalized_relevance_text(request)
+    api_relevant = bool(_TWEAK_API_RE.search(normalized))
+    ui_relevant = (
+        classification == "visual"
+        or bool(_TWEAK_UI_RE.search(normalized))
+        or (classification == "copy" and not api_relevant)
+    )
+
+    selected: set[str] = set()
+    if ui_relevant:
+        selected.add("docs/ui_criteria.md")
+    if api_relevant:
+        selected.add("docs/api_contract.md")
+    return frozenset(selected)
+
+
 def _effective_paths(spec: ContextProfileSpec, root: Path) -> tuple[tuple[str, ...], str | None]:
     selected_tech, tech_manifest = _tech_stack_selection(root)
+    selected_conditional = (
+        _tweak_conditional_paths(root)
+        if spec.name == TWEAK_PROFILE
+        else frozenset(spec.conditional_paths)
+    )
     paths: list[str] = []
     tech_added = False
     for relative in spec.paths:
+        if relative in spec.conditional_paths and relative not in selected_conditional:
+            continue
         if relative in _TECH_STACK_PATHS:
             if not tech_added:
                 paths.extend(selected_tech)
@@ -430,6 +543,7 @@ def _changed_delta_sections(
     base_commit: str | None,
     *,
     extra_paths: tuple[str, ...] = (),
+    namespace: str = "feature-delta",
 ) -> list[tuple[str, str]]:
     """Build focal diff/current excerpts from Git paths, never a filesystem walk."""
     if not base_commit or not _GIT_OBJECT_RE.fullmatch(base_commit):
@@ -468,7 +582,7 @@ def _changed_delta_sections(
         sort_keys=True,
         separators=(",", ":"),
     )
-    sections: list[tuple[str, str]] = [("git:feature-delta.changed-files", manifest)]
+    sections: list[tuple[str, str]] = [(f"git:{namespace}.changed-files", manifest)]
 
     # One bounded tracked diff supplies the high-signal before/after view.
     diff_raw = _git_output(
@@ -483,7 +597,7 @@ def _changed_delta_sections(
         diff_text = diff_raw.decode("utf-8", errors="replace")
         if len(diff_text) > 16_000:
             diff_text = diff_text[:16_000] + "\n...[diff truncated]"
-        sections.append(("git:feature-delta.diff", diff_text))
+        sections.append((f"git:{namespace}.diff", diff_text))
 
     # Current excerpts also cover untracked files (which `git diff` omits).
     excerpt_budget = 12_000
@@ -512,7 +626,12 @@ def _changed_delta_sections(
     return sections
 
 
-def _product_manifest_section(root: Path) -> tuple[str, str] | None:
+def _product_manifest_section(
+    root: Path,
+    *,
+    namespace: str = "feature-delta",
+    max_paths: int = 400,
+) -> tuple[str, str] | None:
     """Describe tracked product/test files from Git without walking the tree."""
     raw = _git_output(
         root,
@@ -527,14 +646,13 @@ def _product_manifest_section(root: Path) -> tuple[str, str] | None:
     })
     if not paths:
         return None
-    max_paths = 400
     payload = {
         "tracked_count": len(paths),
         "paths": paths[:max_paths],
         "truncated": len(paths) > max_paths,
     }
     return (
-        "git:feature-delta.product-manifest",
+        f"git:{namespace}.product-manifest",
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     )
 
@@ -568,13 +686,17 @@ def compose_context_profile(
     state, archived artifacts, logs or process KB are read by this function.
     """
     try:
-        spec = FEATURE_DELTA_PROFILES[profile_name]
+        spec = CONTEXT_PROFILES[profile_name]
     except KeyError as exc:
         raise ValueError(f"context_profile desconhecido: {profile_name}") from exc
 
     root = Path(project_root).resolve()
     paths, tech_manifest = _effective_paths(spec, root)
-    target_ids = _feature_target_ids(root)
+    target_ids = (
+        _feature_target_ids(root)
+        if {"docs/PROJECT_BACKLOG.md", "docs/FEATURES.md"}.intersection(paths)
+        else ()
+    )
     header = (
         f"{CONTEXT_BEGIN}\n"
         f"CONTEXT_PROFILE={profile_name}\n"
@@ -615,7 +737,7 @@ def compose_context_profile(
             # feature spec, receipt, backlog or catalog entries.
             marker = "\n...[document excerpt truncated]"
             per_section_cap = min(
-                8_000,
+                spec.max_section_chars,
                 max(0, content_cap - sum(len(part) for part in parts)),
             )
             targeted = (
@@ -640,8 +762,10 @@ def compose_context_profile(
             content += targeted_block
         if content is None:
             return
-        if len(content) > 8_000:
-            content = content[: 8_000 - len("\n...[document excerpt truncated]")]
+        if len(content) > spec.max_section_chars:
+            content = content[
+                : spec.max_section_chars - len("\n...[document excerpt truncated]")
+            ]
             content += "\n...[document excerpt truncated]"
             source_truncated = True
         section = f"\n### {relative}\n{content.rstrip()}\n"
@@ -656,8 +780,15 @@ def compose_context_profile(
         if relative in paths:
             append_file(relative)
 
-    if spec.include_product_manifest and not cap_exhausted:
-        manifest_section = _product_manifest_section(root)
+    def append_product_manifest() -> None:
+        nonlocal truncated, cap_exhausted
+        if not spec.include_product_manifest or cap_exhausted:
+            return
+        manifest_section = _product_manifest_section(
+            root,
+            namespace=spec.git_namespace,
+            max_paths=spec.manifest_max_paths,
+        )
         if manifest_section:
             virtual_path, content = manifest_section
             added, did_truncate = _append_bounded(
@@ -670,12 +801,16 @@ def compose_context_profile(
             truncated = truncated or did_truncate
             cap_exhausted = cap_exhausted or did_truncate
 
-    if spec.include_changed_delta and not cap_exhausted:
+    def append_changed_delta() -> None:
+        nonlocal truncated, cap_exhausted
+        if not spec.include_changed_delta or cap_exhausted:
+            return
         extra_delta_paths = paths if spec.include_allowlisted_delta else ()
         for virtual_path, content in _changed_delta_sections(
             root,
             base_commit,
             extra_paths=extra_delta_paths,
+            namespace=spec.git_namespace,
         ):
             section = f"\n### {virtual_path}\n{content.rstrip()}\n"
             added, did_truncate = _append_bounded(parts, section, content_cap)
@@ -685,6 +820,13 @@ def compose_context_profile(
             cap_exhausted = cap_exhausted or did_truncate
             if cap_exhausted:
                 break
+
+    if spec.delta_before_manifest:
+        append_changed_delta()
+        append_product_manifest()
+    else:
+        append_product_manifest()
+        append_changed_delta()
 
     for relative in paths:
         if cap_exhausted:

@@ -1,0 +1,159 @@
+# Tweak — alteração pequena, direta e deliberadamente limitada
+#
+# Este template pertence ao entrypoint `ft feature`, mas não executa o processo
+# completo de feature. Ele existe para mudanças locais e de baixo risco que
+# precisam de minutos, não de uma rodada de discovery/review/reconcile.
+
+id: tweak
+version: "1.0.0"
+title: "Tweak — Mudança Pequena e Direta"
+
+execution_policy:
+  entrypoint: feature
+  template: tweak
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/tweak/process.yml
+  merge_command: ft close --merge full
+
+# Tweaks são deliberadamente rápidos e já passam pelos limites/validadores
+# determinísticos abaixo; hooks amplos do projeto ficam para o processo feature.
+commit_policy:
+  verify_hooks: false
+
+correction_policy:
+  follow_graph_after_retry: true
+  acceptance_rejection_restarts_at: tweak.implement
+  mandatory_after_implementation:
+    - tweak.acceptance
+
+# Tweak não cria, conclui nem reconcilia PB/FEAT. O histórico da mudança fica
+# no commit e nos artefatos arquivados do ciclo.
+close_policy:
+  backlog:
+    mode: none
+  merge: full
+
+artifact_policy:
+  canonical: []
+  cycle:
+    - docs/feature-request.md
+    - docs/tweak-baseline.yml
+    - docs/tweak-report.md
+
+nodes:
+  - id: tweak.preflight
+    type: gate
+    title: "Confirmar que a Demanda Cabe em Tweak"
+    description: >-
+      Recusa deterministicamente demandas amplas, sensíveis ou ambíguas antes
+      de gastar uma chamada LLM. Não executa build, testes ou E2E.
+    sprint: tweak-direct
+    executor: python
+    outputs:
+      - docs/tweak-baseline.yml
+    validators:
+      - file_exists: docs/feature-request.md
+      - command_succeeds:
+          command: "python .ft/process/tweak/scripts/validate_tweak.py preflight"
+          timeout: 10
+      - file_exists: docs/tweak-baseline.yml
+    next: tweak.implement
+
+  - id: tweak.implement
+    no_pre_seed: true
+    type: build
+    context_profile: tweak.direct
+    title: "Aplicar o Tweak"
+    description: >-
+      Uma única delegação focal implementa a pequena mudança e executa apenas
+      uma verificação relevante. O validator limita arquivos, linhas e áreas
+      sensíveis e então roda somente o build rápido do produto.
+    sprint: tweak-direct
+    executor: claude
+    max_turns: 12
+    llm_timeout_seconds: 600
+    env_setup:
+      - python .ft/process/tweak/scripts/validate_tweak.py begin
+    outputs:
+      - project/
+      - src/
+      - test/
+      - tests/
+      - docs/tweak-report.md
+    write_scope:
+      - project
+      - src
+      - test
+      - tests
+      - docs/tweak-report.md
+    prompt: |
+      Aplique UMA alteração pequena e local descrita em
+      docs/feature-request.md. O perfil `tweak.direct` já fornece a demanda, a
+      baseline e contexto focal limitado. Vá direto ao arquivo relevante.
+
+      Este processo aceita somente tweaks de baixo risco: aparência, copy ou
+      comportamento local simples. Preserve contratos, estrutura, dependências
+      e comportamentos fora do pedido. Não faça refactor oportunista.
+
+      Limites obrigatórios:
+      - no máximo 4 arquivos de produto/teste e 160 linhas adicionadas+removidas;
+      - no máximo 256 kB por arquivo e 256 kB de patch total;
+      - não altere dependências, lockfiles, banco/migrations, autenticação,
+        autorização, contratos de API, CI/CD, infraestrutura ou `.ft/`;
+      - não altere PRD, backlog, catálogo FEATURES ou CHANGELOG;
+      - não rode suíte completa nem E2E;
+      - execute no máximo um teste/check focal útil, com
+        `.ft/process/tweak/scripts/product.sh focal -- <comando> [args...]`.
+
+      Se a mudança real ultrapassar qualquer limite, NÃO altere o produto.
+      Explique `Resultado: ESCALATE` em docs/tweak-report.md e recomende abortar
+      este ciclo e usar `ft feature --template feature`.
+
+      Ao concluir, crie docs/tweak-report.md com:
+      - a linha exata `Resultado: IMPLEMENTED`;
+      - resumo do comportamento alterado;
+      - lista de todos os arquivos alterados;
+      - a linha exata `Validação focal: PASS`;
+      - uma linha `Comando focal: <comando executado>`;
+      - uma linha `Risco residual: <risco objetivo ou nenhum conhecido>`.
+
+      O validator executará apenas o build rápido depois da sua entrega. Não o
+      repita por conta própria. O wrapper do comando focal registra a execução;
+      não declare PASS sem tê-lo usado de fato.
+    validators:
+      - file_exists: docs/tweak-report.md
+      - command_succeeds:
+          command: >-
+            python .ft/process/tweak/scripts/validate_tweak.py implementation
+            && bash .ft/process/tweak/scripts/product.sh quick
+            && python .ft/process/tweak/scripts/validate_tweak.py implementation
+          timeout: 120
+    next: tweak.acceptance
+
+  - id: tweak.acceptance
+    type: human_gate
+    title: "Aceite do Tweak"
+    description: >-
+      Confira a mudança no produto e o relatório focal. Aprove para concluir;
+      rejeite com um desvio reproduzível para voltar à implementação. Não há
+      review ou reconcile LLM ocultos depois deste gate.
+    sprint: tweak-direct
+    executor: python
+    env_setup:
+      - bash .ft/process/tweak/scripts/serve.sh
+    env_teardown:
+      - bash .ft/process/tweak/scripts/serve.sh stop
+    outputs:
+      - docs/tweak-report.md
+    reject_next: tweak.implement
+    next: tweak.end
+
+  - id: tweak.end
+    type: end
+    title: "Tweak Pronto para Merge"
+    description: >-
+      Tweak aceito. Execute `ft close --merge full` para arquivar os três
+      artefatos do ciclo, integrar a mudança e remover a worktree.

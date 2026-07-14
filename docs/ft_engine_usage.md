@@ -35,6 +35,7 @@ ft --help
 ```bash
 ft init --template base    # Criar layout versionado, sem estado de execução
 ft feature "demanda" --template feature  # Evoluir produto em worktree isolada
+ft feature "ajuste pequeno" --template tweak  # Mudança focal com pipeline mínimo
 ft feature --parallel "d1" "d2" "d3" -t feature  # Batch de features em waves paralelas
 ft migrate-layout . --cycle-id cycle-08  # Migrar process/ e atribuir artefatos soltos
 ft continue                # Avançar 1 step
@@ -591,6 +592,34 @@ e `close` retomam o mesmo processo sem redescobrir o default. Rejeições retorn
 ao node de correção e percorrem novamente os gates intermediários. O `close`
 valida apenas o `backlog_item` de `docs/feature.md` e aplica merge full.
 
+### Tweaks rápidos
+
+`tweak` é outro template do mesmo entrypoint `ft feature`, não um comando novo:
+
+```bash
+ft feature "Mude a cor do botão Salvar para azul" --template tweak --codex
+ft feature --parallel "Ajuste o label" "Reduza o padding" -t tweak --yes
+```
+
+No caminho feliz ele faz um preflight determinístico, uma delegação com budget
+total de 600 segundos, exatamente um check focal comprovado, um `make build`
+curto e o aceite humano. O escopo é limitado a 4 arquivos, 160 linhas e 256 kB
+por arquivo/patch; não há discovery, review, reconcile, suíte completa ou E2E.
+No modo paralelo, o planner compartilhado tem 120 segundos no total para suas
+tentativas; preparação, worktrees e waves continuam a cargo do orquestrador
+normal de `ft feature --parallel`.
+Para impedir hooks globais de recriarem uma pipeline longa, apenas os commits
+automáticos deste template neutralizam `core.hooksPath` e usam
+`--no-verify --no-gpg-sign`; os checks focais, o build e os limites de escopo
+continuam obrigatórios.
+
+O grafo executa preflight determinístico, uma única delegação de implementação,
+build/smoke curto e aceite humano. Não há discovery, review independente, suíte
+E2E/full, reconciliação de `PROJECT_BACKLOG`/`FEATURES`, reserva de PB ou retry
+automático. O fechamento ainda faz merge full da worktree. Um diff grande ou
+uma mudança em dependências, migrações, autenticação, contratos ou infraestrutura
+é bloqueado e deve ser reaberto com `--template feature`.
+
 `approve`, `reject`, `retry` e `close` aceitam `--cycle <nome>` para mirar um
 ciclo específico quando há mais de um ativo.
 
@@ -601,6 +630,7 @@ ciclo específico quando há mais de um ativo.
 
 ```bash
 ft feature --parallel "Busca por telefone" "Dark mode" "Exportar CSV" -t feature
+ft feature --parallel "Ajuste o label" "Reduza o padding" -t tweak
 ft feature --parallel --input demandas.md -t feature      # seções '## ' ou blocos '---'
 ft feature --parallel ... --engines claude:opus,codex:gpt-5.3@high   # engines por feature
 ft feature --parallel ... --max-parallel 3 --yes          # 3 ciclos simultâneos, sem confirmação

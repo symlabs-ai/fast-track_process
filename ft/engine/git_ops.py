@@ -5,6 +5,7 @@ Git operations — commit automatico apos green+review.
 from __future__ import annotations
 
 import subprocess
+from typing import Any, Mapping
 
 
 _RUNTIME_STATE_PATHS = [
@@ -28,6 +29,34 @@ _RUNTIME_STATE_PATHS = [
 ]
 
 
+def verify_hooks_from_process_meta(meta: Mapping[str, Any] | None) -> bool:
+    """Return the safe commit-hook policy for process metadata.
+
+    Hook bypass is opt-in only: absent or malformed metadata preserves Git's
+    normal hooks. Schema validation reports malformed policies separately.
+    """
+    if not isinstance(meta, Mapping):
+        return True
+    policy = meta.get("commit_policy")
+    return not (
+        isinstance(policy, Mapping)
+        and policy.get("verify_hooks") is False
+    )
+
+
+def git_command_prefix(verify_hooks: bool) -> list[str]:
+    """Build a Git argv prefix that truly disables every hook when requested."""
+    if verify_hooks:
+        return ["git"]
+    return ["git", "-c", "core.hooksPath=/dev/null"]
+
+
+def _commit_policy_flags(verify_hooks: bool) -> list[str]:
+    if verify_hooks:
+        return []
+    return ["--no-verify", "--no-gpg-sign"]
+
+
 def _unstage_runtime_state(cwd: str) -> None:
     """Remove generated engine/serve state from the index after broad git add."""
     for pathspec in _RUNTIME_STATE_PATHS:
@@ -43,6 +72,8 @@ def auto_commit(
     message: str,
     project_root: str = ".",
     paths: list[str] | None = None,
+    *,
+    verify_hooks: bool = True,
 ) -> tuple[bool, str]:
     """
     Faz git add + commit com mensagem padrao.
@@ -69,7 +100,13 @@ def auto_commit(
 
     # Commit
     result = subprocess.run(
-        ["git", "commit", "-m", message],
+        [
+            *git_command_prefix(verify_hooks),
+            "commit",
+            *_commit_policy_flags(verify_hooks),
+            "-m",
+            message,
+        ],
         cwd=cwd, capture_output=True, text=True,
     )
 
@@ -85,7 +122,12 @@ def auto_commit(
     return False, f"auto_commit FAIL: {result.stderr.strip()[:200]}"
 
 
-def commit_knowledge(project_root: str = ".", label: str = "snapshot") -> tuple[bool, str]:
+def commit_knowledge(
+    project_root: str = ".",
+    label: str = "snapshot",
+    *,
+    verify_hooks: bool = True,
+) -> tuple[bool, str]:
     """Commita docs/ e metadados versionados do processo se houver mudanças.
 
     Chamado nativamente pelo engine antes de iniciar um run e ao final.
@@ -122,7 +164,13 @@ def commit_knowledge(project_root: str = ".", label: str = "snapshot") -> tuple[
         capture_output=True,
     )
     result = subprocess.run(
-        ["git", "commit", "-m", f"chore: {label} — docs/ e .ft/process/"],
+        [
+            *git_command_prefix(verify_hooks),
+            "commit",
+            *_commit_policy_flags(verify_hooks),
+            "-m",
+            f"chore: {label} — docs/ e .ft/process/",
+        ],
         cwd=cwd, capture_output=True, text=True,
     )
 

@@ -37,7 +37,12 @@ from ft.engine.validators import tests as test_val
 from ft.engine.validators import code as code_val
 from ft.engine.validators import review as review_val
 from ft.engine.validators import check_paths as cp_val
-from ft.engine.git_ops import auto_commit, commit_knowledge
+from ft.engine.git_ops import (
+    auto_commit,
+    commit_knowledge,
+    git_command_prefix,
+    verify_hooks_from_process_meta,
+)
 from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
 from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
 from ft.engine.layout import (
@@ -1203,6 +1208,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         llm_effort=compact_selection.effort,
                         log_path=log_path,
                         stream_prefix=self._stream_prefix(compact_selection.engine),
+                        llm_timeout_seconds=node.llm_timeout_seconds,
                     )
             finally:
                 self._clear_active_llm_log(state)
@@ -2326,6 +2332,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         return work, original_root, branch
 
+    def _verify_commit_hooks(self) -> bool:
+        """Resolve the process-scoped Git policy; legacy processes default on."""
+        return verify_hooks_from_process_meta(self.graph.meta)
+
     def merge_on_close(self, strategy: str, paths: list[str] | None = None) -> bool:
         """Merge artefatos do worktree de volta para o repo original.
 
@@ -2383,6 +2393,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         committed, detail = auto_commit(
             f"chore(ft): archive {cycle_id}",
             project_root=str(work_root),
+            verify_hooks=self._verify_commit_hooks(),
         )
         if not committed:
             print(ui.fail(detail))
@@ -2396,8 +2407,17 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         if strategy == "full":
             if branch:
+                verify_hooks = self._verify_commit_hooks()
+                merge_command = [
+                    *git_command_prefix(verify_hooks),
+                    "merge",
+                    branch,
+                    "--no-edit",
+                ]
+                if not verify_hooks:
+                    merge_command.extend(["--no-verify", "--no-gpg-sign"])
                 result = _sp.run(
-                    ["git", "merge", branch, "--no-edit"],
+                    merge_command,
                     cwd=original_root, capture_output=True, text=True,
                 )
                 if result.returncode == 0:
@@ -3022,7 +3042,11 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 for line in format_llm_usage_lines(usage_summary):
                     print(ui.dim(line))
                 # Commitar conhecimento produzido pelo ciclo
-                ok, detail = commit_knowledge(self.project_root, label="pós-run — ciclo completo")
+                ok, detail = commit_knowledge(
+                    self.project_root,
+                    label="pós-run — ciclo completo",
+                    verify_hooks=self._verify_commit_hooks(),
+                )
                 print(ui.dim(detail))
                 # Merge artefatos de volta para o repo original
                 self._merge_on_end()
@@ -3419,6 +3443,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             llm_effort=llm_selection.effort,
             log_path=log_path,
             stream_prefix=self._stream_prefix(effective_engine),
+            llm_timeout_seconds=node.llm_timeout_seconds,
         )
         self._apply_opencode_options(delegate_kwargs, opencode_options)
         if node.max_turns is not None:
@@ -3558,6 +3583,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         opencode_deny_edit_tools=retry_opencode_options.deny_edit_tools,
                         opencode_early_success_paths=retry_opencode_options.early_success_paths,
                         opencode_capture_output_path=retry_opencode_options.capture_output_path,
+                        llm_timeout_seconds=node.llm_timeout_seconds,
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -3769,6 +3795,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 max_turns=node.max_turns or 50,
                 log_path=log_path,
                 stream_prefix=self._stream_prefix(effective_engine),
+                llm_timeout_seconds=node.llm_timeout_seconds,
             )
             self._apply_opencode_options(fix_kwargs, opencode_options)
             result = delegate_to_llm(**fix_kwargs)
@@ -3886,6 +3913,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         llm_effort=gate_fix_selection.effort,
                         log_path=log_path,
                         stream_prefix=self._stream_prefix(gate_fix_selection.engine),
+                        llm_timeout_seconds=node.llm_timeout_seconds,
                     )
                     if gate_fix_options is not None:
                         self._apply_opencode_options(gate_fix_kwargs, gate_fix_options)
@@ -4124,6 +4152,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         success, detail = auto_commit(
             message=message,
             project_root=self.project_root,
+            verify_hooks=self._verify_commit_hooks(),
         )
         if success:
             print(ui.success(f"COMMIT: {detail}"))
@@ -4370,6 +4399,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             llm_effort=llm_selection.effort,
             log_path=review_log_path,
             stream_prefix=self._stream_prefix(effective_engine),
+            llm_timeout_seconds=node.llm_timeout_seconds,
         )
         self._apply_opencode_options(review_kwargs, opencode_options)
         if node.max_turns is not None:
@@ -4466,6 +4496,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         opencode_deny_edit_tools=recovery_options.deny_edit_tools,
                         opencode_early_success_paths=recovery_options.early_success_paths,
                         opencode_capture_output_path=recovery_options.capture_output_path,
+                        llm_timeout_seconds=node.llm_timeout_seconds,
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -4575,6 +4606,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         opencode_deny_edit_tools=review_retry_options.deny_edit_tools,
                         opencode_early_success_paths=review_retry_options.early_success_paths,
                         opencode_capture_output_path=review_retry_options.capture_output_path,
+                        llm_timeout_seconds=node.llm_timeout_seconds,
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -4672,6 +4704,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             llm_model=llm_selection.model,
             llm_effort=llm_selection.effort,
             log_path=log_path,
+            llm_timeout_seconds=node.llm_timeout_seconds,
         )
         if exploration_options is not None:
             self._apply_opencode_options(exploration_kwargs, exploration_options)
@@ -4748,6 +4781,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 llm_model=llm_selection.model,
                 llm_effort=llm_selection.effort,
                 log_path=str(self._llm_log_dir() / "exploration_report.log"),
+                llm_timeout_seconds=node.llm_timeout_seconds,
             )
             if report_options is not None:
                 self._apply_opencode_options(report_kwargs, report_options)
@@ -4829,6 +4863,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                             engine=selection.engine,
                         )
                     ),
+                    "llm_timeout_seconds": parallel_node.llm_timeout_seconds,
                 }
                 self._apply_opencode_options(delegate_kwargs, options)
             return delegate_to_llm(**delegate_kwargs)
@@ -5145,6 +5180,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     opencode_deny_edit_tools=opencode_options.deny_edit_tools,
                     opencode_early_success_paths=opencode_options.early_success_paths,
                     opencode_capture_output_path=opencode_options.capture_output_path,
+                    llm_timeout_seconds=retry_node.llm_timeout_seconds,
                 )
             finally:
                 self._clear_active_llm_log(state)

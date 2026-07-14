@@ -238,6 +238,23 @@ class TestLoadGraph:
 
         assert node.context_profile == "feature_delta.discovery"
 
+    def test_loads_llm_timeout_seconds(self, tmp_path):
+        p = tmp_path / "process.yml"
+        p.write_text(
+            "id: timeout_process\nversion: '1.0.0'\ntitle: Timeout\nnodes:\n"
+            "  - id: implement\n"
+            "    type: build\n"
+            "    title: Implement\n"
+            "    executor: codex\n"
+            "    llm_timeout_seconds: 600\n"
+            "    outputs: [src/]\n"
+            "    next: end\n"
+            "  - {id: end, type: end, title: End}\n",
+            encoding="utf-8",
+        )
+
+        assert load_graph(p).get_node("implement").llm_timeout_seconds == 600
+
     def test_load_fast_track_v2(self):
         g = load_graph("process/fast_track/FAST_TRACK_PROCESS_V2.yml")
         assert len(g.nodes) >= 42  # May grow as process evolves

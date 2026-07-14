@@ -1,6 +1,6 @@
 """Unit tests for ft.engine.validators.*"""
 
-from pathlib import Path
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -854,12 +854,53 @@ class TestCommandSucceeds:
         silent = MagicMock(returncode=1, stdout="", stderr="")
         diagnostic = MagicMock(returncode=1, stdout="", stderr="Missing script: \"build\"\n")
 
-        with patch("subprocess.run", side_effect=[silent, diagnostic]):
+        with patch(
+            "ft.engine.validators.artifacts._run_shell_command",
+            side_effect=[silent, diagnostic],
+        ):
             passed, detail = command_succeeds("npm run build --silent", str(tmp_path))
 
         assert not passed
         assert "diagnostico sem --silent" in detail
         assert "Missing script" in detail
+
+    def test_timeout_kills_child_before_it_can_write_marker(self, tmp_path):
+        command = (
+            "bash -c '(touch child-started; sleep 0.5; touch timeout-marker) & "
+            "while [ ! -e child-started ]; do :; done; sleep 5'"
+        )
+
+        passed, detail = command_succeeds(command, str(tmp_path), timeout=0.2)
+
+        assert not passed
+        assert "excedeu" in detail
+        assert (tmp_path / "child-started").exists()
+        time.sleep(0.6)
+        assert not (tmp_path / "timeout-marker").exists()
+
+    def test_diagnostic_timeout_also_kills_child_process_group(self, tmp_path):
+        script = tmp_path / "diagnostic.sh"
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ ${1:-} == --silent ]]; then exit 1; fi\n"
+            "(touch diagnostic-child-started; sleep 0.5; "
+            "touch diagnostic-timeout-marker) &\n"
+            "while [[ ! -e diagnostic-child-started ]]; do :; done\n"
+            "sleep 5\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = command_succeeds(
+            "bash diagnostic.sh --silent",
+            str(tmp_path),
+            timeout=0.2,
+        )
+
+        assert not passed
+        assert "código 1" in detail
+        assert (tmp_path / "diagnostic-child-started").exists()
+        time.sleep(0.6)
+        assert not (tmp_path / "diagnostic-timeout-marker").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,7 @@
+run_mode: isolated
+max_node_retries: 0
+max_gate_retries: 0
+max_auto_fix: 0
+
+# O caminho feliz contém exatamente uma delegação LLM. Falhas bloqueiam para
+# decisão humana; o engine não inicia retries nem auto-fixes silenciosos.

@@ -604,7 +604,7 @@ ft feature --parallel "Ajuste o label" "Reduza o padding" -t tweak --yes
 ```
 
 No caminho feliz ele faz um preflight determinístico, uma delegação com budget
-total de 600 segundos, exatamente um check focal comprovado, um `make build`
+total de 1800 segundos, exatamente um check focal comprovado, um `make build`
 curto e o aceite humano. O escopo é limitado a 4 arquivos, 160 linhas e 256 kB
 por arquivo/patch; não há discovery, review, reconcile, suíte completa ou E2E.
 No modo paralelo, o planner compartilhado tem 120 segundos no total para suas

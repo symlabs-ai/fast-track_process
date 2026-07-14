@@ -11,8 +11,9 @@ Meta operacional: **3–10 minutos** no caminho feliz. O grafo faz um preflight
 determinístico, uma única delegação de implementação, um build rápido e um gate
 humano de aceite. Não há discovery, planejamento, review, reconcile, suíte
 completa ou E2E por padrão. Retries e auto-fixes automáticos estão desligados.
-A delegação tem budget total de 600 segundos, inclusive backoff interno: o
-modelo/effort escolhido pelo usuário é preservado, mas não pode ocupar uma hora.
+A delegação tem budget total de 1800 segundos (30 min), inclusive backoff
+interno: o modelo/effort escolhido pelo usuário é preservado, mas não pode
+ocupar uma hora.
 No modo `--parallel`, o planejador já existente compartilha um único budget de
 120 segundos entre suas tentativas; não há um segundo orquestrador para tweak.
 

@@ -79,8 +79,8 @@ nodes:
       sensíveis e então roda somente o build rápido do produto.
     sprint: tweak-direct
     executor: claude
-    max_turns: 12
-    llm_timeout_seconds: 600
+    max_turns: 30
+    llm_timeout_seconds: 1800
     env_setup:
       - python .ft/process/tweak/scripts/validate_tweak.py begin
     outputs:

@@ -170,8 +170,8 @@ def test_tweak_graph_has_one_bounded_llm_node_and_no_heavy_phases():
     assert len(delegated) == 1
     assert delegated[0].id == "tweak.implement"
     assert delegated[0].context_profile == "tweak.direct"
-    assert delegated[0].max_turns == 12
-    assert delegated[0].llm_timeout_seconds == 600
+    assert delegated[0].max_turns == 30
+    assert delegated[0].llm_timeout_seconds == 1800
     assert "sem repetir o wrapper" in delegated[0].prompt
     assert "registra somente o" in delegated[0].prompt
     assert "argv informado depois de `focal --`" in delegated[0].prompt

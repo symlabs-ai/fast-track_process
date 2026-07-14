@@ -1,0 +1,598 @@
+# Material Design PWA — Aplicar M3 e transformar a UI em PWA
+#
+# Aplica as guidelines de Material Design 3 (incluindo M3 Expressive) à UI de
+# um projeto Fast Track existente e o transforma em um PWA instalável:
+# tokens/tema, tipografia, navegação adaptativa, acessibilidade WCAG 2.2,
+# manifesto, service worker, fallback offline e fluxo de atualização.
+#
+# As guidelines completas viajam com o processo em
+# `.ft/process/material_design_pwa/guidelines/material_design_pwa.md` — todos
+# os nodes LLM trabalham a partir delas, não de memória.
+#
+# Este arquivo global nunca é executado diretamente. Na primeira invocação de
+# `ft run . --template material_design_pwa`, o engine materializa o diretório
+# em `.ft/process/material_design_pwa/` e executa somente a cópia local.
+
+id: material_design_pwa
+version: "0.1.0"
+title: "Material Design PWA — M3 + instalável/offline"
+
+execution_policy:
+  entrypoint: run
+  template: material_design_pwa
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/material_design_pwa/process.yml
+  merge_command: ft close --merge full
+
+input_policy:
+  required: false
+  destination: docs/mdpwa-request.md
+  prompt: "Contexto opcional (cor da marca, telas prioritárias, restrições de design)"
+
+correction_policy:
+  follow_graph_after_retry: true
+  mandatory_after_implementation:
+    - mdpwa.review
+
+close_policy:
+  backlog:
+    mode: referenced
+    references_path: docs/mdpwa-plan.md
+    reference_field: backlog_item
+    required_count: 1
+    accepted_statuses:
+      - done
+      - accepted
+  features_catalog: required
+  merge: full
+
+artifact_policy:
+  canonical:
+    - CHANGELOG.md
+    - docs/PRD.md
+    - docs/TECH_STACK.md
+    - docs/PROJECT_BACKLOG.md
+    - docs/FEATURES.md
+    - docs/ui_criteria.md
+    - docs/api_contract.md
+  cycle:
+    - docs/mdpwa-request.md
+    - docs/mdpwa-audit.md
+    - docs/mdpwa-questions.md
+    - docs/mdpwa-plan.md
+    - docs/mdpwa-theme-report.md
+    - docs/mdpwa-shell-report.md
+    - docs/mdpwa-pwa-report.md
+    - docs/mdpwa-review.md
+    - docs/mdpwa-result.md
+    - docs/stakeholder-feedback.md
+
+nodes:
+  - id: mdpwa.preflight
+    type: gate
+    title: "Preflight do Projeto com UI"
+    description: >-
+      Confirma que o projeto tem a documentação canônica Fast Track e um
+      harness executável (Makefile com build/test/run/url). Projetos legados
+      sem essa base devem rodar o template fastfy primeiro.
+    sprint: mdpwa-01-audit
+    executor: python
+    validators:
+      - file_exists: docs/PRD.md
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - file_exists: docs/FEATURES.md
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py preflight"
+      - command_succeeds:
+          command: "bash .ft/process/material_design_pwa/scripts/product.sh build"
+          timeout: 300
+      - command_succeeds:
+          command: "bash .ft/process/material_design_pwa/scripts/product.sh test"
+          timeout: 300
+    next: mdpwa.audit
+
+  - id: mdpwa.audit
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: discovery
+    title: "Auditar UI contra M3 e Estado PWA"
+    description: >-
+      Audita a UI atual contra as guidelines embarcadas (tokens, tipografia,
+      navegação adaptativa, acessibilidade) e levanta o estado PWA (manifesto,
+      service worker, offline). Formula somente perguntas que mudem tema,
+      escopo de telas ou comportamento offline. Sem ambiguidade, fecha o
+      plano de transformação.
+    sprint: mdpwa-01-audit
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/mdpwa-audit.md
+      - docs/mdpwa-questions.md
+      - docs/mdpwa-plan.md
+      - docs/PROJECT_BACKLOG.md
+    write_scope:
+      - docs/mdpwa-audit.md
+      - docs/mdpwa-questions.md
+      - docs/mdpwa-plan.md
+      - docs/PROJECT_BACKLOG.md
+    prompt: |
+      Leia PRIMEIRO as guidelines embarcadas em
+      .ft/process/material_design_pwa/guidelines/material_design_pwa.md —
+      elas são a fonte normativa deste ciclo (M3/M3 Expressive, breakpoints,
+      componentes, WCAG 2.2, manifest/SW/offline). Não implemente nada neste
+      node.
+
+      Se docs/mdpwa-request.md existir, trate-o como contexto do stakeholder.
+      Audite a UI real do produto: framework, entrypoints de UI, CSS atual
+      (hex soltos vs tokens), tipografia, navegação por faixa de largura,
+      acessibilidade (foco visível, labels, contraste, alvos de toque) e o
+      estado PWA (manifesto? service worker? fallback offline?).
+
+      Gere docs/mdpwa-audit.md com frontmatter YAML:
+        framework: <ex.: vanilla | react | vue | angular | flask+jinja>
+        ui_root: <diretório onde vive a UI, relativo à raiz>
+        has_manifest: true | false
+        has_service_worker: true | false
+        clarification_status: required | clear
+      No corpo: achados por área (tokens/cor, tipografia, layout/navegação,
+      componentes, acessibilidade, PWA), cada um com evidência (arquivo/linha)
+      e severidade.
+
+      Gere docs/mdpwa-questions.md com perguntas numeradas SOMENTE sobre
+      decisões que alterem o resultado: cor-fonte da marca, dark mode,
+      telas/rotas prioritárias, nome/short_name/ícones do app, rotas que
+      precisam funcionar offline, CTA de instalação. Sem perguntas, escreva
+      que não há pendências.
+
+      Gere docs/mdpwa-plan.md com frontmatter YAML:
+        backlog_item: PB-NNN
+        theme_file: <path do arquivo de tokens CSS que será criado/atualizado>
+        manifest_path: <path do manifesto, ex.: public/manifest.webmanifest>
+        sw_source: <path do arquivo-fonte do service worker ou da sua config>
+        offline_fallback: <path da página offline, ou "generated">
+      No corpo: plano em três fases (tema/tokens, shell/navegação/componentes,
+      PWA), mapeando cada mudança à seção correspondente das guidelines,
+      estratégia de cache por tipo de recurso, riscos e o que fica fora do
+      escopo. Crie exatamente um PB-* tipo Melhoria em docs/PROJECT_BACKLOG.md
+      com status in_progress e origem mdpwa-request (ou reuse um PB existente
+      equivalente, preservando o ID) e use esse ID em backlog_item.
+
+      Marque clarification_status: required enquanto houver pergunta pendente;
+      clear somente com o plano fechado.
+    validators:
+      - file_exists: docs/mdpwa-audit.md
+      - file_exists: docs/mdpwa-questions.md
+      - file_exists: docs/mdpwa-plan.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py audit"
+    next: mdpwa.audit_gate
+
+  - id: mdpwa.audit_gate
+    type: gate
+    title: "Registrar Resultado da Auditoria"
+    description: >-
+      Extrai deterministicamente o estado de clarificação para encaminhar
+      perguntas pendentes ou seguir para a aprovação do plano.
+    sprint: mdpwa-01-audit
+    executor: python
+    validators:
+      - read_artifact:
+          path: docs/mdpwa-audit.md
+          key: clarification_status
+          pattern: "clarification_status:\\s*(required|clear)"
+    next: mdpwa.clarity
+
+  - id: mdpwa.clarity
+    type: decision
+    title: "Auditoria Está Clara?"
+    description: "Encaminha perguntas ao stakeholder ou segue para a aprovação do plano."
+    sprint: mdpwa-01-audit
+    executor: python
+    condition: clarification_status
+    branches:
+      required: mdpwa.questions
+      clear: mdpwa.scope_gate
+      _default: mdpwa.questions
+
+  - id: mdpwa.questions
+    type: human_gate
+    title: "Perguntas de Design e PWA"
+    description: >-
+      Leia docs/mdpwa-questions.md e responda com `ft approve "1. ... 2. ..."`
+      (cor da marca, dark mode, telas prioritárias, nome do app, rotas
+      offline). As respostas voltam à auditoria. Use ft abort para cancelar
+      sem alterar o checkout principal.
+    sprint: mdpwa-01-audit
+    executor: python
+    outputs:
+      - docs/mdpwa-questions.md
+      - docs/mdpwa-audit.md
+    next: mdpwa.audit
+
+  - id: mdpwa.scope_gate
+    type: human_gate
+    title: "Aprovação do Plano de Transformação"
+    description: >-
+      Revise docs/mdpwa-audit.md e docs/mdpwa-plan.md: fases (tema, shell,
+      PWA), telas no escopo, estratégia de cache/offline e o PB selecionado.
+      Uma rejeição deve dizer objetivamente o que mudar.
+    sprint: mdpwa-01-audit
+    executor: python
+    outputs:
+      - docs/mdpwa-audit.md
+      - docs/mdpwa-plan.md
+    reject_next: mdpwa.audit
+    next: mdpwa.theme
+
+  - id: mdpwa.theme
+    type: build
+    title: "Fase 1 — Tokens, Tipografia e Acessibilidade Base"
+    description: >-
+      Implementa o contrato de tokens M3 (color roles, type scale, shape,
+      spacing e motion locais), dark mode via prefers-color-scheme, foco
+      visível e correções básicas de acessibilidade, substituindo hex soltos
+      por roles.
+    sprint: mdpwa-02-build
+    executor: claude
+    max_turns: 80
+    outputs:
+      - docs/mdpwa-theme-report.md
+    write_scope:
+      - project
+      - src
+      - app
+      - web
+      - frontend
+      - public
+      - static
+      - assets
+      - styles
+      - templates
+      - index.html
+      - offline.html
+      - package.json
+      - package-lock.json
+      - pyproject.toml
+      - docs/mdpwa-theme-report.md
+    prompt: |
+      Implemente a Fase 1 do plano aprovado (docs/mdpwa-plan.md), seguindo as
+      seções "Tokens e sistema visual" e "Acessibilidade e WCAG" das
+      guidelines em
+      .ft/process/material_design_pwa/guidelines/material_design_pwa.md.
+
+      1. Crie/atualize o arquivo de tokens declarado em theme_file com:
+         color roles M3 como CSS custom properties (--md-sys-color-primary,
+         on-primary, *-container, surface e variantes surface-container-*,
+         on-surface, on-surface-variant, outline, error), tipografia
+         (--md-sys-typescale-* para title/body/label no mínimo), shape
+         (--md-sys-shape-corner-*), escala local de spacing (--space-*) e
+         motion local (--motion-*, --easing-standard). Inclua o bloco
+         @media (prefers-color-scheme: dark) com os roles escuros.
+      2. Substitua cores hex soltas da UI por roles; mapeie por papel, não
+         por valor. Aplique a type scale nos headings/body/labels existentes.
+      3. Acessibilidade base: :focus-visible com outline de contraste,
+         scroll-padding-top sob app bar fixa, labels/aria-label nos controles
+         que faltam, alvos de toque mirando 48x48, erros comunicados em texto.
+      4. Não mude comportamento funcional nem quebre testes existentes. Rode
+         os testes focais que tocar; o gate de baseline executa a suíte
+         completa depois.
+
+      Gere docs/mdpwa-theme-report.md: o que mudou, arquivos tocados, roles
+      mapeados (antes → depois) e pendências deliberadas para as fases 2/3.
+    validators:
+      - file_exists: docs/mdpwa-theme-report.md
+      - git_diff_not_empty: {}
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py theme"
+    next: mdpwa.shell
+
+  - id: mdpwa.shell
+    type: build
+    title: "Fase 2 — Shell, Navegação Adaptativa e Componentes"
+    description: >-
+      Implementa o app shell e a navegação adaptativa por faixa de largura
+      (navigation bar < 600px, rail 600–1199px, drawer persistente ≥ 1200px)
+      e alinha os componentes de conteúdo/formulário/feedback à guidance M3.
+    sprint: mdpwa-02-build
+    executor: claude
+    max_turns: 100
+    outputs:
+      - docs/mdpwa-shell-report.md
+    write_scope:
+      - project
+      - src
+      - app
+      - web
+      - frontend
+      - public
+      - static
+      - assets
+      - styles
+      - templates
+      - index.html
+      - offline.html
+      - package.json
+      - package-lock.json
+      - pyproject.toml
+      - docs/mdpwa-shell-report.md
+    prompt: |
+      Implemente a Fase 2 do plano aprovado, seguindo as seções "Escopo e
+      audiência" (breakpoints/navegação) e "Componentes e adaptações para web
+      e PWA" das guidelines em
+      .ft/process/material_design_pwa/guidelines/material_design_pwa.md.
+
+      1. App shell em três camadas (shell, conteúdo, feedback) usando os
+         tokens da Fase 1. Navegação adaptativa com os cortes oficiais:
+         compacta < 600px → navigation bar inferior; média/expandida
+         600–1199px → navigation rail; grande ≥ 1200px → drawer persistente.
+         Shell/navegação em HTML semântico + CSS próprio (roadmap do
+         @material/web não cobre essas peças).
+      2. Componentes: use @material/web apenas onde já é suportado (botões,
+         text fields, dialogs, menus, FAB, progress) com imports POR
+         COMPONENTE — nunca all.js. Hierarquia de botões pelos cinco níveis
+         de ênfase; um único padrão de feedback transitório (snackbar);
+         dialogs somente para interrupção/decisão.
+      3. Acessibilidade dos padrões interativos (APG): teclado no menu
+         button, aria-label nos icon-only/switch/text field com label
+         externa, foco nunca obscurecido por header/drawer.
+      4. Preserve o comportamento funcional; ajuste testes de UI que
+         dependiam da estrutura antiga.
+
+      Gere docs/mdpwa-shell-report.md: estrutura do shell, mapa de navegação
+      por breakpoint, componentes adotados vs próprios e decisões relevantes.
+    validators:
+      - file_exists: docs/mdpwa-shell-report.md
+      - git_diff_not_empty: {}
+      - command_succeeds:
+          command: "bash .ft/process/material_design_pwa/scripts/product.sh build"
+          timeout: 300
+    next: mdpwa.pwa
+
+  - id: mdpwa.pwa
+    type: build
+    title: "Fase 3 — Manifesto, Service Worker e Offline"
+    description: >-
+      Torna o app instalável e utilizável offline: manifesto completo,
+      service worker com estratégia de cache por tipo de recurso, fallback
+      offline explícito, CTA de instalação contextual e aviso discreto de
+      atualização.
+    sprint: mdpwa-02-build
+    executor: claude
+    max_turns: 80
+    outputs:
+      - docs/mdpwa-pwa-report.md
+    write_scope:
+      - project
+      - src
+      - app
+      - web
+      - frontend
+      - public
+      - static
+      - assets
+      - styles
+      - templates
+      - index.html
+      - offline.html
+      - manifest.webmanifest
+      - manifest.json
+      - sw.js
+      - service-worker.js
+      - package.json
+      - package-lock.json
+      - pyproject.toml
+      - vite.config.js
+      - vite.config.ts
+      - angular.json
+      - ngsw-config.json
+      - docs/mdpwa-pwa-report.md
+    prompt: |
+      Implemente a Fase 3 do plano aprovado, seguindo a seção "Performance,
+      instalação e offline-first" das guidelines em
+      .ft/process/material_design_pwa/guidelines/material_design_pwa.md.
+
+      1. Manifesto no path declarado em manifest_path: name, short_name,
+         start_url, display standalone, background_color e theme_color
+         alinhados aos tokens, ícones 192x192 e 512x512 (inclua variante
+         maskable) e shortcuts quando fizer sentido. Linke o manifesto e a
+         meta theme-color no HTML.
+      2. Service worker (arquivo/config em sw_source), usando a ferramenta
+         idiomática do stack (Workbox, vite-plugin-pwa, @angular/pwa ou SW
+         manual quando o stack não tiver nada): precache do app shell,
+         Network First para navegação/dados, Stale While Revalidate para
+         imagens/fontes/CSS revisionado, Cache First só para assets
+         versionados. Fallback offline explícito (offline_fallback) servido
+         quando a navegação falhar, com UI que comunica o estado offline.
+      3. Instalação: capture beforeinstallprompt e ofereça CTA discreto
+         (snackbar/banner), escondendo-o após appinstalled. Atualização: nova
+         versão sinaliza com aviso não bloqueante; nunca force reload no meio
+         do fluxo.
+      4. Performance: nada de @material/web/all.js; imagens com
+         srcset/sizes; loading="lazy" apenas abaixo da dobra.
+
+      Gere docs/mdpwa-pwa-report.md: estratégia de cache por rota/recurso,
+      comportamento offline, fluxo de instalação/atualização e como testar.
+    validators:
+      - file_exists: docs/mdpwa-pwa-report.md
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py pwa"
+    next: mdpwa.baseline
+
+  - id: mdpwa.baseline
+    type: gate
+    title: "Baseline Executável Pós-Transformação"
+    description: >-
+      Prova determinística de que o produto continua buildando e testando
+      após as três fases, e que tokens e artefatos PWA estão presentes.
+    sprint: mdpwa-03-validation
+    executor: python
+    validators:
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py theme"
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py pwa"
+      - command_succeeds:
+          command: "bash .ft/process/material_design_pwa/scripts/product.sh build"
+          timeout: 300
+      - command_succeeds:
+          command: "bash .ft/process/material_design_pwa/scripts/product.sh test"
+          timeout: 300
+    next: mdpwa.review
+
+  - id: mdpwa.review
+    type: review
+    title: "Revisão Independente — Checklist de QA"
+    description: >-
+      Audita a transformação contra o checklist de QA das guidelines:
+      tokens, tipografia, responsividade, navegação, acessibilidade,
+      instalação, offline, atualização e payload.
+    sprint: mdpwa-03-validation
+    executor: claude
+    max_turns: 50
+    outputs:
+      - docs/mdpwa-review.md
+    write_scope:
+      - docs/mdpwa-review.md
+    prompt: |
+      Faça uma revisão independente usando a seção "Checklist de QA, migração
+      e armadilhas comuns" das guidelines em
+      .ft/process/material_design_pwa/guidelines/material_design_pwa.md.
+      Confronte o código real (diff do ciclo, arquivos citados nos relatórios
+      das fases) com cada item — evidência concreta, não confiança nos
+      relatórios.
+
+      Verifique no mínimo, com uma linha PASS/FAIL por item:
+      | Tokens | cores da UI vêm de roles, sem hex avulso novo |
+      | Tipografia | escala curta e consistente aplicada |
+      | Responsividade | faixas compacta/média/expandida tratadas |
+      | Navegação | bar inferior / rail / drawer coerentes por faixa |
+      | Acessibilidade | foco visível, alvos 48x48, labels, erros em texto |
+      | Instalação | manifesto válido, ícones, CTA contextual |
+      | Offline | fallback existe e UI comunica estado offline |
+      | Atualização | aviso discreto, sem reload forçado |
+      | Payload | imports por componente, sem all.js, lazy correto |
+
+      Armadilhas a caçar ativamente: guidance tratada como componente pronto
+      onde o @material/web não cobre; snackbar/toast/banner/modal misturados;
+      lazy-load de imagem acima da dobra; cache agressivo sem política de
+      update.
+
+      Não repita build/test já cobertos pelo gate de baseline; use sondas
+      focais. Gere docs/mdpwa-review.md contendo exatamente uma linha
+      `Resultado: APPROVED` ou `Resultado: REJECTED`, a tabela acima com
+      PASS/FAIL e evidências, e os problemas encontrados. REJECTED se
+      qualquer item obrigatório falhar.
+    validators:
+      - file_exists: docs/mdpwa-review.md
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py review"
+    on_fail:
+      human_gate: "A revisão encontrou desvios das guidelines. Corrija a implementação e revalide."
+      goto: mdpwa.theme
+    next: mdpwa.acceptance
+
+  - id: mdpwa.acceptance
+    type: human_gate
+    title: "Aceite da Transformação"
+    description: >-
+      O serve.sh sobe o produto: valide o tema (claro/escuro), a navegação em
+      larguras diferentes, a instalação (ícone/manifesto no navegador) e o
+      comportamento offline (DevTools → Network → Offline). Rejeite com um
+      desvio reproduzível; a correção volta à implementação.
+    sprint: mdpwa-03-validation
+    executor: python
+    env_setup:
+      - bash .ft/process/material_design_pwa/scripts/serve.sh
+    env_teardown:
+      - bash .ft/process/material_design_pwa/scripts/serve.sh stop
+    outputs:
+      - docs/stakeholder-feedback.md
+    reject_next: mdpwa.theme
+    next: mdpwa.reconcile
+
+  - id: mdpwa.reconcile
+    no_pre_seed: true
+    type: document
+    title: "Reconciliar Documentação Canônica"
+    description: >-
+      Registra a transformação aceita: PB concluído, CHANGELOG, TECH_STACK
+      (PWA/manifesto/SW), ui_criteria com os critérios M3 e resumo final.
+    sprint: mdpwa-03-validation
+    executor: claude
+    max_turns: 40
+    outputs:
+      - CHANGELOG.md
+      - docs/TECH_STACK.md
+      - docs/ui_criteria.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/mdpwa-result.md
+    write_scope:
+      - CHANGELOG.md
+      - docs/TECH_STACK.md
+      - docs/ui_criteria.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/mdpwa-result.md
+    prompt: |
+      O stakeholder aceitou a transformação. Reconcilie apenas o que este
+      ciclo mudou:
+
+      - Marque o PB do ciclo (backlog_item de docs/mdpwa-plan.md) como done
+        em docs/PROJECT_BACKLOG.md, com evidência real. Não toque em itens
+        alheios nem renumere IDs.
+      - CHANGELOG.md: entrada começando com `#FEAT` como primeiro token
+        textual, referenciando o PB e resumindo tema M3 + PWA
+        (instalável/offline).
+      - docs/TECH_STACK.md: registre manifesto, service worker/estratégia de
+        cache, tokens M3 e dependências novas (@material/web, workbox etc.).
+      - docs/ui_criteria.md: atualize/crie critérios verificáveis com IDs
+        estáveis C01, C02... cobrindo tema (roles/dark mode), navegação por
+        faixa de largura, foco visível e estado offline — eles guiarão os
+        próximos ciclos de feature.
+      - docs/FEATURES.md: atualize somente "Última evolução"/notas das FEAT
+        cujas telas mudaram; transformação de UI não cria FEAT nova.
+
+      Gere docs/mdpwa-result.md com: escopo entregue por fase, evidências,
+      PB final, arquivos alterados e uma seção `Documentação atualizada`
+      listando os paths reconciliados (sempre incluindo CHANGELOG.md e
+      docs/PROJECT_BACKLOG.md).
+    validators:
+      - file_exists: CHANGELOG.md
+      - file_exists: docs/mdpwa-result.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py reconcile"
+    next: mdpwa.final_gate
+
+  - id: mdpwa.final_gate
+    type: gate
+    title: "Gate Final da Transformação"
+    description: >-
+      Reconfirma tokens, artefatos PWA e a suíte de testes após a
+      reconciliação, antes de declarar a worktree pronta para merge.
+    sprint: mdpwa-03-validation
+    executor: python
+    validators:
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py theme"
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py pwa"
+      - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py reconcile"
+      - command_succeeds:
+          command: "bash .ft/process/material_design_pwa/scripts/product.sh test"
+          timeout: 300
+    next: mdpwa.end
+
+  - id: mdpwa.end
+    type: end
+    title: "UI Material + PWA Pronta para Merge"
+    description: >-
+      Transformação aceita e validada na worktree. Execute
+      `ft close --merge full` para fazer merge no checkout principal e
+      arquivar o ciclo. Os critérios em docs/ui_criteria.md passam a guiar os
+      próximos ciclos de feature.

@@ -94,14 +94,15 @@ _BROAD_RE = re.compile(
 )
 _ACTION_RE = re.compile(
     r"\b(?:mude|troque|ajuste|ajustar|altere|alterar|coloque|deixe|reduza|"
-    r"aumente|alinhe|corrija|corrigir|remova|oculte|mostre|renomeie|change|"
-    r"replace|adjust|reduce|increase|align|fix|remove|hide|show|update|set|"
-    r"rename)\b"
+    r"aumente|alinhe|corrija|corrigir|remova|oculte|mostre|renomeie|envie|"
+    r"enviar|submeta|submeter|change|replace|adjust|reduce|increase|align|"
+    r"fix|remove|hide|show|update|set|rename|send|submit)\b"
 )
 _LOCAL_BEHAVIOR_RE = re.compile(
     r"\b(?:valor padrao|default value|ordenacao|sort|filtro|filter|toggle|"
     r"contador|counter|formatacao|format|validacao local|local validation|"
-    r"condicao|condition|atalho|shortcut|calculo|calculation|subtotal|link)\b"
+    r"condicao|condition|atalho|shortcut|calculo|calculation|subtotal|link|"
+    r"confirmacao|confirmation|envio|send|submit|enter|ctrl)\b"
 )
 _RISK_PATTERNS = (
     (

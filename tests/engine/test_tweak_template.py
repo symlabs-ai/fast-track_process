@@ -243,6 +243,7 @@ def test_tweak_preflight_accepts_a_small_color_change(tmp_path):
         "Update the Save button color to blue.",
         "Set the Save button color to blue.",
         "Rename the Save button label to Confirm.",
+        "Na aba EXPLORE não deve pedir confirmação para enviar mensagens; simplesmente envie.",
     ],
 )
 def test_tweak_preflight_accepts_natural_focal_wording(tmp_path, demand):

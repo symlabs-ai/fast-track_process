@@ -953,8 +953,15 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         self._verbose = verbose
         # KB path: diretório com lições de runs anteriores (opcional)
         self._kb_path = os.environ.get("FT_KB_PATH")
-        # Nome do log derivado da pasta do projeto (ex: pokemon_log.md)
-        self._log_filename = f"{Path(self.project_root).name}_log.md"
+        # Tweaks validate every product-facing path against a deliberately
+        # narrow allowlist. Their operational activity log therefore belongs
+        # in ignored runtime state, not in the worktree root beside the diff.
+        # Other processes preserve the historical root-level archive input.
+        self._log_filename = (
+            "state/tweak_run_log.md"
+            if self.graph.meta.get("id") == "tweak"
+            else f"{Path(self.project_root).name}_log.md"
+        )
         # Environment config + hooks
         self._environment = load_environment(
             self.project_root,
@@ -2737,6 +2744,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         log_path = Path(self.project_root) / self._log_filename
         if log_path.exists():
             return  # já inicializado (retomada de run)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             ft_version = _im.version("ft-engine")

@@ -838,7 +838,7 @@ metrics:
 """,
     )
 
-    cmd_runs(SimpleNamespace(project=str(project)))
+    cmd_runs(SimpleNamespace(project=str(project), done=True))
 
     output = capsys.readouterr().out
     assert "cycle-08" in output
@@ -872,7 +872,7 @@ progress:
 """,
         )
 
-    cmd_runs(SimpleNamespace(project=str(project)))
+    cmd_runs(SimpleNamespace(project=str(project), done=True))
 
     ansi = _re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
     lines = [ansi.sub("", l) for l in capsys.readouterr().out.splitlines() if l.strip()]
@@ -881,6 +881,57 @@ progress:
     # A coluna FONTE ("archive") deve começar na mesma posição em todas as linhas.
     positions = {l.index("archive") for l in data}
     assert len(positions) == 1, data
+
+
+def test_runs_hides_finished_cycles_by_default(tmp_path, monkeypatch, capsys):
+    """ft runs lista só ciclos ativos; --done inclui os concluídos."""
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+    for name, status in (("cycle-01", "done"), ("cycle-02", "blocked")):
+        cycle = project / ".ft" / "cycles" / name
+        cycle.mkdir(parents=True)
+        (cycle / "cycle.yml").write_text(
+            f"""schema_version: 1
+id: {name}
+status: {status}
+progress:
+  completed: 3
+  total: 11
+""",
+        )
+
+    cmd_runs(SimpleNamespace(project=str(project)))
+    default_out = capsys.readouterr().out
+    assert "cycle-02" in default_out  # blocked continua visível
+    assert "cycle-01" not in default_out  # done escondido por padrão
+
+    cmd_runs(SimpleNamespace(project=str(project), done=True))
+    done_out = capsys.readouterr().out
+    assert "cycle-01" in done_out
+    assert "cycle-02" in done_out
+
+
+def test_runs_default_message_when_only_finished_cycles(tmp_path, monkeypatch, capsys):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+    cycle = project / ".ft" / "cycles" / "cycle-01"
+    cycle.mkdir(parents=True)
+    (cycle / "cycle.yml").write_text(
+        """schema_version: 1
+id: cycle-01
+status: done
+progress:
+  completed: 3
+  total: 3
+""",
+    )
+
+    cmd_runs(SimpleNamespace(project=str(project)))
+    out = capsys.readouterr().out
+    assert "Nenhum ciclo ativo" in out
+    assert "--done" in out
 
 
 def test_full_merge_archives_cycle_before_integrating_branch(tmp_path, monkeypatch):

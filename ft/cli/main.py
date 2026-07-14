@@ -2621,6 +2621,9 @@ def cmd_runs(args):
 
         source = "archive" if archived else "runtime"
         steps_label = f"{steps_done}/{steps_total}".replace("unknown", "?")
+        finished = node_status in ("done", "completed")
+        if finished and not getattr(args, "done", False):
+            continue
         rows.append((cycle.name, steps_label, ts, status_str, serve_url, source))
 
     # Tabela com larguras dinâmicas; o STATUS carrega cores ANSI, então o
@@ -2633,6 +2636,10 @@ def cmd_runs(args):
 
     def _col(header: str, values, measure=len) -> int:
         return max(len(header), max((measure(v) for v in values), default=0))
+
+    if not rows:
+        print(_ui.info("Nenhum ciclo ativo. Use ft runs --done para incluir os concluídos."))
+        return
 
     w_name = _col("CICLO", (r[0] for r in rows))
     w_steps = _col("STEPS", (r[1] for r in rows))
@@ -5581,6 +5588,8 @@ def main():
 
     # runs — tabela comparativa de todos os ciclos
     ru2 = sub.add_parser("runs", help="Ciclos ativos no runtime e fechados em .ft/cycles/")
+    ru2.add_argument("--done", action="store_true",
+                     help="Incluir também os ciclos concluídos (default: só ativos)")
     ru2.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
 
     llm_capabilities = sub.add_parser(

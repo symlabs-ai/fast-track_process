@@ -607,6 +607,10 @@ class DelegateResult:
     # backoff — o runner NÃO deve tratar como falha de conteúdo (não consome
     # auto-fix; pausa o run para retomada via ft continue).
     rate_limited: bool = False
+    # True quando o processo do LLM morreu sem emitir veredito (DONE/BLOCKED):
+    # stream interrompida, crash ou timeout. Falha de infraestrutura, não de
+    # conteúdo — o runner pode retentar a delegação automaticamente.
+    died: bool = False
 
 
 def _build_executor_command(
@@ -2107,6 +2111,7 @@ REGRAS:
                 output = out2  # última tentativa falhou também
 
         success = returncode == 0
+        died = False
         if opencode_capture_mode and opencode_capture_output_path:
             captured = _clean_opencode_capture_text(output)
             capture_blocked = captured.lstrip().upper().startswith("BLOCKED")
@@ -2218,6 +2223,7 @@ REGRAS:
         else:
             token = _final_protocol_token(output)
             success = returncode == 0 and token != "BLOCKED"
+            died = returncode != 0 and token is None
         rate_limited = (
             not deadline_exhausted
             and (not success)
@@ -2251,6 +2257,7 @@ REGRAS:
         files_created=created,
         files_modified=modified,
         rate_limited=rate_limited,
+        died=died and not rate_limited,
     )
 
 

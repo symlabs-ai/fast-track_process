@@ -2993,7 +2993,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """
         from ft.engine.state import StateLockError
         try:
-            state = self.state_mgr.load(check_lock=True)
+            state = self.state_mgr.claim()
         except StateLockError as e:
             print(ui.fail(str(e)))
             return
@@ -3233,6 +3233,30 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             if state.node_status not in ("blocked", "awaiting_approval", "done", "completed"):
                 print(ui.dim("  → ft continue   para continuar o próximo step"))
 
+    _MAX_STREAM_RETRIES = 2
+
+    def _delegate_with_stream_retry(self, **delegate_kwargs):
+        """delegate_to_llm com retry automático quando o processo morre sem veredito.
+
+        Stream interrompida, crash ou timeout do CLI (result.died) é falha de
+        infraestrutura, não de conteúdo: retenta a mesma delegação até
+        _MAX_STREAM_RETRIES vezes extras antes de devolver a falha. O trabalho
+        parcial permanece no working tree, então cada tentativa continua de
+        onde a anterior parou.
+        """
+        attempt = 0
+        while True:
+            result = delegate_to_llm(**delegate_kwargs)
+            if result.success or not getattr(result, "died", False):
+                return result
+            if attempt >= self._MAX_STREAM_RETRIES:
+                return result
+            attempt += 1
+            print(ui.warn(
+                "Delegação morreu sem veredito (stream/crash/timeout) — "
+                f"retry automático {attempt}/{self._MAX_STREAM_RETRIES}"
+            ))
+
     def _run_llm_step(self, node: Node):
         """Wrapper: garante env_teardown em qualquer saída (PASS, retry, block)."""
         try:
@@ -3449,7 +3473,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             delegate_kwargs["max_turns"] = node.max_turns
 
         try:
-            result = delegate_to_llm(**delegate_kwargs)
+            result = self._delegate_with_stream_retry(**delegate_kwargs)
         finally:
             self._clear_active_llm_log(state)
 
@@ -3797,7 +3821,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 llm_timeout_seconds=node.llm_timeout_seconds,
             )
             self._apply_opencode_options(fix_kwargs, opencode_options)
-            result = delegate_to_llm(**fix_kwargs)
+            result = self._delegate_with_stream_retry(**fix_kwargs)
         finally:
             self._clear_active_llm_log(state)
 
@@ -4405,7 +4429,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             review_kwargs["max_turns"] = node.max_turns
 
         try:
-            result = delegate_to_llm(**review_kwargs)
+            result = self._delegate_with_stream_retry(**review_kwargs)
         finally:
             self._clear_active_llm_log(state)
 

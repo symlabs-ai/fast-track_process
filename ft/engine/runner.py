@@ -2993,7 +2993,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """
         from ft.engine.state import StateLockError
         try:
-            state = self.state_mgr.claim()
+            state = self.state_mgr.load(check_lock=True)
         except StateLockError as e:
             print(ui.fail(str(e)))
             return

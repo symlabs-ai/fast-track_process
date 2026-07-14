@@ -302,8 +302,12 @@ BUNDLE_IGNORED_FILES = frozenset({
 BUNDLE_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
-def process_digest(process_file: str | Path) -> str | None:
-    """Hash the complete runtime bundle selected by ``process_file``.
+def _process_digest(
+    process_file: str | Path,
+    *,
+    normalize_git_modes: bool,
+) -> str | None:
+    """Hash one runtime bundle using current or legacy permission semantics.
 
     A process is more than its graph: the adjacent ``environment.yml`` and
     every file under ``scripts/`` can change execution semantics as well.  The
@@ -363,17 +367,45 @@ def process_digest(process_file: str | Path) -> str | None:
             ) from exc
         relative = relative_name(candidate)
         payload = resolved.read_bytes()
-        # Git persists only the executable bit for regular files.  Normalize
-        # rw/umask differences so a freshly checked-out worktree has the same
-        # bundle digest as its owning checkout while executable changes remain
-        # part of the immutable cycle pin.
         raw_mode = stat.S_IMODE(resolved.stat().st_mode)
-        mode = 0o755 if raw_mode & 0o111 else 0o644
+        mode = (
+            0o755 if raw_mode & 0o111 else 0o644
+        ) if normalize_git_modes else raw_mode
         header = f"{len(relative)}:{relative}:{mode:o}:{len(payload)}:".encode("utf-8")
         digest.update(header)
         digest.update(payload)
         digest.update(b"\0")
     return "sha256:" + digest.hexdigest()
+
+
+def process_digest(process_file: str | Path) -> str | None:
+    """Hash a process bundle using Git-stable permission semantics.
+
+    Git persists only the executable bit for regular files.  Normalizing
+    rw/umask differences makes a freshly checked-out worktree identical to its
+    owning checkout while executable changes remain part of the immutable pin.
+    """
+    return _process_digest(process_file, normalize_git_modes=True)
+
+
+def process_digest_matches(
+    process_file: str | Path,
+    expected_digest: str,
+) -> bool:
+    """Match current pins and byte-identical pins created before V3.
+
+    Older cycles hashed the full filesystem mode.  A Git worktree created
+    under a shared umask could therefore pin ``664/775`` even though Git only
+    records ``644/755`` semantics.  The fallback is deliberately verification
+    only: it accepts a legacy pin solely when the complete bundle still hashes
+    to that exact value and never rewrites active state.
+    """
+    if process_digest(process_file) == expected_digest:
+        return True
+    return (
+        _process_digest(process_file, normalize_git_modes=False)
+        == expected_digest
+    )
 
 
 def _safe_manifest_process_path(root: Path, raw_path: object) -> Path | None:

@@ -22,6 +22,7 @@ from ft.engine.layout import (
     manifest_llm_defaults,
     migrate_legacy_layout,
     process_digest,
+    process_digest_matches,
     read_manifest,
     resolve_project_process,
     update_manifest_llm_defaults,
@@ -991,7 +992,7 @@ def get_runner(
                         and execution.get("runtime_source") == "local_only"
                     )
                 )
-                and process_digest(process_path) != pinned_digest
+                and not process_digest_matches(process_path, pinned_digest)
             ):
                 raise ValueError(
                     f"processo local do ciclo divergiu do digest fixado: {pinned_path}"

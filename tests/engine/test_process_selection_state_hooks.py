@@ -7,8 +7,9 @@ import stat
 import pytest
 import yaml
 
+from ft.engine import layout
 from ft.engine.hooks import load_environment, run_hooks
-from ft.engine.layout import process_digest
+from ft.engine.layout import process_digest, process_digest_matches
 from ft.engine.state import StateManager
 
 
@@ -163,6 +164,33 @@ def test_process_digest_covers_environment_scripts_and_executable_mode(tmp_path)
     assert process_digest(process) == baseline
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     assert process_digest(process) != baseline
+
+
+def test_process_digest_accepts_byte_identical_legacy_mode_pin(tmp_path):
+    process_dir = tmp_path / ".ft" / "process" / "feature"
+    scripts_dir = process_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    process = process_dir / "process.yml"
+    environment = process_dir / "environment.yml"
+    script = scripts_dir / "serve.sh"
+    process.write_text("id: feature\nnodes: []\n")
+    environment.write_text("run_mode: isolated\n")
+    script.write_text("#!/bin/sh\nprintf ready\n")
+    process.chmod(0o664)
+    environment.chmod(0o664)
+    script.chmod(0o775)
+
+    legacy_pin = layout._process_digest(
+        process,
+        normalize_git_modes=False,
+    )
+
+    assert legacy_pin is not None
+    assert legacy_pin != process_digest(process)
+    assert process_digest_matches(process, legacy_pin)
+
+    script.write_text("#!/bin/sh\nprintf changed\n")
+    assert not process_digest_matches(process, legacy_pin)
 
 
 def test_run_hooks_rejects_relative_and_absolute_escape(tmp_path):

@@ -4113,6 +4113,20 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """Build provider-specific prompt context for one delegated attempt."""
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = build_task_prompt(node, state_dict)
+        # Modo autônomo: com --bypass-human-gates não há humano para responder
+        # perguntas. A LLM decide no lugar do humano — responde as perguntas com
+        # o default mais razoável, documenta a decisão, e nunca deixa o fluxo
+        # bloqueado aguardando esclarecimento (senão nós de clareza re-loopam).
+        if getattr(self, "_bypass_human_gates", False):
+            task_prompt = (
+                "MODO AUTÔNOMO (--bypass-human-gates ativo): NÃO há humano para "
+                "responder perguntas neste run. Se sua tarefa levantaria perguntas "
+                "ao stakeholder, RESPONDA VOCÊ MESMO com o default mais razoável e "
+                "documente a decisão + justificativa. NUNCA deixe "
+                "clarification_status: required nem bloqueie o fluxo aguardando "
+                "decisão humana — use 'clear' após registrar suas escolhas.\n\n"
+                f"{task_prompt}"
+            )
         process_relative = self._project_relative_process_path()
         compact_bundle = (
             _opencode_compact_bundle_prompt(node, process_relative)

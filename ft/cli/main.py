@@ -3046,11 +3046,29 @@ def cmd_validate(args):
 
     # --- Validação do YAML ---
     print()
-    process_path = resolve_project_process(root, str(args.template))
+    selector = str(args.template)
+    selector_path = Path(selector)
+    is_local_path = "/" in selector or "\\" in selector
+    try:
+        if is_local_path:
+            if selector_path.is_absolute() or "\\" in selector:
+                raise ValueError(
+                    "o path de validação deve ser relativo e usar separadores POSIX"
+                )
+            process_path = validate_local_process_path(
+                root,
+                selector_path,
+                require_registered=False,
+            )
+        else:
+            process_path = resolve_project_process(root, selector)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ERRO: alvo de validação inválido: {exc}")
+        sys.exit(1)
     if not process_path:
         print(
-            f"ERRO: template local não materializado: {args.template}. "
-            f"Use `ft run . --template {args.template}` para materializá-lo."
+            f"ERRO: template local não materializado: {selector}. "
+            f"Use `ft run . --template {selector}` para materializá-lo."
         )
         sys.exit(1)
 
@@ -4651,8 +4669,20 @@ def main():
     graph.add_argument("--cycle", help="Ciclo específico a consultar")
 
     # validate
-    validate = sub.add_parser("validate", help="Validar um template local materializado")
-    validate.add_argument("--template", "-t", required=True, metavar="TEMPLATE")
+    validate = sub.add_parser(
+        "validate",
+        help="Validar um template materializado ou process.yml local",
+    )
+    validate.add_argument(
+        "--template",
+        "-t",
+        required=True,
+        metavar="TEMPLATE_OR_PATH",
+        help=(
+            "Nome registrado ou path canônico "
+            ".ft/process/<nome>/process.yml"
+        ),
+    )
 
     # lint-process
     lp = sub.add_parser("lint-process", help="Lint semântico — detecta especificidades de projeto no YAML")

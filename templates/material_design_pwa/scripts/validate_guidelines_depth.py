@@ -136,6 +136,18 @@ def main() -> int:
     if not re.search(r'state-layer|m3-state|\.ripple', src):
         fails.append("STATE-LAYER: falta utilitário de state layer/ripple para feedback de toque")
 
+    # 8. Seleção: barra contextual efêmera + gatilho long-press nas listas
+    if 'data-md-component="contextual-bar"' not in src:
+        fails.append(
+            'SELECTION-BAR: listas de conteúdo devem ter uma top app bar contextual efêmera '
+            'de seleção (data-md-component="contextual-bar", role="toolbar")'
+        )
+    if not re.search(r'data-md-longpress|onLongPress|useLongPress|LONG_?PRESS|longPress', src):
+        fails.append(
+            "SELECTION-LONGPRESS: o modo de seleção deve ser acionado por long-press "
+            "(data-md-longpress / handler de long-press), não checkbox como gatilho primário"
+        )
+
     if fails:
         print("guidelines-depth FAIL: " + str(len(fails)) + " requisito(s) de componente M3 não atendidos:")
         for f in fails:

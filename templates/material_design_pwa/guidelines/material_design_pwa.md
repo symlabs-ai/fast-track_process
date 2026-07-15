@@ -157,6 +157,26 @@ busca/captura**; na timeline/início, **adicionar compra**. Contrato de implemen
   principal global do produto (capturar/adicionar).
 - Marcador `data-md-component="fab"`. Verificado pelo gate (`validate_guidelines_depth.py`):
   presença + `usePathname` (contexto) + render no `layout.tsx` (persistência).
+
+### Seleção, barra contextual efêmera e gestos (obrigatório em listas de conteúdo)
+
+Listas de conteúdo devem suportar o padrão M3 de **seleção**, como no WhatsApp:
+
+- **Long-press** em um item entra em **modo de seleção** (unificado em todas as listas — não
+  usar checkbox como gatilho primário). Marcador do item selecionável: `data-md-selectable`.
+- Em modo de seleção, o cabeçalho da tela é substituído por uma **top app bar contextual
+  efêmera** no topo, com contagem de selecionados e as ações — marcador
+  `data-md-component="contextual-bar"`, `role="toolbar"`. Sai da seleção com "voltar"/vazio.
+- **Swipe** (arrastar o item) é atalho secundário para a ação principal do item.
+- **Regra por tipo de dado:**
+  - **Registros criados pelo usuário** (ex.: garantias): a barra contextual PODE oferecer
+    **excluir** (hard delete) com desfazer via snackbar.
+  - **Dado fiscal** (compras, itens de nota): é **imutável** — a barra contextual oferece só
+    ações **não destrutivas** (ver documento, adicionar garantia, exportar, compartilhar) e,
+    quando o produto permitir, **arquivar/ocultar reversível** (esconder da lista sem apagar a
+    evidência; nunca hard delete/edit).
+- Verificado pelo gate: presença de `data-md-component="contextual-bar"` + gatilho de
+  long-press (`data-md-longpress` / handler de long-press) nas listas de conteúdo.
 | Responsive grids| Organize layout por panes e contenção| Compacto: 1 pane; expandido: 2+ panes| Layout é guidance, não componente pronto||
 
 A engenharia de componentes para uma PWA Material funciona melhor quando você pensa em **três camadas**: shell, conteúdo e feedback. Abaixo, um mapa prático de dependências entre peças. Ele não vem “pronto” da biblioteca; ele vem da combinação entre a guidance do Material e a realidade do front-end web.

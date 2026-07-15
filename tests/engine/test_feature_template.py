@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -680,6 +681,51 @@ def test_feature_shared_cache_is_opt_in_hermetic_and_single_keyed(tmp_path):
         (tmp_path / "ft-home/cache/feature-validation").glob("implementation-*.json")
     )
     assert len(cache_files) == 1
+
+
+def test_feature_product_full_resource_is_opt_in_and_shared_by_git_worktrees(
+    tmp_path,
+):
+    root = _receipt_project(tmp_path / "project-root")
+    lock_dir = root / ".git" / "ft-resource-locks"
+    lock_dir.mkdir()
+    lock_path = lock_dir / "product_full.lock"
+    lock_handle = lock_path.open("w")
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    env = dict(os.environ)
+    env["FT_FEATURE_PRODUCT_FULL_RESOURCE"] = "1"
+    process = subprocess.Popen(
+        [
+            "bash",
+            str(root / ".ft/process/feature/scripts/product.sh"),
+            "full",
+            "--record",
+            "docs/feature-validation.json",
+        ],
+        cwd=root,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert process.stdout is not None
+        assert process.stdout.readline().strip() == (
+            "product_full resource WAITING: implementation"
+        )
+        assert process.poll() is None
+        assert not (root / "validation-calls.log").exists()
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        stdout, stderr = process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        lock_handle.close()
+
+    assert process.returncode == 0, stderr
+    assert "product_full resource ACQUIRED: implementation" in stdout
+    assert (root / "validation-calls.log").read_text() == "build\ntest\n"
 
 
 def test_feature_implementation_validation_fails_before_full_suite(tmp_path):

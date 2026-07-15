@@ -94,6 +94,21 @@ processo, toolchain (inclusive o pacote editable de `ft`), dependências externa
 declaradas, TTL e single-flight por lock. Sem a declaração hermética, `ensure`
 permanece estritamente local.
 
+Quando múltiplos ciclos disputam CPU, memória ou serviços locais não herméticos,
+o recurso experimental `product_full` pode serializar somente as validações
+completas do mesmo repositório (o lock vive no Git common-dir compartilhado por
+todas as worktrees):
+
+```bash
+FT_FEATURE_PRODUCT_FULL_RESOURCE=1 \
+  .ft/process/feature/scripts/product.sh ensure --record docs/feature-validation.json
+```
+
+O recurso fica desligado por padrão e é independente do cache: ele não reutiliza
+resultados, apenas evita duas execuções completas concorrentes. A ausência de
+`flock` ou de um projeto Git válido falha explicitamente quando o opt-in está
+ativo.
+
 ## Contrato
 
 - uma demanda e uma feature alvo por ciclo;

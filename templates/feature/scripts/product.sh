@@ -118,6 +118,41 @@ run_full_validation() {
   receipt_tool "$validation_kind" record --receipt "$receipt" --expected "$before"
 }
 
+product_full_lock_file() {
+  local common_dir lock_dir
+  common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
+    printf 'ERRO: recurso product_full exige um projeto Git válido\n' >&2
+    return 1
+  }
+  case "$common_dir" in
+    /*) ;;
+    *) common_dir="$ROOT/$common_dir" ;;
+  esac
+  lock_dir="$common_dir/ft-resource-locks"
+  mkdir -p "$lock_dir"
+  printf '%s\n' "$lock_dir/product_full.lock"
+}
+
+run_full_with_resource() {
+  local validation_kind="$1"
+  local receipt="$2"
+  if test "${FT_FEATURE_PRODUCT_FULL_RESOURCE:-0}" != "1"; then
+    run_full_validation "$validation_kind" "$receipt"
+    return $?
+  fi
+  command -v flock >/dev/null 2>&1 || {
+    printf 'ERRO: recurso product_full solicitado, mas flock está indisponível\n' >&2
+    return 2
+  }
+  local lock_file
+  lock_file="$(product_full_lock_file)" || return $?
+  exec {product_full_lock_fd}>"$lock_file"
+  printf 'product_full resource WAITING: %s\n' "$validation_kind"
+  flock -x "$product_full_lock_fd"
+  printf 'product_full resource ACQUIRED: %s\n' "$validation_kind"
+  run_full_validation "$validation_kind" "$receipt"
+}
+
 ensure_validation() {
   local validation_kind="$1"
   local receipt="$2"
@@ -135,7 +170,7 @@ ensure_validation() {
       printf 'cache compartilhado ignorado: flock indisponível\n' >&2
     fi
   fi
-  run_full_validation "$validation_kind" "$receipt"
+  run_full_with_resource "$validation_kind" "$receipt"
 }
 
 ensure_from_shared_cache() {
@@ -173,7 +208,7 @@ ensure_from_shared_cache() {
     fi
   fi
 
-  run_full_validation "$validation_kind" "$receipt" || return $?
+  run_full_with_resource "$validation_kind" "$receipt" || return $?
   local temporary="$cache_file.tmp.$$"
   cp -- "$ROOT/$receipt" "$temporary"
   chmod 600 "$temporary"
@@ -199,7 +234,7 @@ case "${1:-path}" in
       usage
       exit 2
     fi
-    run_full_validation implementation "$2"
+    run_full_with_resource implementation "$2"
     ;;
   ensure)
     shift

@@ -3353,6 +3353,18 @@ def cmd_fix(args):
             return
 
     print(_ui.info(f"Aplicando correção: {instruction}"))
+    # Observabilidade: o fix genérico delega fora do ciclo de vida do node.
+    # Registrar o log no lugar padrão e no state permite que ft status/ft log
+    # mostrem a delegação em andamento (última atividade e LLM log ativo).
+    fix_log_path = runner._build_llm_log_path(
+        state.current_node if state and state.current_node else "fix",
+        "fix",
+        engine=fix_engine,
+    )
+    fix_log_rel = runner._display_path(fix_log_path)
+    state.active_llm_log = fix_log_rel
+    state.last_llm_log = fix_log_rel
+    runner.state_mgr.save()
     fix_kwargs = dict(
         task=prompt,
         project_root=str(root),
@@ -3360,10 +3372,15 @@ def cmd_fix(args):
         llm_engine=fix_engine,
         llm_model=fix_model,
         llm_effort=fix_effort,
+        log_path=str(fix_log_path),
     )
     if opencode_capture_output_path:
         fix_kwargs["opencode_capture_output_path"] = opencode_capture_output_path
-    result = delegate_to_llm(**fix_kwargs)
+    try:
+        result = delegate_to_llm(**fix_kwargs)
+    finally:
+        state = runner.state_mgr.load()
+        runner._clear_active_llm_log(state)
 
     if result.success:
         postprocess_note = None

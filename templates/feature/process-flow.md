@@ -1,21 +1,18 @@
 # Feature — Diagrama de Fluxo
 
 Fluxo do processo definido em [`process.yml`](./process.yml) (`id: feature`,
-versão `1.2.0`). Gerado a partir dos `nodes`, seus `next`, `branches`,
-`reject_next` e `on_fail`.
+versão `1.3.0`). O template continua executando um ciclo independente por
+demanda; não existe planner, wave ou batch oculto.
 
 ## Legenda
 
 | Forma | Tipo de node |
 |---|---|
-| Hexágono | `gate` (validação determinística) |
-| Retângulo | `discovery` / `build` / `review` / `document` (executor de agente) |
-| Losango | `decision` (branch por condição) |
-| Paralelogramo | `human_gate` (aprovação humana) |
-| Estádio | `end` |
-
-Arestas tracejadas em vermelho são caminhos de **rejeição / correção** que
-voltam o ciclo para trás.
+| Hexágono | `gate` determinístico |
+| Retângulo | node LLM focal |
+| Losango | `decision` determinístico |
+| Paralelogramo | `human_gate` |
+| Estádio | início/fim |
 
 ## Fluxo
 
@@ -23,67 +20,72 @@ voltam o ciclo para trás.
 flowchart TD
     start([ft run . --template feature]) --> preflight
 
-    subgraph s1["Sprint feature-01-scope"]
-        preflight{{"feature.preflight<br/>Preflight do Produto Existente<br/>(gate)"}}
-        discovery["feature.discovery<br/>Elucidar Demanda e Planejar<br/>(discovery · claude)"]
-        discovery_gate{{"feature.discovery_gate<br/>Registrar Resultado do Discovery<br/>(gate)"}}
-        clarity{"feature.clarity<br/>Demanda está clara?<br/>(decision)"}
-        questions[/"feature.questions<br/>Perguntas sobre a Feature<br/>(human_gate)"/]
-        scope_gate[/"feature.scope_gate<br/>Aprovação do Escopo<br/>(human_gate)"/]
+    subgraph scope["feature-01-scope"]
+        preflight{{"preflight<br/>checks estáticos → baseline"}}
+        discovery["discovery<br/>contrato + plano + workset"]
+        discovery_gate{{"discovery_gate<br/>extrair clareza"}}
+        clarity{"clarity"}
+        questions[/"questions<br/>responder pendências"/]
+        reserve_ids{{"reserve_ids<br/>PB distinto + FEAT reservado"}}
+        scope_gate[/"scope_gate<br/>aprovar escopo"/]
     end
 
-    subgraph s2["Sprint feature-02-build"]
-        implement["feature.implement<br/>Implementar Feature e Testes<br/>(build · claude)"]
-        review["feature.review<br/>Revisão Independente<br/>(review · claude)"]
+    subgraph build["feature-02-build"]
+        implement["implement<br/>somente código e testes"]
+        product_validate{{"product_validate<br/>ensure local: build + test"}}
+        evidence["evidence<br/>somente referências e relatório"]
+        evidence_gate{{"evidence_gate<br/>integridade referencial"}}
+        review["review<br/>avaliação semântica independente"]
+        review_route{{"review_route<br/>extrair rota estruturada"}}
+        review_decision{"review_decision"}
     end
 
-    subgraph s3["Sprint feature-03-acceptance"]
-        acceptance[/"feature.acceptance<br/>Aceite da Feature<br/>(human_gate)"/]
-        reconcile["feature.reconcile<br/>Reconciliar Backlog e Catálogo<br/>(document · claude)"]
-        final_gate{{"feature.final_gate<br/>Gate Final<br/>(gate)"}}
-        endnode([feature.end<br/>Feature Pronta para Merge])
+    subgraph acceptance["feature-03-acceptance"]
+        accept[/"acceptance<br/>aceite do stakeholder"/]
+        reconcile["reconcile<br/>proposta documental"]
+        final_gate{{"final_gate<br/>receipt + reconciliação"}}
+        endnode([feature.end])
     end
 
-    preflight --> discovery
-    discovery --> discovery_gate
-    discovery_gate --> clarity
-    clarity -->|clear| scope_gate
-    clarity -->|"required / _default"| questions
-    questions -.->|respostas voltam ao discovery| discovery
-
-    scope_gate --> implement
-    scope_gate -.->|reject_next| discovery
-
-    implement --> review
-    review --> acceptance
-    review -.->|on_fail → human_gate| implement
-
-    acceptance --> reconcile
-    acceptance -.->|reject_next| implement
-
-    reconcile --> final_gate
-    final_gate --> endnode
-    endnode --> close([ft close --merge full])
+    preflight --> discovery --> discovery_gate --> clarity
+    clarity -->|required| questions
+    questions -. respostas .-> discovery
+    clarity -->|clear| reserve_ids --> scope_gate
+    scope_gate -. rejeição .-> discovery
+    scope_gate --> implement --> product_validate --> evidence --> evidence_gate --> review
+    product_validate -. falha focal .-> implement
+    evidence_gate -. referência inválida .-> evidence
+    review --> review_route --> review_decision
+    review_decision -->|approved| accept
+    review_decision -. implementation .-> implement
+    review_decision -. evidence .-> evidence
+    review_decision -. scope .-> discovery
+    review_decision -. inválida .-> review
+    accept -. rejeição semântica .-> implement
+    accept --> reconcile --> final_gate --> endnode --> close([ft close --merge full])
 
     classDef human fill:#fde68a,stroke:#b45309,color:#000;
     classDef gate fill:#bfdbfe,stroke:#1e40af,color:#000;
     classDef terminal fill:#bbf7d0,stroke:#166534,color:#000;
-    class questions,scope_gate,acceptance human;
-    class preflight,discovery_gate,final_gate gate;
+    class questions,scope_gate,accept human;
+    class preflight,discovery_gate,reserve_ids,product_validate,evidence_gate,review_route,final_gate gate;
     class start,endnode,close terminal;
-
-    linkStyle 6,8,11,13 stroke:#dc2626,stroke-width:2px;
 ```
 
-## Resumo dos caminhos
+## Salvaguardas de desempenho
 
-- **Caminho feliz:** `preflight → discovery → discovery_gate → clarity(clear) →
-  scope_gate → implement → review → acceptance → reconcile → final_gate → end`.
-- **Loop de clarificação:** `clarity(required) → questions → discovery →
-  discovery_gate` — repete até o discovery marcar
-  `clarification_status: clear`.
-- **Rejeição de escopo:** `scope_gate` (reject) volta para `discovery`.
-- **Falha de revisão:** `review` com `on_fail` abre um human_gate e retorna para
-  `implement`.
-- **Rejeição no aceite:** `acceptance` (reject) volta para `implement`, repetindo
-  `make build` / `make test`.
+- `preflight` e os demais gates caros usam `validation_mode: fail_fast`; checks
+  estáticos vêm antes de build/test.
+- `implement` não produz evidência narrativa. `product_validate` roda a suíte
+  completa uma vez por snapshot e `ensure` reutiliza somente o receipt local
+  válido.
+- `evidence` não altera código e o gate seguinte comprova apenas referências;
+  a suficiência semântica permanece na review.
+- O episódio de implementação tem deadline por chamada e orçamento cumulativo.
+  Rotas semânticas `implementation` e `scope`, além de rejeição humana legítima,
+  iniciam um episódio novo; esgotamento pausa preservando o diff.
+- `reconcile` propõe conteúdo estruturado, o engine valida IDs autorizados e só
+  então aplica os documentos canônicos.
+- Ciclos paralelos exigem PBs preexistentes distintos. FEATs novos são
+  reservados sob lock curto, e o close tenta a reconciliação conservadora de
+  CHANGELOG, backlog e catálogo antes de pedir merge manual.

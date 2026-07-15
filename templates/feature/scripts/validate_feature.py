@@ -8,11 +8,15 @@ owned by ``process.yml`` so command output is visible in the engine gate log.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
+import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from typing import Iterable
 
@@ -27,6 +31,11 @@ CLARIFICATION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 BASELINE_PATH = "docs/feature-baseline.yml"
+RESERVATION_PATH = "docs/feature-id-reservation.yml"
+EVIDENCE_PATH = "docs/feature-evidence.yml"
+REVIEW_ROUTE_PATH = "docs/feature-review.yml"
+RECONCILIATION_PATH = "docs/feature-reconciliation.yml"
+RECEIPT_PATH = "docs/feature-validation.json"
 DOCUMENTATION_PATHS = (
     "CHANGELOG.md",
     "docs/PRD.md",
@@ -37,6 +46,10 @@ DOCUMENTATION_PATHS = (
     "docs/test_data.md",
     "docs/PROJECT_BACKLOG.md",
     "docs/FEATURES.md",
+)
+RECONCILIATION_PATHS = frozenset(DOCUMENTATION_PATHS)
+REQUIRED_RECONCILIATION_PATHS = frozenset(
+    {"CHANGELOG.md", "docs/PROJECT_BACKLOG.md", "docs/FEATURES.md"}
 )
 
 
@@ -67,6 +80,40 @@ def _read(root: Path, relative: str) -> str:
     if not text.strip():
         raise FeatureValidationError(f"arquivo obrigatório vazio: {relative}")
     return text
+
+
+def _read_yaml(root: Path, relative: str) -> dict[str, object]:
+    text = _read(root, relative)
+    try:
+        payload = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise FeatureValidationError(f"{relative}: YAML inválido: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise FeatureValidationError(f"{relative}: esperado mapping YAML")
+    return payload
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_write_yaml(path: Path, payload: dict[str, object]) -> None:
+    _atomic_write_text(
+        path,
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+    )
 
 
 def _frontmatter(text: str, path: str) -> dict[str, object]:
@@ -320,6 +367,15 @@ def _feature_contract(root: Path) -> tuple[dict[str, str], str, list[str]]:
     backlog_records = _markdown_records(_read(root, "docs/PROJECT_BACKLOG.md"))
     if _find_row(backlog_records, backlog) is None:
         raise FeatureValidationError(f"PROJECT_BACKLOG não contém {backlog}")
+    request_backlogs = {
+        match.group(0).upper()
+        for match in PB_RE.finditer(_read(root, "docs/feature-request.md"))
+    }
+    if request_backlogs != {backlog}:
+        raise FeatureValidationError(
+            "docs/feature.md deve preservar o único PB da demanda: "
+            + (", ".join(sorted(request_backlogs)) or "nenhum")
+        )
 
     feature_records = _markdown_records(_read(root, "docs/FEATURES.md"))
     if target != "NEW" and _find_row(feature_records, target) is None:
@@ -421,10 +477,32 @@ def _review_ac_statuses(
 
 
 def validate_baseline(root: Path) -> None:
-    _read(root, "docs/feature-request.md")
+    request = _read(root, "docs/feature-request.md")
     _read(root, "docs/PRD.md")
-    _read(root, "docs/PROJECT_BACKLOG.md")
+    backlog_text = _read(root, "docs/PROJECT_BACKLOG.md")
     _read(root, "docs/FEATURES.md")
+    request_backlogs = sorted(
+        {
+            match.group(0).upper()
+            for match in PB_RE.finditer(request)
+        }
+    )
+    if len(request_backlogs) != 1:
+        raise FeatureValidationError(
+            "docs/feature-request.md deve referenciar exatamente um PB-* "
+            "preexistente para permitir ciclos independentes e paralelos"
+        )
+    request_row = _find_row(_markdown_records(backlog_text), request_backlogs[0])
+    if request_row is None:
+        raise FeatureValidationError(
+            f"PROJECT_BACKLOG não contém {request_backlogs[0]}"
+        )
+    request_status = _normalize(_row_value(request_row, "status", "estado"))
+    if request_status not in {"planned", "ready", "in_progress"}:
+        raise FeatureValidationError(
+            f"{request_backlogs[0]} não está aberto para execução feature: "
+            f"status={request_status or 'ausente'}"
+        )
     product_root = _detect_product_root(root)
     makefile_path = f"{product_root}/Makefile"
     makefile = _read(root, makefile_path)
@@ -444,6 +522,38 @@ def validate_discovery(root: Path) -> None:
     questions = _read(root, "docs/feature-questions.md")
     _read(root, "docs/feature.md")
     _read(root, "docs/feature-plan.md")
+    workset_text = _read(root, "docs/feature-workset.yml")
+    try:
+        workset = yaml.safe_load(workset_text) or {}
+    except yaml.YAMLError as exc:
+        raise FeatureValidationError(
+            f"docs/feature-workset.yml: YAML inválido: {exc}"
+        ) from exc
+    if not isinstance(workset, dict) or workset.get("schema_version") != 1:
+        raise FeatureValidationError(
+            "docs/feature-workset.yml exige schema_version: 1"
+        )
+    workset_paths = workset.get("paths")
+    if not isinstance(workset_paths, list) or not all(
+        isinstance(path, str) and path.strip() for path in workset_paths
+    ):
+        raise FeatureValidationError(
+            "docs/feature-workset.yml exige paths como lista de strings"
+        )
+    invalid_workset_paths = [
+        path
+        for path in workset_paths
+        if Path(path).is_absolute()
+        or ".." in Path(path).parts
+        or not Path(path).parts
+    ]
+    if invalid_workset_paths:
+        raise FeatureValidationError(
+            "docs/feature-workset.yml contém paths inválidos: "
+            + ", ".join(invalid_workset_paths)
+        )
+    # O workset é deliberadamente apenas uma dica focal. Paths previstos pelo
+    # discovery podem ainda não existir e nunca restringem o write_scope.
     match = CLARIFICATION_RE.search(discovery)
     if not match:
         raise FeatureValidationError(
@@ -466,6 +576,147 @@ def validate_discovery(root: Path) -> None:
         raise FeatureValidationError(
             "docs/feature-plan.md sem referências obrigatórias: " + ", ".join(missing)
         )
+
+
+def _git_common_dir(root: Path) -> Path:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FeatureValidationError(f"não foi possível localizar git common dir: {exc}") from exc
+    if result.returncode != 0 or not result.stdout.strip():
+        raise FeatureValidationError(
+            "reserva de IDs exige worktree Git: "
+            + (result.stderr.strip() or f"exit {result.returncode}")
+        )
+    common = Path(result.stdout.strip())
+    if not common.is_absolute():
+        common = root / common
+    return common.resolve()
+
+
+def _feature_number(identifier: str) -> int | None:
+    match = FEAT_RE.fullmatch(identifier.upper())
+    return int(identifier.split("-", 1)[1]) if match else None
+
+
+def validate_reserve(root: Path) -> None:
+    metadata, _, _ = _feature_contract(root)
+    backlog = metadata["backlog_item"]
+    target = metadata["target_feature"]
+    owner_root = str(root.resolve())
+    common_dir = _git_common_dir(root)
+    registry_path = common_dir / "ft-feature-id-reservations.yml"
+    lock_path = common_dir / "ft-feature-id-reservations.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                registry = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+            except FileNotFoundError:
+                registry = {}
+            except yaml.YAMLError as exc:
+                raise FeatureValidationError(f"registry de IDs inválido: {exc}") from exc
+            if not isinstance(registry, dict):
+                raise FeatureValidationError("registry de IDs deve ser mapping")
+            if registry.get("schema_version") not in {None, 1}:
+                raise FeatureValidationError("registry de IDs possui schema_version inválido")
+            reservations = registry.get("reservations", [])
+            if not isinstance(reservations, list) or not all(
+                isinstance(item, dict) for item in reservations
+            ):
+                raise FeatureValidationError("registry de IDs possui reservations inválidas")
+
+            request_type = metadata["type"]
+            own = next(
+                (
+                    item
+                    for item in reservations
+                    if item.get("backlog_item") == backlog
+                    and item.get("worktree_root") == owner_root
+                    and item.get("request_type") in {None, request_type}
+                    and item.get("target_feature") in {None, target}
+                ),
+                None,
+            )
+            for item in reservations:
+                if (
+                    item.get("backlog_item") != backlog
+                    or item.get("worktree_root") == owner_root
+                ):
+                    continue
+                other_root = item.get("worktree_root")
+                if isinstance(other_root, str) and Path(other_root).exists():
+                    raise FeatureValidationError(
+                        f"{backlog} já está reservado pelo ciclo em {other_root}; "
+                        "ciclos paralelos devem usar PBs distintos"
+                    )
+
+            if own is not None:
+                final_feature_id = str(own.get("feature_id") or "")
+            elif metadata["type"] == "new":
+                feature_records = _markdown_records(_read(root, "docs/FEATURES.md"))
+                used = {
+                    number
+                    for number in (
+                        _feature_number(_row_value(row, "id"))
+                        for row in feature_records
+                    )
+                    if number is not None
+                }
+                used.update(
+                    number
+                    for number in (
+                        _feature_number(str(item.get("feature_id") or ""))
+                        for item in reservations
+                    )
+                    if number is not None
+                )
+                final_feature_id = f"FEAT-{max(used, default=0) + 1:03d}"
+            else:
+                final_feature_id = target
+
+            if not FEAT_RE.fullmatch(final_feature_id):
+                raise FeatureValidationError(
+                    f"reserva produziu feature_id inválido: {final_feature_id or 'vazio'}"
+                )
+            if own is None:
+                reservations.append(
+                    {
+                        "backlog_item": backlog,
+                        "feature_id": final_feature_id,
+                        "worktree_root": owner_root,
+                        "request_type": request_type,
+                        "target_feature": target,
+                    }
+                )
+                _atomic_write_yaml(
+                    registry_path,
+                    {"schema_version": 1, "reservations": reservations},
+                )
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    _atomic_write_yaml(
+        root / RESERVATION_PATH,
+        {
+            "schema_version": 1,
+            "backlog_item": backlog,
+            "target_feature": target,
+            "final_feature_id": final_feature_id,
+            "request_type": metadata["type"],
+            "reservation_owner": owner_root,
+        },
+    )
 
 
 def _changed_product_paths(root: Path, product_root: str) -> list[str]:
@@ -502,9 +753,7 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
 
 
 def validate_implementation(root: Path) -> None:
-    _, _, acceptance_ids = _feature_contract(root)
-    report = _read(root, "docs/implementation-report.md")
-    _assert_ac_pass(report, acceptance_ids, "docs/implementation-report.md")
+    _feature_contract(root)
     _, _, product_root = _load_baseline(root)
     changed = _changed_product_paths(root, product_root)
     if not changed:
@@ -515,21 +764,98 @@ def validate_implementation(root: Path) -> None:
         raise FeatureValidationError("implementação não alterou nenhum arquivo de teste")
 
 
+def _existing_relative_paths(root: Path, values: object, label: str) -> list[str]:
+    if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+        raise FeatureValidationError(f"{label}: esperado lista de paths")
+    normalized: list[str] = []
+    for raw in values:
+        candidate = Path(raw)
+        if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts:
+            raise FeatureValidationError(f"{label}: path inválido: {raw}")
+        path = root / candidate
+        try:
+            path.resolve(strict=True).relative_to(root)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            raise FeatureValidationError(f"{label}: path ausente/fora da raiz: {raw}") from exc
+        if not path.is_file():
+            raise FeatureValidationError(f"{label}: evidência deve ser arquivo: {raw}")
+        normalized.append(candidate.as_posix())
+    return normalized
+
+
+def validate_evidence(root: Path) -> None:
+    _, _, acceptance_ids = _feature_contract(root)
+    report = _read(root, "docs/implementation-report.md")
+    _assert_ac_pass(report, acceptance_ids, "docs/implementation-report.md")
+    payload = _read_yaml(root, EVIDENCE_PATH)
+    if payload.get("schema_version") != 1:
+        raise FeatureValidationError(f"{EVIDENCE_PATH}: schema_version deve ser 1")
+    if payload.get("receipt") != RECEIPT_PATH:
+        raise FeatureValidationError(
+            f"{EVIDENCE_PATH}: receipt deve ser {RECEIPT_PATH}"
+        )
+    try:
+        receipt = json.loads(_read(root, RECEIPT_PATH))
+    except json.JSONDecodeError as exc:
+        raise FeatureValidationError(f"{RECEIPT_PATH}: JSON inválido: {exc}") from exc
+    receipt_commands = receipt.get("commands") if isinstance(receipt, dict) else None
+    if payload.get("commands") != receipt_commands:
+        raise FeatureValidationError(
+            f"{EVIDENCE_PATH}: commands devem corresponder exatamente ao receipt"
+        )
+    acceptance = payload.get("acceptance")
+    if not isinstance(acceptance, list) or not all(isinstance(item, dict) for item in acceptance):
+        raise FeatureValidationError(f"{EVIDENCE_PATH}: acceptance deve ser lista")
+    indexed = {str(item.get("id") or "").upper(): item for item in acceptance}
+    if set(indexed) != set(acceptance_ids) or len(indexed) != len(acceptance):
+        raise FeatureValidationError(
+            f"{EVIDENCE_PATH}: acceptance deve conter exatamente "
+            + ", ".join(acceptance_ids)
+        )
+    for acceptance_id in acceptance_ids:
+        item = indexed[acceptance_id]
+        if item.get("status") not in {"PASS", "FAIL"}:
+            raise FeatureValidationError(
+                f"{EVIDENCE_PATH}: {acceptance_id} sem status PASS/FAIL"
+            )
+        tests = _existing_relative_paths(
+            root, item.get("tests"), f"{EVIDENCE_PATH}:{acceptance_id}:tests"
+        )
+        if not tests:
+            raise FeatureValidationError(
+                f"{EVIDENCE_PATH}: {acceptance_id} deve referenciar ao menos um teste"
+            )
+        _existing_relative_paths(
+            root,
+            item.get("artifacts", []),
+            f"{EVIDENCE_PATH}:{acceptance_id}:artifacts",
+        )
+
+
 def validate_review(root: Path) -> None:
     _, _, acceptance_ids = _feature_contract(root)
     report = _read(root, "docs/feature-review.md")
-    results = re.findall(r"(?m)^\s*Resultado\s*:\s*(APPROVED|REJECTED)\s*$", report)
-    if len(results) != 1:
+    route = _read_yaml(root, REVIEW_ROUTE_PATH)
+    if route.get("schema_version") != 1:
+        raise FeatureValidationError(f"{REVIEW_ROUTE_PATH}: schema_version deve ser 1")
+    review_route = route.get("review_route")
+    verdict = route.get("verdict")
+    if review_route not in {"approved", "implementation", "evidence", "scope"}:
+        raise FeatureValidationError(f"{REVIEW_ROUTE_PATH}: review_route inválida")
+    if verdict not in {"APPROVED", "REJECTED"}:
+        raise FeatureValidationError(f"{REVIEW_ROUTE_PATH}: verdict inválido")
+    if not isinstance(route.get("summary"), str) or not str(route["summary"]).strip():
+        raise FeatureValidationError(f"{REVIEW_ROUTE_PATH}: summary obrigatório")
+    if (review_route == "approved") != (verdict == "APPROVED"):
         raise FeatureValidationError(
-            "docs/feature-review.md exige exatamente uma linha "
-            "`Resultado: APPROVED` ou `Resultado: REJECTED`"
+            f"{REVIEW_ROUTE_PATH}: approved exige APPROVED; demais rotas exigem REJECTED"
         )
     statuses = _review_ac_statuses(
         report,
         acceptance_ids,
         "docs/feature-review.md",
     )
-    if results[0] == "APPROVED":
+    if review_route == "approved":
         failed = [acceptance_id for acceptance_id, status in statuses.items() if status == "FAIL"]
         if failed:
             raise FeatureValidationError(
@@ -538,10 +864,289 @@ def validate_review(root: Path) -> None:
             )
 
 
+def _table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return []
+    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def _row_identifier(line: str) -> str | None:
+    cells = _table_cells(line)
+    if not cells:
+        return None
+    match = re.fullmatch(r"(?:PB-\d+[A-Z]?|FEAT-\d{3})", cells[0], re.I)
+    return match.group(0).upper() if match else None
+
+
+def _replace_markdown_row(
+    document: str,
+    *,
+    identifier: str,
+    replacement: object,
+    label: str,
+    allow_insert: bool,
+) -> str:
+    if not isinstance(replacement, str) or "\n" in replacement.strip("\n"):
+        raise FeatureValidationError(f"{label}: deve ser uma única linha Markdown")
+    normalized = replacement.strip()
+    if _row_identifier(normalized) != identifier:
+        raise FeatureValidationError(
+            f"{label}: a primeira coluna deve ser exatamente {identifier}"
+        )
+    replacement_cells = _table_cells(normalized)
+    lines = document.splitlines()
+    candidate_tables: list[tuple[int, int, int]] = []
+    existing_index: int | None = None
+    existing_table: tuple[int, int, int] | None = None
+    for index in range(len(lines) - 1):
+        headers = _table_cells(lines[index])
+        separator = _table_cells(lines[index + 1])
+        if not headers or not separator or "---" not in lines[index + 1]:
+            continue
+        if _normalize(headers[0]) != "id":
+            continue
+        row_index = index + 2
+        while row_index < len(lines) and _table_cells(lines[row_index]):
+            if _row_identifier(lines[row_index]) == identifier:
+                existing_index = row_index
+            row_index += 1
+        table = (index, row_index, len(headers))
+        candidate_tables.append(table)
+        if existing_index is not None and index < existing_index < row_index:
+            existing_table = table
+            break
+
+    selected = existing_table or (candidate_tables[0] if candidate_tables else None)
+    if selected is None:
+        raise FeatureValidationError(f"{label}: tabela canônica com coluna ID ausente")
+    _, insert_at, column_count = selected
+    if len(replacement_cells) != column_count:
+        raise FeatureValidationError(
+            f"{label}: esperado {column_count} colunas; recebidas "
+            f"{len(replacement_cells)}"
+        )
+    if existing_index is not None:
+        lines[existing_index] = normalized
+    elif allow_insert:
+        lines.insert(insert_at, normalized)
+    else:
+        raise FeatureValidationError(f"{label}: registro {identifier} ausente")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _insert_changelog_entry(document: str, entry: object, backlog: str) -> str:
+    if not isinstance(entry, str) or "\n" in entry.strip("\n"):
+        raise FeatureValidationError(
+            "changelog_entry deve ser uma única linha Markdown"
+        )
+    normalized = entry.strip()
+    if not _has_tagged_feature_changelog_entry(normalized, backlog):
+        raise FeatureValidationError(
+            f"changelog_entry de {backlog} deve iniciar com #FEAT"
+        )
+    lines = document.splitlines()
+    if normalized in (line.strip() for line in lines):
+        return document.rstrip() + "\n"
+    heading_index = next(
+        (index for index, line in enumerate(lines) if line.startswith("## ")),
+        next(
+            (index for index, line in enumerate(lines) if line.startswith("# ")),
+            -1,
+        ),
+    )
+    insert_at = heading_index + 1
+    while insert_at < len(lines) and not lines[insert_at].strip():
+        insert_at += 1
+    lines.insert(insert_at, normalized)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _validated_reconciliation_proposal(root: Path) -> dict[str, str]:
+    metadata, _, _ = _feature_contract(root)
+    reservation = _read_yaml(root, RESERVATION_PATH)
+    proposal = _read_yaml(root, RECONCILIATION_PATH)
+    if proposal.get("schema_version") != 1:
+        raise FeatureValidationError(f"{RECONCILIATION_PATH}: schema_version deve ser 1")
+    backlog = metadata["backlog_item"]
+    target = metadata["target_feature"]
+    final_feature_id = str(reservation.get("final_feature_id") or "").upper()
+    expected = {
+        "backlog_item": backlog,
+        "target_feature": target,
+        "final_feature_id": final_feature_id,
+    }
+    mismatched = [
+        key
+        for key, value in expected.items()
+        if str(proposal.get(key) or "").upper() != value
+    ]
+    if mismatched:
+        raise FeatureValidationError(
+            f"{RECONCILIATION_PATH}: IDs divergem da reserva/contrato: "
+            + ", ".join(mismatched)
+        )
+    allowed_keys = {
+        "schema_version",
+        "backlog_item",
+        "target_feature",
+        "final_feature_id",
+        "backlog_row",
+        "feature_row",
+        "changelog_entry",
+        "documentation",
+    }
+    extra_keys = sorted(set(proposal) - allowed_keys)
+    missing_keys = sorted(
+        {
+            "backlog_row",
+            "feature_row",
+            "changelog_entry",
+        }
+        - set(proposal)
+    )
+    if extra_keys or missing_keys:
+        details: list[str] = []
+        if extra_keys:
+            details.append("não permitidos: " + ", ".join(extra_keys))
+        if missing_keys:
+            details.append("ausentes: " + ", ".join(missing_keys))
+        raise FeatureValidationError(
+            f"{RECONCILIATION_PATH}: campos " + "; ".join(details)
+        )
+
+    proposed_backlog_text = _replace_markdown_row(
+        _read(root, "docs/PROJECT_BACKLOG.md"),
+        identifier=backlog,
+        replacement=proposal.get("backlog_row"),
+        label="backlog_row",
+        allow_insert=False,
+    )
+    proposed_features_text = _replace_markdown_row(
+        _read(root, "docs/FEATURES.md"),
+        identifier=final_feature_id,
+        replacement=proposal.get("feature_row"),
+        label="feature_row",
+        allow_insert=metadata["type"] == "new",
+    )
+    proposed_changelog_text = _insert_changelog_entry(
+        _read(root, "CHANGELOG.md"),
+        proposal.get("changelog_entry"),
+        backlog,
+    )
+    rendered_files: dict[str, str] = {
+        "CHANGELOG.md": proposed_changelog_text,
+        "docs/PROJECT_BACKLOG.md": proposed_backlog_text,
+        "docs/FEATURES.md": proposed_features_text,
+    }
+    documentation = proposal.get("documentation", {})
+    if not isinstance(documentation, dict):
+        raise FeatureValidationError(
+            f"{RECONCILIATION_PATH}: documentation deve ser mapping"
+        )
+    for raw_path, content in documentation.items():
+        if (
+            not isinstance(raw_path, str)
+            or raw_path not in RECONCILIATION_PATHS
+            or raw_path in REQUIRED_RECONCILIATION_PATHS
+        ):
+            raise FeatureValidationError(
+                f"{RECONCILIATION_PATH}: path canônico não autorizado: {raw_path}"
+            )
+        if not isinstance(content, str) or not content.strip():
+            raise FeatureValidationError(
+                f"{RECONCILIATION_PATH}: conteúdo vazio/inválido para {raw_path}"
+            )
+        rendered_files[raw_path] = content.rstrip() + "\n"
+
+    baseline_backlog, baseline_features, _ = _load_baseline(root)
+    proposed_backlog = _markdown_records(proposed_backlog_text)
+    _assert_unrelated_records_unchanged(
+        baseline=baseline_backlog,
+        current=proposed_backlog,
+        allowed_ids={backlog},
+        label="PROJECT_BACKLOG proposto",
+    )
+    backlog_row = _find_row(proposed_backlog, backlog)
+    status = _normalize(_row_value(backlog_row or {}, "status", "estado"))
+    if status not in {"done", "accepted"}:
+        raise FeatureValidationError(
+            f"PROJECT_BACKLOG proposto: {backlog} deve terminar done/accepted"
+        )
+
+    proposed_features = _markdown_records(proposed_features_text)
+    baseline_ids = set(_records_by_id(baseline_features))
+    proposed_ids = set(_records_by_id(proposed_features))
+    if metadata["type"] == "new":
+        new_ids = proposed_ids - baseline_ids
+        if new_ids != {final_feature_id}:
+            raise FeatureValidationError(
+                "FEATURES proposta deve criar somente o ID reservado "
+                f"{final_feature_id}; encontrados {', '.join(sorted(new_ids)) or 'nenhum'}"
+            )
+        allowed = {final_feature_id}
+    else:
+        new_ids = proposed_ids - baseline_ids
+        if new_ids:
+            raise FeatureValidationError(
+                "FEATURES proposta não pode criar IDs em evolution/improvement: "
+                + ", ".join(sorted(new_ids))
+            )
+        allowed = {target}
+    _assert_unrelated_records_unchanged(
+        baseline=baseline_features,
+        current=proposed_features,
+        allowed_ids=allowed,
+        label="FEATURES proposta",
+    )
+    final_row = _find_row(proposed_features, final_feature_id)
+    if final_row is None or backlog not in _row_value(final_row, "backlog").upper():
+        raise FeatureValidationError(
+            f"FEATURES proposta: {final_feature_id} deve referenciar {backlog}"
+        )
+    if not _has_tagged_feature_changelog_entry(proposed_changelog_text, backlog):
+        raise FeatureValidationError(
+            f"CHANGELOG proposto: entrada de {backlog} deve iniciar com #FEAT"
+        )
+    return rendered_files
+
+
+def validate_proposal(root: Path) -> None:
+    _validated_reconciliation_proposal(root)
+
+
+def apply_reconciliation(root: Path) -> None:
+    files = _validated_reconciliation_proposal(root)
+    for relative, content in sorted(files.items()):
+        assert isinstance(relative, str) and isinstance(content, str)
+        target = root / relative
+        current = root
+        for part in Path(relative).parts:
+            current = current / part
+            if current.is_symlink():
+                raise FeatureValidationError(
+                    f"aplicação recusada: componente symlink em {relative}"
+                )
+        try:
+            target.parent.resolve().relative_to(root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise FeatureValidationError(
+                f"aplicação recusada fora da raiz: {relative}"
+            ) from exc
+        _atomic_write_text(target, content)
+    validate_reconcile(root)
+
+
 def validate_reconcile(root: Path) -> None:
     metadata, _, acceptance_ids = _feature_contract(root)
     backlog = metadata["backlog_item"]
     target = metadata["target_feature"]
+    reservation = _read_yaml(root, RESERVATION_PATH)
+    final_feature_id = str(reservation.get("final_feature_id") or "").upper()
+    if reservation.get("schema_version") != 1 or not FEAT_RE.fullmatch(final_feature_id):
+        raise FeatureValidationError(f"{RESERVATION_PATH}: reserva inválida")
+    if str(reservation.get("backlog_item") or "").upper() != backlog:
+        raise FeatureValidationError(f"{RESERVATION_PATH}: backlog diverge de {backlog}")
     backlog_records = _markdown_records(_read(root, "docs/PROJECT_BACKLOG.md"))
     baseline_backlog, baseline_features, _ = _load_baseline(root)
     _assert_unrelated_records_unchanged(
@@ -562,10 +1167,11 @@ def validate_reconcile(root: Path) -> None:
     current_feature_ids = set(_records_by_id(feature_records))
     if metadata["type"] == "new":
         new_feature_ids = current_feature_ids - baseline_feature_ids
-        if len(new_feature_ids) != 1:
+        if new_feature_ids != {final_feature_id}:
             raise FeatureValidationError(
-                "FEATURES: feature new exige exatamente um novo ID FEAT-*; "
-                f"encontrados {len(new_feature_ids)}"
+                "FEATURES: feature new exige exatamente o ID reservado "
+                f"{final_feature_id}; encontrados "
+                + (", ".join(sorted(new_feature_ids)) or "nenhum")
             )
         allowed_feature_ids = new_feature_ids
     else:
@@ -592,8 +1198,10 @@ def validate_reconcile(root: Path) -> None:
                 f"feature new exige exatamente uma FEAT referenciando {backlog}; encontradas {len(referencing)}"
             )
         final_id = _row_value(referencing[0], "id").upper()
-        if not FEAT_RE.fullmatch(final_id):
-            raise FeatureValidationError(f"ID final de feature inválido: {final_id}")
+        if final_id != final_feature_id:
+            raise FeatureValidationError(
+                f"ID final {final_id} diverge da reserva {final_feature_id}"
+            )
     else:
         target_row = _find_row(feature_records, target)
         if target_row is None or backlog not in _row_value(target_row, "backlog").upper():
@@ -645,10 +1253,17 @@ def validate_reconcile(root: Path) -> None:
 VALIDATORS = {
     "baseline": validate_baseline,
     "discovery": validate_discovery,
+    "reserve": validate_reserve,
     "implementation": validate_implementation,
+    "evidence": validate_evidence,
     "review": validate_review,
+    "proposal": validate_proposal,
+    "apply-reconcile": apply_reconciliation,
     "reconcile": validate_reconcile,
 }
+READ_ONLY_VALIDATOR_MODES = tuple(
+    mode for mode in VALIDATORS if mode not in {"reserve", "apply-reconcile"}
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -661,7 +1276,8 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root = Path(args.root).resolve()
-    modes = list(VALIDATORS) if args.mode == "all" else [args.mode]
+    # ``all`` permanece diagnóstico: nunca reserva IDs nem aplica documentos.
+    modes = list(READ_ONLY_VALIDATOR_MODES) if args.mode == "all" else [args.mode]
     try:
         for mode in modes:
             VALIDATORS[mode](root)

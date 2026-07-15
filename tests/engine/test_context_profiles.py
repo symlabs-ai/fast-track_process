@@ -71,6 +71,7 @@ def test_profile_caps_are_explicit() -> None:
     } == {
         "feature_delta.discovery": 64_000,
         "feature_delta.implement": 48_000,
+        "feature_delta.evidence": 40_000,
         "feature_delta.review": 56_000,
         "feature_delta.reconcile": 72_000,
     }

@@ -467,6 +467,69 @@ class TestApproveReject:
 
 
 class TestDelegationDisplay:
+    def test_llm_episode_budget_hard_stops_before_second_call_and_persists(
+        self, tmp_path
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: budget_process
+version: "1.0.0"
+title: Budget
+nodes:
+  - id: implement
+    type: build
+    title: Implement
+    executor: claude
+    llm_timeout_seconds: 30
+    llm_episode: implementation
+    llm_episode_budget_seconds: 60
+    llm_episode_max_calls: 1
+    outputs: [docs/out.md]
+    validators:
+      - file_exists: docs/out.md
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            return_value=DelegateResult(True, "DONE", [], []),
+        ) as delegated:
+            runner.run(mode="mvp")
+
+        state = runner.state_mgr.load()
+        assert delegated.call_count == 1
+        assert state.node_status == "blocked"
+        assert "Orçamento cumulativo" in (state.blocked_reason or "")
+        assert state.llm_episodes["implementation"]["calls"] == 1
+        assert state.llm_episodes["implementation"]["consumed_seconds"] >= 0
+        checkpoint = state.llm_episodes["implementation"]["checkpoint"]
+        assert checkpoint["node_id"] == "implement"
+        assert isinstance(checkpoint["changed_paths"], list)
+        assert checkpoint["created_at"].endswith("+00:00")
+
+        resumed = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        persisted = resumed.state_mgr.load()
+        assert persisted.llm_episodes == state.llm_episodes
+
     def test_node_llm_timeout_is_forwarded_to_delegate(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
@@ -511,6 +574,117 @@ nodes:
             runner._run_llm_step(runner.graph.get_node("implement"))
 
         assert delegate_mock.call_args.kwargs["llm_timeout_seconds"] == 37
+
+    def test_decision_can_start_new_semantic_episode(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: restart_process
+title: Restart
+nodes:
+  - id: route
+    type: decision
+    title: Route
+    condition: review_route
+    branches:
+      implementation: end
+      approved: end
+    episode_restart:
+      implementation: implementation
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.artifacts["review_route"] = "implementation"
+        state.llm_episodes["implementation"] = {
+            "ordinal": 1,
+            "calls": 2,
+            "consumed_seconds": 42.5,
+        }
+        runner.state_mgr.save()
+
+        runner._run_decision(runner.graph.get_node("route"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "end"
+        assert state.llm_episodes["implementation"] == {
+            "ordinal": 2,
+            "calls": 0,
+            "consumed_seconds": 0.0,
+            "last_reason": "decision:route:implementation",
+        }
+
+    def test_backward_decision_rewinds_completed_nodes_and_clears_route(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: semantic_route
+title: Semantic route
+nodes:
+  - id: implement
+    type: gate
+    title: Implement
+    next: review
+  - id: review
+    type: gate
+    title: Review
+    next: route
+  - id: route
+    type: decision
+    title: Route
+    condition: review_route
+    branches:
+      implementation: implement
+      approved: end
+    episode_restart:
+      implementation: implementation
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.current_node = "route"
+        state.completed_nodes = ["implement", "review"]
+        state.gate_log = {"implement": "PASS", "review": "STRUCTURED"}
+        state.artifacts["review_route"] = "implementation"
+        state.llm_episodes["implementation"] = {
+            "ordinal": 1,
+            "calls": 2,
+            "consumed_seconds": 42.5,
+        }
+        runner.state_mgr.save()
+
+        runner._run_decision(runner.graph.get_node("route"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "implement"
+        assert state.completed_nodes == []
+        assert state.gate_log == {}
+        assert "review_route" not in state.artifacts
+        assert state.llm_episodes["implementation"]["ordinal"] == 2
 
     def test_delegation_message_uses_effective_llm_engine(self, tmp_path, capsys):
         project_root = tmp_path / "project"
@@ -2663,6 +2837,63 @@ nodes:
 
         assert runner.state_mgr.load().current_node == "ft.end"
 
+    def test_structured_review_routes_rejection_without_static_on_fail(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: structured_review
+title: Structured Review
+nodes:
+  - id: review
+    type: review
+    title: Review
+    executor: claude
+    review_route_path: docs/review.yml
+    outputs: [docs/review.md, docs/review.yml]
+    validators:
+      - file_exists: docs/review.md
+      - file_exists: docs/review.yml
+    next: route
+  - id: route
+    type: decision
+    title: Route
+    condition: review_route
+    branches:
+      implementation: end
+      approved: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        def review(**_kwargs):
+            (docs / "review.md").write_text("Resultado: REJECTED\n")
+            (docs / "review.yml").write_text(
+                "review_route: implementation\nverdict: REJECTED\n"
+            )
+            return DelegateResult(True, "DONE", ["docs/review.md", "docs/review.yml"], [])
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=review):
+            runner._run_review(runner.graph.get_node("review"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "route"
+        assert state.node_status != "blocked"
+        assert state.gate_log["review"] == "STRUCTURED"
+
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"
@@ -3975,6 +4206,108 @@ class TestRunValidators:
         assert len(result.items) == 2
         assert result.items[0].passed
         assert not result.items[1].passed
+
+    def test_fail_fast_stops_before_expensive_validator(self, tmp_path, monkeypatch):
+        from ft.engine.graph import Node
+        from ft.engine.runner import VALIDATOR_REGISTRY
+
+        calls: list[str] = []
+
+        def fail(*, project_root):
+            calls.append("static")
+            return False, f"static failed in {project_root}"
+
+        def expensive(*, project_root):
+            calls.append("expensive")
+            return True, f"expensive passed in {project_root}"
+
+        monkeypatch.setitem(VALIDATOR_REGISTRY, "static_check", fail)
+        monkeypatch.setitem(VALIDATOR_REGISTRY, "expensive_check", expensive)
+        node = Node(
+            id="x",
+            type="gate",
+            title="X",
+            validation_mode="fail_fast",
+            validators=[{"static_check": True}, {"expensive_check": True}],
+        )
+
+        result = run_validators(node, str(tmp_path))
+
+        assert not result.passed
+        assert calls == ["static"]
+        assert [item.name for item in result.items] == ["static_check"]
+        assert result.items[0].duration_ms is not None
+
+    def test_validator_stop_on_failure_is_local_opt_in(self, tmp_path, monkeypatch):
+        from ft.engine.graph import Node
+        from ft.engine.runner import VALIDATOR_REGISTRY
+
+        calls: list[str] = []
+
+        def fail(*, project_root):
+            calls.append("first")
+            return False, "first failed"
+
+        def later(*, project_root):
+            calls.append("later")
+            return True, "later passed"
+
+        monkeypatch.setitem(VALIDATOR_REGISTRY, "first_check", fail)
+        monkeypatch.setitem(VALIDATOR_REGISTRY, "later_check", later)
+        node = Node(
+            id="x",
+            type="gate",
+            title="X",
+            validators=[
+                {"first_check": {"stop_on_failure": True}},
+                {"later_check": True},
+            ],
+        )
+
+        result = run_validators(node, str(tmp_path))
+
+        assert not result.passed
+        assert calls == ["first"]
+
+    def test_validator_trace_has_parent_child_and_persistent_timing(
+        self, tmp_path, monkeypatch
+    ):
+        from ft.engine.graph import Node
+        from ft.engine.runner import VALIDATOR_REGISTRY
+        from ft.engine.trace import TraceRecorder, read_trace_events
+
+        monkeypatch.setitem(
+            VALIDATOR_REGISTRY,
+            "quick_check",
+            lambda *, project_root: (True, f"ok: {project_root}"),
+        )
+        trace = TraceRecorder(tmp_path / "events.jsonl", "cycle-test")
+        node = Node(
+            id="x",
+            type="gate",
+            title="X",
+            validators=[{"quick_check": True}],
+        )
+
+        result = run_validators(
+            node,
+            str(tmp_path),
+            trace=trace,
+            parent_span_id="node-parent",
+            attempt_id="x:1",
+        )
+
+        assert result.passed
+        starts = [
+            event
+            for event in read_trace_events(trace.path)
+            if event["event"] == "span_start"
+        ]
+        validation = next(event for event in starts if event["category"] == "validation")
+        validator = next(event for event in starts if event["category"] == "validator")
+        assert validation["parent_span_id"] == "node-parent"
+        assert validator["parent_span_id"] == validation["span_id"]
+        assert validator["attempt_id"] == "x:1"
 
     def test_command_succeeds_accepts_per_validator_timeout(self, tmp_path):
         from ft.engine.graph import Node

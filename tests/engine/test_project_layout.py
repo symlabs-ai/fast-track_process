@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -205,6 +206,10 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     (state_dir / "engine_state.yml").write_text("runtime")
+    from ft.engine.trace import TraceRecorder
+
+    trace = TraceRecorder(state_dir / "trace" / "events.jsonl", "cycle-07")
+    trace.begin_span(category="run", name="cycle", node_id="cycle-07").finish()
 
     state = EngineState(
         process_id="test_process",
@@ -232,7 +237,11 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     assert (result.cycle_dir / "screenshots" / "home.png").exists()
     assert (result.cycle_dir / "cycle-log.md").exists()
     assert (state_dir / "engine_state.yml").exists()
+    assert trace.path.exists()
     assert not (result.cycle_dir / "engine_state.yml").exists()
+    report = json.loads((result.cycle_dir / "run-report.json").read_text())
+    assert report["run_id"] == "cycle-07"
+    assert "run-report.json" in result.moved
 
     record = yaml.safe_load((result.cycle_dir / "cycle.yml").read_text())
     assert record["progress"] == {"completed": 44, "total": 44}
@@ -1086,6 +1095,13 @@ nodes:
     assert not (repo / "docs" / "task_list.md").exists()
     assert (repo / ".ft" / "cycles" / "cycle-01" / "task_list.md").exists()
     assert (repo / ".ft" / "cycles" / "cycle-01" / "cycle.yml").exists()
+    report = json.loads(
+        (repo / ".ft" / "cycles" / "cycle-01" / "run-report.json").read_text()
+    )
+    close_spans = [span for span in report["spans"] if span["category"] == "close"]
+    assert len(close_spans) == 1
+    assert close_spans[0]["status"] == "ok"
+    assert report["wall"]["status"] == "closed"
     tracked = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", "HEAD"],
         cwd=repo,
@@ -1094,6 +1110,123 @@ nodes:
         text=True,
     ).stdout
     assert "state/engine_state.yml" not in tracked
+
+
+def test_five_independent_cycle_closes_reconcile_distinct_canonical_updates(
+    tmp_path, monkeypatch
+):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    repo = tmp_path / "project"
+    repo.mkdir()
+    ensure_project_layout(repo)
+    process = repo / ".ft/process/close-test/process.yml"
+    process.parent.mkdir()
+    process.write_text(
+        """id: close_test
+version: '1.0'
+title: Close Test
+artifact_policy:
+  canonical: [CHANGELOG.md, docs/PROJECT_BACKLOG.md, docs/FEATURES.md]
+  cycle: []
+nodes:
+  - id: end
+    type: end
+    title: End
+""",
+        encoding="utf-8",
+    )
+    register_project_process(
+        repo,
+        process_name="close-test",
+        process_path=process,
+        template_id="close-test",
+        entrypoint="run",
+        set_default=True,
+    )
+    (repo / "docs").mkdir()
+    changelog = "# Changelog\n\n## Unreleased\n\n- base\n"
+    backlog_header = (
+        "# PROJECT_BACKLOG\n\n## Itens do Backlog\n\n"
+        "| ID | Tipo | Prioridade | Status | Origem | Título | Critérios de Aceite | Evidência | Decisão/Notas |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+    )
+    backlog_rows = "".join(
+        f"| PB-{100 + index} | Feature | P1 | in_progress | test | Item {index} | AC | — | Em curso |\n"
+        for index in range(1, 6)
+    )
+    features = (
+        "# FEATURES\n\n## Catálogo de Features\n\n"
+        "| ID | Status | Backlog | Título | Descrição | Entregue em | Evidência | Última evolução | Notas |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+        "| FEAT-001 | active | PB-000 | Base | Base. | cycle-00 | base | cycle-00 | Base |\n"
+    )
+    (repo / "CHANGELOG.md").write_text(changelog)
+    (repo / "docs/PROJECT_BACKLOG.md").write_text(backlog_header + backlog_rows)
+    (repo / "docs/FEATURES.md").write_text(features)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+
+    runners: list[StepRunner] = []
+    for index in range(1, 6):
+        cycle = f"cycle-{index:02d}"
+        worktree = ft_home / "worktrees" / repo.name / cycle
+        worktree.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "-b", cycle, str(worktree), "HEAD"],
+            cwd=repo,
+            check=True,
+        )
+        pb = f"PB-{100 + index}"
+        current_backlog = (worktree / "docs/PROJECT_BACKLOG.md").read_text()
+        (worktree / "docs/PROJECT_BACKLOG.md").write_text(
+            current_backlog.replace(
+                f"| {pb} | Feature | P1 | in_progress | test | Item {index} | AC | — | Em curso |",
+                f"| {pb} | Feature | P1 | accepted | test | Item {index} | AC | test-{index} | Entregue |",
+            )
+        )
+        (worktree / "CHANGELOG.md").write_text(
+            changelog.replace("- base", f"- #FEAT {pb} / FEAT-001: item {index}.\n- base")
+        )
+        (worktree / "docs/FEATURES.md").write_text(
+            features.replace(
+                "| FEAT-001 | active | PB-000 | Base | Base. | cycle-00 | base | cycle-00 | Base |",
+                f"| FEAT-001 | active | PB-000, {pb} | Base | Base. | cycle-00 | base; test-{index} | cycle-00; {cycle} | Base; item {index} |",
+            )
+        )
+        runner = StepRunner(
+            worktree / process.relative_to(repo),
+            worktree / "state/engine_state.yml",
+            project_root=worktree,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.node_status = "done"
+        state.current_node = None
+        runner.state_mgr.save()
+        runners.append(runner)
+
+    for runner in runners:
+        assert runner.merge_on_close("full")
+
+    merged_backlog = (repo / "docs/PROJECT_BACKLOG.md").read_text()
+    merged_features = (repo / "docs/FEATURES.md").read_text()
+    merged_changelog = (repo / "CHANGELOG.md").read_text()
+    for index in range(1, 6):
+        pb = f"PB-{100 + index}"
+        assert f"| {pb} | Feature | P1 | accepted" in merged_backlog
+        assert pb in merged_features
+        assert f"#FEAT {pb}" in merged_changelog
+    assert not subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
 
 
 def test_docs_copy_merge_preserves_live_main_manifest(tmp_path, monkeypatch):

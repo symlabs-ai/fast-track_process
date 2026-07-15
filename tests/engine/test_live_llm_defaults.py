@@ -239,6 +239,69 @@ def test_node_provider_change_does_not_inherit_incompatible_command_model(
     assert selection.effort is None
 
 
+def test_selection_reports_field_level_provenance_and_provider_resets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FT_LLM_ENGINE", "claude")
+    monkeypatch.setenv("FT_LLM_MODEL", "env-model")
+    monkeypatch.setenv("FT_LLM_EFFORT", "low")
+    runner, _owner, _cycle = _runner(
+        tmp_path,
+        llm_engine="codex",
+        llm_model="command-model",
+        llm_effort="max",
+    )
+    state = runner.state_mgr.load()
+    node = runner.graph.get_node("first")
+    node.llm_engine = "opencode"
+    node.llm_model = "provider/node-model"
+    node.llm_effort = "high"
+
+    selection = runner._capture_delegation_llm_selection(state, node=node)
+
+    assert (selection.engine, selection.model, selection.effort) == (
+        "opencode",
+        "provider/node-model",
+        "high",
+    )
+    assert selection.provenance == {
+        "engine": "node",
+        "model": "node",
+        "effort": "node",
+    }
+    assert {entry["source"] for entry in selection.resolution} >= {
+        "environment",
+        "state",
+        "command",
+        "node",
+    }
+
+
+def test_selection_reports_manifest_live_and_explicit_effort_clear(tmp_path: Path) -> None:
+    runner, owner, _cycle = _runner(tmp_path)
+    state = runner.state_mgr.load()
+    update_manifest_llm_defaults(
+        owner,
+        llm_engine="opencode",
+        llm_model="provider/live",
+        llm_effort=None,
+    )
+
+    selection = runner._capture_delegation_llm_selection(state)
+
+    assert (selection.engine, selection.model, selection.effort) == (
+        "opencode",
+        "provider/live",
+        None,
+    )
+    assert selection.provenance == {
+        "engine": "manifest_live",
+        "model": "manifest_live",
+        "effort": "manifest_live",
+    }
+
+
 def test_provider_specific_context_is_rebuilt_and_compact_xml_is_initial_only(
     tmp_path: Path,
     monkeypatch,

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
@@ -22,6 +22,11 @@ class LLMSelection:
     engine: str
     model: str | None
     effort: str | None
+    provenance: Mapping[str, str] = field(default_factory=dict, compare=False)
+    resolution: tuple[Mapping[str, Any], ...] = field(
+        default_factory=tuple,
+        compare=False,
+    )
 
 
 def normalize_llm_effort(value: Any) -> str | None:
@@ -166,9 +171,16 @@ class LiveLLMSettings:
         engine = "claude"
         model: str | None = None
         effort: str | None = None
+        provenance: dict[str, str] = {
+            "engine": "default",
+            "model": "default",
+            "effort": "default",
+        }
+        resolution: list[dict[str, Any]] = []
 
         def overlay(
             *,
+            source: str,
             layer_engine: object = unset,
             layer_model: object = unset,
             layer_effort: object = unset,
@@ -178,22 +190,39 @@ class LiveLLMSettings:
                 next_engine = str(layer_engine or "").strip().lower() or "claude"
                 if next_engine != engine:
                     engine, model, effort = next_engine, None, None
+                    provenance["model"] = f"provider_reset:{source}:engine"
+                    provenance["effort"] = f"provider_reset:{source}:engine"
+                provenance["engine"] = source
+                resolution.append(
+                    {"field": "engine", "source": source, "value": next_engine}
+                )
             if layer_model is not unset:
                 next_model = str(layer_model or "").strip() or None
                 if next_model != model:
                     model, effort = next_model, None
+                    provenance["effort"] = f"provider_reset:{source}:model"
+                provenance["model"] = source
+                resolution.append(
+                    {"field": "model", "source": source, "value": next_model}
+                )
             if layer_effort is not unset:
                 effort = normalize_llm_effort(layer_effort)
+                provenance["effort"] = source
+                resolution.append(
+                    {"field": "effort", "source": source, "value": effort}
+                )
 
         env_engine = os.environ.get("FT_LLM_ENGINE")
         env_model = os.environ.get("FT_LLM_MODEL")
         env_effort = os.environ.get("FT_LLM_EFFORT")
         overlay(
+            source="environment",
             layer_engine=env_engine if env_engine else unset,
             layer_model=env_model if env_model else unset,
             layer_effort=env_effort if env_effort is not None else unset,
         )
         overlay(
+            source="fallback",
             layer_engine=self.engine_fallback or unset,
             layer_model=self.model_fallback or unset,
             layer_effort=self.effort_fallback or unset,
@@ -201,6 +230,7 @@ class LiveLLMSettings:
         state_engine = getattr(state, "llm_engine", None) if state is not None else None
         if state_engine:
             overlay(
+                source="state",
                 layer_engine=state_engine,
                 layer_model=getattr(state, "llm_model", None),
                 layer_effort=getattr(state, "llm_effort", None),
@@ -210,6 +240,7 @@ class LiveLLMSettings:
             manifest_model = defaults.get("llm_model", unset)
             complete = manifest_engine is not unset and manifest_model is not unset
             overlay(
+                source="manifest_live",
                 layer_engine=manifest_engine,
                 layer_model=manifest_model,
                 layer_effort=(
@@ -219,6 +250,7 @@ class LiveLLMSettings:
                 ),
             )
         overlay(
+            source="command",
             layer_engine=self.engine_override or unset,
             layer_model=self.model_override or unset,
             layer_effort=self.effort_override if self.effort_override_set else unset,
@@ -226,8 +258,15 @@ class LiveLLMSettings:
         if node is not None:
             node_effort = getattr(node, "llm_effort", None)
             overlay(
+                source="node",
                 layer_engine=getattr(node, "llm_engine", None) or unset,
                 layer_model=getattr(node, "llm_model", None) or unset,
                 layer_effort=node_effort if node_effort is not None else unset,
             )
-        return LLMSelection(engine, model, effort)
+        return LLMSelection(
+            engine,
+            model,
+            effort,
+            provenance=dict(provenance),
+            resolution=tuple(resolution),
+        )

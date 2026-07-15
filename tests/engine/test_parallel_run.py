@@ -20,6 +20,7 @@ from ft.engine.parallel import WorktreeResult
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import StateManager
+from ft.engine.trace import build_run_report
 
 
 _PARALLEL_PROCESS = """\
@@ -232,6 +233,10 @@ def test_fan_in_uses_group_order_even_if_threads_finish_out_of_order(
     assert state.completed_nodes[-2:] == ["par-a", "par-b"]
     assert state.current_node == "end"
     assert state.node_status == "ready"
+    report = build_run_report(runner.trace.path, run_id=runner.trace.run_id)
+    queue_spans = [span for span in report["spans"] if span["category"] == "queue"]
+    assert len(queue_spans) == 2
+    assert {span["result"] for span in queue_spans} == {"not_dispatched"}
 
 
 def test_fan_in_blocks_when_one_task_fails(tmp_path: Path) -> None:

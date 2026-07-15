@@ -1531,6 +1531,20 @@ def archive_cycle_artifacts(
         move(src, dst)
         moved.append(label)
 
+    # O journal cru e os logs continuam runtime-only. O histórico recebe apenas
+    # o relatório pequeno e derivado, já enriquecido com métricas disponíveis.
+    trace_path = root / "state" / "trace" / "events.jsonl"
+    if trace_path.is_file():
+        from ft.engine.trace import write_run_report
+
+        write_run_report(
+            trace_path,
+            cycle_dir / "run-report.json",
+            run_id=cycle_id,
+            log_root=root,
+        )
+        moved.append("run-report.json")
+
     gate_log = getattr(state, "gate_log", {}) if state is not None else {}
     metrics = getattr(state, "metrics", {}) if state is not None else {}
     process_meta = graph_meta or {}

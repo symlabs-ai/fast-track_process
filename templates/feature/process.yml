@@ -5,7 +5,7 @@
 # `.ft/process/feature/` e executa somente a cópia local versionada.
 
 id: feature
-version: "1.2.0"
+version: "1.3.0"
 title: "Feature — Evolução Incremental"
 
 execution_policy:
@@ -59,13 +59,19 @@ artifact_policy:
   cycle:
     - docs/feature-request.md
     - docs/feature-baseline.yml
+    - docs/feature-baseline-attestation.json
     - docs/feature-discovery.md
     - docs/feature-questions.md
     - docs/feature.md
     - docs/feature-plan.md
+    - docs/feature-workset.yml
+    - docs/feature-id-reservation.yml
     - docs/implementation-report.md
+    - docs/feature-evidence.yml
     - docs/feature-validation.json
     - docs/feature-review.md
+    - docs/feature-review.yml
+    - docs/feature-reconciliation.yml
     - docs/stakeholder-feedback.md
     - docs/feature-result.md
     - docs/screenshots/feature/
@@ -81,6 +87,7 @@ nodes:
       ser corrigida automaticamente como parte da feature.
     sprint: feature-01-scope
     executor: python
+    validation_mode: fail_fast
     outputs:
       - docs/feature-baseline.yml
     validators:
@@ -97,12 +104,16 @@ nodes:
       - implemented_backlog_covered_by_features:
           features_path: docs/FEATURES.md
           backlog_path: docs/PROJECT_BACKLOG.md
-      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py baseline"
       - command_succeeds:
-          command: "bash .ft/process/feature/scripts/product.sh build"
-          timeout: 300
+          command: "python .ft/process/feature/scripts/validate_feature.py baseline"
+          stop_on_failure: true
       - command_succeeds:
-          command: "bash .ft/process/feature/scripts/product.sh test"
+          command: >-
+            bash .ft/process/feature/scripts/product.sh ensure-baseline --record
+            docs/feature-baseline-attestation.json
+          resume_command: >-
+            bash .ft/process/feature/scripts/product.sh verify-baseline
+            docs/feature-baseline-attestation.json
           timeout: 300
     next: feature.discovery
 
@@ -119,18 +130,19 @@ nodes:
     sprint: feature-01-scope
     executor: claude
     max_turns: 40
+    llm_timeout_seconds: 600
     outputs:
       - docs/feature-discovery.md
       - docs/feature-questions.md
       - docs/feature.md
       - docs/feature-plan.md
-      - docs/PROJECT_BACKLOG.md
+      - docs/feature-workset.yml
     write_scope:
       - docs/feature-discovery.md
       - docs/feature-questions.md
       - docs/feature.md
       - docs/feature-plan.md
-      - docs/PROJECT_BACKLOG.md
+      - docs/feature-workset.yml
     prompt: |
       Trabalhe exclusivamente na elucidação de UMA feature para um produto já
       existente. Não implemente código neste node.
@@ -139,11 +151,6 @@ nodes:
       já reúne a demanda imutável, o estado atual dos drafts, as fontes
       canônicas relevantes, a baseline e recortes do produto/testes. Abra
       arquivos adicionais somente quando uma decisão concreta exigir evidência.
-
-      Quando feature-request.md contiver metadata do batch com
-      `reserved_backlog_item: PB-NNN`, use exatamente esse ID para esta demanda.
-      A reserva é determinística e evita que features da mesma wave criem o
-      mesmo PB; não a substitua nem crie outro PB.
 
       Determine se a demanda é:
       - new: uma única capacidade nova;
@@ -168,9 +175,10 @@ nodes:
         priority: P0 | P1 | P2
         interface: ui | api | internal | mixed
 
-      Se a demanda ainda não possuir PB, crie exatamente um novo PB-* em
-      PROJECT_BACKLOG com status in_progress, origem feature-request e critérios
-      derivados dos AC-*. Se já possuir, preserve o ID e marque-o in_progress.
+      A demanda deve referenciar exatamente um PB-* já existente. Preserve esse
+      ID e mantenha PROJECT_BACKLOG inalterado até a reconciliação pós-aceite.
+      Ciclos paralelos devem usar PBs distintos; não aloque nem renumere PBs
+      dentro da worktree.
       Para evolution/improvement, target_feature deve existir em FEATURES.
 
       feature.md deve conter Objetivo, Comportamento Esperado, Critérios de
@@ -183,12 +191,16 @@ nodes:
       prever a atualização de CHANGELOG.md, PROJECT_BACKLOG.md e FEATURES.md.
 
       feature-discovery.md deve preservar um resumo das perguntas e respostas
-      que levaram ao escopo atual. Não altere código nem FEATURES neste node.
+      que levaram ao escopo atual. Gere também docs/feature-workset.yml com uma
+      lista curta de paths e testes provavelmente relevantes. Esse workset é uma
+      dica focal e pode estar incompleto: nunca o trate como bloqueio rígido.
+      Não altere código, PROJECT_BACKLOG nem FEATURES neste node.
     validators:
       - file_exists: docs/feature-discovery.md
       - file_exists: docs/feature-questions.md
       - file_exists: docs/feature.md
       - file_exists: docs/feature-plan.md
+      - file_exists: docs/feature-workset.yml
       - project_backlog_valid:
           path: docs/PROJECT_BACKLOG.md
           min_items: 1
@@ -223,7 +235,7 @@ nodes:
     condition: clarification_status
     branches:
       required: feature.questions
-      clear: feature.scope_gate
+      clear: feature.reserve_ids
       _default: feature.questions
 
   - id: feature.questions
@@ -239,6 +251,23 @@ nodes:
       - docs/feature-questions.md
       - docs/feature-discovery.md
     next: feature.discovery
+
+  - id: feature.reserve_ids
+    type: gate
+    title: "Reservar Identidade da Entrega"
+    description: >-
+      Confirma o PB preexistente e, para type=new, reserva um FEAT-* definitivo
+      sob lock curto no git comum. Reservas nunca são reutilizadas; ciclos de
+      evolution/improvement preservam a FEAT alvo.
+    sprint: feature-01-scope
+    executor: python
+    outputs:
+      - docs/feature-id-reservation.yml
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py reserve"
+      - file_exists: docs/feature-id-reservation.yml
+    next: feature.scope_gate
 
   - id: feature.scope_gate
     type: human_gate
@@ -260,23 +289,23 @@ nodes:
     context_profile: feature_delta.implement
     title: "Implementar Feature e Testes"
     description: >-
-      Implementa apenas o escopo aprovado, atualiza contratos afetados e cria
-      testes. O agente itera com testes focais; o gate determinístico executa
-      uma única validação completa pós-implementação e grava seu receipt antes
-      de seguir para a revisão.
+      Implementa apenas código, testes e contratos executáveis do escopo
+      aprovado. Evidências e relatórios são produzidos por um node separado.
     sprint: feature-02-build
     executor: claude
-    max_turns: 100
+    max_turns: 60
+    llm_timeout_seconds: 900
+    llm_episode: feature_implementation
+    llm_episode_budget_seconds: 1800
+    llm_episode_max_calls: 2
     outputs:
       - project/
       - src/
-      - docs/implementation-report.md
     write_scope:
       - project
       - src
       - docs/api_contract.md
       - docs/ui_criteria.md
-      - docs/implementation-report.md
       - docs/screenshots/feature
     prompt: |
       Implemente somente a feature aprovada. O perfil
@@ -295,26 +324,98 @@ nodes:
          executará `full --record docs/feature-validation.json`, cobrindo build
          e test nessa ordem e vinculando o resultado ao snapshot executável do
          produto.
-      6. Gere docs/implementation-report.md com uma linha PASS/FAIL por AC-*,
-         comandos executados, arquivos alterados, compatibilidade e evidências.
+      6. Não produza relatórios ou evidências narrativas neste node; concentre a
+         chamada em código e testes. O node evidence fará essa coleta.
       7. Em uma correção solicitada, considere o feedback mais recente e mantenha
          todo o restante aprovado funcionando.
+    next: feature.product_validate
+
+  - id: feature.product_validate
+    type: gate
+    title: "Validar Produto Implementado"
+    description: >-
+      Verifica primeiro a presença de mudanças e testes; somente então executa
+      build+test uma vez. Em retomadas, ensure verifica o receipt local antes de
+      considerar a suíte completa.
+    sprint: feature-02-build
+    executor: python
+    outputs:
+      - docs/feature-validation.json
+    validation_mode: fail_fast
     validators:
-      - file_exists: docs/implementation-report.md
+      - command_succeeds:
+          command: "python .ft/process/feature/scripts/validate_feature.py implementation"
+          stop_on_failure: true
       - command_succeeds:
           command: >-
-            python .ft/process/feature/scripts/validate_feature.py implementation
-            && bash .ft/process/feature/scripts/product.sh full --record
+            bash .ft/process/feature/scripts/product.sh ensure --record
             docs/feature-validation.json
           resume_command: >-
-            python .ft/process/feature/scripts/validate_feature.py implementation
-            && bash .ft/process/feature/scripts/product.sh verify
+            bash .ft/process/feature/scripts/product.sh verify
             docs/feature-validation.json
           timeout: 300
+    on_fail:
+      human_gate: "A validação do produto falhou; corrija a implementação preservada."
+      goto: feature.implement
+    next: feature.evidence
+
+  - id: feature.evidence
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    context_profile: feature_delta.evidence
+    title: "Coletar Evidências da Feature"
+    description: >-
+      Converte diff, testes e receipt já executado em evidência referencial por
+      AC, sem alterar o produto nem repetir build/test.
+    sprint: feature-02-build
+    executor: claude
+    max_turns: 24
+    llm_timeout_seconds: 480
+    outputs:
+      - docs/implementation-report.md
+      - docs/feature-evidence.yml
+    write_scope:
+      - docs/implementation-report.md
+      - docs/feature-evidence.yml
+      - docs/screenshots/feature
+    prompt: |
+      Produza apenas evidência da implementação já validada. Não altere código,
+      testes, contratos ou o receipt e não repita build/test.
+
+      Gere docs/implementation-report.md com uma linha PASS/FAIL por AC-*, os
+      arquivos alterados, compatibilidade e os comandos presentes no receipt.
+      Gere docs/feature-evidence.yml (schema_version: 1) com `receipt`,
+      `commands` e uma lista `acceptance`; cada item deve conter `id`, `status`,
+      `tests` e `artifacts`. Paths devem existir. Screenshots só são exigidos
+      quando o contrato aprovado os prevê. A suficiência semântica continuará
+      sendo responsabilidade da revisão independente.
+    next: feature.evidence_gate
+
+  - id: feature.evidence_gate
+    type: gate
+    title: "Validar Integridade das Evidências"
+    description: >-
+      Confirma referências, ACs, paths e receipt. Não tenta decidir se um teste
+      demonstra semanticamente o comportamento; isso pertence à review.
+    sprint: feature-02-build
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - file_exists: docs/implementation-report.md
+      - file_exists: docs/feature-evidence.yml
+      - command_succeeds:
+          command: "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
+          stop_on_failure: true
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py evidence"
+    on_fail:
+      human_gate: "As referências de evidência estão incompletas; regenere somente a evidência."
+      goto: feature.evidence
     next: feature.review
 
   - id: feature.review
     type: review
+    review_route_path: docs/feature-review.yml
     context_profile: feature_delta.review
     title: "Revisão Independente da Feature"
     description: >-
@@ -323,10 +424,13 @@ nodes:
     sprint: feature-02-build
     executor: claude
     max_turns: 50
+    llm_timeout_seconds: 600
     outputs:
       - docs/feature-review.md
+      - docs/feature-review.yml
     write_scope:
       - docs/feature-review.md
+      - docs/feature-review.yml
     prompt: |
       Faça uma revisão independente usando o contexto focal fornecido por
       `feature_delta.review`: contrato, plano, relatório, diff, código/testes
@@ -338,19 +442,49 @@ nodes:
       focais com `product.sh focal -- <comando> [args...]`. Qualquer alteração no
       produto invalida deterministicamente o receipt e exige nova implementação.
 
-      Gere docs/feature-review.md contendo exatamente uma linha
-      `Resultado: APPROVED` ou `Resultado: REJECTED`, uma tabela com todos os
-      AC-* e PASS/FAIL, regressões, compatibilidade, scope creep e evidências.
-      REJECTED se qualquer AC falhar, se os testes não comprovarem o comportamento
-      ou se houver alteração material fora do escopo.
+      Gere docs/feature-review.md com uma tabela de todos os AC-*, regressões,
+      compatibilidade, scope creep e evidências. Gere também
+      docs/feature-review.yml com schema_version: 1, verdict, review_route e
+      summary. `review_route` deve ser exatamente approved, implementation,
+      evidence ou scope: use implementation para defeito no produto, evidence
+      para prova ausente/inadequada e scope para contradição do contrato.
+    validation_mode: fail_fast
     validators:
       - file_exists: docs/feature-review.md
-      - command_succeeds: "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
+      - file_exists: docs/feature-review.yml
+      - command_succeeds:
+          command: "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
+          stop_on_failure: true
       - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py review"
-    on_fail:
-      human_gate: "A revisão encontrou problemas. Corrija a implementação e rode todos os checks novamente."
-      goto: feature.implement
-    next: feature.acceptance
+    next: feature.review_route
+
+  - id: feature.review_route
+    type: gate
+    title: "Registrar Rota da Revisão"
+    sprint: feature-02-build
+    executor: python
+    validators:
+      - read_artifact:
+          path: docs/feature-review.yml
+          key: review_route
+          pattern: "review_route:\\s*(approved|implementation|evidence|scope)"
+    next: feature.review_decision
+
+  - id: feature.review_decision
+    type: decision
+    title: "Encaminhar Veredicto da Revisão"
+    sprint: feature-02-build
+    executor: python
+    condition: review_route
+    branches:
+      approved: feature.acceptance
+      implementation: feature.implement
+      evidence: feature.evidence
+      scope: feature.discovery
+      _default: feature.review
+    episode_restart:
+      implementation: feature_implementation
+      scope: feature_implementation
 
   - id: feature.acceptance
     type: human_gate
@@ -377,41 +511,26 @@ nodes:
     context_profile: feature_delta.reconcile
     title: "Reconciliar Backlog e Catálogo"
     description: >-
-      Registra somente a capacidade aceita neste ciclo, preservando todos os IDs
-      e itens alheios. Reconcilia a documentação afetada e o CHANGELOG e produz
-      o resumo final usado pelo close.
+      Propõe somente a capacidade aceita neste ciclo. O validator confere IDs e
+      aplica a proposta deterministicamente antes de validar a reconciliação.
     sprint: feature-03-acceptance
     executor: claude
     max_turns: 40
+    llm_timeout_seconds: 480
     outputs:
-      - CHANGELOG.md
-      - docs/PRD.md
-      - docs/TECH_STACK.md
-      - docs/tech_stack.md
-      - docs/ui_criteria.md
-      - docs/api_contract.md
-      - docs/test_data.md
-      - docs/PROJECT_BACKLOG.md
-      - docs/FEATURES.md
+      - docs/feature-reconciliation.yml
       - docs/feature-result.md
     write_scope:
-      - CHANGELOG.md
-      - docs/PRD.md
-      - docs/TECH_STACK.md
-      - docs/tech_stack.md
-      - docs/ui_criteria.md
-      - docs/api_contract.md
-      - docs/test_data.md
-      - docs/PROJECT_BACKLOG.md
-      - docs/FEATURES.md
+      - docs/feature-reconciliation.yml
       - docs/feature-result.md
     prompt: |
-      O stakeholder aprovou a feature. O perfil `feature_delta.reconcile` já
-      fornece o contrato aceito, evidências, feedback, diff documental e as
-      fontes canônicas aplicáveis. Reconcilie apenas o PB-* e a FEAT-* do ciclo.
+      O stakeholder aprovou a feature. Proponha a reconciliação em
+      docs/feature-reconciliation.yml; não edite diretamente os documentos
+      canônicos. O validator aplicará o conteúdo proposto somente após conferir
+      paths e IDs autorizados.
 
       - Marque o PB selecionado como accepted e registre evidências reais.
-      - type=new: crie exatamente o próximo FEAT-* e referencie o PB aceito.
+      - type=new: use exatamente o FEAT-* de feature-id-reservation.yml.
       - evolution/improvement: preserve a FEAT-* alvo, acrescente o PB, atualize
         evidência, descrição quando necessário e Última evolução.
       - Nunca renumere, reutilize ou apague IDs.
@@ -427,14 +546,30 @@ nodes:
         PB/FEAT, a mudança entregue e qualquer compatibilidade ou migração
         relevante.
 
+      O YAML deve ter schema_version: 1, backlog_item, target_feature,
+      final_feature_id, `backlog_row`, `feature_row`, `changelog_entry` e
+      `documentation`. Forneça somente a linha Markdown completa do PB, a linha
+      Markdown completa da FEAT e uma única entrada de changelog; o engine
+      preservará o restante das tabelas e inserirá essas operações
+      deterministicamente. `documentation` é um mapping opcional de outros
+      paths canônicos afetados para seu conteúdo completo; não inclua nele
+      CHANGELOG, PROJECT_BACKLOG ou FEATURES.
+
       Gere docs/feature-result.md com escopo entregue, AC-*, testes/build,
       evidências, PB/FEAT final, arquivos alterados, nenhuma pendência escondida
       e uma seção `Documentação atualizada` que liste os caminhos realmente
       reconciliados, incluindo sempre CHANGELOG.md, docs/PROJECT_BACKLOG.md e
       docs/FEATURES.md.
+    validation_mode: fail_fast
     validators:
-      - file_exists: CHANGELOG.md
+      - file_exists: docs/feature-reconciliation.yml
       - file_exists: docs/feature-result.md
+      - command_succeeds:
+          command: "python .ft/process/feature/scripts/validate_feature.py proposal"
+          stop_on_failure: true
+      - command_succeeds:
+          command: "python .ft/process/feature/scripts/validate_feature.py apply-reconcile"
+          stop_on_failure: true
       - project_backlog_valid:
           path: docs/PROJECT_BACKLOG.md
           min_items: 1
@@ -444,6 +579,7 @@ nodes:
       - implemented_backlog_covered_by_features:
           features_path: docs/FEATURES.md
           backlog_path: docs/PROJECT_BACKLOG.md
+      - command_succeeds: "python .ft/process/feature/scripts/validate_feature.py reconcile"
     next: feature.final_gate
 
   - id: feature.final_gate
@@ -456,6 +592,7 @@ nodes:
       ferramenta ou comando mudou, o receipt falha e a suíte deve ser refeita.
     sprint: feature-03-acceptance
     executor: python
+    validation_mode: fail_fast
     outputs:
       - docs/feature-result.md
     validators:

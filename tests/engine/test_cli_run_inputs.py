@@ -440,7 +440,7 @@ class TestStatusMultipleCycles:
 
         return factory
 
-    def test_status_without_cycle_fails_on_multiple_open_runtimes(
+    def test_status_without_cycle_fans_out_multiple_open_runtimes(
         self, tmp_path, monkeypatch, capsys
     ):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
@@ -448,15 +448,25 @@ class TestStatusMultipleCycles:
         project.mkdir()
         self._write_open_state(project, "cycle-14-f-03")
         self._write_open_state(project, "cycle-13-f-01")
-        with patch.object(cli_main, "find_project_root", return_value=project):
-            with pytest.raises(SystemExit) as excinfo:
-                cli_main.cmd_status(self._args(full=True))
+        calls: list[dict] = []
+        with (
+            patch.object(cli_main, "find_project_root", return_value=project),
+            patch.object(
+                cli_main,
+                "get_runner",
+                side_effect=self._fake_runner_factory(calls),
+            ),
+        ):
+            cli_main.cmd_status(self._args(full=True))
 
         output = capsys.readouterr().out
-        assert excinfo.value.code == 2
-        assert "informe --cycle" in output
-        assert "cycle-13-f-01" in output
-        assert "cycle-14-f-03" in output
+        assert [call["cycle"] for call in calls] == [
+            "cycle-13-f-01",
+            "cycle-14-f-03",
+        ]
+        assert all(call["method"] == "status" and call["full"] for call in calls)
+        assert "Ciclo: cycle-13-f-01" in output
+        assert "Ciclo: cycle-14-f-03" in output
 
     def test_status_report_targets_one_explicit_runtime(
         self, tmp_path, monkeypatch

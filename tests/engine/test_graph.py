@@ -163,12 +163,66 @@ class TestGraphValidation:
                 {"id": "c", "type": "end"},
             ])
 
+    def test_invalid_validation_mode_raises(self):
+        nodes = [
+            Node(
+                id="a",
+                type="gate",
+                title="A",
+                next="done",
+                validation_mode="fastish",
+            ),
+            Node(id="done", type="end", title="Done"),
+        ]
+        with pytest.raises(ValueError, match="validation_mode invalido"):
+            ProcessGraph(nodes, {"id": "test"})
+
+    def test_llm_episode_budget_requires_named_episode(self):
+        nodes = [
+            Node(
+                id="a",
+                type="build",
+                title="A",
+                next="done",
+                llm_episode_budget_seconds=60,
+            ),
+            Node(id="done", type="end", title="Done"),
+        ]
+        with pytest.raises(ValueError, match="orçamento sem llm_episode"):
+            ProcessGraph(nodes, {"id": "test"})
+
+    def test_structured_review_path_is_only_valid_on_review(self):
+        nodes = [
+            Node(
+                id="a",
+                type="build",
+                title="A",
+                next="done",
+                review_route_path="docs/review.yml",
+            ),
+            Node(id="done", type="end", title="Done"),
+        ]
+        with pytest.raises(ValueError, match="nao e review"):
+            ProcessGraph(nodes, {"id": "test"})
+
 
 # ---------------------------------------------------------------------------
 # load_graph — YAML file
 # ---------------------------------------------------------------------------
 
 class TestLoadGraph:
+    def test_loads_fail_fast_validation_mode(self, tmp_path):
+        p = tmp_path / "process.yml"
+        p.write_text(
+            "id: test\ntitle: Test\nnodes:\n"
+            "  - {id: gate, type: gate, title: Gate, validation_mode: fail_fast, next: end}\n"
+            "  - {id: end, type: end, title: Done}\n"
+        )
+
+        graph = load_graph(p)
+
+        assert graph.get_node("gate").validation_mode == "fail_fast"
+
     def test_load_inline_process(self, tmp_path):
         p = tmp_path / "process.yml"
         p.write_text(

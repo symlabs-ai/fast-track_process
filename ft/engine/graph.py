@@ -21,6 +21,9 @@ class Node:
     write_scope: list[str] = field(default_factory=list)
     requires_approval: bool = False
     validators: list[dict[str, Any]] = field(default_factory=list)
+    # aggregate preserva o diagnostico completo historico; fail_fast para no
+    # primeiro erro e evita suites caras quando um check estatico ja falhou.
+    validation_mode: str = "aggregate"
     next: str | None = None
     # Para decisions
     branches: dict[str, str] | None = None
@@ -58,6 +61,15 @@ class Node:
     # Budget total de uma delegacao, incluindo retries/backoff internos.
     # None preserva o timeout global historico do provider.
     llm_timeout_seconds: int | None = None
+    # Orçamento cumulativo para uma sequência de chamadas semanticamente
+    # relacionadas. episode_restart em um decision inicia uma nova sequência.
+    llm_episode: str | None = None
+    llm_episode_budget_seconds: int | None = None
+    llm_episode_max_calls: int | None = None
+    episode_restart: dict[str, str] | None = None
+    # Quando definido, o review só valida estrutura e deixa o decision seguinte
+    # interpretar a rota; evita que o runner converta REJECTED em on_fail fixo.
+    review_route_path: str | None = None
     # Hyper-mode por node. None preserva os defaults historicos do engine;
     # lista vazia desabilita a carga de docs para aquele node.
     hyper_mode_docs: list[str] | None = None
@@ -92,6 +104,71 @@ class ProcessGraph:
         for node in self.nodes.values():
             if node.type == "end":
                 continue
+            if node.validation_mode not in {"aggregate", "fail_fast"}:
+                raise ValueError(
+                    f"Node '{node.id}' possui validation_mode invalido: "
+                    f"{node.validation_mode!r}"
+                )
+            if (
+                node.llm_episode_budget_seconds is not None
+                and (
+                    isinstance(node.llm_episode_budget_seconds, bool)
+                    or not isinstance(node.llm_episode_budget_seconds, int)
+                    or node.llm_episode_budget_seconds <= 0
+                )
+            ):
+                raise ValueError(
+                    f"Node '{node.id}' possui llm_episode_budget_seconds invalido"
+                )
+            if (
+                node.llm_episode_max_calls is not None
+                and (
+                    isinstance(node.llm_episode_max_calls, bool)
+                    or not isinstance(node.llm_episode_max_calls, int)
+                    or node.llm_episode_max_calls <= 0
+                )
+            ):
+                raise ValueError(
+                    f"Node '{node.id}' possui llm_episode_max_calls invalido"
+                )
+            if (
+                node.llm_episode_budget_seconds is not None
+                or node.llm_episode_max_calls is not None
+            ) and not node.llm_episode:
+                raise ValueError(
+                    f"Node '{node.id}' define orçamento sem llm_episode"
+                )
+            if node.episode_restart is not None and not isinstance(
+                node.episode_restart, dict
+            ):
+                raise ValueError(
+                    f"Node '{node.id}' possui episode_restart invalido"
+                )
+            if node.episode_restart:
+                if node.type != "decision":
+                    raise ValueError(
+                        f"Node '{node.id}' usa episode_restart mas nao e decision"
+                    )
+                unknown = set(node.episode_restart) - set(node.branches or {})
+                if unknown:
+                    raise ValueError(
+                        f"Node '{node.id}' episode_restart sem branch: "
+                        + ", ".join(sorted(unknown))
+                    )
+                invalid_episodes = [
+                    key
+                    for key, value in node.episode_restart.items()
+                    if not isinstance(value, str) or not value.strip()
+                ]
+                if invalid_episodes:
+                    raise ValueError(
+                        f"Node '{node.id}' episode_restart inválido para: "
+                        + ", ".join(sorted(invalid_episodes))
+                    )
+            if node.review_route_path and node.type != "review":
+                raise ValueError(
+                    f"Node '{node.id}' usa review_route_path mas nao e review"
+                )
             if node.next and node.next not in ids:
                 raise ValueError(f"Node '{node.id}' aponta para '{node.next}' que nao existe")
             if node.branches:
@@ -236,6 +313,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             write_scope=node_raw.get("write_scope", []),
             requires_approval=node_raw.get("requires_approval", False),
             validators=validators,
+            validation_mode=node_raw.get("validation_mode", "aggregate"),
             next=node_raw.get("next"),
             branches=node_raw.get("branches"),
             condition=node_raw.get("condition"),
@@ -249,6 +327,11 @@ def load_graph(path: str | Path) -> ProcessGraph:
             llm_model=node_raw.get("llm_model"),
             llm_effort=node_raw.get("llm_effort"),
             llm_timeout_seconds=node_raw.get("llm_timeout_seconds"),
+            llm_episode=node_raw.get("llm_episode"),
+            llm_episode_budget_seconds=node_raw.get("llm_episode_budget_seconds"),
+            llm_episode_max_calls=node_raw.get("llm_episode_max_calls"),
+            episode_restart=node_raw.get("episode_restart"),
+            review_route_path=node_raw.get("review_route_path"),
             no_pre_seed=node_raw.get("no_pre_seed", False),
             preserve_outputs_on_reentry=node_raw.get(
                 "preserve_outputs_on_reentry", False

@@ -82,7 +82,11 @@ def _base_project(tmp_path: Path, product_dir: str = "project") -> Path:
     _write(
         tmp_path, "CHANGELOG.md", "# Changelog\n\n## Histórico\n\n- PB-001 entregue.\n"
     )
-    _write(tmp_path, "docs/feature-request.md", "Adicionar busca por telefone.\n")
+    _write(
+        tmp_path,
+        "docs/feature-request.md",
+        "PB-002: adicionar busca por telefone.\n",
+    )
     _write(tmp_path, "docs/PRD.md", "# PRD\n\nProduto existente.\n")
     _write(tmp_path, "docs/PROJECT_BACKLOG.md", BACKLOG)
     _write(tmp_path, "docs/FEATURES.md", FEATURES)
@@ -103,6 +107,32 @@ def _clear_discovery(root: Path) -> None:
     )
     _write(root, "docs/feature-discovery.md", "clarification_status: clear\n")
     _write(root, "docs/feature-questions.md", "Nenhuma pergunta pendente.\n")
+    _write(root, "docs/feature-workset.yml", "schema_version: 1\npaths: [project/]\n")
+    _write(
+        root,
+        "docs/feature-id-reservation.yml",
+        "schema_version: 1\n"
+        "backlog_item: PB-002\n"
+        "target_feature: FEAT-001\n"
+        "final_feature_id: FEAT-001\n"
+        "reservation_owner: test\n",
+    )
+
+
+def _write_review_route(
+    root: Path,
+    *,
+    route: str = "approved",
+    verdict: str = "APPROVED",
+) -> None:
+    _write(
+        root,
+        "docs/feature-review.yml",
+        "schema_version: 1\n"
+        f"verdict: {verdict}\n"
+        f"review_route: {route}\n"
+        "summary: Revisão estruturada.\n",
+    )
 
 
 def _run_validator(root: Path, mode: str) -> subprocess.CompletedProcess[str]:
@@ -175,7 +205,11 @@ def _receipt_project(tmp_path: Path) -> Path:
     return root
 
 
-def _run_product_helper(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run_product_helper(
+    root: Path,
+    *args: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(root / ".ft/process/feature/scripts/product.sh"), *args],
         cwd=root,
@@ -184,6 +218,7 @@ def _run_product_helper(root: Path, *args: str) -> subprocess.CompletedProcess[s
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
+        env=env,
     )
 
 
@@ -217,7 +252,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature"
-    assert graph.meta["version"] == "1.2.0"
+    assert graph.meta["version"] == "1.3.0"
     assert graph.meta["execution_policy"] == {
         "entrypoint": "run",
         "template": "feature",
@@ -244,6 +279,8 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
 
     nodes = graph.nodes
     assert nodes["feature.discovery"].next == "feature.discovery_gate"
+    assert "docs/PROJECT_BACKLOG.md" not in nodes["feature.discovery"].outputs
+    assert "docs/PROJECT_BACKLOG.md" not in nodes["feature.discovery"].write_scope
     assert nodes["feature.discovery_gate"].next == "feature.clarity"
     assert nodes["feature.discovery_gate"].validators == [
         {
@@ -256,7 +293,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     ]
     assert nodes["feature.clarity"].branches == {
         "required": "feature.questions",
-        "clear": "feature.scope_gate",
+        "clear": "feature.reserve_ids",
         "_default": "feature.questions",
     }
     assert nodes["feature.questions"].next == "feature.discovery"
@@ -265,10 +302,22 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert nodes["feature.acceptance"].env_teardown == [
         "bash .ft/process/feature/scripts/serve.sh stop"
     ]
-    assert nodes["feature.review"].on_fail["goto"] == "feature.implement"
+    assert nodes["feature.reserve_ids"].next == "feature.scope_gate"
+    assert nodes["feature.implement"].next == "feature.product_validate"
+    assert nodes["feature.product_validate"].next == "feature.evidence"
+    assert nodes["feature.evidence_gate"].next == "feature.review"
+    assert nodes["feature.review"].next == "feature.review_route"
+    assert nodes["feature.review_decision"].branches == {
+        "approved": "feature.acceptance",
+        "implementation": "feature.implement",
+        "evidence": "feature.evidence",
+        "scope": "feature.discovery",
+        "_default": "feature.review",
+    }
     assert nodes["feature.end"].type == "end"
-    assert "CHANGELOG.md" in nodes["feature.reconcile"].outputs
-    assert "CHANGELOG.md" in nodes["feature.reconcile"].write_scope
+    assert "CHANGELOG.md" not in nodes["feature.reconcile"].outputs
+    assert "CHANGELOG.md" not in nodes["feature.reconcile"].write_scope
+    assert "docs/feature-reconciliation.yml" in nodes["feature.reconcile"].write_scope
 
     raw = PROCESS.read_text(encoding="utf-8")
     assert "começar com `#FEAT` como primeiro token" in raw
@@ -280,37 +329,65 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert "hyper_mode_" not in raw
     assert "Leia obrigatoriamente" not in raw
     assert "Releia feature-plan" not in raw
+    assert "batch" not in raw.lower()
+    assert "wave" not in raw.lower()
+    assert "planner" not in raw.lower()
     assert {
         node_id: raw_nodes[node_id]["context_profile"]
         for node_id in (
             "feature.discovery",
             "feature.implement",
+            "feature.evidence",
             "feature.review",
             "feature.reconcile",
         )
     } == {
         "feature.discovery": "feature_delta.discovery",
         "feature.implement": "feature_delta.implement",
+        "feature.evidence": "feature_delta.evidence",
         "feature.review": "feature_delta.review",
         "feature.reconcile": "feature_delta.reconcile",
     }
-    assert "product.sh test" in raw
-    assert "product.sh build" in raw
+    assert "product.sh ensure-baseline" in raw
+    assert "product.sh ensure --record" in raw
     assert "cd project" not in raw
     assert nodes["feature.implement"].write_scope[:2] == ["project", "src"]
-    assert nodes["feature.implement"].validators == [
-        {"file_exists": "docs/implementation-report.md"},
+    assert nodes["feature.implement"].validators == []
+    assert nodes["feature.implement"].llm_timeout_seconds == 900
+    assert nodes["feature.implement"].llm_episode_budget_seconds == 1800
+    assert {
+        node_id: nodes[node_id].llm_timeout_seconds
+        for node_id in (
+            "feature.discovery",
+            "feature.evidence",
+            "feature.review",
+            "feature.reconcile",
+        )
+    } == {
+        "feature.discovery": 600,
+        "feature.evidence": 480,
+        "feature.review": 600,
+        "feature.reconcile": 480,
+    }
+    assert nodes["feature.product_validate"].validators == [
         {
             "command_succeeds": {
                 "command": (
                     "python .ft/process/feature/scripts/validate_feature.py "
-                    "implementation && bash .ft/process/feature/scripts/product.sh "
-                    "full --record docs/feature-validation.json"
+                    "implementation"
+                ),
+                "stop_on_failure": True,
+            }
+        },
+        {
+            "command_succeeds": {
+                "command": (
+                    "bash .ft/process/feature/scripts/product.sh ensure --record "
+                    "docs/feature-validation.json"
                 ),
                 "resume_command": (
-                    "python .ft/process/feature/scripts/validate_feature.py "
-                    "implementation && bash .ft/process/feature/scripts/product.sh "
-                    "verify docs/feature-validation.json"
+                    "bash .ft/process/feature/scripts/product.sh verify "
+                    "docs/feature-validation.json"
                 ),
                 "timeout": 300,
             }
@@ -318,8 +395,15 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     ]
     assert nodes["feature.review"].validators == [
         {"file_exists": "docs/feature-review.md"},
+        {"file_exists": "docs/feature-review.yml"},
         {
-            "command_succeeds": "bash .ft/process/feature/scripts/product.sh verify docs/feature-validation.json"
+            "command_succeeds": {
+                "command": (
+                    "bash .ft/process/feature/scripts/product.sh verify "
+                    "docs/feature-validation.json"
+                ),
+                "stop_on_failure": True,
+            }
         },
         {
             "command_succeeds": "python .ft/process/feature/scripts/validate_feature.py review"
@@ -336,13 +420,20 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     assert nodes["feature.preflight"].validators[-2:] == [
         {
             "command_succeeds": {
-                "command": "bash .ft/process/feature/scripts/product.sh build",
-                "timeout": 300,
+                "command": "python .ft/process/feature/scripts/validate_feature.py baseline",
+                "stop_on_failure": True,
             }
         },
         {
             "command_succeeds": {
-                "command": "bash .ft/process/feature/scripts/product.sh test",
+                "command": (
+                    "bash .ft/process/feature/scripts/product.sh ensure-baseline --record "
+                    "docs/feature-baseline-attestation.json"
+                ),
+                "resume_command": (
+                    "bash .ft/process/feature/scripts/product.sh verify-baseline "
+                    "docs/feature-baseline-attestation.json"
+                ),
                 "timeout": 300,
             }
         },
@@ -352,7 +443,17 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
         for validator in nodes["feature.reconcile"].validators
         if "command_succeeds" in validator
     ]
-    assert reconcile_commands == []
+    assert reconcile_commands == [
+        {
+            "command": "python .ft/process/feature/scripts/validate_feature.py proposal",
+            "stop_on_failure": True,
+        },
+        {
+            "command": "python .ft/process/feature/scripts/validate_feature.py apply-reconcile",
+            "stop_on_failure": True,
+        },
+        "python .ft/process/feature/scripts/validate_feature.py reconcile",
+    ]
 
     policy = graph.meta["artifact_policy"]
     assert "CHANGELOG.md" in policy["canonical"]
@@ -361,6 +462,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
     environment = yaml.safe_load((TEMPLATE / "environment.yml").read_text())
     assert environment == {
         "run_mode": "isolated",
+        "max_node_retries": 1,
         "max_gate_retries": 0,
         "max_auto_fix": 0,
     }
@@ -377,6 +479,36 @@ def test_feature_validator_baseline_and_clear_discovery_pass(tmp_path):
     assert discovery.returncode == 0, discovery.stderr
 
 
+def test_feature_baseline_requires_an_open_preexisting_pb(tmp_path):
+    root = _base_project(tmp_path)
+    _write(root, "docs/feature-request.md", "PB-001: refazer entrega aceita.\n")
+
+    result = _run_validator(root, "baseline")
+
+    assert result.returncode == 1
+    assert "não está aberto" in result.stderr
+
+
+def test_feature_workset_is_a_nonexistent_but_safe_hint(tmp_path):
+    root = _base_project(tmp_path)
+    _clear_discovery(root)
+    _write(
+        root,
+        "docs/feature-workset.yml",
+        "schema_version: 1\npaths: [project/path-that-does-not-exist.py]\n",
+    )
+    assert _run_validator(root, "discovery").returncode == 0
+
+    _write(
+        root,
+        "docs/feature-workset.yml",
+        "schema_version: 1\npaths: [../outside]\n",
+    )
+    invalid = _run_validator(root, "discovery")
+    assert invalid.returncode == 1
+    assert "paths inválidos" in invalid.stderr
+
+
 def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
     root = _receipt_project(tmp_path)
     receipt_path = root / "docs" / "feature-validation.json"
@@ -388,8 +520,9 @@ def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
         encoding="utf-8"
     ) == "build\ntest\n"
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["kind"] == "ft.feature.product-validation"
+    assert payload["validation_kind"] == "implementation"
     assert payload["result"] == "pass"
     assert payload["fingerprint"].startswith("sha256:")
     assert payload["product_root"] == "project"
@@ -398,7 +531,9 @@ def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
     assert set(payload) == {
         "schema_version",
         "kind",
+        "validation_kind",
         "product_root",
+        "project_identity",
         "commands",
         "file_count",
         "fingerprint",
@@ -407,30 +542,12 @@ def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
     }
     assert payload["commands"] == [
         [
-            "env",
-            "-u",
-            "MAKEFLAGS",
-            "-u",
-            "MFLAGS",
-            "-u",
-            "GNUMAKEFLAGS",
-            "make",
-            "-C",
-            "project",
-            "build",
+            "env", "-u", "MAKEFLAGS", "-u", "MFLAGS", "-u",
+            "GNUMAKEFLAGS", "make", "-C", "project", "build",
         ],
         [
-            "env",
-            "-u",
-            "MAKEFLAGS",
-            "-u",
-            "MFLAGS",
-            "-u",
-            "GNUMAKEFLAGS",
-            "make",
-            "-C",
-            "project",
-            "test",
+            "env", "-u", "MAKEFLAGS", "-u", "MFLAGS", "-u",
+            "GNUMAKEFLAGS", "make", "-C", "project", "test",
         ],
     ]
 
@@ -443,14 +560,134 @@ def test_feature_product_full_records_and_verify_reuses_exact_receipt(tmp_path):
     ) == "build\ntest\n"
 
 
+def test_feature_baseline_and_implementation_receipts_are_separate_and_ensure_reuses(
+    tmp_path,
+):
+    root = _receipt_project(tmp_path)
+
+    first_baseline = _run_product_helper(
+        root,
+        "ensure-baseline",
+        "--record",
+        "docs/feature-baseline-attestation.json",
+    )
+    second_baseline = _run_product_helper(
+        root,
+        "ensure-baseline",
+        "--record",
+        "docs/feature-baseline-attestation.json",
+    )
+
+    assert first_baseline.returncode == 0, first_baseline.stderr
+    assert second_baseline.returncode == 0, second_baseline.stderr
+    assert "REUSED" in second_baseline.stdout
+    baseline = json.loads(
+        (root / "docs/feature-baseline-attestation.json").read_text()
+    )
+    assert baseline["validation_kind"] == "baseline"
+    assert baseline["kind"] == "ft.feature.baseline-attestation"
+    assert not (root / "docs/feature-validation.json").exists()
+    assert (root / "validation-calls.log").read_text() == "build\ntest\n"
+
+    _write(root, "project/app.py", "VALUE = 2\n")
+    implementation = _run_product_helper(
+        root, "ensure", "--record", "docs/feature-validation.json"
+    )
+    implementation_again = _run_product_helper(
+        root, "ensure", "--record", "docs/feature-validation.json"
+    )
+
+    assert implementation.returncode == 0, implementation.stderr
+    assert implementation_again.returncode == 0, implementation_again.stderr
+    assert "REUSED" in implementation_again.stdout
+    receipt = json.loads((root / "docs/feature-validation.json").read_text())
+    assert receipt["validation_kind"] == "implementation"
+    assert (root / "validation-calls.log").read_text() == (
+        "build\ntest\nbuild\ntest\n"
+    )
+
+
+def test_feature_receipt_detects_external_ft_toolchain_change(tmp_path):
+    root = _receipt_project(tmp_path / "project-root")
+    receipt_path = root / "docs/feature-validation.json"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_ft = bin_dir / "ft"
+    fake_ft.write_text("#!/bin/sh\nprintf 'ft test 1\\n'\n", encoding="utf-8")
+    fake_ft.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    full = _run_product_helper(
+        root,
+        "full",
+        "--record",
+        "docs/feature-validation.json",
+        env=env,
+    )
+    assert full.returncode == 0, full.stderr
+
+    fake_ft.write_text("#!/bin/sh\nprintf 'ft test 2\\n'\n", encoding="utf-8")
+    fake_ft.chmod(0o755)
+    verified = _run_product_helper(
+        root,
+        "verify",
+        "docs/feature-validation.json",
+        env=env,
+    )
+
+    assert verified.returncode == 1
+    assert "ferramentas" in verified.stderr
+    assert receipt_path.is_file()
+
+
+def test_feature_shared_cache_is_opt_in_hermetic_and_single_keyed(tmp_path):
+    root = _receipt_project(tmp_path / "project-root")
+    env = dict(os.environ)
+    env.update(
+        {
+            "FT_HOME": str(tmp_path / "ft-home"),
+            "FT_FEATURE_SHARED_CACHE": "1",
+            "FT_FEATURE_VALIDATION_HERMETIC": "1",
+            "FT_FEATURE_EXTERNAL_DEPENDENCIES": "none",
+        }
+    )
+
+    first = _run_product_helper(
+        root,
+        "ensure",
+        "--record",
+        "docs/feature-validation.json",
+        env=env,
+    )
+    assert first.returncode == 0, first.stderr
+    assert (root / "validation-calls.log").read_text() == "build\ntest\n"
+    (root / "docs/feature-validation.json").unlink()
+    (root / "validation-calls.log").unlink()
+
+    cached = _run_product_helper(
+        root,
+        "ensure",
+        "--record",
+        "docs/feature-validation.json",
+        env=env,
+    )
+
+    assert cached.returncode == 0, cached.stderr
+    assert "SHARED-CACHE" in cached.stdout
+    assert not (root / "validation-calls.log").exists()
+    cache_files = list(
+        (tmp_path / "ft-home/cache/feature-validation").glob("implementation-*.json")
+    )
+    assert len(cache_files) == 1
+
+
 def test_feature_implementation_validation_fails_before_full_suite(tmp_path):
     root = _receipt_project(tmp_path)
     _clear_discovery(root)
     _snapshot_baseline(root)
-    # Há mudança de produto/teste potencial, mas o relatório estrutural exigido
-    # está ausente. O comando composto deve parar antes de make build/test.
-    _write(root, "project/test_app.py", "def test_value():\n    assert True\n")
-    node = load_graph(PROCESS).nodes["feature.implement"]
+    # Sem mudança de produto, o check estático deve parar antes de make build/test.
+    node = load_graph(PROCESS).nodes["feature.product_validate"]
 
     result = run_validators(node, str(root), work_dir=str(root))
 
@@ -818,6 +1055,7 @@ def test_feature_validator_implementation_review_and_reconcile_pass(tmp_path):
         "docs/feature-review.md",
         "Resultado: APPROVED\n\n| AC-01 | PASS |\n| AC-02 | PASS |\n",
     )
+    _write_review_route(root)
 
     implementation = _run_validator(root, "implementation")
     review = _run_validator(root, "review")
@@ -845,6 +1083,215 @@ def test_feature_validator_implementation_review_and_reconcile_pass(tmp_path):
 
     reconcile = _run_validator(root, "reconcile")
     assert reconcile.returncode == 0, reconcile.stderr
+
+
+def test_feature_evidence_gate_checks_references_without_claiming_semantics(tmp_path):
+    root = _base_project(tmp_path)
+    _clear_discovery(root)
+    _write(root, "project/tests/test_search.py", "def test_search():\n    assert True\n")
+    commands = [["make", "-C", "project", "build"], ["make", "-C", "project", "test"]]
+    _write(
+        root,
+        "docs/feature-validation.json",
+        json.dumps({"commands": commands}),
+    )
+    _write(
+        root,
+        "docs/implementation-report.md",
+        "| AC-01 | PASS | project/tests/test_search.py |\n"
+        "| AC-02 | PASS | project/tests/test_search.py |\n",
+    )
+    _write(
+        root,
+        "docs/feature-evidence.yml",
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "receipt": "docs/feature-validation.json",
+                "commands": commands,
+                "acceptance": [
+                    {
+                        "id": "AC-01",
+                        "status": "PASS",
+                        "tests": ["project/tests/test_search.py"],
+                        "artifacts": [],
+                    },
+                    {
+                        "id": "AC-02",
+                        "status": "PASS",
+                        "tests": ["project/tests/test_search.py"],
+                        "artifacts": [],
+                    },
+                ],
+            },
+            sort_keys=False,
+        ),
+    )
+
+    valid = _run_validator(root, "evidence")
+    assert valid.returncode == 0, valid.stderr
+
+    evidence = yaml.safe_load((root / "docs/feature-evidence.yml").read_text())
+    evidence["acceptance"][1]["tests"] = ["project/tests/missing.py"]
+    _write(root, "docs/feature-evidence.yml", yaml.safe_dump(evidence))
+    invalid = _run_validator(root, "evidence")
+    assert invalid.returncode == 1
+    assert "path ausente" in invalid.stderr
+
+
+def test_feature_review_route_is_exported_for_all_semantic_destinations(tmp_path):
+    graph = load_graph(PROCESS)
+    for route, destination in {
+        "approved": "feature.acceptance",
+        "implementation": "feature.implement",
+        "evidence": "feature.evidence",
+        "scope": "feature.discovery",
+    }.items():
+        assert graph.resolve_next(
+            "feature.review_decision", {"review_route": route}
+        ) == destination
+
+
+def test_feature_id_reservation_blocks_same_pb_in_live_parallel_worktrees(tmp_path):
+    root = _base_project(tmp_path / "repo")
+    _clear_discovery(root)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=root, check=True
+    )
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+    first = tmp_path / "cycle-one"
+    second = tmp_path / "cycle-two"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "cycle-one", str(first), "HEAD"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "cycle-two", str(second), "HEAD"],
+        cwd=root,
+        check=True,
+    )
+
+    reserved = _run_validator(first, "reserve")
+    duplicate = _run_validator(second, "reserve")
+
+    assert reserved.returncode == 0, reserved.stderr
+    payload = yaml.safe_load((first / "docs/feature-id-reservation.yml").read_text())
+    assert payload["backlog_item"] == "PB-002"
+    assert payload["final_feature_id"] == "FEAT-001"
+    assert duplicate.returncode == 1
+    assert "ciclos paralelos devem usar PBs distintos" in duplicate.stderr
+
+
+def test_feature_id_reservation_allocates_distinct_new_feat_ids_under_one_lock(
+    tmp_path,
+):
+    root = _base_project(tmp_path / "repo")
+    _clear_discovery(root)
+    _write(
+        root,
+        "docs/PROJECT_BACKLOG.md",
+        BACKLOG
+        + "| PB-003 | Feature | P1 | planned | feature-request | Exportação | AC-01 | — | Planejado |\n",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=root, check=True
+    )
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+
+    worktrees = [tmp_path / "cycle-new-one", tmp_path / "cycle-new-two"]
+    for index, worktree in enumerate(worktrees, start=1):
+        subprocess.run(
+            [
+                "git", "worktree", "add", "-q", "-b", f"cycle-new-{index}",
+                str(worktree), "HEAD",
+            ],
+            cwd=root,
+            check=True,
+        )
+        backlog = "PB-002" if index == 1 else "PB-003"
+        feature = FEATURE.replace("type: evolution", "type: new").replace(
+            "target_feature: FEAT-001", "target_feature: new"
+        ).replace("backlog_item: PB-002", f"backlog_item: {backlog}")
+        _write(worktree, "docs/feature.md", feature)
+        _write(worktree, "docs/feature-request.md", f"{backlog}: capacidade nova.\n")
+        _write(
+            worktree,
+            "docs/feature-plan.md",
+            f"# Plano\n\n{backlog}\nAC-01\nAC-02\n",
+        )
+
+    results = [_run_validator(worktree, "reserve") for worktree in worktrees]
+
+    assert all(result.returncode == 0 for result in results)
+    reservations = [
+        yaml.safe_load((worktree / "docs/feature-id-reservation.yml").read_text())
+        for worktree in worktrees
+    ]
+    assert [item["final_feature_id"] for item in reservations] == [
+        "FEAT-002",
+        "FEAT-003",
+    ]
+
+
+def test_feature_reconciliation_proposal_is_validated_then_applied_atomically(tmp_path):
+    root = _base_project(tmp_path)
+    _snapshot_baseline(root)
+    _clear_discovery(root)
+    accepted_backlog = BACKLOG.replace("in_progress", "accepted")
+    evolved_features = FEATURES.replace("| PB-001 |", "| PB-001, PB-002 |")
+    backlog_row = next(
+        line for line in accepted_backlog.splitlines() if line.startswith("| PB-002 |")
+    )
+    feature_row = next(
+        line for line in evolved_features.splitlines() if line.startswith("| FEAT-001 |")
+    )
+    proposal = {
+        "schema_version": 1,
+        "backlog_item": "PB-002",
+        "target_feature": "FEAT-001",
+        "final_feature_id": "FEAT-001",
+        "backlog_row": backlog_row,
+        "feature_row": feature_row,
+        "changelog_entry": "- #FEAT PB-002 / FEAT-001: busca entregue.",
+        "documentation": {},
+    }
+    _write(
+        root,
+        "docs/feature-reconciliation.yml",
+        yaml.safe_dump(proposal, allow_unicode=True, sort_keys=False),
+    )
+    _write(
+        root,
+        "docs/feature-result.md",
+        "# Resultado PB-002\n\nAC-01 PASS\nAC-02 PASS\n\n"
+        "## Documentação atualizada\n\n"
+        "- CHANGELOG.md\n- docs/PROJECT_BACKLOG.md\n- docs/FEATURES.md\n",
+    )
+
+    proposed = _run_validator(root, "proposal")
+    applied = _run_validator(root, "apply-reconcile")
+
+    assert proposed.returncode == 0, proposed.stderr
+    assert applied.returncode == 0, applied.stderr
+    merged_changelog = (root / "CHANGELOG.md").read_text()
+    assert "- #FEAT PB-002 / FEAT-001: busca entregue." in merged_changelog
+    assert "PB-001 entregue" in merged_changelog
+    assert "| PB-002 | Feature | P1 | accepted" in (
+        root / "docs/PROJECT_BACKLOG.md"
+    ).read_text()
+
+    proposal["documentation"]["docs/UNRELATED.md"] = "not allowed\n"
+    _write(root, "docs/feature-reconciliation.yml", yaml.safe_dump(proposal))
+    rejected = _run_validator(root, "proposal")
+    assert rejected.returncode == 1
+    assert "path canônico não autorizado" in rejected.stderr
 
 
 def test_feature_validator_reconcile_requires_updated_changelog(tmp_path):
@@ -954,6 +1401,7 @@ def test_feature_validator_review_accepts_rejected_with_failed_ac(tmp_path):
         "| AC-01 | PASS | Busca completa coberta. |\n"
         "| AC-02 | FAIL | Regressão reproduzida. |\n",
     )
+    _write_review_route(root, route="implementation", verdict="REJECTED")
 
     review = _run_validator(root, "review")
 
@@ -975,6 +1423,7 @@ def test_feature_validator_review_accepts_rejected_with_all_ac_pass_for_scope_re
         "| AC-02 | PASS | Coberto. |\n\n"
         "Regressão fora dos AC: contrato público incompatível.\n",
     )
+    _write_review_route(root, route="scope", verdict="REJECTED")
 
     review = _run_validator(root, "review")
 
@@ -995,6 +1444,7 @@ def test_feature_validator_review_does_not_treat_technical_fail_kind_as_ac_failu
         "| AC-01 | PASS | Preserva a aresta de kind `fail`. |\n"
         "| AC-02 | PASS | O tipo técnico `fail` continua renderizado. |\n",
     )
+    _write_review_route(root)
 
     review = _run_validator(root, "review")
 
@@ -1015,6 +1465,7 @@ def test_feature_validator_review_rejects_approved_with_failed_or_ambiguous_ac(
         "| AC-01 | PASS | Coberto. |\n"
         "| AC-02 | FAIL | Quebrado. |\n",
     )
+    _write_review_route(root)
 
     failed = _run_validator(root, "review")
     assert failed.returncode == 1
@@ -1028,26 +1479,37 @@ def test_feature_validator_review_rejects_approved_with_failed_or_ambiguous_ac(
         "| AC-01 | FAIL | Avaliação conflitante. |\n"
         "| AC-02 | PASS | Coberto. |\n",
     )
+    _write_review_route(root, route="implementation", verdict="REJECTED")
 
     ambiguous = _run_validator(root, "review")
     assert ambiguous.returncode == 1
     assert "status ambíguo: AC-01" in ambiguous.stderr
 
 
-def test_feature_validator_review_requires_exactly_one_supported_result(tmp_path):
+def test_feature_validator_review_requires_valid_structured_route(tmp_path):
     root = _base_project(tmp_path)
     _clear_discovery(root)
     report_body = "\n| AC-01 | PASS |\n| AC-02 | PASS |\n"
 
-    for result_line in (
-        "Resultado: APPROVED WITH NOTES",
-        "Resultado: APPROVED\nResultado: REJECTED",
-        "Resultado: BLOCKED",
+    _write(root, "docs/feature-review.md", report_body)
+    for route_payload, expected in (
+        (
+            "schema_version: 1\nverdict: APPROVED\nreview_route: nowhere\nsummary: x\n",
+            "review_route inválida",
+        ),
+        (
+            "schema_version: 1\nverdict: REJECTED\nreview_route: approved\nsummary: x\n",
+            "approved exige APPROVED",
+        ),
+        (
+            "schema_version: 2\nverdict: APPROVED\nreview_route: approved\nsummary: x\n",
+            "schema_version deve ser 1",
+        ),
     ):
-        _write(root, "docs/feature-review.md", result_line + report_body)
+        _write(root, "docs/feature-review.yml", route_payload)
         review = _run_validator(root, "review")
         assert review.returncode == 1
-        assert "exige exatamente uma linha" in review.stderr
+        assert expected in review.stderr
 
 
 def test_feature_validator_accepts_implementation_under_src(tmp_path):

@@ -6,13 +6,15 @@ resolve_next() → delegate() → validate() → advance()
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ from ft.engine.graph import Node, load_graph
 from ft.engine.context_profiles import compose_context_profile
 from ft.engine.state import StateManager
 from ft.engine.delegate import (
+    DelegateResult,
     delegate_to_llm,
     delegate_with_feedback,
     delegate_opencode_exact_file_raw,
@@ -52,6 +55,7 @@ from ft.engine.layout import (
     validate_local_process_path,
 )
 from ft.engine.llm_defaults import LLMSelection, LiveLLMSettings, normalize_llm_effort
+from ft.engine.trace import TraceRecorder, TraceSpan, build_run_report
 from ft.engine import ui
 from ft.providers.opencode_fallbacks import (
     OpenCodeDomainFallbackMixin,
@@ -75,6 +79,10 @@ from ft.engine.stakeholder import (
 _REVIEW_REJECT_VERDICTS = {"REJECTED", "BLOCKED", "INCOMPLETE", "INCOMPLETO", "ITERATE"}
 _REVIEW_APPROVE_VERDICTS = {"APPROVED", "APPROVED WITH NOTES"}
 _REVIEW_VERDICTS = _REVIEW_APPROVE_VERDICTS | _REVIEW_REJECT_VERDICTS
+
+
+class LLMEpisodeBudgetExceeded(RuntimeError):
+    """Hard stop preservando o diff quando o orçamento cumulativo termina."""
 
 
 def _normalize_review_line(line: str) -> str:
@@ -219,6 +227,7 @@ class ValidationItem:
     name: str
     passed: bool
     detail: str
+    duration_ms: int | None = None
 
 
 @dataclass
@@ -314,6 +323,9 @@ def run_validators(
     work_dir: str | None = None,
     *,
     resume: bool = False,
+    trace: TraceRecorder | None = None,
+    parent_span_id: str | None = None,
+    attempt_id: str | None = None,
 ) -> ValidationResult:
     """Roda todos os validadores de um node. Retorna resultado agregado.
 
@@ -322,101 +334,165 @@ def run_validators(
     normais continuam usando ``command``. Isso permite que uma retomada valide um
     receipt determinístico sem repetir o comando caro que o produziu.
     """
-    items = []
+    items: list[ValidationItem] = []
     extra_artifacts: dict[str, str] = {}
+    validation_span: TraceSpan | None = None
+    if trace is not None:
+        validation_ordinal = trace.next_ordinal("validation", node.id)
+        validation_span = trace.begin_span(
+            category="validation",
+            name="validators",
+            node_id=node.id,
+            parent_span_id=parent_span_id,
+            attempt_id=attempt_id,
+            invocation_id=f"{node.id}:validation:{validation_ordinal}",
+            ordinal=validation_ordinal,
+            attributes={
+                "mode": node.validation_mode,
+                "resume": resume,
+                "validator_count": sum(
+                    1
+                    for spec in node.validators
+                    for name in spec
+                    if name != "stop_on_failure"
+                ),
+            },
+        )
 
-    for validator_spec in node.validators:
-        for name, args in validator_spec.items():
-            fn = VALIDATOR_REGISTRY.get(name)
-            if fn is None:
-                items.append(ValidationItem(name=name, passed=False, detail=f"Validador desconhecido: {name}"))
-                continue
+    def _execute(name: str, args: Any) -> tuple[bool, str]:
+        fn = VALIDATOR_REGISTRY.get(name)
+        if fn is None:
+            return False, f"Validador desconhecido: {name}"
 
-            # Resolver root efetivo: docs/ → project_root, código → work_dir
-            def _eff_root(path: str = "") -> str:
-                return _resolve_validator_root(path, project_root, work_dir)
+        if isinstance(args, dict):
+            args = dict(args)
+            # Metadata do runner vale para qualquer validator e nunca faz
+            # parte da assinatura da função determinística subjacente.
+            args.pop("stop_on_failure", None)
 
-            # Validators booleanos de código (tests_pass, tests_exist, etc.) → work_dir
-            _code_validators = ("tests_pass", "tests_fail", "tests_exist",
-                                "coverage_min", "coverage_per_file",
-                                "lint_clean", "format_check",
-                                "gate_frontend", "gate_delivery", "gate_smoke",
-                                "gate_mvp", "gate_tdd_sequence", "gate_coverage_80",
-                                "gate_e2e_all_pass", "gate_server_starts")
+        def _eff_root(path: str = "") -> str:
+            return _resolve_validator_root(path, project_root, work_dir)
 
-            # read_artifact — caso especial: args como dict com path/key/pattern
-            if name == "read_artifact" and isinstance(args, dict):
-                root = _eff_root(args.get("path", ""))
-                passed, detail = fn(**args, project_root=root)
-                if name == "read_artifact" and passed:
-                    try:
-                        kv = detail.split(": ", 1)[-1]
-                        if "=" in kv:
-                            k, v = kv.split("=", 1)
-                            extra_artifacts[k.strip()] = v.strip()
-                    except Exception:
-                        pass
-            # Gate validators compostos — recebem args como dict
-            elif name.startswith("gate_") and isinstance(args, dict):
-                passed, detail = fn(**args, project_root=_eff_root())
-            elif name.startswith("gate_") and isinstance(args, bool) and args is True:
-                # gate_delivery: true → usa outputs do node
-                # Gates verificam estrutura de código → usar work_dir quando disponível
-                gate_root = work_dir or project_root
-                if name == "gate_delivery":
-                    passed, detail = fn(outputs=node.outputs, project_root=gate_root)
-                else:
-                    passed, detail = fn(project_root=gate_root)
-            elif isinstance(args, dict):
-                resolved_args = dict(args)
-                if name == "command_succeeds":
-                    resume_command = resolved_args.pop("resume_command", None)
-                    if resume and resume_command is not None:
-                        if (
-                            not isinstance(resume_command, str)
-                            or not resume_command.strip()
-                        ):
-                            passed, detail = (
-                                False,
-                                "command_succeeds FAIL: resume_command deve ser uma string não vazia",
-                            )
-                            items.append(
-                                ValidationItem(name=name, passed=passed, detail=detail)
-                            )
-                            continue
-                        resolved_args["command"] = resume_command
-                # sections_unchanged: resolve snapshot_path relativo ao state_dir
-                if name == "sections_unchanged" and state_dir and "snapshot_path" in args:
-                    resolved_args["snapshot_path"] = str(
-                        Path(state_dir) / args["snapshot_path"]
+        if name == "read_artifact" and isinstance(args, dict):
+            passed, detail = fn(**args, project_root=_eff_root(args.get("path", "")))
+            if passed:
+                try:
+                    kv = detail.split(": ", 1)[-1]
+                    if "=" in kv:
+                        key, value = kv.split("=", 1)
+                        extra_artifacts[key.strip()] = value.strip()
+                except Exception:
+                    pass
+            return passed, detail
+
+        if name.startswith("gate_") and isinstance(args, dict):
+            return fn(**args, project_root=_eff_root())
+        if name.startswith("gate_") and args is True:
+            gate_root = work_dir or project_root
+            if name == "gate_delivery":
+                return fn(outputs=node.outputs, project_root=gate_root)
+            return fn(project_root=gate_root)
+
+        if isinstance(args, dict):
+            resolved_args = dict(args)
+            resume_command = (
+                resolved_args.pop("resume_command", None)
+                if name == "command_succeeds"
+                else None
+            )
+            if resume and resume_command is not None:
+                if not isinstance(resume_command, str) or not resume_command.strip():
+                    return (
+                        False,
+                        "command_succeeds FAIL: resume_command deve ser uma string não vazia",
                     )
-                    passed, detail = fn(**resolved_args, project_root=_eff_root(args.get("path", "")))
-                else:
-                    passed, detail = fn(**resolved_args, project_root=_eff_root())
-            # Validadores simples
-            elif isinstance(args, bool) and args is True:
-                # Prefer work_dir (worktree) when available — LLM escreve lá
-                root = work_dir or project_root
-                passed, detail = fn(project_root=root)
-            elif isinstance(args, (int, float)):
-                path = node.outputs[0] if node.outputs else ""
-                if not path:
-                    passed, detail = False, f"{name} FAIL: node sem outputs — não é possível inferir o path do artefato"
-                else:
-                    passed, detail = fn(path, args, project_root=_eff_root(path))
-            elif isinstance(args, str):
-                # Ex: file_exists: path → file_exists(path, project_root)
-                passed, detail = fn(args, project_root=_eff_root(args))
-            elif isinstance(args, list):
-                path = node.outputs[0] if node.outputs else ""
-                if not path:
-                    passed, detail = False, f"{name} FAIL: node sem outputs — não é possível inferir o path do artefato"
-                else:
-                    passed, detail = fn(path, args, project_root=_eff_root(path))
-            else:
-                passed, detail = False, f"Args nao suportados para {name}: {args}"
+                resolved_args["command"] = resume_command
+            if name == "sections_unchanged" and state_dir and "snapshot_path" in args:
+                resolved_args["snapshot_path"] = str(
+                    Path(state_dir) / args["snapshot_path"]
+                )
+                return fn(
+                    **resolved_args,
+                    project_root=_eff_root(args.get("path", "")),
+                )
+            return fn(**resolved_args, project_root=_eff_root())
 
-            items.append(ValidationItem(name=name, passed=passed, detail=detail))
+        if args is True:
+            return fn(project_root=work_dir or project_root)
+        if isinstance(args, (int, float)):
+            path = node.outputs[0] if node.outputs else ""
+            if not path:
+                return False, (
+                    f"{name} FAIL: node sem outputs — não é possível inferir "
+                    "o path do artefato"
+                )
+            return fn(path, args, project_root=_eff_root(path))
+        if isinstance(args, str):
+            return fn(args, project_root=_eff_root(args))
+        if isinstance(args, list):
+            path = node.outputs[0] if node.outputs else ""
+            if not path:
+                return False, (
+                    f"{name} FAIL: node sem outputs — não é possível inferir "
+                    "o path do artefato"
+                )
+            return fn(path, args, project_root=_eff_root(path))
+        return False, f"Args nao suportados para {name}: {args}"
+
+    stop_requested = False
+    for validator_spec in node.validators:
+        spec_stop = validator_spec.get("stop_on_failure") is True
+        for name, args in validator_spec.items():
+            if name == "stop_on_failure":
+                continue
+            child_span: TraceSpan | None = None
+            if trace is not None:
+                child_ordinal = trace.next_ordinal("validator", node.id)
+                child_span = trace.begin_span(
+                    category="validator",
+                    name=name,
+                    node_id=node.id,
+                    parent_span_id=(
+                        validation_span.span_id if validation_span is not None else parent_span_id
+                    ),
+                    attempt_id=attempt_id,
+                    invocation_id=f"{node.id}:validator:{child_ordinal}",
+                    ordinal=child_ordinal,
+                    attributes={"resume": resume},
+                )
+            started = time.monotonic_ns()
+            try:
+                passed, detail = _execute(name, args)
+            except Exception as exc:
+                if child_span is not None:
+                    child_span.finish(status="error", result=type(exc).__name__)
+                if validation_span is not None:
+                    validation_span.finish(status="error", result=type(exc).__name__)
+                raise
+            duration_ms = max(0, (time.monotonic_ns() - started) // 1_000_000)
+            items.append(
+                ValidationItem(
+                    name=name,
+                    passed=passed,
+                    detail=detail,
+                    duration_ms=duration_ms,
+                )
+            )
+            if child_span is not None:
+                child_span.finish(
+                    status="ok" if passed else "error",
+                    result="PASS" if passed else "FAIL",
+                    metrics={"duration_ms": duration_ms},
+                    attributes={"detail": detail},
+                )
+            arg_stop = isinstance(args, dict) and args.get("stop_on_failure") is True
+            if not passed and (
+                node.validation_mode == "fail_fast" or spec_stop or arg_stop
+            ):
+                stop_requested = True
+                break
+        if stop_requested:
+            break
 
     all_passed = all(item.passed for item in items)
     retryable = not all_passed and node.executor.startswith("llm")
@@ -424,6 +500,21 @@ def run_validators(
     if not all_passed:
         failures = [item.detail for item in items if not item.passed]
         feedback = "\n".join(failures)
+
+    if validation_span is not None:
+        validation_span.finish(
+            status="ok" if all_passed else "error",
+            result="PASS" if all_passed else "FAIL",
+            metrics={
+                "executed": len(items),
+                "configured": sum(
+                    1
+                    for spec in node.validators
+                    for name in spec
+                    if name != "stop_on_failure"
+                ),
+            },
+        )
 
     return ValidationResult(
         passed=all_passed,
@@ -1109,9 +1200,25 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         # Run mode: isolated → LLM trabalha na worktree externa; continuous → na raiz.
         self._run_mode = self._environment.get("run_mode", "isolated")
         self._work_dir = self._resolve_work_dir()
+        trace_run_id = (
+            self.state_mgr.path.parent.parent.name
+            if self.state_mgr.path.parent.name == "state"
+            else Path(self.project_root).name
+        )
+        self.trace = TraceRecorder.for_state_path(
+            self.state_mgr.path,
+            trace_run_id,
+        )
         # Tracking para log enriquecido
         self._node_start_times: dict[str, datetime] = {}   # node_id → início
         self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
+        self._active_node_trace: TraceSpan | None = None
+        self._active_node_trace_id: str | None = None
+        self._active_node_attempt_id: str | None = None
+        self._run_trace_id: str | None = None
+        self._active_llm_traces: dict[str, TraceSpan] = {}
+        self._active_llm_episodes: dict[str, str] = {}
+        self._pending_llm_trace_attributes: dict[str, Any] = {}
         self._auto_fix_counts: dict[str, int] = {}          # node_id → auto-fix attempts
         self._auto_fix_prev_error: dict[str, str] = {}     # node_id → último erro (detecção de loop)
 
@@ -1296,7 +1403,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             for path, content in files:
                 if not write_controlled_file(path, content):
                     return True
-            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+            validation = self._run_validators(node)
             self._print_validation(validation)
             if not validation.passed:
                 self.state_mgr.block(f"OpenCode compact bundle insuficiente: {validation.feedback}")
@@ -1363,7 +1470,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 self.state_mgr.block(f"OpenCode compact bundle falhou em {path}: {result.output[:500]}")
                 return True
 
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        validation = self._run_validators(node)
         self._print_validation(validation)
         if not validation.passed:
             self.state_mgr.block(f"OpenCode compact bundle insuficiente: {validation.feedback}")
@@ -1464,7 +1571,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             build_script.write_text("console.log('build ok');\n", encoding="utf-8")
         (root / ".build_ok").write_text("frontend scaffold ready\n", encoding="utf-8")
 
-        repaired = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        repaired = self._run_validators(node)
         self._print_validation(repaired)
         if not repaired.passed:
             return False
@@ -1658,7 +1765,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         print(ui.info("OpenCode repair: normalizando contrato de API a partir dos docs"))
         target.write_text(body.rstrip() + "\n", encoding="utf-8")
 
-        repaired = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        repaired = self._run_validators(node)
         self._print_validation(repaired)
         if not repaired.passed:
             return False
@@ -1701,7 +1808,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         print(ui.info("OpenCode repair: normalizando massa de dados de jogo com datas relativas"))
         self._write_opencode_game_test_data_artifact()
 
-        repaired = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        repaired = self._run_validators(node)
         self._print_validation(repaired)
         if not repaired.passed:
             return False
@@ -1754,7 +1861,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 self.state_mgr.block(str(exc))
                 return True
 
-        repaired = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        repaired = self._run_validators(node)
         self._print_validation(repaired)
         if not repaired.passed:
             return False
@@ -1780,13 +1887,27 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         target.write_text(content, encoding="utf-8")
 
     def _run_validators(self, node: Node, *args, **kwargs) -> ValidationResult:
+        kwargs.setdefault("trace", self.trace)
+        kwargs.setdefault("parent_span_id", self._active_node_trace_id)
+        kwargs.setdefault("attempt_id", self._active_node_attempt_id)
         if args or kwargs:
-            return run_validators(node, *args, **kwargs)
+            if args:
+                return run_validators(node, *args, **kwargs)
+            return run_validators(
+                node,
+                self.project_root,
+                state_dir=str(self.state_mgr.path.parent),
+                work_dir=self._run_dir,
+                **kwargs,
+            )
         return run_validators(
             node,
             self.project_root,
             state_dir=str(self.state_mgr.path.parent),
             work_dir=self._run_dir,
+            trace=self.trace,
+            parent_span_id=self._active_node_trace_id,
+            attempt_id=self._active_node_attempt_id,
         )
 
 
@@ -1802,12 +1923,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
 
     def _finish_opencode_fallback_node(self, node: Node, summary: str, result: str = "PASS") -> bool:
-        validation = run_validators(
-            node,
-            self.project_root,
-            state_dir=str(self.state_mgr.path.parent),
-            work_dir=self._run_dir,
-        )
+        validation = self._run_validators(node)
         self._print_validation(validation)
         if not validation.passed:
             self.state_mgr.block(f"OpenCode fallback insuficiente: {validation.feedback}")
@@ -2347,6 +2463,12 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 f"{len(result.loaded_paths)} recortes, {len(result.context)} chars"
             )
         )
+        self._pending_llm_trace_attributes = {
+            "context_profile": node.context_profile,
+            "context_chars": len(result.context),
+            "context_paths": list(result.loaded_paths),
+            "context_truncated": result.truncated,
+        }
         deny_paths = (
             list(result.deny_read_paths)
             if selection.engine == "opencode"
@@ -2361,14 +2483,139 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         phase: str,
         *,
         engine: str | None = None,
+        selection: LLMSelection | None = None,
     ) -> str:
         """Registra no estado o log ativo para a delegação corrente."""
-        log_path = self._build_llm_log_path(node_id, phase, engine=engine)
+        node = self.graph.nodes.get(node_id)
+        episode = self._reserve_llm_episode_call(state, node) if node is not None else None
+        effective_engine = selection.engine if selection is not None else engine
+        log_path = self._build_llm_log_path(
+            node_id,
+            phase,
+            engine=effective_engine,
+        )
         rel = self._display_path(log_path)
         state.active_llm_log = rel
         state.last_llm_log = rel
+        attributes: dict[str, Any] = {
+            "engine": selection.engine if selection is not None else effective_engine,
+            "model": selection.model if selection is not None else None,
+            "effort": selection.effort if selection is not None else None,
+            "provenance": (
+                dict(selection.provenance) if selection is not None else {}
+            ),
+            "resolution": (
+                list(selection.resolution) if selection is not None else []
+            ),
+            "log_path": rel,
+            "episode_key": node.llm_episode if node is not None else None,
+            "episode_ordinal": episode.get("ordinal") if episode else None,
+            "episode_call": episode.get("calls") if episode else None,
+            **self._pending_llm_trace_attributes,
+        }
+        self._pending_llm_trace_attributes = {}
+        llm_ordinal = self.trace.next_ordinal("llm", node_id)
+        llm_span = self.trace.begin_span(
+            category="llm",
+            name=phase,
+            node_id=node_id,
+            parent_span_id=(
+                self._active_node_trace.span_id
+                if self._active_node_trace is not None
+                else None
+            ),
+            attempt_id=self._active_node_attempt_id,
+            invocation_id=f"{node_id}:llm:{llm_ordinal}",
+            ordinal=llm_ordinal,
+            attributes=attributes,
+        )
+        self._active_llm_traces[rel] = llm_span
+        if node is not None and node.llm_episode:
+            self._active_llm_episodes[rel] = node.llm_episode
         print(f"  LLM log: {rel}")
         return str(log_path)
+
+    def _reserve_llm_episode_call(self, state: Any, node: Node) -> dict[str, Any] | None:
+        key = node.llm_episode
+        if not key:
+            return None
+        record = state.llm_episodes.get(key)
+        if not isinstance(record, dict):
+            record = {
+                "ordinal": 1,
+                "calls": 0,
+                "consumed_seconds": 0.0,
+                "last_reason": "initial",
+            }
+            state.llm_episodes[key] = record
+        calls = int(record.get("calls", 0) or 0)
+        consumed = float(record.get("consumed_seconds", 0.0) or 0.0)
+        exhausted_reason: str | None = None
+        if node.llm_episode_max_calls is not None and calls >= node.llm_episode_max_calls:
+            exhausted_reason = f"limite de {node.llm_episode_max_calls} chamada(s)"
+        if (
+            node.llm_episode_budget_seconds is not None
+            and consumed >= node.llm_episode_budget_seconds
+        ):
+            exhausted_reason = (
+                f"orçamento de {node.llm_episode_budget_seconds}s "
+                f"(consumidos {consumed:.1f}s)"
+            )
+        if exhausted_reason:
+            try:
+                status = subprocess.run(
+                    ["git", "status", "--short"],
+                    cwd=self._work_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                status_lines = status.stdout.splitlines()
+            except (OSError, subprocess.TimeoutExpired):
+                status_lines = []
+            changed_paths = [
+                line[3:].strip()
+                for line in status_lines
+                if len(line) > 3 and line[3:].strip()
+            ][:100]
+            record["checkpoint"] = {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "node_id": node.id,
+                "changed_paths": changed_paths,
+                "truncated": len(status_lines) > len(changed_paths),
+            }
+            reason = (
+                f"Orçamento cumulativo do episódio LLM '{key}' esgotado: "
+                f"{exhausted_reason}. Diff e artefatos foram preservados; "
+                "revise antes de iniciar um novo episódio."
+            )
+            self.state_mgr.block(reason)
+            raise LLMEpisodeBudgetExceeded(reason)
+        record["calls"] = calls + 1
+        record["last_node"] = node.id
+        return record
+
+    def _effective_llm_timeout(self, node: Node) -> int | None:
+        timeout = node.llm_timeout_seconds
+        if not node.llm_episode or node.llm_episode_budget_seconds is None:
+            return timeout
+        state = self.state_mgr.state
+        record = state.llm_episodes.get(node.llm_episode, {})
+        consumed = float(record.get("consumed_seconds", 0.0) or 0.0)
+        remaining = max(1, int(node.llm_episode_budget_seconds - consumed))
+        return min(timeout, remaining) if timeout is not None else remaining
+
+    def _restart_llm_episode(self, state: Any, key: str, reason: str) -> None:
+        previous = state.llm_episodes.get(key, {})
+        ordinal = int(previous.get("ordinal", 0) or 0) + 1
+        state.llm_episodes[key] = {
+            "ordinal": ordinal,
+            "calls": 0,
+            "consumed_seconds": 0.0,
+            "last_reason": reason,
+        }
+        self.state_mgr.save()
 
     def _start_delegation_attempt(
         self,
@@ -2383,13 +2630,31 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             node.id,
             phase,
             engine=selection.engine,
+            selection=selection,
         )
         self.state_mgr.save()
         return selection, log_path
 
     def _clear_active_llm_log(self, state: Any) -> None:
         """Limpa referência ao log ativo após a conclusão do subprocesso."""
-        if getattr(state, "active_llm_log", None):
+        active = getattr(state, "active_llm_log", None)
+        if active:
+            span = self._active_llm_traces.pop(str(active), None)
+            if span is not None:
+                episode_key = self._active_llm_episodes.pop(str(active), None)
+                if episode_key:
+                    elapsed = max(
+                        0.0,
+                        (time.monotonic_ns() - span.started_monotonic_ns) / 1_000_000_000,
+                    )
+                    record = state.llm_episodes.get(episode_key)
+                    if isinstance(record, dict):
+                        record["consumed_seconds"] = round(
+                            float(record.get("consumed_seconds", 0.0) or 0.0)
+                            + elapsed,
+                            3,
+                        )
+                span.finish(status="returned")
             state.active_llm_log = None
             self.state_mgr.save()
 
@@ -2479,6 +2744,173 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         return verify_hooks_from_process_meta(self.graph.meta)
 
     def merge_on_close(self, strategy: str, paths: list[str] | None = None) -> bool:
+        """Fecha o ciclo com um span durável e arquiva o relatório final.
+
+        O processo pode terminar horas antes do ``ft close``. Por isso o close
+        é um span de topo próprio: o relatório consegue medir o wall time real
+        sem manter artificialmente aberto o span de execução do grafo.
+        """
+        from ft.engine import paths as _engine_paths
+
+        if strategy == "none":
+            return True
+
+        work_root = Path(self.project_root)
+        state = self.state_mgr.load()
+        worktree = self._detect_worktree()
+        cycle_id = (
+            work_root.name
+            if _engine_paths.is_worktree_path(work_root)
+            else getattr(state, "current_cycle", "cycle-01")
+        )
+        target_root = worktree[1] if worktree else work_root
+        if not worktree and _engine_paths.is_worktree_path(work_root):
+            candidate = Path.cwd().resolve()
+            if candidate != work_root.resolve():
+                target_root = candidate
+
+        ordinal = self.trace.next_ordinal("close", cycle_id)
+        close_span = self.trace.begin_span(
+            category="close",
+            name=f"merge:{strategy}",
+            node_id=cycle_id,
+            invocation_id=f"{cycle_id}:close:{ordinal}",
+            ordinal=ordinal,
+            attributes={"strategy": strategy},
+        )
+        try:
+            success = self._merge_on_close_impl(strategy, paths)
+        except BaseException as exc:
+            close_span.finish(
+                status="error",
+                result=type(exc).__name__,
+            )
+            raise
+
+        close_span.finish(
+            status="ok" if success else "error",
+            result="merged" if success else "merge_failed",
+        )
+        if success:
+            # Em execuções normais o span run já termina no end node. Um close
+            # forçado ou retomado pode encontrar spans órfãos; feche-os para o
+            # relatório arquivado não permanecer artificialmente "active".
+            self.trace.finish_open_spans(
+                category="run",
+                status="ok",
+                result="cycle_closed",
+            )
+            self.trace.finish_open_spans(
+                status="interrupted",
+                result="cycle_closed",
+            )
+        if success and not self._finalize_close_report(
+            cycle_id=cycle_id,
+            work_root=work_root,
+            target_root=target_root,
+            commit=strategy == "full",
+        ):
+            return False
+        return success
+
+    def _finalize_close_report(
+        self,
+        *,
+        cycle_id: str,
+        work_root: Path,
+        target_root: Path,
+        commit: bool,
+    ) -> bool:
+        """Regera o report após o merge sem incluir logs crus no Git."""
+        import subprocess as _sp
+
+        from ft.engine.trace import write_run_report
+
+        destination = target_root / ".ft" / "cycles" / cycle_id / "run-report.json"
+        # Um close selective pode deliberadamente excluir o histórico.
+        if not destination.exists():
+            return True
+        try:
+            write_run_report(
+                self.trace.path,
+                destination,
+                run_id=cycle_id,
+                log_root=work_root,
+            )
+        except OSError as exc:
+            print(ui.fail(f"Relatório final do close falhou: {exc}"))
+            return False
+
+        if not commit or not (target_root / ".git").exists():
+            return True
+
+        relative = destination.relative_to(target_root).as_posix()
+        from ft.engine.layout import (
+            _assert_no_exclusive_startup,
+            _manifest_write_lock,
+            _suspend_for_exclusive_project_write,
+        )
+
+        verify_hooks = self._verify_commit_hooks()
+        with _manifest_write_lock(target_root):
+            _assert_no_exclusive_startup(target_root)
+            with _suspend_for_exclusive_project_write(
+                target_root,
+                reason=f"ft close report {cycle_id}",
+            ):
+                added = _sp.run(
+                    ["git", "add", "--", relative],
+                    cwd=target_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if added.returncode != 0:
+                    print(ui.fail(
+                        "Relatório final do close não pôde ser preparado — "
+                        + (added.stderr.strip() or added.stdout.strip())[:300]
+                    ))
+                    return False
+                changed = _sp.run(
+                    ["git", "diff", "--cached", "--quiet", "--", relative],
+                    cwd=target_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if changed.returncode == 0:
+                    return True
+                if changed.returncode != 1:
+                    print(ui.fail("Não foi possível inspecionar o relatório final do close"))
+                    return False
+                command = [
+                    *git_command_prefix(verify_hooks),
+                    "commit",
+                ]
+                if not verify_hooks:
+                    command.extend(["--no-verify", "--no-gpg-sign"])
+                command.extend(
+                    [
+                        "--only",
+                        "-m",
+                        f"chore(ft): finalize report {cycle_id}",
+                        "--",
+                        relative,
+                    ]
+                )
+                completed = _sp.run(
+                    command,
+                    cwd=target_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if completed.returncode != 0:
+                    print(ui.fail(
+                        "Commit do relatório final do close falhou — "
+                        + (completed.stderr.strip() or completed.stdout.strip())[:300]
+                    ))
+                    return False
+        return True
+
+    def _merge_on_close_impl(self, strategy: str, paths: list[str] | None = None) -> bool:
         """Merge artefatos do worktree de volta para o repo original.
 
         strategy:
@@ -2493,9 +2925,6 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         """
         import subprocess as _sp
         from ft.engine import paths as _engine_paths
-
-        if strategy == "none":
-            return True
 
         work_root = Path(self.project_root)
         state = self.state_mgr.load()
@@ -2578,10 +3007,49 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 if result.returncode == 0:
                     print(ui.success(f"Merge: branch {branch} mergida em {original_root.name}"))
                     return True
+                merging = (original_root / ".git" / "MERGE_HEAD").exists()
+                if merging:
+                    from ft.engine.canonical_merge import resolve_canonical_conflicts
+
+                    with _manifest_write_lock(original_root):
+                        with _suspend_for_exclusive_project_write(
+                            original_root,
+                            reason=f"ft close canonical reconcile {cycle_id}",
+                        ):
+                            canonical = resolve_canonical_conflicts(original_root)
+                            if canonical.success:
+                                commit_command = [
+                                    *git_command_prefix(verify_hooks),
+                                    "commit",
+                                    "--no-edit",
+                                ]
+                                if not verify_hooks:
+                                    commit_command.extend(["--no-verify", "--no-gpg-sign"])
+                                completed = _sp.run(
+                                    commit_command,
+                                    cwd=original_root,
+                                    capture_output=True,
+                                    text=True,
+                                )
+                                if completed.returncode == 0:
+                                    print(ui.success(
+                                        "Merge: conflitos canônicos reconciliados "
+                                        f"({', '.join(canonical.resolved)})"
+                                    ))
+                                    return True
+                                print(ui.fail(
+                                    "Merge: documentos reconciliados, mas o commit "
+                                    "de merge falhou — "
+                                    + (completed.stderr.strip() or completed.stdout.strip())[:300]
+                                ))
+                                return False
+                            print(ui.warn(
+                                "Merge: reconciliação canônica conservadora não se aplica — "
+                                f"{canonical.error}"
+                            ))
                 # git manda conflitos para o STDOUT; stderr costuma vir vazio
                 reason = (result.stdout.strip() or result.stderr.strip())[:300]
                 print(ui.fail(f"Merge: falha — {reason}"))
-                merging = (original_root / ".git" / "MERGE_HEAD").exists()
                 if merging:
                     print(ui.warn(
                         f"Merge em andamento com conflitos em {original_root}. "
@@ -2797,8 +3265,105 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
     def _mark_node_start(self, node_id: str):
         """Registra o instante de início de um node (para cálculo de duração)."""
+        self._ensure_run_trace()
+        # A tentativa anterior pode ter sido interrompida por SIGINT/SIGKILL. O
+        # journal é a fonte durável dos ordinais; contadores em memória servem
+        # somente para renderizar o log Markdown legado.
+        self.trace.finish_open_spans(
+            category="llm_provider",
+            node_id=node_id,
+            status="interrupted",
+            result="runner_restarted",
+        )
+        self.trace.finish_open_spans(
+            category="llm",
+            node_id=node_id,
+            status="interrupted",
+            result="runner_restarted",
+        )
+        self.trace.finish_open_spans(
+            category="node",
+            node_id=node_id,
+            status="interrupted",
+            result="runner_restarted",
+        )
+        ordinal = self.trace.next_ordinal("node", node_id)
         self._node_start_times[node_id] = datetime.now()
-        self._node_attempts[node_id] = self._node_attempts.get(node_id, 0) + 1
+        self._node_attempts[node_id] = ordinal
+        node = self.graph.get_node(node_id)
+        attempt_id = f"{node_id}:{ordinal}"
+        self._active_node_attempt_id = attempt_id
+        self._active_node_trace = self.trace.begin_span(
+            category="node",
+            name=node.title,
+            node_id=node_id,
+            parent_span_id=self._run_trace_id,
+            attempt_id=attempt_id,
+            invocation_id=attempt_id,
+            ordinal=ordinal,
+            attributes={
+                "node_type": node.type,
+                "executor": node.executor,
+                "sprint": node.sprint,
+            },
+        )
+        self._active_node_trace_id = self._active_node_trace.span_id
+
+    def _ensure_run_trace(self) -> str:
+        """Retoma ou inicia o span raiz do ciclo sem depender da instância Python."""
+        if self._run_trace_id is not None:
+            return self._run_trace_id
+        open_runs = self.trace.open_span_ids(category="run")
+        if open_runs:
+            self._run_trace_id = open_runs[-1]
+            return self._run_trace_id
+        ordinal = self.trace.next_ordinal("run", self.trace.run_id)
+        span = self.trace.begin_span(
+            category="run",
+            name="cycle",
+            node_id=self.trace.run_id,
+            invocation_id=f"{self.trace.run_id}:run:{ordinal}",
+            ordinal=ordinal,
+            attributes={
+                "project": Path(self.project_root).name,
+                "process": self.graph.meta.get("id"),
+                "process_version": self.graph.meta.get("version"),
+            },
+        )
+        self._run_trace_id = span.span_id
+        return self._run_trace_id
+
+    def _finish_run_trace(self, *, status: str, result: str) -> None:
+        self._ensure_run_trace()
+        if self._run_trace_id is not None:
+            self.trace.finish_open_span(
+                self._run_trace_id,
+                status=status,
+                result=result,
+            )
+
+    def _start_human_wait(self, node: Node, reason: str) -> None:
+        if self.trace.open_span_ids(category="human", node_id=node.id):
+            return
+        ordinal = self.trace.next_ordinal("human", node.id)
+        self.trace.begin_span(
+            category="human",
+            name="awaiting_decision",
+            node_id=node.id,
+            parent_span_id=self._active_node_trace_id or self._run_trace_id,
+            attempt_id=self._active_node_attempt_id,
+            invocation_id=f"{node.id}:human:{ordinal}",
+            ordinal=ordinal,
+            attributes={"reason": reason},
+        )
+
+    def _finish_human_wait(self, node_id: str, result: str) -> None:
+        self.trace.finish_open_spans(
+            category="human",
+            node_id=node_id,
+            status="ok" if result == "approved" else "error",
+            result=result,
+        )
 
     def _init_log(self):
         """Cria <projeto>_log.md com frontmatter YAML e cabeçalho da tabela.
@@ -2880,6 +3445,42 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         with log_path.open("a") as f:
             f.write(entry)
 
+        if self._active_node_trace is not None:
+            normalized = result.strip().lower().replace(" ", "_")
+            failed = normalized in {
+                "blocked",
+                "failed",
+                "rate_limited",
+                "rejected",
+            }
+            self._active_node_trace.finish(
+                status="error" if failed else "ok",
+                result=result,
+                attributes={"summary": summary},
+            )
+            self._active_node_trace = None
+            self._active_node_trace_id = None
+            self._active_node_attempt_id = None
+
+    def _finish_active_node_trace(
+        self,
+        *,
+        status: str,
+        result: str,
+        summary: str | None = None,
+    ) -> None:
+        """Fecha uma tentativa ativa sem duplicar a linha do log Markdown."""
+        if self._active_node_trace is None:
+            return
+        self._active_node_trace.finish(
+            status=status,
+            result=result,
+            attributes={"summary": summary} if summary else None,
+        )
+        self._active_node_trace = None
+        self._active_node_trace_id = None
+        self._active_node_attempt_id = None
+
     def init_state(self):
         """Inicializa estado a partir do grafo."""
         self._reset_validator_snapshots()
@@ -2948,6 +3549,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             base_commit=base_commit,
             worktree_branch=worktree_branch,
         )
+        self._ensure_run_trace()
         print(ui.init_banner(
             self.graph.meta.get("title", "?"), first.id, first.title, total,
             process_file=self.process_path,
@@ -3010,16 +3612,28 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         print(ui.warn(
             f"Delegação órfã detectada em {node_id} — validando artefatos existentes antes de redelegar"
         ))
+        self.trace.finish_open_spans(
+            category="llm_provider",
+            node_id=node_id,
+            status="interrupted",
+            result="orphan_recovery",
+        )
+        self.trace.finish_open_spans(
+            category="llm",
+            node_id=node_id,
+            status="interrupted",
+            result="orphan_recovery",
+        )
+        self.trace.finish_open_spans(
+            category="node",
+            node_id=node_id,
+            status="interrupted",
+            result="orphan_recovery",
+        )
         state.active_llm_log = None
         self.state_mgr.save()
 
-        validation = run_validators(
-            node,
-            self.project_root,
-            state_dir=str(self.state_mgr.path.parent),
-            work_dir=self._run_dir,
-            resume=True,
-        )
+        validation = self._run_validators(node, resume=True)
         has_resume_command = any(
             isinstance(spec.get("command_succeeds"), dict)
             and "resume_command" in spec["command_succeeds"]
@@ -3031,12 +3645,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 "Validação leve de retomada falhou — executando a validação "
                 "normal uma única vez antes de redelegar"
             ))
-            validation = run_validators(
-                node,
-                self.project_root,
-                state_dir=str(self.state_mgr.path.parent),
-                work_dir=self._run_dir,
-            )
+            validation = self._run_validators(node)
         self._print_validation(validation)
         if not validation.passed:
             state = self.state_mgr.load()
@@ -3060,6 +3669,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if node.requires_approval and not self._auto_approve:
             print(ui.awaiting_approval(auto=False))
             self.state_mgr.set_pending_approval(node.id)
+            self._start_human_wait(node, "node_requires_approval")
             return True
 
         next_id = self.graph.resolve_next(node.id)
@@ -3068,6 +3678,18 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         return True
 
     def run(self, mode: str = "step"):
+        try:
+            return self._run_loop(mode)
+        except LLMEpisodeBudgetExceeded as exc:
+            self._finish_active_node_trace(
+                status="error",
+                result="BUDGET_EXHAUSTED",
+                summary=str(exc),
+            )
+            print(ui.step_block(str(exc)))
+            return None
+
+    def _run_loop(self, mode: str = "step"):
         """
         Loop principal.
 
@@ -3085,6 +3707,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         self._persist_llm_engine(state)
         self._sync_process_meta(state)
+        self._ensure_run_trace()
 
         if state.current_node is None:
             print("Processo nao inicializado. Rode: ft init")
@@ -3136,6 +3759,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 self._merge_on_end()
                 self._fire_hooks("on_deliver")
                 self._advance_state(node_id, None)
+                self._finish_run_trace(status="ok", result="completed")
                 break
 
             # Sprint boundary check — para se mudou de sprint
@@ -3160,9 +3784,27 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             # Review node — expert gate via LLM
             if node.type == "review":
                 self._run_review(node)
+                review_state = self.state_mgr.load()
+                if review_state.node_status == "blocked":
+                    review_result = "BLOCKED"
+                    review_summary = review_state.blocked_reason or "review bloqueada"
+                elif review_state.node_status in ("awaiting_approval", "pending_fix"):
+                    review_result = "AWAITING_APPROVAL"
+                    review_summary = "review aguardando decisão"
+                else:
+                    review_result = "PASS"
+                    review_summary = f"→ {review_state.current_node or 'fim'}"
+                self._log_activity(
+                    node_id,
+                    node.title,
+                    node.type,
+                    review_result,
+                    review_summary,
+                    sprint=node_sprint,
+                )
                 if mode == "step":
                     break
-                state = self.state_mgr.load()
+                state = review_state
                 if state.node_status in ("blocked", "awaiting_approval", "pending_fix"):
                     break
                 continue
@@ -3301,6 +3943,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     state = self.state_mgr.load()
                 else:
                     print(ui.awaiting_approval(auto=False))
+                    self._start_human_wait(node, "node_requires_approval")
                     self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL",
                                        "aguardando aprovacao humana", sprint=node_sprint)
                     break
@@ -3315,6 +3958,20 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         if mode == "step":
             state = self.state_mgr.load()
+            if self._active_node_trace is not None:
+                trace_status = "error" if state.node_status == "blocked" else "ok"
+                trace_result = (
+                    "BLOCKED"
+                    if state.node_status == "blocked"
+                    else "AWAITING_APPROVAL"
+                    if state.node_status == "awaiting_approval"
+                    else "STEP_COMPLETE"
+                )
+                self._finish_active_node_trace(
+                    status=trace_status,
+                    result=trace_result,
+                    summary=state.blocked_reason,
+                )
             if state.node_status not in ("blocked", "awaiting_approval", "done", "completed"):
                 print(ui.dim("  → ft continue   para continuar o próximo step"))
 
@@ -3330,8 +3987,50 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         onde a anterior parou.
         """
         attempt = 0
+        configured_timeout = delegate_kwargs.get("llm_timeout_seconds")
+        deadline = (
+            time.monotonic() + float(configured_timeout)
+            if isinstance(configured_timeout, (int, float))
+            and not isinstance(configured_timeout, bool)
+            and configured_timeout > 0
+            else None
+        )
+        log_path = delegate_kwargs.get("log_path")
+        active_parent = (
+            self._active_llm_traces.get(self._display_path(Path(log_path)))
+            if isinstance(log_path, (str, Path))
+            else None
+        )
         while True:
+            if deadline is not None:
+                remaining = math.ceil(deadline - time.monotonic())
+                if remaining <= 0:
+                    return DelegateResult(
+                        success=False,
+                        output="deadline cumulativo da invocação LLM esgotado",
+                        files_created=[],
+                        files_modified=[],
+                        died=True,
+                    )
+                delegate_kwargs["llm_timeout_seconds"] = max(1, remaining)
+            provider_span: TraceSpan | None = None
+            if active_parent is not None:
+                provider_span = self.trace.begin_span(
+                    category="llm_provider",
+                    name="provider_attempt",
+                    node_id=self.state_mgr.state.current_node,
+                    parent_span_id=active_parent.span_id,
+                    attempt_id=self._active_node_attempt_id,
+                    invocation_id=f"{active_parent.span_id}:provider:{attempt + 1}",
+                    ordinal=attempt + 1,
+                    attributes={"stream_retry": attempt},
+                )
             result = delegate_to_llm(**delegate_kwargs)
+            if provider_span is not None:
+                provider_span.finish(
+                    status="ok" if result.success else "error",
+                    result="success" if result.success else "died" if result.died else "failed",
+                )
             if result.success or not getattr(result, "died", False):
                 return result
             if attempt >= self._MAX_STREAM_RETRIES:
@@ -3456,7 +4155,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 (Path(self.project_root) / o).exists() for o in node.outputs
             )
             if all_exist:
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+                validation = self._run_validators(node)
                 if validation.passed:
                     print(ui.success("Artefato já existe e é válido — pulando etapa"))
                     self._log_event(
@@ -3539,6 +4238,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             node.id,
             "run",
             engine=llm_selection.engine,
+            selection=llm_selection,
         )
         self.state_mgr.save()
 
@@ -3551,7 +4251,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             llm_effort=llm_selection.effort,
             log_path=log_path,
             stream_prefix=self._stream_prefix(effective_engine),
-            llm_timeout_seconds=node.llm_timeout_seconds,
+            llm_timeout_seconds=self._effective_llm_timeout(node),
         )
         self._apply_opencode_options(delegate_kwargs, opencode_options)
         if node.max_turns is not None:
@@ -3569,12 +4269,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     f"após todo o backoff) no node {node.id}"
                 )
                 return
-            validation = run_validators(
-                node,
-                self.project_root,
-                state_dir=str(self.state_mgr.path.parent),
-                work_dir=self._run_dir,
-            )
+            validation = self._run_validators(node)
             self._print_validation(validation)
             if self._try_repair_opencode_frontend_scaffold(node, effective_engine, validation):
                 return
@@ -3612,7 +4307,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         # Validar
         print(ui.info("Validando..."))
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        validation = self._run_validators(node)
         self._print_validation(validation)
 
         if validation.passed:
@@ -3691,7 +4386,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         opencode_deny_edit_tools=retry_opencode_options.deny_edit_tools,
                         opencode_early_success_paths=retry_opencode_options.early_success_paths,
                         opencode_capture_output_path=retry_opencode_options.capture_output_path,
-                        llm_timeout_seconds=node.llm_timeout_seconds,
+                        llm_timeout_seconds=self._effective_llm_timeout(node),
                     )
                 finally:
                     self._clear_active_llm_log(state)
@@ -3704,7 +4399,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     )
                     return
 
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+                validation = self._run_validators(node)
                 self._print_validation(validation)
 
                 if validation.passed:
@@ -3775,6 +4470,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             files=abs_files or None,
         ))
         self.state_mgr.set_pending_approval(node.id)
+        self._start_human_wait(node, "human_gate")
 
     def _pause_for_rate_limit(self, node: Node, node_sprint) -> None:
         """Pausa o run por rate limit da API sem penalizar o node.
@@ -3886,6 +4582,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             node.id,
             f"auto-fix-{self._auto_fix_counts.get(node.id, 0) + 1}",
             engine=llm_selection.engine,
+            selection=llm_selection,
         )
         # Desbloquear antes de chamar o LLM
         state.node_status = "ready"
@@ -3903,7 +4600,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 max_turns=node.max_turns or 50,
                 log_path=log_path,
                 stream_prefix=self._stream_prefix(effective_engine),
-                llm_timeout_seconds=node.llm_timeout_seconds,
+                llm_timeout_seconds=self._effective_llm_timeout(node),
             )
             self._apply_opencode_options(fix_kwargs, opencode_options)
             result = self._delegate_with_stream_retry(**fix_kwargs)
@@ -3927,7 +4624,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             print(ui.fail("Auto-fix: LLM não conseguiu aplicar correção"))
             return False
 
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        validation = self._run_validators(node)
         self._print_validation(validation)
 
         if validation.passed:
@@ -3950,7 +4647,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
     def _run_gate(self, node: Node):
         """Roda gate — validacao pura sem LLM. Em modo mvp, tenta corrigir via LLM."""
         print(ui.info("Rodando gate..."))
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        validation = self._run_validators(node)
         self._print_validation(validation)
 
         if validation.passed:
@@ -4030,7 +4727,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     self._clear_active_llm_log(state)
 
                 # Re-validar
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+                validation = self._run_validators(node)
                 self._print_validation(validation)
 
                 if validation.passed:
@@ -4080,7 +4777,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             return False
 
         # Re-validar com o fix aplicado
-        validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        validation = self._run_validators(node)
         self._print_validation(validation)
 
         if validation.passed:
@@ -4284,7 +4981,36 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         next_id = self.graph.resolve_next(node.id, state_dict)
         if next_id:
-            self._advance_state(node.id, next_id)
+            branch_value = (
+                str(state_dict.get(node.condition))
+                if node.condition is not None
+                else ""
+            )
+            episode_key = (node.episode_restart or {}).get(branch_value)
+            if episode_key:
+                self._restart_llm_episode(
+                    state,
+                    episode_key,
+                    f"decision:{node.id}:{branch_value}",
+                )
+            ordered = [candidate.id for candidate in self.graph.nodes.values()]
+            current_index = ordered.index(node.id)
+            target_index = ordered.index(next_id)
+            if target_index <= current_index:
+                # A branch semântica volta a uma etapa já concluída. Um simples
+                # advance manteria implement/review marcados como concluídos e
+                # produziria progresso e artefatos incoerentes. Limpe também o
+                # valor de roteamento para que uma retomada não reutilize o
+                # veredicto anterior antes de uma nova review.
+                if node.condition:
+                    state.artifacts.pop(node.condition, None)
+                    self.state_mgr.save()
+                self._rewind_to_node(
+                    next_id,
+                    f"roteamento {node.id}: {branch_value}",
+                )
+            else:
+                self._advance_state(node.id, next_id)
             chosen = next_id
             print(f"  DECISION: condicao='{node.condition}' → {chosen}")
         else:
@@ -4433,6 +5159,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         Le o relatorio produzido e verifica APPROVED/REJECTED.
         """
         state = self.state_mgr.state
+        structured_review = bool(node.review_route_path)
         allowed = self._resolve_allowed_paths(node)
         llm_selection = self._capture_delegation_llm_selection(state, node=node)
         effective_engine = llm_selection.engine
@@ -4448,7 +5175,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         )
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
-        early_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+        early_check = self._run_validators(node)
         correction_policy = self.graph.meta.get("correction_policy", {})
         mandatory_reviews = (
             correction_policy.get("mandatory_after_implementation", [])
@@ -4474,7 +5201,11 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             else:
                 print(ui.warn("Expert Review: relatório pré-existente contradiz o produto — regenerando"))
         else:
-            blocking_reason = self._review_blocking_evidence_reason(node)
+            blocking_reason = (
+                None
+                if structured_review
+                else self._review_blocking_evidence_reason(node)
+            )
             if blocking_reason:
                 self._write_review_rejection_report(node, blocking_reason)
                 print(ui.fail("REVIEW REJECTED"))
@@ -4485,7 +5216,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     self.state_mgr.block(f"Expert Review REJECTED:\n{blocking_reason[:500]}")
                 return
 
-        if self._try_opencode_deterministic_review(node, effective_engine):
+        if (
+            not structured_review
+            and self._try_opencode_deterministic_review(node, effective_engine)
+        ):
             return
 
         print(f"  Expert Review ({node.executor})...")
@@ -4495,6 +5229,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             node.id,
             "review",
             engine=llm_selection.engine,
+            selection=llm_selection,
         )
         self.state_mgr.save()
 
@@ -4526,13 +5261,15 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if not result.success:
             # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
             # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
-            pre_check = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+            pre_check = self._run_validators(node)
             if pre_check.passed:
                 print(f"  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
                 post_delegation_validation = pre_check
             else:
-                rejected_review_output = self._read_review_output(node)
+                rejected_review_output = (
+                    "" if structured_review else self._read_review_output(node)
+                )
                 rejected_verdict = (
                     _parse_review_verdict(rejected_review_output)
                     if rejected_review_output
@@ -4561,7 +5298,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     f"após todo o backoff) no review do node {node.id}"
                 )
                 return
-            elif not pre_check.passed and self._try_opencode_deterministic_review(
+            elif not structured_review and not pre_check.passed and self._try_opencode_deterministic_review(
                 node,
                 effective_engine,
                 require_opt_in=False,
@@ -4615,12 +5352,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         f"após todo o backoff) no recovery do review {node.id}"
                     )
                     return
-                recovery_check = run_validators(
-                    node,
-                    self.project_root,
-                    state_dir=str(self.state_mgr.path.parent),
-                    work_dir=self._run_dir,
-                )
+                recovery_check = self._run_validators(node)
                 if recovery_result.success or recovery_check.passed:
                     result.success = True
                     post_delegation_validation = recovery_check
@@ -4653,17 +5385,14 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         validation = (
             post_delegation_validation
             if post_delegation_validation is not None
-            else run_validators(
-                node,
-                self.project_root,
-                state_dir=str(self.state_mgr.path.parent),
-                work_dir=self._run_dir,
-            )
+            else self._run_validators(node)
         )
         self._print_validation(validation)
 
         if not validation.passed:
-            rejected_review_output = self._read_review_output(node)
+            rejected_review_output = (
+                "" if structured_review else self._read_review_output(node)
+            )
             rejected_verdict = _parse_review_verdict(rejected_review_output) if rejected_review_output else None
             if rejected_verdict in _REVIEW_REJECT_VERDICTS:
                 reason = _extract_review_rejection_reason(rejected_review_output, rejected_verdict)
@@ -4674,7 +5403,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 else:
                     self.state_mgr.block(f"Expert Review {rejected_verdict}:\n{reason[:500]}")
                 return
-            if self._try_opencode_deterministic_review(
+            if not structured_review and self._try_opencode_deterministic_review(
                 node,
                 last_review_engine,
                 require_opt_in=False,
@@ -4719,11 +5448,11 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 finally:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
-                validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+                validation = self._run_validators(node)
                 self._print_validation(validation)
 
             if not validation.passed:
-                if self._try_opencode_deterministic_review(
+                if not structured_review and self._try_opencode_deterministic_review(
                     node,
                     last_review_engine,
                     require_opt_in=False,
@@ -4738,6 +5467,12 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         # Ler relatorio e verificar veredicto
         review_output = self._read_review_output(node)
+
+        if structured_review:
+            next_id = self.graph.resolve_next(node.id)
+            self._advance_state(node.id, next_id, "STRUCTURED")
+            print(f"  REVIEW STRUCTURED → proximo: {next_id}")
+            return
 
         # Veredicto deterministico via parse do relatorio.
         # Use apenas vereditos explicitos; o corpo do review pode citar comandos
@@ -4920,13 +5655,26 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
     def _run_parallel_group(self, nodes: list[Node]):
         """Fan-out: delega nodes independentes em paralelo via worktrees."""
+        self._ensure_run_trace()
         print(f"\n  PARALLEL GROUP: {len(nodes)} tasks")
         for n in nodes:
             print(f"    → {n.id}: {n.title}")
 
         tasks = []
+        queue_spans: dict[str, TraceSpan] = {}
         for n in nodes:
             allowed = self._resolve_allowed_paths(n)
+            queue_ordinal = self.trace.next_ordinal("queue", n.id)
+            queue_spans[n.id] = self.trace.begin_span(
+                category="queue",
+                name="parallel_slot",
+                node_id=n.id,
+                parent_span_id=self._run_trace_id,
+                attempt_id=f"{n.id}:parallel:{queue_ordinal}",
+                invocation_id=f"{n.id}:queue:{queue_ordinal}",
+                ordinal=queue_ordinal,
+                attributes={"max_slots": self.state_mgr.state.parallel_max_slots},
+            )
             tasks.append({
                 "node_id": n.id,
                 "task_prompt": build_task_prompt(n, {}),
@@ -4941,6 +5689,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         def delegate_parallel(*, selection_node_id: str, **kwargs):
             parallel_node = self.graph.get_node(selection_node_id)
+            queue_spans[selection_node_id].finish(
+                status="ok",
+                result="dispatched",
+            )
             with selection_lock:
                 selection = self._capture_delegation_llm_selection(
                     self.state_mgr.state,
@@ -4957,6 +5709,11 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     selection.engine,
                     deny_read_paths=deny_paths,
                 )
+                log_path = self._build_llm_log_path(
+                    parallel_node.id,
+                    "parallel",
+                    engine=selection.engine,
+                )
                 delegate_kwargs = {
                     **kwargs,
                     "task": task_prompt,
@@ -4964,17 +5721,39 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     "llm_model": selection.model,
                     "llm_effort": selection.effort,
                     "stream_prefix": self._stream_prefix(selection.engine),
-                    "log_path": str(
-                        self._build_llm_log_path(
-                            parallel_node.id,
-                            "parallel",
-                            engine=selection.engine,
-                        )
-                    ),
+                    "log_path": str(log_path),
                     "llm_timeout_seconds": parallel_node.llm_timeout_seconds,
                 }
                 self._apply_opencode_options(delegate_kwargs, options)
-            return delegate_to_llm(**delegate_kwargs)
+            llm_ordinal = self.trace.next_ordinal("llm", parallel_node.id)
+            llm_span = self.trace.begin_span(
+                category="llm",
+                name="parallel",
+                node_id=parallel_node.id,
+                parent_span_id=self._run_trace_id,
+                attempt_id=f"{parallel_node.id}:parallel:{llm_ordinal}",
+                invocation_id=f"{parallel_node.id}:llm:{llm_ordinal}",
+                ordinal=llm_ordinal,
+                attributes={
+                    "engine": selection.engine,
+                    "model": selection.model,
+                    "effort": selection.effort,
+                    "provenance": dict(selection.provenance),
+                    "resolution": list(selection.resolution),
+                    "log_path": self._display_path(log_path),
+                    "parallel": True,
+                },
+            )
+            try:
+                result = delegate_to_llm(**delegate_kwargs)
+            except BaseException as exc:
+                llm_span.finish(status="error", result=type(exc).__name__)
+                raise
+            llm_span.finish(
+                status="ok" if result.success else "error",
+                result="success" if result.success else "failed",
+            )
+            return result
 
         try:
             results = par.run_parallel(
@@ -4982,9 +5761,13 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                 delegate_parallel,
             )
         except ValueError as e:
+            for span in queue_spans.values():
+                span.finish(status="error", result="group_rejected")
             self.state_mgr.block(str(e))
             print(f"  PARALLEL BLOCK: {e}")
             return
+        for span in queue_spans.values():
+            span.finish(status="error", result="not_dispatched")
 
         # Fan-in determinístico: seguir a ordem do grupo no YAML, não a ordem
         # de término das threads — o último advance define o current_node, que
@@ -5024,7 +5807,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         # Validar e avançar todos os nodes do grupo
         for wt_result in results:
             node = self.graph.get_node(wt_result.node_id)
-            validation = run_validators(node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+            validation = self._run_validators(node)
             self._print_validation(validation)
             if validation.passed:
                 next_id = self.graph.resolve_next(node.id)
@@ -5074,6 +5857,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         node_id = state.pending_approval
         node = self.graph.get_node(node_id)
+        self._finish_human_wait(node_id, "approved")
         if node.env_teardown:
             self._run_env_teardown(node)
         next_id = self.graph.resolve_next(node_id)
@@ -5190,6 +5974,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
 
         node_id = state.pending_approval
         node = self.graph.get_node(node_id)
+        self._finish_human_wait(node_id, "rejected")
         print(f"  REJEITADO: {node_id} — {reason}")
         if node.env_teardown:
             self._run_env_teardown(node)
@@ -5212,6 +5997,13 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                         if target == node_id:
                             retry_node = other_node
                             break
+
+        if retry and retry_node.llm_episode:
+            self._restart_llm_episode(
+                state,
+                retry_node.llm_episode,
+                f"human_rejection:{node_id}",
+            )
 
         correction_policy = self.graph.meta.get("correction_policy", {})
         follow_graph = (
@@ -5291,14 +6083,14 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     opencode_deny_edit_tools=opencode_options.deny_edit_tools,
                     opencode_early_success_paths=opencode_options.early_success_paths,
                     opencode_capture_output_path=opencode_options.capture_output_path,
-                    llm_timeout_seconds=retry_node.llm_timeout_seconds,
+                    llm_timeout_seconds=self._effective_llm_timeout(retry_node),
                 )
             finally:
                 self._clear_active_llm_log(state)
             state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
 
             if result.success:
-                validation = run_validators(retry_node, self.project_root, state_dir=str(self.state_mgr.path.parent), work_dir=self._run_dir)
+                validation = self._run_validators(retry_node)
                 self._print_validation(validation)
                 if validation.passed:
                     # Marcar retry_node como concluído e avançar ao gate
@@ -5512,6 +6304,71 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         import json as _json
         from datetime import datetime as _dt
 
+        trace_report = build_run_report(
+            self.trace.path,
+            run_id=self.trace.run_id,
+            log_root=self.project_root,
+        )
+        if trace_report.get("spans"):
+            state = self.state_mgr.load()
+            print(ui.header(f"Relatório — {state.process_id} / {state.llm_engine}"))
+            print()
+            print(
+                f"  {'Node / operação':<48} {'Tipo':<10} {'Tent.':>6} "
+                f"{'Tempo':>9} {'Out tok':>10}"
+            )
+            print(f"  {'-'*48} {'-'*10} {'-'*6} {'-'*9} {'-'*10}")
+            visible = {"llm", "validator", "human", "queue", "close"}
+            for span in trace_report["spans"]:
+                category = span.get("category")
+                if category not in visible:
+                    continue
+                duration_ms = span.get("duration_ms")
+                seconds = int(duration_ms / 1000) if isinstance(duration_ms, int) else 0
+                elapsed = self._format_elapsed(seconds)
+                node_name = str(span.get("node_id") or span.get("name") or "—")
+                if category == "validator":
+                    node_name = f"{node_name} [{span.get('name')}]"
+                ordinal = span.get("ordinal") or "—"
+                metrics = span.get("metrics") or {}
+                output_tokens = metrics.get("output_tokens")
+                token_text = f"{output_tokens:,}" if isinstance(output_tokens, int) else "—"
+                print(
+                    f"  {node_name:<48.48} {str(category):<10} {str(ordinal):>6} "
+                    f"{elapsed:>9} {token_text:>10}"
+                )
+
+            wall = trace_report.get("wall") or {}
+            wall_ms = wall.get("duration_ms")
+            wall_text = (
+                self._format_elapsed(int(wall_ms / 1000))
+                if isinstance(wall_ms, int)
+                else "indisponível"
+            )
+            active = trace_report.get("active_time_ms") or {}
+            print()
+            print(f"  Tempo wall real : {wall_text} ({wall.get('status', 'unknown')})")
+            print(
+                "  Tempo ativo      : "
+                + ", ".join(
+                    f"{category}={self._format_elapsed(int(value / 1000))}"
+                    for category, value in active.items()
+                    if isinstance(value, int) and value > 0
+                )
+            )
+            llm = trace_report.get("llm") or {}
+            print(
+                "  LLM              : "
+                f"{llm.get('calls', 0)} chamada(s), "
+                f"in={llm.get('input_tokens') if llm.get('input_tokens') is not None else '—'}, "
+                f"out={llm.get('output_tokens') if llm.get('output_tokens') is not None else '—'}"
+            )
+            print(
+                f"  Progresso        : {state.metrics.get('steps_completed', 0)}/"
+                f"{state.metrics.get('steps_total', 0)} nodes"
+            )
+            return
+
         logs_dir = self._llm_log_dir()
         if not logs_dir.is_dir():
             print(ui.warn("Nenhum log LLM encontrado para o ciclo atual"))
@@ -5592,7 +6449,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         steps_done = state.metrics.get("steps_completed", 0)
         steps_total = state.metrics.get("steps_total", 0)
         print(f"  Progresso : {steps_done}/{steps_total} nodes")
-        print(f"  Tempo wall: {td_m}m{td_s:02d}s  ({total_dur/3600:.1f}h)")
+        print(f"  Tempo LLM observado: {td_m}m{td_s:02d}s  ({total_dur/3600:.1f}h)")
         usage_summary = summarize_llm_usage(
             logs_dir,
             default_engine=state.llm_engine,

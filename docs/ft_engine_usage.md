@@ -153,19 +153,23 @@ fan-out de nodes de um único ciclo quando o YAML possui `parallel_group`.
 
 ## Seleção de ciclo
 
-Comandos de acompanhamento seguem uma regra comum:
+Comandos que alteram ou conduzem um ciclo seguem uma regra comum:
 
 - zero ciclos aplicáveis: erro;
 - exatamente um: pode ser inferido;
 - dois ou mais: `--cycle <id>` é obrigatório e o erro lista as opções.
 
 O engine nunca escolhe pela data de criação. A regra vale para `continue`,
-`status`, `graph`, `log`, `approve`, `reject`, `retry`, `fix`, `explore`,
-`abort`, `cancel`, `process-candidates` e `close`.
+`graph`, `log`, `approve`, `reject`, `retry`, `fix`, `explore`, `abort`,
+`cancel`, `process-candidates` e `close`. `ft status` é a exceção somente
+leitura: sem `--cycle`, ele imprime um bloco rotulado para cada ciclo aberto;
+com `--cycle`, mostra apenas o selecionado. O mesmo fan-out vale para
+`ft status --report`.
 
 ```bash
 ft runs
 ft status --cycle cycle-07 --full
+ft status --cycle cycle-07 --report
 ft graph --cycle cycle-08
 ft continue --cycle cycle-07 --auto
 ft close --cycle cycle-08
@@ -209,6 +213,13 @@ ft close --cycle <id>
 
 `--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
 `--bypass-human-gates` autoriza o LLM a decidir nesses pontos.
+
+`ft status --report` usa o trace append-only do ciclo. O relatório distingue
+wall time real de tempo ativo de LLM, validators, espera humana, fila e close;
+tentativas e ordinais sobrevivem a reinícios do runner. Métricas que o provider
+não fornece aparecem como `—`/`null`, nunca como zero inventado. No close, o
+resumo derivado é arquivado em `.ft/cycles/<cycle>/run-report.json`; logs crus
+permanecem fora do Git.
 
 ## Seleção do executor LLM
 
@@ -262,6 +273,10 @@ combinação com probe fresco e atualiza atomicamente o manifesto. O effort
 | `FT_OPENCODE_BUNDLE_MODE` | Opt-in de materialização por bundle XML |
 | `FT_OPENCODE_SCRIPT_MODE` | Opt-in de materialização por script Bash |
 | `FT_OPENCODE_DEBUG` | Logs detalhados da CLI OpenCode |
+| `FT_FEATURE_SHARED_CACHE` | Habilita o cache compartilhado experimental do template feature |
+| `FT_FEATURE_VALIDATION_HERMETIC` | Declara explicitamente que a validação feature é hermética; exigido pelo cache compartilhado |
+| `FT_FEATURE_SHARED_CACHE_TTL_SECONDS` | TTL, em segundos, do cache compartilhado feature |
+| `FT_FEATURE_EXTERNAL_DEPENDENCIES` | Dependências externas declaradas que entram no fingerprint feature |
 
 ## Governança de melhorias do processo
 
@@ -447,6 +462,45 @@ validators:
       timeout: 300
 ```
 
+Validadores são agregados por padrão. Para gates com checks caros, o node pode
+parar na primeira falha; um validator isolado também pode interromper a lista:
+
+```yaml
+validation_mode: fail_fast
+validators:
+  - file_exists: docs/contract.md
+  - command_succeeds:
+      command: make build
+      stop_on_failure: true
+  - command_succeeds: make test
+```
+
+Use `aggregate` quando o diagnóstico conjunto tiver mais valor que a latência.
+`fail_fast` é decisão do node, não uma política global implícita.
+
+Nodes LLM podem combinar deadline por chamada e orçamento cumulativo por
+episódio. O primeiro limita também retries internos do provider; o segundo
+persiste chamadas e tempo entre retomadas do runner:
+
+```yaml
+llm_timeout_seconds: 900
+llm_episode: implementation
+llm_episode_budget_seconds: 1800
+llm_episode_max_calls: 2
+```
+
+Um decision pode iniciar novo episódio apenas para rejeições semânticas
+declaradas:
+
+```yaml
+episode_restart:
+  implementation: implementation
+  scope: implementation
+```
+
+Ao esgotar o orçamento, o engine pausa, grava um checkpoint compacto no state e
+preserva o diff; não inicia silenciosamente outra chamada.
+
 ### Testes, código e gates
 
 | Grupo | Validadores |
@@ -518,16 +572,28 @@ sequenciais.
 ### `feature`
 
 Implementa uma capacidade em produto existente, com elucidação de escopo,
-aprovação, implementação, review, testes e aceite:
+aprovação, implementação, validação, evidência, review e aceite:
 
 ```bash
 ft run . --template feature --request "Adicionar busca por telefone" --codex
 ft run . --template feature --input demanda.md --codex
 ```
 
-O state fixa path e digest do fork local. Rejeições retornam ao node de correção
-e percorrem novamente os gates. O close valida o item de backlog selecionado.
-Entradas novas de changelog começam com `#FEAT`.
+Cada demanda deve citar exatamente um PB preexistente; ciclos simultâneos usam
+PBs distintos. Para uma capacidade nova, o processo reserva o FEAT definitivo
+sob lock curto. O state fixa path e digest do fork local.
+
+Código/testes, validação completa, evidência referencial e review semântica são
+nodes diferentes. A review produz rota estruturada (`approved`,
+`implementation`, `evidence` ou `scope`) e o decision node invalida o progresso
+posterior quando volta no grafo. A implementação possui deadline por chamada e
+orçamento cumulativo por episódio; um hard stop preserva diff e artefatos.
+
+Baseline attestation e implementation receipt são separados. `ensure` verifica
+primeiro o receipt local; cache compartilhado só existe como experimento opt-in
+para validação declarada hermética. O reconcile propõe YAML, o engine valida os
+IDs permitidos e aplica os documentos canônicos deterministicamente. Entradas
+novas de changelog começam com `#FEAT`.
 
 ### `bug`
 
@@ -570,9 +636,12 @@ ft close --cycle cycle-09 --merge selective --merge-paths "src/a tests/a"
 ft close --cycle cycle-10 --keep-worktree
 ```
 
-O lock de close serializa merges. A política do processo mantém artefatos
-canônicos em `docs/` e arquiva relatórios específicos em
-`.ft/cycles/<cycle>/`. Estado e logs brutos nunca são mergeados.
+O lock de close serializa merges. Se somente CHANGELOG, PROJECT_BACKLOG e
+FEATURES conflitarem de forma aditiva e inequívoca, o resolvedor canônico os
+reconcilia; qualquer conflito ambíguo ou fora desses documentos permanece
+manual. A política do processo mantém artefatos canônicos em `docs/` e arquiva
+relatórios específicos em `.ft/cycles/<cycle>/`. Estado e logs brutos nunca são
+mergeados.
 
 Depois do merge, reinstale dependências alteradas, limpe caches antigos,
 reinicie serviços no checkout promovido, confira as rotas principais e exerça a

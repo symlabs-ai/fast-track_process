@@ -289,13 +289,12 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     assert tweak_worktree.parent == runtime_home
 
     monkeypatch.chdir(project)
-    with pytest.raises(SystemExit) as ambiguous_exit:
-        _invoke_cli(monkeypatch, "status")
-    assert ambiguous_exit.value.code == 2
-    ambiguity = capsys.readouterr().out
-    assert "informe --cycle" in ambiguity
-    assert "cycle-01-feature" in ambiguity
-    assert "cycle-02-tweak" in ambiguity
+    _invoke_cli(monkeypatch, "status")
+    multi_status = capsys.readouterr().out
+    assert "Ciclo: cycle-01-feature" in multi_status
+    assert "Ciclo: cycle-02-tweak" in multi_status
+    assert "feature v1.3.0" in multi_status
+    assert "tweak v1.0.1" in multi_status
 
     selected = cli_main._select_cycle_for_command(project, "cycle-02-tweak")
     assert selected.name == "cycle-02-tweak"

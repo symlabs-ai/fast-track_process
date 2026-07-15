@@ -1,7 +1,7 @@
 """Deterministic three-way merge for Fast Track canonical documents.
 
-The parallel feature orchestrator may merge workers that changed the same
-canonical Markdown files even when their product-code changes do not overlap.
+Independent feature cycles may close branches that changed the same canonical
+Markdown files even when their product-code changes do not overlap.
 This module resolves only that narrow case.  It reads the merge base, ours and
 the worker version from index stages 1, 2 and 3, computes every result before
 touching the checkout, and stages all resolved paths in one Git invocation.

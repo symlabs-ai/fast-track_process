@@ -139,6 +139,24 @@ O catálogo do Material continua amplo, mas o **catálogo de guidance** e o **ca
 | Snackbar e toast| No Material, trate “toast” como **snackbar** de feedback transitório| Não crie um padrão paralelo sem necessidade| Snackbar está no roadmap/em construção; implemente feedback transitório controlado||
 | FAB| Só para ação principal inequívoca da tela| Se houver dúvida sobre qual é a ação principal, provavelmente não é caso de FAB| **Suportado**||
 | Progress indicators| Use linear e circular conforme contexto| Use determinate quando houver progresso real; indeterminate quando não houver| **Suportado**||
+
+### FAB persistente e sensível ao contexto (obrigatório)
+
+O FAB **não** é um botão pontual de uma tela: é um elemento **persistente do app shell**,
+presente em **todas as telas**, cuja ação **muda conforme o contexto (rota/aba atual)** —
+exatamente o padrão de "ação principal da tela" da guideline, aplicado consistentemente. Ex.:
+na captura o FAB lê **QR Code**; em garantias, **adicionar garantia**; na busca, **nova
+busca/captura**; na timeline/início, **adicionar compra**. Contrato de implementação:
+
+- Um **único componente de FAB** renderizado pelo **app shell (`app/layout.tsx`)**, não
+  duplicado por página — assim aparece em toda tela sem repetição.
+- **Sensível ao contexto** via a rota atual (`usePathname`): ícone, `aria-label` e ação
+  (destino/handler) derivam da rota. FAB icon-only sempre com `aria-label`.
+- Nunca oferecer no FAB uma ação que viole regras do produto (ex.: nada de excluir dado
+  fiscal imutável). A ação padrão, quando a rota não define uma específica, é a ação
+  principal global do produto (capturar/adicionar).
+- Marcador `data-md-component="fab"`. Verificado pelo gate (`validate_guidelines_depth.py`):
+  presença + `usePathname` (contexto) + render no `layout.tsx` (persistência).
 | Responsive grids| Organize layout por panes e contenção| Compacto: 1 pane; expandido: 2+ panes| Layout é guidance, não componente pronto||
 
 A engenharia de componentes para uma PWA Material funciona melhor quando você pensa em **três camadas**: shell, conteúdo e feedback. Abaixo, um mapa prático de dependências entre peças. Ele não vem “pronto” da biblioteca; ele vem da combinação entre a guidance do Material e a realidade do front-end web.

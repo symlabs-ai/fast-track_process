@@ -100,9 +100,29 @@ def main() -> int:
        and 'list-style: none' not in css and 'list-style:none' not in css:
         fails.append("LIST-STYLE: listas M3 devem remover bullets default (list-style: none)")
 
-    # 4. FAB para a ação principal
-    if 'data-md-component="fab"' not in src:
-        fails.append('FAB: ação principal (adicionar/capturar compra) deve usar um FAB (data-md-component="fab")')
+    # 4. FAB persistente e SENSÍVEL AO CONTEXTO (rota/aba) em todas as telas
+    fab_files = [
+        p for p in (root / SRC).rglob("*.tsx")
+        if 'data-md-component="fab"' in p.read_text(errors="ignore")
+    ]
+    if not fab_files:
+        fails.append('FAB: falta um FAB (data-md-component="fab")')
+    else:
+        # (a) sensível ao contexto: varia a ação por rota (usePathname)
+        contexto = any("usePathname" in p.read_text(errors="ignore") for p in fab_files)
+        if not contexto:
+            fails.append(
+                "FAB-CONTEXTO: o FAB deve ser sensível ao contexto — usar usePathname "
+                "para variar a ação por rota (QR na captura, adicionar garantia em garantias, etc.)"
+            )
+        # (b) persistente: renderizado pelo app shell/layout, não numa página só
+        layout = read(root, f"{SRC}/app/layout.tsx")
+        fab_no_shell = ('data-md-component="fab"' in layout) or bool(re.search(r"\bFab\b|<\w*Fab", layout))
+        if not fab_no_shell:
+            fails.append(
+                "FAB-PERSISTENTE: o FAB deve ser renderizado pelo app shell (app/layout.tsx), "
+                "para aparecer em TODAS as telas — não apenas numa página"
+            )
 
     # 5. Filtros da timeline como chips
     if 'data-md-component="chip"' not in src:

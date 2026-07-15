@@ -485,6 +485,8 @@ nodes:
     validators:
       - file_exists: docs/mdpwa-review.md
       - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py review"
+      - file_exists: docs/mdpwa-screenshots/home__compact__light.png
+      - command_succeeds: "python3 .ft/process/material_design_pwa/scripts/validate_guidelines_depth.py"
     on_fail:
       human_gate: "A revisão encontrou desvios das guidelines. Corrija a implementação e revalide."
       goto: mdpwa.theme
@@ -583,6 +585,7 @@ nodes:
       - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py theme"
       - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py pwa"
       - command_succeeds: "python .ft/process/material_design_pwa/scripts/validate_mdpwa.py reconcile"
+      - command_succeeds: "python3 .ft/process/material_design_pwa/scripts/validate_guidelines_depth.py"
       - command_succeeds:
           command: "bash .ft/process/material_design_pwa/scripts/product.sh test"
           timeout: 300

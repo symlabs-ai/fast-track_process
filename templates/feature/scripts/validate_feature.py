@@ -736,11 +736,41 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
         raise FeatureValidationError(
             "git status falhou: " + (result.stderr.strip() or f"exit {result.returncode}")
         )
-    paths: list[str] = []
+    raw_paths: list[str] = []
     for line in result.stdout.splitlines():
         raw = line[3:].strip()
         if " -> " in raw:
             raw = raw.split(" -> ", 1)[1]
+        raw_paths.append(raw)
+    # Também contar mudanças JÁ COMMITADAS no ciclo: o node de implementação
+    # auto-commita (ex.: "[feature.implement]"), deixando o working tree limpo —
+    # sem isto o validador concluiria "nada mudou" mesmo com a feature pronta.
+    # Aditivo (união com o working tree): só pode adicionar detecção.
+    for base_ref in ("main", "master"):
+        try:
+            mb = subprocess.run(
+                ["git", "merge-base", "HEAD", base_ref],
+                cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=20, check=False,
+            )
+            if mb.returncode != 0 or not mb.stdout.strip():
+                continue
+            diff = subprocess.run(
+                ["git", "diff", "--name-only", f"{mb.stdout.strip()}..HEAD"],
+                cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=20, check=False,
+            )
+            if diff.returncode == 0:
+                raw_paths.extend(p.strip() for p in diff.stdout.splitlines() if p.strip())
+            break
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    paths: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        if raw in seen:
+            continue
+        seen.add(raw)
         if product_root == ".":
             # Produto na raiz: docs/.ft/CHANGELOG são evidência do ciclo, não produto.
             first = raw.split("/", 1)[0]

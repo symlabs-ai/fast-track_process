@@ -13,6 +13,7 @@ from ft.engine.runner import (
     run_validators,
     ValidationResult,
     build_task_prompt,
+    _brief_cycle_objective,
     _opencode_compact_bundles_enabled,
     _opencode_compact_bundle_prompt,
 )
@@ -115,6 +116,73 @@ class TestInitState:
         runner_v2.init_state()
         state = runner_v2.state_mgr.load()
         assert state.metrics["steps_total"] == 5
+
+    def test_init_persists_brief_objective_from_template_input(
+        self, tmp_path, capsys
+    ):
+        root = tmp_path / "project"
+        request = root / "docs" / "feature-request.md"
+        request.parent.mkdir(parents=True)
+        request.write_text(
+            "# Feature\n\nAdicionar filtro por período ao relatório de vendas.\n",
+            encoding="utf-8",
+        )
+        process_path = root / "process.yml"
+        process_path.write_text(
+            """
+id: feature
+version: "1.3.0"
+title: Feature
+input_policy:
+  required: true
+  destination: docs/feature-request.md
+  prompt: Descreva a feature
+nodes:
+  - id: feature.discovery
+    type: discovery
+    title: Discovery
+    next: feature.end
+  - id: feature.end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=root / "state" / "engine_state.yml",
+            project_root=root,
+        )
+
+        runner.init_state()
+
+        state = runner.state_mgr.load()
+        assert state.cycle_objective == (
+            "Adicionar filtro por período ao relatório de vendas."
+        )
+
+        # Estados criados por versões anteriores não têm o novo campo; o
+        # status ainda recupera a demanda pinada dentro da worktree.
+        state.cycle_objective = None
+        runner.state_mgr.save()
+        capsys.readouterr()
+
+        runner.status()
+
+        assert (
+            "Objetivo do Ciclo: Adicionar filtro por período ao relatório de "
+            "vendas."
+        ) in capsys.readouterr().out
+
+    def test_cycle_objective_is_single_line_and_bounded(self):
+        objective = _brief_cycle_objective(
+            "## Demanda\n- Implementar uma alteração " + ("muito detalhada " * 30)
+        )
+
+        assert objective is not None
+        assert "\n" not in objective
+        assert len(objective) <= 160
+        assert objective.endswith("…")
 
     def test_init_persists_selected_llm_engine(self, tmp_path):
         process_path = tmp_path / "process.yml"

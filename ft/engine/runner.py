@@ -79,6 +79,58 @@ from ft.engine.stakeholder import (
 _REVIEW_REJECT_VERDICTS = {"REJECTED", "BLOCKED", "INCOMPLETE", "INCOMPLETO", "ITERATE"}
 _REVIEW_APPROVE_VERDICTS = {"APPROVED", "APPROVED WITH NOTES"}
 _REVIEW_VERDICTS = _REVIEW_APPROVE_VERDICTS | _REVIEW_REJECT_VERDICTS
+_CYCLE_OBJECTIVE_MAX_CHARS = 160
+_GENERIC_OBJECTIVE_HEADINGS = {
+    "bug",
+    "demanda",
+    "descrição",
+    "feature",
+    "feature request",
+    "objetivo",
+    "objetivo do ciclo",
+    "pedido",
+    "request",
+    "solicitação",
+    "tweak",
+}
+
+
+def _brief_cycle_objective(raw: str) -> str | None:
+    """Converte a demanda original em uma linha estável para ``ft status``."""
+    paragraph: list[str] = []
+
+    def shorten(value: str) -> str:
+        if len(value) <= _CYCLE_OBJECTIVE_MAX_CHARS:
+            return value
+        limit = _CYCLE_OBJECTIVE_MAX_CHARS - 1
+        shortened = value[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")
+        if len(shortened) < limit // 2:
+            shortened = value[:limit].rstrip(" ,;:-")
+        return f"{shortened}…"
+
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if paragraph:
+                break
+            continue
+        is_heading = bool(re.match(r"^#{1,6}(?:\s|$)", line))
+        line = re.sub(r"^(?:#{1,6}|>|[-*+]|\d+[.)])\s*", "", line)
+        line = re.sub(r"^\[[ xX]\]\s*", "", line)
+        line = line.replace("**", "").replace("__", "").replace("`", "")
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line:
+            continue
+        if line.casefold().rstrip(":") in _GENERIC_OBJECTIVE_HEADINGS:
+            if paragraph:
+                break
+            continue
+        if is_heading:
+            return shorten(line)
+        paragraph.append(line)
+
+    objective = " ".join(paragraph).strip()
+    return shorten(objective) if objective else None
 
 
 class LLMEpisodeBudgetExceeded(RuntimeError):
@@ -3539,6 +3591,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             llm_effort=initial_llm.effort,
             llm_defaults_digest=self._llm_defaults_digest(initial_defaults),
             current_cycle=cycle_id,
+            cycle_objective=self._cycle_objective_from_input(),
             process_path=selected_process_path,
             process_digest=process_digest(process_file),
             process_immutable=(
@@ -6135,6 +6188,41 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             return f"{minutes}m{secs:02d}s"
         return f"{secs}s"
 
+    def _cycle_objective_from_input(self) -> str | None:
+        """Lê a demanda pinada no ciclo sem depender de uma chamada LLM."""
+        from ft.templates.input_policy import InputPolicy, InputPolicyError
+
+        destinations: list[str] = []
+        try:
+            policy = InputPolicy.from_mapping(self.graph.meta.get("input_policy"))
+        except InputPolicyError:
+            policy = None
+        if policy is not None and policy.destination:
+            destinations.append(policy.destination)
+        # Compatibilidade com processos feature/bug/tweak antigos que ainda
+        # não declaravam formalmente a origem do objetivo no grafo pinado.
+        if "docs/feature-request.md" not in destinations:
+            destinations.append("docs/feature-request.md")
+
+        root = Path(self.project_root).resolve()
+        for destination in destinations:
+            candidate = (root / destination).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                continue
+            if not candidate.is_file():
+                continue
+            try:
+                with candidate.open(encoding="utf-8") as source:
+                    raw = source.read(16_384)
+            except (OSError, UnicodeError):
+                continue
+            objective = _brief_cycle_objective(raw)
+            if objective:
+                return objective
+        return None
+
     def _status_timing_labels(self) -> tuple[str | None, str | None]:
         """(tempo de ciclo, última atividade) para o status — best effort.
 
@@ -6199,6 +6287,14 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         # and effort are additive lines instead of a breaking replacement.
         if state.current_cycle:
             print(ui.info(f"Ciclo: {state.current_cycle}"))
+        persisted_objective = (
+            _brief_cycle_objective(state.cycle_objective)
+            if isinstance(state.cycle_objective, str)
+            else None
+        )
+        cycle_objective = persisted_objective or self._cycle_objective_from_input()
+        if cycle_objective:
+            print(ui.info(f"Objetivo do Ciclo: {cycle_objective}"))
         print(ui.info(f"LLM engine: {state.llm_engine}"))
         if state.llm_model:
             print(ui.info(f"LLM model: {state.llm_model}"))

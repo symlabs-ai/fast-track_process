@@ -61,6 +61,19 @@ class TestStateManager:
         assert state.llm_model == "fable"
         assert state.llm_effort == "max"
 
+    def test_init_from_graph_persists_cycle_objective(self, tmp_state):
+        tmp_state.init_from_graph(
+            {"id": "feature", "version": "1.3.0"},
+            first_node_id="feature.preflight",
+            total_steps=17,
+            current_cycle="cycle-13-feature",
+            cycle_objective="Adicionar filtro por período ao relatório.",
+        )
+
+        state = tmp_state.load()
+        assert state.current_cycle == "cycle-13-feature"
+        assert state.cycle_objective == "Adicionar filtro por período ao relatório."
+
     def test_persists_active_and_last_llm_logs(self, initialized_state):
         state = initialized_state.load()
         state.active_llm_log = "project/state/llm_logs/current.jsonl"

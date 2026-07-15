@@ -152,6 +152,7 @@ class EngineState:
     node_status: str = "ready"  # ready | delegated | validating | done | blocked
     completed_nodes: list[str] = field(default_factory=list)
     current_cycle: str = "cycle-01"
+    cycle_objective: str | None = None
     current_sprint: str | None = None
     sprint_status: str | None = None
     gate_log: dict[str, str] = field(default_factory=dict)
@@ -235,6 +236,7 @@ class StateManager:
                 node_status=raw.get("node_status", "ready"),
                 completed_nodes=raw.get("completed_nodes", []),
                 current_cycle=raw.get("current_cycle", "cycle-01"),
+                cycle_objective=raw.get("cycle_objective"),
                 current_sprint=raw.get("current_sprint"),
                 sprint_status=raw.get("sprint_status"),
                 gate_log=raw.get("gate_log", {}),
@@ -343,6 +345,7 @@ class StateManager:
             "node_status": self._state.node_status,
             "completed_nodes": self._state.completed_nodes,
             "current_cycle": self._state.current_cycle,
+            "cycle_objective": self._state.cycle_objective,
             "current_sprint": self._state.current_sprint,
             "sprint_status": self._state.sprint_status,
             "gate_log": self._state.gate_log,
@@ -383,6 +386,7 @@ class StateManager:
         total_steps: int,
         llm_engine: str = "claude",
         current_cycle: str = "cycle-01",
+        cycle_objective: str | None = None,
         process_path: str | None = None,
         process_digest: str | None = None,
         process_immutable: bool = False,
@@ -408,6 +412,7 @@ class StateManager:
             llm_effort=llm_effort,
             llm_defaults_digest=llm_defaults_digest,
             current_cycle=current_cycle,
+            cycle_objective=cycle_objective,
             current_node=first_node_id,
             node_status="ready",
             metrics={

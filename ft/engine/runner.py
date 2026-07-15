@@ -6296,7 +6296,7 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if state.current_node:
             current_sprint = self.graph.sprint_of(state.current_node)
 
-        print(ui.header(f"{state.process_id} v{state.version}"))
+        print(ui.header(f"Process: {state.process_id} v{state.version}"))
         # Preserve the public text consumed by existing status parsers; model
         # and effort are additive lines instead of a breaking replacement.
         if state.current_cycle:

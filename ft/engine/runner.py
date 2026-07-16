@@ -6380,7 +6380,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:
             if delegation_running:
-                print(ui.dim(f"(motivo do bloqueio, sendo tratado pela delegação em andamento) {state.blocked_reason}"))
+                # Trabalho em curso: mostrar o motivo por inteiro e legível
+                # (o banner acima já esclarece que não é preciso intervir);
+                # só troca o ✗ vermelho por um rótulo neutro.
+                print(ui.info(f"Motivo do bloqueio (em correção): {state.blocked_reason}"))
             else:
                 print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
         if state.pending_fix:

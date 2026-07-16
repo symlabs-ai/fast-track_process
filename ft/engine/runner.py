@@ -6351,7 +6351,8 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         print(ui.info(f"Status: {state.node_status}"))
         recent = self._recent_delegation(state)
         delegation_running = recent is not None and recent[0] < 120
-        if delegation_running:
+
+        def _print_delegation_banner() -> None:
             secs = int(recent[0])
             when = f"há {secs}s" if secs < 60 else f"há {secs // 60}min{secs % 60:02d}s"
             if recent[1]:
@@ -6364,6 +6365,11 @@ class StepRunner(OpenCodeDomainFallbackMixin):
                     f"⟳ EM CONDUÇÃO — delegação concluída {when}; o ciclo avança para o "
                     "próximo passo. Aguarde; não é preciso intervir."
                 ))
+
+        # Sem bloqueio, o banner fica logo após o Status. Com bloqueio, ele vem
+        # imediatamente ABAIXO do motivo (BLOCKED: … / ⟳ …) — ver abaixo.
+        if delegation_running and not state.blocked_reason:
+            _print_delegation_banner()
         if current_sprint:
             print(ui.info(f"Sprint: {current_sprint}"))
         steps_done = state.metrics.get("steps_completed", 0)
@@ -6392,13 +6398,9 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         elif state.last_llm_log:
             print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:
+            print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
             if delegation_running:
-                # Trabalho em curso: mostrar o motivo por inteiro e legível
-                # (o banner acima já esclarece que não é preciso intervir);
-                # só troca o ✗ vermelho por um rótulo neutro.
-                print(ui.info(f"Motivo do bloqueio (em correção): {state.blocked_reason}"))
-            else:
-                print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
+                _print_delegation_banner()
         if state.pending_fix:
             pf = state.pending_fix
             goto = pf.get("goto", "?")

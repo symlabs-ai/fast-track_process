@@ -6284,6 +6284,30 @@ class StepRunner(OpenCodeDomainFallbackMixin):
             activity_label = last.strftime(fmt)
         return runtime_label, activity_label
 
+    def _active_delegation_age_seconds(self, state) -> float | None:
+        """Segundos desde a última escrita no log da delegação ativa, ou None.
+
+        Uma delegação (implement, review ou um ft fix em andamento) escreve no
+        active_llm_log continuamente. Se o arquivo foi tocado há pouco, há
+        trabalho em curso — mesmo que o node esteja `blocked` aguardando a
+        conclusão do fix. Serve para o status distinguir "travado, intervenha"
+        de "trabalhando, aguarde".
+        """
+        active = getattr(state, "active_llm_log", None)
+        if not active:
+            return None
+        for base in (
+            self.state_mgr.path.parent.parent,
+            Path(self.project_root),
+            Path(self._work_dir),
+        ):
+            candidate = base / active
+            if candidate.is_file():
+                from datetime import datetime as _dt
+
+                return max(0.0, _dt.now().timestamp() - candidate.stat().st_mtime)
+        return None
+
     def status(self, full: bool = False):
         """Mostra estado atual."""
         state = self.state_mgr.load()
@@ -6315,7 +6339,18 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         if state.llm_effort:
             print(ui.info(f"LLM effort: {state.llm_effort}"))
         print(ui.info(f"Node atual: {state.current_node}"))
-        print(ui.info(f"Status: {state.node_status}"))
+        delegation_age = self._active_delegation_age_seconds(state)
+        delegation_running = delegation_age is not None and delegation_age < 120
+        if delegation_running:
+            print(ui.info(f"Status: {state.node_status}"))
+            secs = int(delegation_age)
+            when = f"há {secs}s" if secs < 60 else f"há {secs // 60}min{secs % 60:02d}s"
+            print(ui.success(
+                f"⟳ TRABALHO EM ANDAMENTO — delegação LLM ativa (última escrita {when}). "
+                "Aguarde; não é preciso intervir."
+            ))
+        else:
+            print(ui.info(f"Status: {state.node_status}"))
         if current_sprint:
             print(ui.info(f"Sprint: {current_sprint}"))
         steps_done = state.metrics.get("steps_completed", 0)
@@ -6344,7 +6379,10 @@ class StepRunner(OpenCodeDomainFallbackMixin):
         elif state.last_llm_log:
             print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:
-            print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
+            if delegation_running:
+                print(ui.dim(f"(motivo do bloqueio, sendo tratado pela delegação em andamento) {state.blocked_reason}"))
+            else:
+                print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
         if state.pending_fix:
             pf = state.pending_fix
             goto = pf.get("goto", "?")

@@ -4,7 +4,7 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [Unreleased]
+## [v0.15.2] - 2026-07-16
 
 ### Templates de inicialização (`kind: init`) + `ft init --template`
 - Templates ganham `kind: init | process`. Um template `kind: init` não tem

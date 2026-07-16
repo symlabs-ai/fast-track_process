@@ -148,6 +148,71 @@ def main() -> int:
             "(data-md-longpress / handler de long-press), não checkbox como gatilho primário"
         )
 
+    # 9. Seleção: a barra contextual ocupa o MESMO slot do top app bar (substitui o
+    #    cabeçalho, não empilha abaixo) e não estoura na horizontal.
+    if 'data-md-component="contextual-bar"' in src:
+        # 9a. Slot compartilhado com o top app bar: o marcador de região deve aparecer no
+        #     cabeçalho E na barra contextual (>=2), provando que ela reusa a mesma área.
+        if src.count('data-md-region="top-app-bar"') < 2:
+            fails.append(
+                'SELECTION-TOPBAR-SLOT: a barra contextual deve ocupar o MESMO slot do top app '
+                'bar e substituí-lo (não empilhar abaixo como card). Marque cabeçalho E barra '
+                'com data-md-region="top-app-bar" e renderize a barra pelo app shell.'
+            )
+        # 9b. Full-bleed: a barra não pode ter aparência de card (margin/border-radius) que a
+        #     descole do slot do top app bar.
+        bar_css = re.search(r"\.m3-contextual-bar\s*\{([^}]*)\}", src)
+        bloco = bar_css.group(1) if bar_css else ""
+        if re.search(r"\bmargin\b\s*:", bloco) and not re.search(r"\bmargin\b\s*:\s*0", bloco):
+            fails.append(
+                "SELECTION-TOPBAR-SLOT: a barra contextual deve ser full-bleed no slot do top "
+                "app bar (sem margin de card em .m3-contextual-bar)."
+            )
+        # 9c. Sem estouro horizontal: overflow menu OU contenção de largura na barra
+        #     (min-width:0 / overflow / flex-wrap). Contador flex:1 sem contenção estoura.
+        tem_overflow_menu = 'data-md-component="overflow-menu"' in src
+        tem_contencao = bool(re.search(r"min-width:\s*0|overflow(-x)?\s*:|flex-wrap", bloco))
+        if not (tem_overflow_menu or tem_contencao):
+            fails.append(
+                "SELECTION-NO-OVERFLOW: a barra contextual não pode estourar na horizontal no "
+                "compacto — limite a <=3 ações-ícone + data-md-component=\"overflow-menu\", ou "
+                "aplique contenção (min-width:0 / overflow / flex-wrap) em .m3-contextual-bar."
+            )
+        # 9d. Long-press não pode disparar o menu/callout nativo do navegador junto com a
+        #     barra. São DOIS mecanismos distintos e AMBOS são necessários:
+        #      (i) callout/seleção de texto nativos: -webkit-touch-callout:none + user-select:none;
+        #      (ii) o MENU DE CONTEXTO em si: só some com preventDefault no evento `contextmenu`
+        #           — user-select:none NÃO suprime o menu (foi o falso-positivo do incidente).
+        tem_callout = bool(
+            re.search(r"-webkit-touch-callout\s*:\s*none", src)
+            or re.search(r"user-select\s*:\s*none", src)
+        )
+        tem_ctxmenu = bool(re.search(r"onContextMenu|oncontextmenu|['\"]contextmenu['\"]", src))
+        if not tem_callout:
+            fails.append(
+                "SELECTION-NATIVE-SUPPRESS: o long-press dispara o callout/seleção de texto "
+                "nativos — desligue no item selecionável via -webkit-touch-callout:none + "
+                "user-select:none."
+            )
+        if not tem_ctxmenu:
+            fails.append(
+                "SELECTION-NATIVE-SUPPRESS: o menu de contexto do navegador ainda aparece no "
+                "long-press/clique-direito — user-select:none NÃO o suprime; é preciso "
+                "preventDefault no evento contextmenu (onContextMenu / listener 'contextmenu') "
+                "no item selecionável."
+            )
+        # 9e. Layout de linha única (ícone/check + infos lado a lado, sem empilhar) deve ser
+        #     aplicado no seletor COMPARTILHADO [data-md-selectable] — não numa classe de uma
+        #     única tela. Senão só a lista que recebeu a classe fica concisa e as outras
+        #     (garantias/preços/busca) continuam em duas linhas (incidente: fix só em compras).
+        if not re.search(r"\[data-md-selectable\][^{}]*\{[^}]*display\s*:\s*flex", src):
+            fails.append(
+                "SELECTION-ITEM-SINGLEROW: o item selecionável deve ficar em uma única linha "
+                "(ícone/check + infos lado a lado) via layout flex no seletor compartilhado "
+                "[data-md-selectable], para valer em todas as listas — não por classe de uma "
+                "só tela."
+            )
+
     if fails:
         print("guidelines-depth FAIL: " + str(len(fails)) + " requisito(s) de componente M3 não atendidos:")
         for f in fails:

@@ -167,6 +167,35 @@ Listas de conteúdo devem suportar o padrão M3 de **seleção**, como no WhatsA
 - Em modo de seleção, o cabeçalho da tela é substituído por uma **top app bar contextual
   efêmera** no topo, com contagem de selecionados e as ações — marcador
   `data-md-component="contextual-bar"`, `role="toolbar"`. Sai da seleção com "voltar"/vazio.
+- **Mesma região do top app bar (não empilhar):** a barra contextual **ocupa o mesmo slot
+  do top app bar** e o **substitui** enquanto há seleção — mesma altura, full-bleed (sem
+  `margin`/`border-radius` de card), `z-index` ≥ o do top app bar, ancorada em `top:0`. Ela é
+  renderizada pelo **app shell** (o mesmo lugar que renderiza o cabeçalho), não como um bloco
+  solto no meio do conteúdo da página empurrando a lista para baixo. Como no WhatsApp: o
+  título some e a barra de seleção aparece **no lugar dele**, não abaixo dele. Marque o slot
+  compartilhado com `data-md-region="top-app-bar"` no cabeçalho **e** na barra contextual.
+- **Sem estouro horizontal (compacto):** as ações da barra **têm que caber** na largura da tela
+  — nada de ícone cortado na borda. No compacto, no máximo **3 ações** visíveis como ícone; o
+  excedente vai para um **overflow menu** (`data-md-component="overflow-menu"`, ícone "mais",
+  alvo ≥48px). O container das ações não pode transbordar o viewport (use contenção/`min-width:0`,
+  não deixe o contador `flex:1` empurrar ícones para fora).
+- **Suprimir o comportamento nativo do navegador no long-press:** o item selecionável
+  (`data-md-selectable`) deve desligar o **menu de contexto/callout** e a **seleção de texto**
+  nativos, senão o gesto de segurar dispara o menu do navegador (copiar/compartilhar) **junto**
+  com a barra contextual. São **dois mecanismos e ambos são obrigatórios**: (1) callout e
+  seleção de texto — `-webkit-touch-callout: none;` + `user-select: none;`
+  (`-webkit-user-select: none;`) no CSS do item; **e** (2) o **menu de contexto em si** —
+  `preventDefault()` no evento `contextmenu` (via `onContextMenu` no elemento ou um listener
+  `'contextmenu'` escopado a `[data-md-selectable]`). **`user-select: none` sozinho NÃO
+  suprime o menu de contexto** — sem o `preventDefault` no `contextmenu`, o menu do navegador
+  volta a aparecer. Como no WhatsApp: segurar entra em seleção, o navegador não interfere.
+- **Item selecionável em uma única linha, via seletor compartilhado:** o item deve ficar
+  conciso — ícone/check + infos (título, subtítulo, valor) **lado a lado na mesma linha**, sem
+  empilhar (melhor uso do espaço vertical). Aplique esse layout (flex) no seletor
+  **compartilhado `[data-md-selectable]`**, não numa classe de uma tela só — senão apenas a
+  lista que recebeu a classe fica concisa e as demais (garantias/preços/busca) continuam em
+  duas linhas. As melhorias de seleção (single-row, badge de check, supressão nativa) valem
+  para **todas** as listas de conteúdo, não só uma.
 - **Swipe** (arrastar o item) é atalho secundário para a ação principal do item.
 - **Regra por tipo de dado:**
   - **Registros criados pelo usuário** (ex.: garantias): a barra contextual PODE oferecer
@@ -176,7 +205,11 @@ Listas de conteúdo devem suportar o padrão M3 de **seleção**, como no WhatsA
     quando o produto permitir, **arquivar/ocultar reversível** (esconder da lista sem apagar a
     evidência; nunca hard delete/edit).
 - Verificado pelo gate: presença de `data-md-component="contextual-bar"` + gatilho de
-  long-press (`data-md-longpress` / handler de long-press) nas listas de conteúdo.
+  long-press (`data-md-longpress` / handler de long-press) nas listas de conteúdo; barra
+  contextual no slot do top app bar (`data-md-region="top-app-bar"` no cabeçalho **e** na barra,
+  barra full-bleed sem `margin`/`border-radius` de card); e proteção contra estouro horizontal
+  (≤3 ações-ícone no compacto **ou** `data-md-component="overflow-menu"`, sem contador `flex:1`
+  empurrando ações para fora).
 | Responsive grids| Organize layout por panes e contenção| Compacto: 1 pane; expandido: 2+ panes| Layout é guidance, não componente pronto||
 
 A engenharia de componentes para uma PWA Material funciona melhor quando você pensa em **três camadas**: shell, conteúdo e feedback. Abaixo, um mapa prático de dependências entre peças. Ele não vem “pronto” da biblioteca; ele vem da combinação entre a guidance do Material e a realidade do front-end web.

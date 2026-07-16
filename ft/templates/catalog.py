@@ -46,6 +46,17 @@ class TemplateDescriptor:
 
 
 @dataclass(frozen=True)
+class InitTemplateDescriptor:
+    """One ``kind: init`` template — project bootstrap scripts, no process."""
+
+    name: str
+    directory: Path
+    manifest_file: Path
+    scripts: tuple[Path, ...]
+    source_digest: str
+
+
+@dataclass(frozen=True)
 class ResolvedTemplate:
     """Project-owned process selected for a new run.
 
@@ -94,6 +105,83 @@ def template_process_file(template_dir: Path) -> Path | None:
             f"template ambíguo em {template_dir}: múltiplos YAMLs de processo"
         )
     return candidates[0] if candidates else None
+
+
+TEMPLATE_MANIFEST_NAME = "template.yml"
+
+
+def template_kind(template_dir: Path) -> str:
+    """Return the declared kind of a template bundle.
+
+    ``kind: init`` templates carry a ``template.yml`` manifest instead of a
+    process graph. Bundles without a manifest are runnable process templates.
+    """
+    manifest = template_dir / TEMPLATE_MANIFEST_NAME
+    if not manifest.is_file() or manifest.is_symlink():
+        return "process"
+    try:
+        payload = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise TemplateCatalogError(f"manifest inválido em {manifest}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise TemplateCatalogError(f"manifest inválido em {manifest}: raiz deve ser mapping")
+    kind = str(payload.get("kind") or "process")
+    if kind not in {"init", "process"}:
+        raise TemplateCatalogError(
+            f"kind desconhecido em {manifest}: {kind!r} (esperado: init | process)"
+        )
+    return kind
+
+
+def bundle_digest(directory: Path) -> str:
+    """Stable content digest over every regular file of a template bundle."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for candidate in sorted(directory.rglob("*")):
+        if not candidate.is_file():
+            continue
+        relative = candidate.relative_to(directory).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(candidate.read_bytes())
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _load_init_manifest(manifest_file: Path, template_name: str) -> tuple[Path, ...]:
+    """Validate an init manifest and resolve its ordered script list."""
+    payload = yaml.safe_load(manifest_file.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise TemplateCatalogError(
+            f"manifest inválido em {manifest_file}: raiz deve ser mapping"
+        )
+    raw_scripts = payload.get("scripts")
+    if not isinstance(raw_scripts, list) or not raw_scripts:
+        raise TemplateCatalogError(
+            f"template init '{template_name}' não declara scripts em {manifest_file}"
+        )
+    template_dir = manifest_file.parent.resolve()
+    scripts: list[Path] = []
+    for entry in raw_scripts:
+        requested = Path(str(entry))
+        if requested.is_absolute():
+            raise TemplateCatalogError(
+                f"template init '{template_name}': script deve ser relativo: {entry}"
+            )
+        resolved = (template_dir / requested).resolve()
+        try:
+            resolved.relative_to(template_dir)
+        except ValueError:
+            raise TemplateCatalogError(
+                f"template init '{template_name}': script fora do bundle: {entry}"
+            ) from None
+        if not resolved.is_file():
+            raise TemplateCatalogError(
+                f"template init '{template_name}': script ausente: {entry}"
+            )
+        scripts.append(resolved)
+    return tuple(scripts)
 
 
 def _load_process_payload(process_file: Path) -> dict[str, Any]:
@@ -246,6 +334,11 @@ class TemplateCatalog:
         if not directory.exists():
             raise TemplateNotFoundError(f"template '{selected}' não encontrado")
         reject_bundle_symlinks(directory)
+        if template_kind(directory) == "init":
+            raise TemplateCatalogError(
+                f"template '{selected}' é de inicialização (kind: init); "
+                f"use ft init --template {selected}"
+            )
         process_file = template_process_file(directory)
         if process_file is None:
             raise TemplateNotFoundError(
@@ -269,6 +362,54 @@ class TemplateCatalog:
             policy=policy,
             source_digest=digest,
         )
+
+    def init_names(self) -> tuple[str, ...]:
+        """List templates selectable through ``ft init --template``."""
+        if not self.root.is_dir():
+            return ()
+        available: list[str] = []
+        for candidate in sorted(self.root.iterdir(), key=lambda path: path.name):
+            if not candidate.is_dir() or candidate.is_symlink():
+                continue
+            try:
+                descriptor = self.get_init(candidate.name)
+            except TemplateCatalogError:
+                continue
+            available.append(descriptor.name)
+        return tuple(available)
+
+    def get_init(self, name: str) -> InitTemplateDescriptor:
+        """Load one ``kind: init`` template and validate its complete bundle."""
+        selected = validate_template_name(name)
+        directory = self.root / selected
+        if not directory.exists():
+            raise TemplateNotFoundError(f"template '{selected}' não encontrado")
+        reject_bundle_symlinks(directory)
+        if template_kind(directory) != "init":
+            raise TemplateCatalogError(
+                f"template '{selected}' é de processo (kind: process); "
+                f"use ft run . --template {selected}"
+            )
+        manifest_file = directory / TEMPLATE_MANIFEST_NAME
+        scripts = _load_init_manifest(manifest_file, selected)
+        return InitTemplateDescriptor(
+            name=selected,
+            directory=directory,
+            manifest_file=manifest_file,
+            scripts=scripts,
+            source_digest=bundle_digest(directory),
+        )
+
+    def require_init(self, name: str) -> InitTemplateDescriptor:
+        """Like :meth:`get_init`, but include available choices in errors."""
+        try:
+            return self.get_init(name)
+        except TemplateNotFoundError as exc:
+            choices = ", ".join(self.init_names()) or "nenhum"
+            raise TemplateNotFoundError(
+                f"template init '{name}' não encontrado. "
+                f"Templates de init disponíveis: {choices}"
+            ) from exc
 
     def require(self, name: str) -> TemplateDescriptor:
         """Like :meth:`get`, but include available choices in missing errors."""

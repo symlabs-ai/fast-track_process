@@ -1018,12 +1018,21 @@ def get_runner(
 def cmd_init(args):
     """Initialize, diagnose, or repair the common project workspace."""
     from ft.engine import ui as _ui
-    from ft.project import bootstrap_project, check_project, repair_project
+    from ft.project import BootstrapError, bootstrap_project, check_project, repair_project
+    from ft.project.bootstrap import DEFAULT_INIT_TEMPLATE, load_init_descriptor
+    from ft.project.init_scripts import (
+        InitScriptError,
+        read_init_marker,
+        record_init_template,
+        run_init_template,
+    )
 
     raw_target = Path(getattr(args, "name", None) or ".").expanduser()
     root = raw_target if raw_target.is_absolute() else Path.cwd() / raw_target
     root = root.resolve()
     _guard_engine_repo(root)
+
+    template_name = getattr(args, "init_template", None)
 
     def print_issues(issues) -> None:
         for issue in issues:
@@ -1031,10 +1040,29 @@ def cmd_init(args):
             suffix = f" ({issue.path})" if issue.path else ""
             print(f"  {marker} [{issue.code}] {issue.message}{suffix}")
 
+    def print_script_actions(name: str, results) -> None:
+        for result in results:
+            for line in result.output.splitlines():
+                if line.strip():
+                    print(f"  ✓ [{name}] {line.strip()}")
+
+    def apply_init_template(name: str, *, mode: str, adopt: bool) -> None:
+        descriptor = load_init_descriptor(name)
+        results = run_init_template(descriptor, root, mode=mode, adopt=adopt)
+        print_script_actions(descriptor.name, results)
+        record_init_template(root, descriptor)
+
     if getattr(args, "check", False):
         result = check_project(root)
         print(f"  Projeto: {result.root}")
         print(f"  Status: {result.status}")
+        applied = read_init_marker(root)
+        if applied:
+            for name, meta in sorted(applied.items()):
+                stamp = meta.get("completed_at", "?") if isinstance(meta, dict) else "?"
+                print(f"  Init template aplicado: {name} ({stamp})")
+        else:
+            print("  Nenhum init template aplicado nesta máquina.")
         print_issues(result.issues)
         if not result.healthy:
             print(_ui.info("Reparo seguro disponível: ft init --fix"))
@@ -1042,6 +1070,19 @@ def cmd_init(args):
         return
 
     if getattr(args, "fix", False):
+        # Re-executa a cadeia de init (init-default + template explícito) para
+        # consertar o ambiente antes do reparo estrutural — os scripts são
+        # idempotentes e podem restaurar o próprio Git (HEAD, commit inicial).
+        if not paths.project_ft_dir(root).is_dir():
+            print(_ui.fail("Diretório não é um workspace Fast Track; use ft init primeiro."))
+            raise SystemExit(1)
+        try:
+            apply_init_template(DEFAULT_INIT_TEMPLATE, mode="fix", adopt=True)
+            if template_name:
+                apply_init_template(template_name, mode="fix", adopt=True)
+        except (BootstrapError, InitScriptError) as exc:
+            print(_ui.fail(str(exc)))
+            raise SystemExit(1) from exc
         result = repair_project(root)
         print(f"  Projeto: {result.root}")
         for action in result.actions:
@@ -1056,10 +1097,41 @@ def cmd_init(args):
         return
 
     adopt = getattr(args, "adopt", False)
-    result = bootstrap_project(root, adopt=adopt)
+    try:
+        result = bootstrap_project(root, adopt=adopt)
+    except BootstrapError as exc:
+        print(_ui.fail(str(exc)))
+        raise SystemExit(1) from exc
     print(f"  Projeto: {result.root}")
     for action in result.actions:
         print(f"  ✓ {action}")
+
+    if template_name:
+        applied = read_init_marker(root)
+        if template_name in applied:
+            print(_ui.warn(
+                f"Init template '{template_name}' já aplicado nesta máquina; "
+                f"re-execute com: ft init --fix --template {template_name}"
+            ))
+        else:
+            try:
+                apply_init_template(template_name, mode="init", adopt=adopt)
+            except (BootstrapError, InitScriptError) as exc:
+                print(_ui.fail(str(exc)))
+                raise SystemExit(1) from exc
+            import subprocess as _subprocess
+
+            status = _subprocess.run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                cwd=root, capture_output=True, text=True, timeout=30, check=False,
+            )
+            if not adopt and status.returncode == 0 and status.stdout.strip():
+                print(_ui.warn(
+                    f"Init template '{template_name}' deixou arquivos fora do Git; "
+                    "commite-os ou adicione ao .gitignore antes de ft run "
+                    "(worktrees exigem checkout limpo)."
+                ))
+
     if result.status == "unchanged":
         print(_ui.success("Workspace Fast Track já estava inicializado e saudável."))
     else:
@@ -1076,7 +1148,7 @@ def cmd_init(args):
                 "Adoção deixou arquivos legados fora do Git; commite-os antes de "
                 "ft run (worktrees exigem checkout limpo)."
             ))
-    print("  Nenhum template foi selecionado. Inicie um ciclo com:")
+    print("  Nenhum processo foi selecionado. Inicie um ciclo com:")
     print("    ft run . --template <template>")
 
 
@@ -4564,6 +4636,16 @@ def main():
         "name",
         nargs="?",
         help="Diretório do projeto (default: diretório atual)",
+    )
+    init.add_argument(
+        "--template",
+        dest="init_template",
+        metavar="NOME",
+        help=(
+            "Template de inicialização (kind: init) a executar após o "
+            "init-default — provisiona ambiente, .env, credenciais etc. "
+            "Roda uma única vez por projeto; com --fix, re-executa a cadeia"
+        ),
     )
     init_mode = init.add_mutually_exclusive_group()
     init_mode.add_argument(

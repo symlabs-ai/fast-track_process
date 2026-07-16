@@ -25,8 +25,21 @@ from ft.engine.layout import (
     _validate_manifest,
     process_digest,
 )
-from ft.project.bootstrap import _copy_agents_playbook
 from ft.project.migration import migrate_v2_manifest
+
+
+def _copy_agents_playbook(root: Path) -> bool:
+    """Restore the engine-distributed AGENTS.md when the project lost it."""
+    import shutil
+
+    destination = root / "AGENTS.md"
+    if destination.exists() or destination.is_symlink():
+        return False
+    source = Path(__file__).resolve().parents[2] / "AGENTS.md"
+    if not source.is_file():
+        return False
+    shutil.copyfile(source, destination)
+    return True
 
 
 @dataclass(frozen=True)

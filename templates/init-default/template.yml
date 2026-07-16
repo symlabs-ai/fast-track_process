@@ -1,0 +1,15 @@
+kind: init
+title: Inicialização padrão de projeto
+description: >
+  Prepara um projeto novo para o Fast Track: repositório Git, arquivos
+  base (.gitignore, .env.example, README.md, AGENTS.md) e commit inicial.
+  Roda uma única vez por projeto via `ft init`; re-execute com
+  `ft init --fix` para consertar o ambiente.
+
+# Executados em ordem, com cwd na raiz do projeto. Exit != 0 bloqueia o init.
+# Variáveis disponíveis: FT_PROJECT_ROOT, FT_TEMPLATE_DIR, FT_ENGINE_ROOT,
+# FT_INIT_MODE (init|fix), FT_ADOPT (0|1), FT_COMMIT_MESSAGE.
+scripts:
+  - scripts/10_git_init.sh
+  - scripts/20_scaffold.sh
+  - scripts/90_commit.sh

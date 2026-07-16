@@ -6,11 +6,13 @@ is distributed by the engine, materialized once into the project-owned
 """
 
 from ft.templates.catalog import (
+    InitTemplateDescriptor,
     ResolvedTemplate,
     TemplateCatalog,
     TemplateCatalogError,
     TemplateDescriptor,
     TemplateNotFoundError,
+    template_kind,
 )
 from ft.templates.input_policy import (
     InputPolicy,
@@ -22,6 +24,7 @@ from ft.templates.input_policy import (
 from ft.templates.materialize import TemplateMaterializer, resolve_template
 
 __all__ = [
+    "InitTemplateDescriptor",
     "InputPolicy",
     "InputPolicyError",
     "InputRequiredError",
@@ -34,4 +37,5 @@ __all__ = [
     "TemplateNotFoundError",
     "load_input_policy",
     "resolve_template",
+    "template_kind",
 ]

@@ -1,10 +1,16 @@
-"""Idempotent bootstrap for a Git-backed Fast Track workspace."""
+"""Idempotent bootstrap for a Git-backed Fast Track workspace.
+
+The engine owns the invariants: pre-conditions (safe directory, clean
+checkout), the ``.ft/`` scaffold, and post-conditions (usable HEAD, clean
+tree). The mechanics of preparing the project — ``git init``, base files,
+initial commit — live in the ``init-default`` template (``kind: init``) so
+each workspace can customize them without patching the engine.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import shutil
 import subprocess
 
 from ft.engine import paths
@@ -15,6 +21,19 @@ from ft.engine.layout import (
     ensure_project_layout,
     read_manifest,
 )
+from ft.project.init_scripts import (
+    InitScriptError,
+    read_init_marker,
+    record_init_template,
+    run_init_template,
+)
+from ft.templates.catalog import (
+    InitTemplateDescriptor,
+    TemplateCatalog,
+    TemplateCatalogError,
+)
+
+DEFAULT_INIT_TEMPLATE = "init-default"
 
 
 class BootstrapError(RuntimeError):
@@ -69,20 +88,14 @@ def _has_head(root: Path) -> bool:
     return _run_git(root, "rev-parse", "--verify", "HEAD", check=False).returncode == 0
 
 
+def _head_commit(root: Path) -> str | None:
+    result = _run_git(root, "rev-parse", "--verify", "HEAD", check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def _status_entries(root: Path) -> tuple[str, ...]:
     result = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
     return tuple(line for line in result.stdout.splitlines() if line.strip())
-
-
-def _copy_agents_playbook(root: Path) -> bool:
-    destination = root / "AGENTS.md"
-    if destination.exists() or destination.is_symlink():
-        return False
-    source = Path(__file__).resolve().parents[2] / "AGENTS.md"
-    if not source.is_file():
-        return False
-    shutil.copyfile(source, destination)
-    return True
 
 
 def _common_scaffold(root: Path) -> tuple[str, ...]:
@@ -91,16 +104,24 @@ def _common_scaffold(root: Path) -> tuple[str, ...]:
         paths.project_ft_dir(root) / ".gitignore",
         paths.project_process_dir(root) / ".gitkeep",
         paths.project_cycles_dir(root) / ".gitkeep",
-        root / "AGENTS.md",
     )
     before = {path for path in scaffold if path.is_file()}
     ensure_project_layout(root)
     process_keep = paths.project_process_dir(root) / ".gitkeep"
     process_keep.touch(exist_ok=True)
-    _copy_agents_playbook(root)
     return tuple(
         sorted(path.relative_to(root).as_posix() for path in scaffold if path.is_file() and path not in before)
     )
+
+
+def load_init_descriptor(
+    name: str, *, catalog_root: str | Path | None = None
+) -> InitTemplateDescriptor:
+    """Resolve one ``kind: init`` template from the engine catalog."""
+    try:
+        return TemplateCatalog(catalog_root).get_init(name)
+    except TemplateCatalogError as exc:
+        raise BootstrapError(str(exc)) from exc
 
 
 def bootstrap_project(
@@ -108,12 +129,16 @@ def bootstrap_project(
     *,
     adopt: bool = False,
     commit_message: str = "chore: initialize fast track workspace",
+    catalog_root: str | Path | None = None,
 ) -> BootstrapResult:
     """Create the common FT workspace and guarantee a usable Git ``HEAD``.
 
     A non-empty directory without its own repository is refused by default so
     initialization cannot silently adopt arbitrary files into a new history.
     Existing repositories must be clean before the tracked scaffold is added.
+    The project mechanics (``git init``, base files, initial commit) run via
+    the ``init-default`` template exactly once; the marker under
+    ``.ft/runtime/`` skips them on re-runs (``ft init --fix`` re-executes).
     """
     requested = Path(project_root).expanduser()
     if requested.is_symlink():
@@ -125,25 +150,22 @@ def bootstrap_project(
     root = requested.resolve()
 
     has_entries = any(root.iterdir())
-    created_repository = False
-    if not _is_git_root(root):
-        if has_entries and not adopt:
-            raise BootstrapError(
-                "diretório não vazio sem repositório Git próprio; "
-                "mova o projeto para um repositório ou use ft init --adopt"
-            )
-        _run_git(root, "init", "-q")
-        created_repository = True
-
-    had_head = _has_head(root)
-    dirty_before = _status_entries(root)
-    if dirty_before and (had_head or not created_repository) and not adopt:
-        shown = ", ".join(entry[3:] for entry in dirty_before[:5])
+    was_git_root = _is_git_root(root)
+    if not was_git_root and has_entries and not adopt:
         raise BootstrapError(
-            "checkout Git deve estar limpo antes do bootstrap"
-            + (f": {shown}" if shown else "")
-            + "; commite as mudanças ou use ft init --adopt"
+            "diretório não vazio sem repositório Git próprio; "
+            "mova o projeto para um repositório ou use ft init --adopt"
         )
+
+    if was_git_root and not adopt:
+        dirty_before = _status_entries(root)
+        if dirty_before:
+            shown = ", ".join(entry[3:] for entry in dirty_before[:5])
+            raise BootstrapError(
+                "checkout Git deve estar limpo antes do bootstrap"
+                + (f": {shown}" if shown else "")
+                + "; commite as mudanças ou use ft init --adopt"
+            )
 
     ft_dir = paths.project_ft_dir(root)
     if ft_dir.is_symlink():
@@ -165,41 +187,30 @@ def bootstrap_project(
         if manifest.get("schema_version") != LAYOUT_VERSION:
             raise BootstrapError("manifest FT possui versão não suportada")
 
+    head_before = _head_commit(root) if was_git_root else None
     created_files = _common_scaffold(root)
     actions: list[str] = []
-    if created_repository:
-        actions.append("repositório Git criado")
     actions.extend(f"criado {item}" for item in created_files)
 
-    status_after = _status_entries(root)
-    commit: str | None = None
-    if status_after:
-        tracked_paths = (
-            ".ft/manifest.yml",
-            ".ft/.gitignore",
-            ".ft/process/.gitkeep",
-            ".ft/cycles/.gitkeep",
-            "AGENTS.md",
-        )
-        present = [item for item in tracked_paths if (root / item).exists()]
-        _run_git(root, "add", "--", *present)
-        staged = _run_git(root, "diff", "--cached", "--quiet", check=False)
-        if staged.returncode == 1:
-            _run_git(
+    descriptor = load_init_descriptor(DEFAULT_INIT_TEMPLATE, catalog_root=catalog_root)
+    already_initialized = descriptor.name in read_init_marker(root)
+    if not already_initialized:
+        try:
+            script_results = run_init_template(
+                descriptor,
                 root,
-                "-c",
-                "user.name=Fast Track",
-                "-c",
-                "user.email=ft@localhost",
-                "commit",
-                "-q",
-                "-m",
-                commit_message,
-                "--",
-                *present,
+                mode="init",
+                adopt=adopt,
+                commit_message=commit_message,
             )
-            commit = _run_git(root, "rev-parse", "HEAD").stdout.strip()
-            actions.append(f"commit criado {commit}")
+        except InitScriptError as exc:
+            raise BootstrapError(str(exc)) from exc
+        for result in script_results:
+            actions.extend(
+                line.strip() for line in result.output.splitlines() if line.strip()
+            )
+
+    created_repository = not was_git_root and _is_git_root(root)
 
     if not _has_head(root):
         raise BootstrapError(
@@ -207,6 +218,12 @@ def bootstrap_project(
         )
     if _status_entries(root) and not adopt:
         raise BootstrapError("bootstrap terminou com checkout Git não limpo")
+
+    if not already_initialized:
+        record_init_template(root, descriptor)
+
+    head_after = _head_commit(root)
+    commit = head_after if head_after != head_before else None
 
     changed = bool(actions)
     status = "created" if not existed or created_repository else "updated" if changed else "unchanged"

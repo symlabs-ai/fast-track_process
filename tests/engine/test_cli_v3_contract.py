@@ -94,7 +94,7 @@ def test_init_creates_common_workspace_and_is_idempotent_and_checkable(
     first_output = capsys.readouterr().out
     project = tmp_path / "product"
 
-    assert "Nenhum template foi selecionado" in first_output
+    assert "Nenhum processo foi selecionado" in first_output
     assert (project / ".git").is_dir()
     assert _git(project, "rev-parse", "--verify", "HEAD")
     manifest = yaml.safe_load(

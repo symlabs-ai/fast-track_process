@@ -46,6 +46,34 @@ O argumento de diretório é opcional (`.` por padrão). O comando:
 
 Em um workspace saudável, repetir `ft init` é idempotente.
 
+### Templates de inicialização (`kind: init`)
+
+O engine só garante os invariantes (pré-condições, scaffold `.ft/`,
+pós-condições: HEAD utilizável e checkout limpo). A mecânica do init —
+`git init`, `.gitignore`, `.env.example`, `README.md`, `AGENTS.md` e o
+commit inicial — vive no template embutido `init-default`
+(`templates/init-default/`), um template `kind: init`: sem processo, apenas
+`template.yml` com uma lista ordenada de scripts executáveis.
+
+Um template de init roda **uma única vez por projeto por máquina** — o
+marker fica em `.ft/runtime/init.yml` (gitignored: um clone em outra máquina
+inicializa o próprio ambiente de novo). Scripts recebem `FT_PROJECT_ROOT`,
+`FT_TEMPLATE_DIR`, `FT_ENGINE_ROOT`, `FT_INIT_MODE` (`init`|`fix`) e
+`FT_ADOPT`; exit != 0 bloqueia como um gate.
+
+Para provisionar ambiente específico (`.env`, credenciais, registro no
+gateway), crie um template `kind: init` no catálogo e selecione-o no init:
+
+```bash
+ft init meu-projeto --template symgateway-env   # init-default + symgateway-env
+ft init . --fix --template symgateway-env       # re-executa a cadeia p/ consertar
+```
+
+`ft init --template` roda a cadeia `init-default` → template escolhido;
+`ft run --template` segue intocado (processos por ciclo) e recusa templates
+`kind: init` com instrução de uso. Credenciais nunca entram no template:
+os scripts geram/leem arquivos locais gitignored.
+
 ### Diagnóstico e reparo
 
 ```bash

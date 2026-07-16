@@ -4,6 +4,34 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [Unreleased]
+
+### Templates de inicialização (`kind: init`) + `ft init --template`
+- Templates ganham `kind: init | process`. Um template `kind: init` não tem
+  processo: declara em `template.yml` uma lista ordenada de scripts
+  executáveis (bash, python, qualquer executável) que preparam o ambiente de
+  um projeto — `.env`, credenciais locais, registro em gateway etc.
+- Novo template embutido `init-default`: a mecânica do `ft init` que era
+  hardcoded (git init, `AGENTS.md`, commit inicial) migrou para scripts do
+  template, que agora também criam `.gitignore` padrão (com `.env`),
+  `.env.example` e `README.md`. O engine mantém apenas os invariantes:
+  pré-condições de segurança, scaffold `.ft/` e pós-condições (HEAD, checkout
+  limpo).
+- `ft init <proj> --template <nome>` roda a cadeia `init-default` → template
+  escolhido, **uma única vez por projeto por máquina** (marker gitignored em
+  `.ft/runtime/init.yml`; um clone em outra máquina re-inicializa o próprio
+  ambiente). `ft init --fix --template <nome>` re-executa a cadeia para
+  consertar o ambiente antes do reparo estrutural.
+- `ft init --check` passa a reportar os init templates aplicados na máquina.
+- `ft run --template` segue intocado; selecionar um template `kind: init` no
+  run (ou um `kind: process` no init) falha com instrução de uso clara.
+- Scripts de init recebem `FT_PROJECT_ROOT`, `FT_TEMPLATE_DIR`,
+  `FT_ENGINE_ROOT`, `FT_INIT_MODE` (`init`|`fix`), `FT_ADOPT` e
+  `FT_COMMIT_MESSAGE`; exit != 0 bloqueia como um gate. Na adoção
+  (`--adopt`), arquivos base legados nunca são commitados silenciosamente.
+
+---
+
 ## [v0.15.0] - 2026-07-14
 
 ### Template material_design_pwa — M3 + PWA sobre projeto existente

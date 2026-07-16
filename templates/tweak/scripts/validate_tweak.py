@@ -891,6 +891,12 @@ def _is_cycle_path(root: Path, relative: str) -> bool:
         return False
     if path in CYCLE_PATHS:
         return True
+    # `state/` é bookkeeping de runtime da própria engine (engine_state.yml,
+    # llm_logs/, trace/events.jsonl) escrito DURANTE o run — não é mudança de
+    # produto do LLM. Ignorar o diretório inteiro; senão a escrita da engine
+    # conta contra o orçamento de arquivos do tweak e bloqueia mudanças legítimas.
+    if path.parts and path.parts[0] == "state":
+        return True
     # StepRunner's activity log is a runtime artifact consumed by `ft runs`,
     # close/archive and duration reports. Ignore only its exact root-level
     # filename; arbitrary `*_log.md` paths remain guarded product changes.

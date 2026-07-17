@@ -106,19 +106,24 @@ class TestExternalIntegrationSeparation:
     def test_symgateway_not_packaged_as_engine_module(self):
         assert importlib.util.find_spec("ft.integrations.symgateway") is None
 
-    def test_symgateway_template_contains_register_script(self):
+    def test_org_templates_are_init_kind_with_provision_script(self):
         root = Path(__file__).resolve().parents[2]
-        script = root / "templates" / "symgateway" / "scripts" / "register_gateway.sh"
+        for org in ("symlabs", "tecnospeed"):
+            manifest = root / "templates" / org / "template.yml"
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            assert data["kind"] == "init", org
+            assert "scripts/provision.sh" in data["scripts"], org
+            script = root / "templates" / org / "scripts" / "provision.sh"
+            assert script.exists(), org
+            # kind: init não é executável pelo run — não carrega process.yml.
+            assert not (root / "templates" / org / "process.yml").exists(), org
 
-        assert script.exists()
-        assert "SYM_GATEWAY_PROJECT_KEY" in script.read_text(encoding="utf-8")
-
-    def test_symgateway_template_wires_script_as_hook(self):
+    def test_org_credential_env_files_are_gitignored_examples_only(self):
         root = Path(__file__).resolve().parents[2]
-        environment = root / "templates" / "symgateway" / "environment.yml"
-        data = yaml.safe_load(environment.read_text(encoding="utf-8"))
-
-        assert "scripts/register_gateway.sh" in data["hooks"]["on_init"]
+        # O exemplo é versionado; o .env real (com secrets) nunca.
+        assert (root / "environment" / "symlabs.env.example").exists()
+        gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+        assert "environment/*.env" in gitignore
 
     def test_delegate_has_no_external_integration_dependency(self):
         from ft.engine.delegate import delegate_to_llm

@@ -4,6 +4,31 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [Unreleased]
+
+### Templates de organização `symlabs` e `tecnospeed` (kind: init)
+- O template `symgateway` (que era o processo `base` duplicado + scripts de
+  ambiente no `on_init` de cada ciclo) foi **substituído por dois templates
+  de organização**: `symlabs` e `tecnospeed`. `ft init proj --template
+  symlabs` roda a cadeia `init-default` → `symlabs`; `ft run` os recusa.
+- Cada template de org faz scaffold Poetry (`src/<nome>/`, `docs/`, versão
+  0.0.1), `.env` de dev (`DEV_MODE=true`), `CLAUDE.md`/settings e registra o
+  projeto no workspace da org no SymGateway (`POST /_api/projects`, 409 =
+  idempotente; caller key linkada). O `provision.sh` é genérico — resolve a
+  organização pelo nome do template.
+- **Config da org em `environment/<org>.env`** (gitignored via
+  `environment/*.env`; `<org>.env.example` versionado): workspace id, caller
+  key, admin key do gateway, provider path. A admin key só registra o projeto
+  e nunca toca o repo; o `settings.local.json` (gitignored) recebe só a
+  caller key na URL. Script falha alto se a config estiver ausente/incompleta.
+- `tecnospeed` acompanha o mesmo esqueleto, mas a organização ainda não está
+  provisionada no SymGateway/SymVault — o template falha com instrução
+  (`/ask devops`) até `environment/tecnospeed.env` ser preenchido.
+- `ft setup-env` deprecado: delega para a cadeia de init templates e aponta
+  `ft init --fix --template <T>`; hint do health check 403 atualizado.
+
+---
+
 ## [v0.15.2] - 2026-07-16
 
 ### Templates de inicialização (`kind: init`) + `ft init --template`

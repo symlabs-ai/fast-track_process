@@ -62,17 +62,30 @@ inicializa o próprio ambiente de novo). Scripts recebem `FT_PROJECT_ROOT`,
 `FT_ADOPT`; exit != 0 bloqueia como um gate.
 
 Para provisionar ambiente específico (`.env`, credenciais, registro no
-gateway), crie um template `kind: init` no catálogo e selecione-o no init:
+gateway), crie um template `kind: init` no catálogo e selecione-o no init.
+Os templates de **organização** `symlabs` e `tecnospeed` são exemplos reais —
+scaffold Poetry/`src`, `.env` de dev, `CLAUDE.md` e registro do projeto no
+workspace da org no SymGateway:
 
 ```bash
-ft init meu-projeto --template symgateway-env   # init-default + symgateway-env
-ft init . --fix --template symgateway-env       # re-executa a cadeia p/ consertar
+ft init meu-projeto --template symlabs   # init-default + symlabs
+ft init . --fix --template symlabs       # re-executa a cadeia p/ consertar
 ```
 
 `ft init --template` roda a cadeia `init-default` → template escolhido;
 `ft run --template` segue intocado (processos por ciclo) e recusa templates
-`kind: init` com instrução de uso. Credenciais nunca entram no template:
-os scripts geram/leem arquivos locais gitignored.
+`kind: init` com instrução de uso.
+
+A config de cada organização (workspace, caller key, admin key do gateway)
+vive em `environment/<org>.env` no repo do engine — **gitignored, nunca no
+bundle** (`environment/<org>.env.example` é o modelo versionado). O script
+`provision.sh` resolve a org pelo nome do template, lê essa config e falha
+alto se estiver ausente/incompleta. Credenciais nunca entram no template nem
+no repo do projeto; a admin key só registra o projeto e o `.claude/
+settings.local.json` (gitignored) recebe apenas a caller key na URL.
+`tecnospeed` acompanha o mesmo esqueleto, mas a org ainda não está
+provisionada: o template falha com instrução (`/ask devops`) até
+`environment/tecnospeed.env` ser preenchido.
 
 ### Diagnóstico e reparo
 
@@ -652,8 +665,9 @@ mudança transversal; nesses casos, abra outro ciclo com `feature`.
 ### Outros
 
 `base` fornece grafo mínimo; `ft-ui-prototype` cobre prototipagem de UI;
-`symgateway` demonstra integração externa opt-in; `fast-track-v2` preserva o
-processo histórico. Todos usam o mesmo comando de run e viram forks locais.
+`fast-track-v2` preserva o processo histórico. Todos usam o mesmo comando de
+run e viram forks locais. `symlabs` e `tecnospeed` são templates `kind: init`
+(ambiente por organização) — pertencem ao `ft init --template`, não ao run.
 
 ## Encerramento e artefatos
 

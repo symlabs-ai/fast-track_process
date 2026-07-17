@@ -1,0 +1,11 @@
+kind: init
+title: Organização Tecnospeed
+description: >
+  Inicializa um projeto no ambiente da organização Tecnospeed (estrutura
+  Poetry, .env de dev, CLAUDE.md/AGENTS.md e registro no SymGateway).
+  ATENÇÃO: a organização Tecnospeed ainda NÃO está provisionada no
+  SymGateway/SymVault — este template falha com instrução até que
+  environment/tecnospeed.env seja preenchido. Ver /ask devops.
+
+scripts:
+  - scripts/provision.sh

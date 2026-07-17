@@ -244,43 +244,58 @@ nodes:
 
 
 class TestSetupEnv:
-    def test_setup_env_runs_project_script(self, tmp_path, monkeypatch):
-        project = tmp_path / "project"
-        process = _write_local_process(
-            project,
-            "id: setup\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n",
-            name="setup",
+    """setup-env é deprecado: delega para a cadeia de init templates."""
+
+    def _write_catalog_init_template(self, catalog_root: Path, name: str) -> None:
+        scripts = catalog_root / name / "scripts"
+        scripts.mkdir(parents=True)
+        (catalog_root / name / "template.yml").write_text(
+            "kind: init\nscripts:\n  - scripts/register_gateway.sh\n",
+            encoding="utf-8",
         )
-        scripts = process.parent / "scripts"
-        scripts.mkdir()
-        marker = project / "configured.txt"
         script = scripts / "register_gateway.sh"
-        script.write_text(f"#!/usr/bin/env bash\nset -e\ntouch {marker}\n")
+        script.write_text(
+            "#!/usr/bin/env bash\nset -e\ntouch configured.txt\n",
+            encoding="utf-8",
+        )
         script.chmod(0o755)
-        monkeypatch.setenv("SYM_GATEWAY_PROJECT_KEY", "sk-sym_test")
+
+    def _point_catalog_to(self, monkeypatch, catalog_root: Path) -> None:
+        from ft.templates.catalog import TemplateCatalog
+        import ft.project.bootstrap as bootstrap_mod
+
+        monkeypatch.setattr(
+            bootstrap_mod,
+            "TemplateCatalog",
+            lambda root=None: TemplateCatalog(catalog_root),
+        )
+
+    def test_setup_env_delegates_to_catalog_init_template(self, tmp_path, monkeypatch):
+        catalog_root = tmp_path / "catalog"
+        self._write_catalog_init_template(catalog_root, "setup")
+        self._point_catalog_to(monkeypatch, catalog_root)
+        project = tmp_path / "project"
+        project.mkdir()
 
         cli_main.cmd_setup_env(Namespace(project=str(project), template="setup"))
 
-        assert marker.exists()
+        assert (project / "configured.txt").exists()
+        # A execução via setup-env registra o marker como um init aplicado.
+        from ft.project.init_scripts import read_init_marker
 
-    def test_setup_env_runs_relative_project_script_from_parent_cwd(self, tmp_path, monkeypatch):
+        assert "setup" in read_init_marker(project)
+
+    def test_setup_env_resolves_relative_project_from_parent_cwd(self, tmp_path, monkeypatch):
+        catalog_root = tmp_path / "catalog"
+        self._write_catalog_init_template(catalog_root, "setup")
+        self._point_catalog_to(monkeypatch, catalog_root)
         project = tmp_path / "project"
-        process = _write_local_process(
-            project,
-            "id: setup\nversion: '1'\nnodes:\n  - id: end\n    type: end\n    title: End\n",
-            name="setup",
-        )
-        scripts = process.parent / "scripts"
-        scripts.mkdir()
-        script = scripts / "register_gateway.sh"
-        script.write_text("#!/usr/bin/env bash\nset -e\ntouch configured-from-cwd.txt\n")
-        script.chmod(0o755)
+        project.mkdir()
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("SYM_GATEWAY_PROJECT_KEY", "sk-sym_test")
 
         cli_main.cmd_setup_env(Namespace(project="project", template="setup"))
 
-        assert (project / "configured-from-cwd.txt").exists()
+        assert (project / "configured.txt").exists()
 
 
 class TestActiveRunDetection:

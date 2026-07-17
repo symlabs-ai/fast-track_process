@@ -1,6 +1,0 @@
-run_mode: isolated
-
-hooks:
-  on_init:
-    - scripts/setup_env.sh
-    - scripts/register_gateway.sh

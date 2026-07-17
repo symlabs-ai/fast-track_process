@@ -1,0 +1,15 @@
+kind: init
+title: Organização Symlabs
+description: >
+  Inicializa um projeto no ambiente da organização Symlabs: estrutura
+  Poetry (src/<nome>/, docs/), .env de dev, CLAUDE.md/AGENTS.md e registro
+  no workspace Symlabs [DEV] do SymGateway (projeto + caller key). Roda uma
+  única vez via `ft init --template symlabs`; `ft init --fix --template
+  symlabs` re-executa para consertar.
+
+# A configuração da organização (workspace, caller key, admin key do gateway)
+# vive em `environment/symlabs.env` no repo do engine — gitignored, nunca no
+# bundle. O script resolve a org pelo nome do template e falha alto se a
+# config estiver ausente. Ver environment/symlabs.env.example.
+scripts:
+  - scripts/provision.sh

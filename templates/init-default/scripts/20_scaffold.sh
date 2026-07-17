@@ -9,6 +9,7 @@ if [ ! -e .gitignore ]; then
 .env
 .env.local
 .env.*.local
+.claude/settings.local.json
 
 # Ambientes e artefatos de build.
 .venv/

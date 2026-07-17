@@ -171,10 +171,20 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 | `mvp-builder` | Processo completo recomendado para um MVP |
 | `fast-track-v2` | Processo histórico V2 |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
-| `symgateway` | Ambiente com integração SymGateway opt-in |
 
-Integrações externas pertencem ao processo local. O engine chama scripts apenas
-ao lado do template materializado, em `.ft/process/<nome>/scripts/`.
+Templates de inicialização (`kind: init`) — usados por `ft init --template`,
+recusados pelo run:
+
+| Template | Uso |
+|---|---|
+| `init-default` | Base de todo projeto: git, .gitignore, .env.example, commit inicial |
+| `symlabs` | Ambiente da org Symlabs: Poetry/src, .env, CLAUDE.md, registro no SymGateway |
+| `tecnospeed` | Ambiente da org Tecnospeed (mesmo shape; org ainda não provisionada) |
+
+Integrações externas pertencem ao processo local: nos runs, o engine chama
+scripts apenas ao lado do template materializado
+(`.ft/process/<nome>/scripts/`); no init, apenas os scripts declarados no
+`template.yml` de um template `kind: init`.
 
 ## Migração
 

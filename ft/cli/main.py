@@ -242,41 +242,6 @@ def _guard_engine_repo(root: Path) -> None:
         sys.exit(1)
 
 
-def _run_environment_script(
-    project_root: Path,
-    template: str,
-    script: str,
-) -> bool:
-    """Run an optional script adjacent to one explicit local template."""
-    import subprocess
-
-    project_root = project_root.resolve()
-    process_path = resolve_project_process(project_root, template)
-    if process_path is None:
-        return False
-    script_path = process_path.parent / "scripts" / script
-    if not script_path.exists():
-        return False
-
-    result = subprocess.run(
-        [str(script_path)],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    output = (result.stdout or result.stderr).strip()
-    if output:
-        print(output)
-    if result.returncode != 0:
-        print(
-            f"  ERRO: {script_path.relative_to(project_root)} falhou "
-            f"com exit code {result.returncode}"
-        )
-        sys.exit(result.returncode)
-    return True
-
-
 def find_project_root() -> Path:
     """Encontra a raiz do projeto subindo até o layout .ft versionado."""
     current = Path.cwd()
@@ -823,7 +788,7 @@ def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
         else:
             print(_ui.fail(f"API health check: {code} — {body}"))
             if code == 403:
-                print("    → Acesso negado. Verifique credenciais ou rode: ft setup-env")
+                print("    → Acesso negado. Verifique credenciais ou rode: ft init --fix --template <org>")
             elif code == 405:
                 print("    → Rota inválida. Verifique ANTHROPIC_BASE_URL.")
             raise SystemExit(1)
@@ -3750,27 +3715,31 @@ def cmd_cancel(args):
 
 
 def cmd_setup_env(args):
-    """Executa o script opcional de provisionamento do ambiente do projeto."""
-    import os
-    key = os.environ.get("SYM_GATEWAY_PROJECT_KEY")
-    if not key:
-        print("  ✗ SYM_GATEWAY_PROJECT_KEY não definida\n")
-        print("    Exporte antes de rodar:")
-        print("      export SYM_GATEWAY_PROJECT_KEY=sk-sym_...")
-        print("      export SYM_GATEWAY_ADMIN_KEY=sk-sym_...  # opcional")
-        sys.exit(1)
+    """[DEPRECADO] Delegado para a cadeia de init templates (kind: init)."""
+    from ft.engine import ui as _ui
+    from ft.project.bootstrap import BootstrapError, load_init_descriptor
+    from ft.project.init_scripts import (
+        InitScriptError,
+        record_init_template,
+        run_init_template,
+    )
+
+    print(_ui.warn(
+        "ft setup-env está deprecado; use ft init --template <T> "
+        "(ou ft init --fix --template <T> para re-executar)."
+    ))
     project_root = Path(args.project).resolve() if args.project else find_project_root()
-    if not _run_environment_script(
-        project_root,
-        str(args.template),
-        "register_gateway.sh",
-    ):
-        print(
-            "  ✗ register_gateway.sh não encontrado ao lado do template "
-            f"{args.template}"
-        )
-        print("    Materialize-o primeiro: ft run . --template symgateway")
+    try:
+        descriptor = load_init_descriptor(str(args.template))
+        results = run_init_template(descriptor, project_root, mode="fix")
+    except (BootstrapError, InitScriptError) as exc:
+        print(_ui.fail(str(exc)))
         sys.exit(1)
+    for result in results:
+        for line in result.output.splitlines():
+            if line.strip():
+                print(f"  ✓ [{descriptor.name}] {line.strip()}")
+    record_init_template(project_root, descriptor)
     print(f"  Projeto: {project_root}")
 
 
@@ -4928,10 +4897,10 @@ def main():
     ca.add_argument("reason", help="Motivo do cancelamento (entre aspas)")
     ca.add_argument("--cycle", help="Ciclo específico a cancelar")
 
-    # setup-env
+    # setup-env (deprecado — use ft init --template / --fix --template)
     se = sub.add_parser(
         "setup-env",
-        help="Executar register_gateway.sh ao lado de um template local",
+        help="[deprecado] Executar um template de init; use ft init --template",
     )
     se.add_argument("--project", help="Diretório do projeto (default: CWD ou raiz detectada)")
     se.add_argument("--template", "-t", required=True, metavar="TEMPLATE")

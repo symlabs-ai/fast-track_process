@@ -119,7 +119,15 @@ Templates principais:
 | `mvp-builder` | Processo completo recomendado para construir um MVP |
 | `fast-track-v2` | Processo histórico V2 |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
-| `symgateway` | Ambiente com integração SymGateway opt-in |
+
+Templates de inicialização (`kind: init`) — usados por `ft init --template`,
+recusados pelo run:
+
+| Template | Uso |
+|---|---|
+| `init-default` | Base de todo projeto: git, .gitignore, .env.example, commit inicial |
+| `symlabs` | Ambiente da org Symlabs: Poetry/src, .env, CLAUDE.md, registro no SymGateway |
+| `tecnospeed` | Ambiente da org Tecnospeed (mesmo shape; org ainda não provisionada) |
 
 Cada template declara sua política de entrada. `--request` e `--input` são
 formas genéricas; o engine recusa combinações ausentes ou incompatíveis antes de

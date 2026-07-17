@@ -25,6 +25,8 @@ __pycache__/
 # Environment — configuração local (cada usuário tem o seu, não commitar)
 environment/gateway.md
 environment/*.local.md
+# Credenciais das organizações (symlabs.env, tecnospeed.env) — .example é commitado
+environment/*.env
 .claude/settings.json
 .claude/settings.local.json
 .claude/worktrees/

@@ -4,6 +4,18 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.15.4] - 2026-07-17
+
+### Fix: registro no gateway usa Authorization: Bearer + READMEs dos templates
+- `provision.sh` (symlabs/tecnospeed): os endpoints de gestão do SymGateway
+  (`/_api/projects`, link da caller) exigem `Authorization: Bearer`, não
+  `x-api-key` — corrige 401 silencioso que registrava o projeto pela metade
+  (roteamento funcionava, mas sem atribuição por projeto). Erros de auth
+  (401/403) agora são visíveis. Validado E2E: `ft init plugmessage --template
+  tecnospeed` registrou o projeto e linkou a caller no gateway real.
+- READMEs em `templates/symlabs` e `templates/tecnospeed` documentando o
+  processo (cadeia init, scaffold, config em `environment/<org>.env`, secrets).
+
 ## [v0.15.3] - 2026-07-17
 
 ### Templates de organização `symlabs` e `tecnospeed` (kind: init)

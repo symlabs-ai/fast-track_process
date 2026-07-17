@@ -138,8 +138,9 @@ EOF
 echo "  ✓ criado .claude/settings.local.json (roteamento ${PROVIDER_PATH})"
 
 # Registro no gateway (best-effort — não bloqueia se a API oscilar).
+# Endpoints de gestão do gateway exigem Authorization: Bearer (get_current_api_key).
 API="${GATEWAY_URL%/}/_api"
-auth=(-H "x-api-key: ${ADMIN_KEY}" -H "X-Workspace-ID: ${WORKSPACE_ID}")
+auth=(-H "Authorization: Bearer ${ADMIN_KEY}" -H "X-Workspace-ID: ${WORKSPACE_ID}")
 
 # Extrai um campo do projeto de `slug` a partir do JSON da lista. Usa python3
 # (ambiente Python garantido); sem ele, degrada para vazio sem quebrar.
@@ -183,8 +184,9 @@ case "$code" in
     fi
     echo "  → SymGateway: projeto '${SLUG}' já existe — ok"
     ;;
+  401|403) echo "  ✗ SymGateway: sem permissão (HTTP ${code}) — ADMIN_KEY inválida; projeto NÃO registrado" >&2 ;;
   000)     echo "  ⚠ SymGateway: sem resposta da API — verifique conectividade" ;;
-  *)       echo "  ⚠ SymGateway: registro retornou HTTP ${code} — continuando" ;;
+  *)       echo "  ⚠ SymGateway: registro retornou HTTP ${code} — projeto pode não ter sido registrado" ;;
 esac
 
 # Linka a caller key existente ao projeto (se CALLER_KEY_ID informado).
@@ -200,6 +202,7 @@ if [ -n "$CALLER_KEY_ID" ]; then
     case "$lcode" in
       200|201) echo "  ✓ SymGateway: caller linkada ao projeto" ;;
       409)     echo "  → SymGateway: caller já linkada — ok" ;;
+      401|403) echo "  ✗ SymGateway: sem permissão para linkar caller (HTTP ${lcode})" >&2 ;;
       *)       echo "  ⚠ SymGateway: link da caller retornou HTTP ${lcode}" ;;
     esac
   fi

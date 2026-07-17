@@ -4,7 +4,7 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [Unreleased]
+## [v0.15.3] - 2026-07-17
 
 ### Templates de organização `symlabs` e `tecnospeed` (kind: init)
 - O template `symgateway` (que era o processo `base` duplicado + scripts de

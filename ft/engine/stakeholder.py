@@ -198,8 +198,14 @@ def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
             continue
 
         lines = content.splitlines()
-        title_line = next((l for l in lines if l.startswith("# ")), path.stem)
-        nota_line = next((l for l in lines if "Nota:" in l or "nota" in l.lower()), "")
+        title_line = next(
+            (line for line in lines if line.startswith("# ")),
+            path.stem,
+        )
+        nota_line = next(
+            (line for line in lines if "Nota:" in line or "nota" in line.lower()),
+            "",
+        )
 
         # Extrair APENAS seções genéricas (lições de processo, não detalhes de projeto)
         # "O que falhou" e "Causa Raiz" são específicos de projeto — não injetar

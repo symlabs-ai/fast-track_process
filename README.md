@@ -3,7 +3,8 @@
 Motor determinístico de processos para solo dev + AI. O pacote se chama
 `ft-engine`, mas o comando instalado é `ft`.
 
-Versão atual: **0.13.6**.
+A versão instalada é exibida por `ft --version`; a fonte canônica do pacote é
+[`ft/__about__.py`](ft/__about__.py).
 
 ## O que é
 
@@ -25,8 +26,13 @@ explícita com `FT_ALLOW_ENGINE_REPO=1`.
 
 ## Instalação local
 
+Plataforma suportada: Linux/POSIX, Python 3.11 ou 3.12, Git e Bash. macOS é
+best-effort; Windows nativo não é suportado (use WSL2). O sandbox de filesystem
+do OpenCode também requer `bwrap` no Linux.
+
 ```bash
 pip install -e .
+ft --version
 ft --help
 ```
 
@@ -44,9 +50,11 @@ git add -A && git commit -m "docs: seed product context"
 ft run . --template mvp-builder --auto
 ```
 
-`ft init` não recebe opções de seleção de template, não copia processo e não
-semeia `docs/` ou `src/`. Ele prepara `.ft/`, o manifesto, ignores e o
-repositório Git. Repeti-lo em um workspace saudável é idempotente.
+`ft init` não seleciona nem copia template de **processo** e não semeia `docs/`
+ou `src/`. A opção `--template` existe apenas para encadear um template de
+inicialização (`kind: init`) depois da base comum. O comando prepara `.ft/`, o
+manifesto, ignores e o repositório Git. Repeti-lo em um workspace saudável é
+idempotente.
 
 ```bash
 ft init --check   # diagnóstico somente leitura
@@ -71,7 +79,9 @@ o mesmo entrypoint:
 
 ```bash
 ft run . --template mvp-builder --auto
+ft run . --template mvp-builder-fast --auto --parallel
 ft run . --template feature --request "Adicionar busca por telefone" --codex
+ft run . --template feature-fast --request "Adicionar busca por telefone" --codex
 ft run . --template feature --input demanda.md --claude
 ft run . --template bug --request "Terminal duplica o eco do input" --codex
 ft run . --template tweak --request "Mudar o botão Salvar para azul" --codex
@@ -166,11 +176,15 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 |---|---|
 | `base` | Processo mínimo para composição local |
 | `feature` | Evolução incremental de uma capacidade existente |
+| `feature-fast` | Mesmo contrato de `feature`, com plano interno e sessões persistentes por sprint |
 | `bug` | Correção focal com regressão RED→GREEN |
 | `tweak` | Mudança pequena e de baixo risco |
 | `mvp-builder` | Processo completo recomendado para um MVP |
+| `mvp-builder-fast` | Variante opt-in com plano interno, sessões por sprint e macro-nodes seguros |
 | `fast-track-v2` | Processo histórico V2 |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
+| `fastfy` | Adoção de repositório legado na base canônica Fast Track |
+| `material_design_pwa` | Evolução de UI existente para Material Design 3 e PWA |
 
 Templates de inicialização (`kind: init`) — usados por `ft init --template`,
 recusados pelo run:
@@ -179,7 +193,7 @@ recusados pelo run:
 |---|---|
 | `init-default` | Base de todo projeto: git, .gitignore, .env.example, commit inicial |
 | `symlabs` | Ambiente da org Symlabs: Poetry/src, .env, CLAUDE.md, registro no SymGateway |
-| `tecnospeed` | Ambiente da org Tecnospeed (mesmo shape; org ainda não provisionada) |
+| `tecnospeed` | Ambiente da org Tecnospeed; exige credenciais locais emitidas pelo DevOps |
 
 Integrações externas pertencem ao processo local: nos runs, o engine chama
 scripts apenas ao lado do template materializado
@@ -211,5 +225,7 @@ qualquer fonte.
 ## Validação local
 
 ```bash
+python -m ruff check ft tests
 python -m pytest -q
+python -m pip wheel --no-deps --wheel-dir dist .
 ```

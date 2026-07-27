@@ -15,6 +15,7 @@ import sys
 
 import yaml
 
+from ft.cli.fix_command import execute_fix
 from ft.engine import paths
 from ft.engine.layout import (
     canonical_project_root,
@@ -811,91 +812,6 @@ def _validate_cycle_name(name: str | None) -> str | None:
     return name
 
 
-def _single_fix_target_path(instruction: str, root: Path) -> str | None:
-    """Extrai um path relativo unico citado numa instrucao de `ft fix`.
-
-    Usado para OpenCode operar em modo capture/file-content quando o fix mira
-    um arquivo especifico, evitando chamadas nativas de Edit/Write instaveis.
-    """
-    candidates: list[str] = []
-    pattern = r"(?<![A-Za-z0-9_.])((?:project|src|tests|docs|\.ft/process)/(?:[A-Za-z0-9_.@%+=-]+/)*[A-Za-z0-9_.@%+=-]+)"
-    for match in re.finditer(pattern, instruction):
-        rel = match.group(1).strip().strip("'\"`.,;:)")
-        path = Path(rel)
-        if path.is_absolute() or ".." in path.parts:
-            continue
-        target = (root / path).resolve()
-        try:
-            target.relative_to(root.resolve())
-        except ValueError:
-            continue
-        if target.exists() and target.is_file():
-            candidates.append(path.as_posix())
-    unique = sorted(set(candidates))
-    return unique[0] if len(unique) == 1 else None
-
-
-def _postprocess_opencode_fix_capture(runner, capture_path: str | None) -> str | None:
-    """Valida artefato capturado por OpenCode e aplica reparos determinísticos conhecidos."""
-    if not capture_path:
-        return None
-    root = Path(getattr(runner, "_work_dir", runner.project_root))
-    target = root / capture_path
-    if not target.exists() or target.suffix != ".py":
-        return None
-
-    import py_compile
-
-    try:
-        py_compile.compile(str(target), doraise=True)
-        if capture_path == "project/tests/e2e/test_navigation.py" and hasattr(runner, "_write_opencode_e2e_test"):
-            text = target.read_text(encoding="utf-8", errors="ignore")
-            if "outerHTML" in text and "arena-board" in text:
-                runner._write_opencode_e2e_test(root)
-                py_compile.compile(str(target), doraise=True)
-                return "E2E determinístico regravado: canvas agora compara toDataURL(), não outerHTML"
-        return None
-    except py_compile.PyCompileError as exc:
-        if capture_path == "project/tests/e2e/test_navigation.py" and hasattr(runner, "_write_opencode_e2e_test"):
-            runner._write_opencode_e2e_test(root)
-            py_compile.compile(str(target), doraise=True)
-            return f"arquivo Python inválido gerado pelo OpenCode; E2E determinístico regravado ({exc.msg})"
-        raise
-
-
-def _try_apply_opencode_arena_board_fix(runner, instruction: str) -> str | None:
-    """Repair estreito para o contrato E2E de arena canvas em produtos de jogo."""
-    norm = instruction.lower()
-    if "arena-board" not in norm or "canvas" not in norm:
-        return None
-    root = Path(getattr(runner, "_work_dir", runner.project_root))
-    changed: list[str] = []
-    for rel in ("project/frontend/src/main.js", "project/frontend/dist/src/main.js"):
-        target = root / rel
-        if not target.exists() or not target.is_file():
-            continue
-        text = target.read_text(encoding="utf-8", errors="ignore")
-        if 'data-testid="arena-board"' in text:
-            continue
-        updated = text.replace(
-            '<canvas id="arena-canvas" ',
-            '<canvas id="arena-canvas" data-testid="arena-board" ',
-            1,
-        )
-        if updated == text:
-            updated = text.replace(
-                '<canvas id="arena-canvas"',
-                '<canvas id="arena-canvas" data-testid="arena-board"',
-                1,
-            )
-        if updated != text:
-            target.write_text(updated, encoding="utf-8")
-            changed.append(rel)
-    if not changed:
-        return None
-    return "arena canvas atualizado com data-testid=arena-board em " + ", ".join(changed)
-
-
 def _worktree_root_from_state(state_path: Path) -> Path | None:
     """Se o state mora dentro de um worktree, retorna o root desse worktree."""
     # state_path é algo como ~/.ft/worktrees/<proj>/cycle-NN/state/engine_state.yml
@@ -915,6 +831,35 @@ def _worktree_root_from_state(state_path: Path) -> Path | None:
     ):
         return candidate
     return None
+
+
+def _completed_process_evolution_allows_digest_change(
+    state_payload: dict,
+) -> bool:
+    """Aceita o fork evoluído somente depois de o ciclo terminar com sucesso.
+
+    Durante o run, o digest continua imutável. O node canônico de
+    meta-melhoria, porém, pode editar o próprio fork local como último passo;
+    nesse caso o estado preserva o digest inicial para auditoria e o close
+    arquiva separadamente o digest final.
+    """
+    terminal = str(state_payload.get("node_status", "")).lower() in {
+        "done",
+        "completed",
+    }
+    completed = state_payload.get("completed_nodes")
+    gate_log = state_payload.get("gate_log")
+    if not terminal or state_payload.get("current_node") is not None:
+        return False
+    if not isinstance(completed, list) or not isinstance(gate_log, dict):
+        return False
+    evolution_node = "ft.handoff.05.process_evolve"
+    return (
+        evolution_node in completed
+        and "ft.end" in completed
+        and gate_log.get(evolution_node) == "PASS"
+        and gate_log.get("ft.end") == "PASS"
+    )
 
 
 def get_runner(
@@ -958,6 +903,9 @@ def get_runner(
                     )
                 )
                 and not process_digest_matches(process_path, pinned_digest)
+                and not _completed_process_evolution_allows_digest_change(
+                    state_payload
+                )
             ):
                 raise ValueError(
                     f"processo local do ciclo divergiu do digest fixado: {pinned_path}"
@@ -986,10 +934,9 @@ def cmd_init(args):
     from ft.project import BootstrapError, bootstrap_project, check_project, repair_project
     from ft.project.bootstrap import DEFAULT_INIT_TEMPLATE, load_init_descriptor
     from ft.project.init_scripts import (
+        execute_and_record_init_template,
         InitScriptError,
         read_init_marker,
-        record_init_template,
-        run_init_template,
     )
 
     raw_target = Path(getattr(args, "name", None) or ".").expanduser()
@@ -1013,9 +960,13 @@ def cmd_init(args):
 
     def apply_init_template(name: str, *, mode: str, adopt: bool) -> None:
         descriptor = load_init_descriptor(name)
-        results = run_init_template(descriptor, root, mode=mode, adopt=adopt)
+        results = execute_and_record_init_template(
+            descriptor,
+            root,
+            mode=mode,
+            adopt=adopt,
+        )
         print_script_actions(descriptor.name, results)
-        record_init_template(root, descriptor)
 
     if getattr(args, "check", False):
         result = check_project(root)
@@ -1138,10 +1089,6 @@ def cmd_continue(args):
     # done chamava init_state e recomeçava tudo).
     if _cycle_complete(state):
         from ft.engine import ui as _ui
-        if runner.audit_completed_cycle():
-            print(_ui.fail("Ciclo concluído reaberto: evidência final contradiz o PRD."))
-            print(_ui.info("Estado atual: BLOCKED. Corrija o processo/produto pelo fluxo ft antes de fechar novamente."))
-            return
         template = getattr(state, "template_id", None) or "<template>"
         print(_ui.warn(
             "Ciclo já concluído — nada a retomar. Novo ciclo: "
@@ -1500,6 +1447,13 @@ def _cycle_completion_report(runner) -> list[str]:
     engine = state.llm_engine or "?"
     model = state.llm_model or ("pgx/zai-org_glm-4.7-flash" if engine == "opencode" else "default")
     llm_calls = metrics.get("llm_calls", "?")
+    session_count = sum(
+        1
+        for record in (state.llm_sessions or {}).values()
+        if isinstance(record, dict) and record.get("established")
+    )
+    session_resumes = metrics.get("llm_session_resumes", 0)
+    session_recoveries = metrics.get("llm_session_recoveries", 0)
     usage_summary = metrics.get("llm_usage") if isinstance(metrics.get("llm_usage"), dict) else None
     if not usage_summary:
         usage_summary = summarize_llm_usage(
@@ -1530,6 +1484,10 @@ def _cycle_completion_report(runner) -> list[str]:
         f"  Duração:    {duration}",
         f"  LLM:        {engine} ({model})",
         f"  LLM calls:  {llm_calls}",
+        (
+            f"  Sessões:    {session_count} estabelecidas; "
+            f"{session_resumes} retomadas; {session_recoveries} reidratadas"
+        ),
         *usage_lines,
         f"  Testar em:  {url}",
         f"  Backlog:    {backlog_line}",
@@ -3158,7 +3116,7 @@ def cmd_lint_process(args):
         "WARNINGS — reporte como warning:\n"
         "- Nomes de screenshots muito específicos do projeto (ex: 'graph.png', 'drawer-open.png')\n\n"
         "ACEITO — NÃO reporte:\n"
-        "- Caminhos genéricos de artefatos (docs/PRD.md, docs/ui_guidelines.md, docs/tech_stack.md)\n"
+        "- Caminhos genéricos de artefatos (docs/PRD.md, docs/ui_guidelines.md, docs/TECH_STACK.md)\n"
         "- Validators genéricos (file_exists, has_sections, command_succeeds)\n"
         "- Estrutura de pastas genérica (frontend/src/, docs/screenshots/, frontend/dist/)\n"
         "- IDs de nodes, títulos descritivos genéricos, nomes de sprints\n"
@@ -3284,208 +3242,19 @@ def cmd_retry(args):
 
 
 def cmd_fix(args):
-    """Injeta instrução de correção e retoma o ciclo (on_fail) ou delega ao LLM (blocked)."""
-    from ft.engine import ui as _ui
-
-    instruction = args.instruction
-    runner = get_runner(llm_engine=resolve_llm_engine(args),
-                        llm_model=resolve_llm_model(args),
-                        llm_effort=resolve_llm_effort(args),
-                        verbose=getattr(args, "verbose", False),
-                        cycle=getattr(args, "cycle", None))
+    """Select a cycle runner and execute the correction application service."""
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     if not _ensure_runtime_selected(args, runner):
         return
+    execute_fix(args, runner)
 
-    # Modo 1: pending_fix (on_fail event) — injeta instrução e volta ao goto
-    if runner.apply_fix(instruction):
-        mode = "mvp" if getattr(args, "auto", False) else "step"
-        runner.run(mode=mode)
-        return
 
-    # Modo 2: blocked genérico — delega ao LLM para corrigir arquivos
-    from ft.engine.delegate import delegate_to_llm
-    root = runner.project_root
-    state_path = runner.state_mgr.path
-    blocked_context = ""
-    if state_path.exists():
-        state = runner.state_mgr.load()
-        if state.blocked_reason:
-            blocked_context = (
-                f"\n\nCONTEXTO: O processo parou no node '{state.current_node}' com o erro:\n"
-                f"{state.blocked_reason}\n"
-            )
-
-    prompt = (
-        f"O usuário pediu a seguinte correção:\n\n"
-        f"{instruction}\n"
-        f"{blocked_context}\n"
-        f"Analise o problema, faça as alterações necessárias nos arquivos do projeto, "
-        f"e diga DONE quando terminar."
-    )
-
-    state = runner.state_mgr.load()
-    fix_node = None
-    if state and state.current_node and state.current_node in runner.graph.nodes:
-        fix_node = runner.graph.get_node(state.current_node)
-    fix_selection = runner._capture_delegation_llm_selection(
-        state,
-        node=fix_node,
-    )
-    fix_engine = fix_selection.engine
-    fix_model = fix_selection.model
-    fix_effort = fix_selection.effort
-    fix_allowed_paths = ["project/", "src/", "tests/", "docs/", "main.py", "app.py", "server.py",
-                         "frontend/", ".ft/process/"]
-    opencode_capture_output_path = None
-    if fix_engine == "opencode" and fix_node is not None:
-        outputs = [str(output) for output in getattr(fix_node, "outputs", []) if not str(output).endswith("/")]
-        if getattr(fix_node, "type", None) in {"discovery", "document", "retro"} and len(outputs) == 1:
-            opencode_capture_output_path = outputs[0]
-            fix_allowed_paths = [opencode_capture_output_path]
-    elif fix_engine == "opencode":
-        inferred_path = _single_fix_target_path(instruction, Path(root))
-        if inferred_path:
-            opencode_capture_output_path = inferred_path
-            fix_allowed_paths = [inferred_path]
-
-    if fix_engine == "opencode":
-        repair_note = _try_apply_opencode_arena_board_fix(runner, instruction)
-        if repair_note:
-            print(_ui.success("Correção aplicada"))
-            print(_ui.warn(repair_note))
-            return
-
-    if opencode_capture_output_path:
-        target = Path(root) / opencode_capture_output_path
-        if target.exists() and target.is_file():
-            current = target.read_text(encoding="utf-8", errors="ignore")
-            prompt += (
-                f"\n\nARQUIVO ALVO: {opencode_capture_output_path}\n"
-                "CONTEUDO ATUAL ENTRE MARCADORES:\n"
-                "<<<FT_CURRENT_FILE>>>\n"
-                f"{current.rstrip()}\n"
-                "<<<FT_END_CURRENT_FILE>>>\n\n"
-                "Retorne o conteudo completo atualizado desse unico arquivo. "
-                "Nao retorne diff, explicacao, markdown fence ou DONE."
-            )
-        if opencode_capture_output_path.startswith("project/tests/e2e/"):
-            frontend_source = Path(root) / "project" / "frontend" / "src" / "main.js"
-            if frontend_source.exists() and frontend_source.is_file():
-                prompt += (
-                    "\n\nCONTEXTO DA UI ATUAL (somente leitura): project/frontend/src/main.js\n"
-                    "<<<FT_UI_SOURCE>>>\n"
-                    f"{frontend_source.read_text(encoding='utf-8', errors='ignore').rstrip()}\n"
-                    "<<<FT_END_UI_SOURCE>>>"
-                )
-
-    if fix_engine == "opencode" and opencode_capture_output_path == "project/tests/e2e/test_navigation.py":
-        try:
-            pre_note = _postprocess_opencode_fix_capture(runner, opencode_capture_output_path)
-        except Exception:
-            pre_note = None
-        if pre_note and state and state.node_status != "blocked":
-            print(_ui.success("Correção aplicada"))
-            print(_ui.warn(pre_note))
-            print(_ui.info("Para continuar o processo: ft continue --auto"))
-            return
-
-    print(_ui.info(f"Aplicando correção: {instruction}"))
-    # Observabilidade: o fix genérico delega fora do ciclo de vida do node.
-    # Registrar o log no lugar padrão e no state permite que ft status/ft log
-    # mostrem a delegação em andamento (última atividade e LLM log ativo).
-    fix_log_path = runner._build_llm_log_path(
-        state.current_node if state and state.current_node else "fix",
-        "fix",
-        engine=fix_engine,
-    )
-    fix_log_rel = runner._display_path(fix_log_path)
-    state.active_llm_log = fix_log_rel
-    state.last_llm_log = fix_log_rel
-    runner.state_mgr.save()
-    fix_kwargs = dict(
-        task=prompt,
-        project_root=str(root),
-        allowed_paths=fix_allowed_paths,
-        llm_engine=fix_engine,
-        llm_model=fix_model,
-        llm_effort=fix_effort,
-        log_path=str(fix_log_path),
-    )
-    if opencode_capture_output_path:
-        fix_kwargs["opencode_capture_output_path"] = opencode_capture_output_path
-    try:
-        result = delegate_to_llm(**fix_kwargs)
-    finally:
-        state = runner.state_mgr.load()
-        runner._clear_active_llm_log(state)
-
-    if result.success:
-        postprocess_note = None
-        if fix_engine == "opencode" and opencode_capture_output_path:
-            try:
-                postprocess_note = _postprocess_opencode_fix_capture(runner, opencode_capture_output_path)
-            except Exception as exc:
-                print(_ui.fail(f"Correção aplicada, mas artefato capturado é inválido: {exc}"))
-                return
-        print(_ui.success("Correção aplicada"))
-        if postprocess_note:
-            print(_ui.warn(postprocess_note))
-        state = runner.state_mgr.load()
-        if state.node_status == "blocked":
-            mode = "mvp" if getattr(args, "auto", False) else "step"
-            node_id = state.current_node
-            node = runner.graph.get_node(node_id) if node_id and node_id in runner.graph.nodes else None
-            if node is not None:
-                from ft.engine.runner import run_validators
-
-                print(_ui.info("Validando correção..."))
-                validation = run_validators(
-                    node,
-                    runner.project_root,
-                    state_dir=str(runner.state_mgr.path.parent),
-                    work_dir=runner._run_dir,
-                )
-                runner._print_validation(validation)
-                if validation.passed:
-                    for output_path in node.outputs:
-                        runner.state_mgr.record_artifact(Path(output_path).stem, output_path)
-                    runner._maybe_auto_commit(node)
-                    runner._record_node_summary(
-                        node,
-                        "NODE_SUMMARY:\n"
-                        "- fiz: correção via ft fix\n"
-                        "- verificado: validators do node passaram\n"
-                        f"- instrução: {instruction}",
-                    )
-                    if node.requires_approval and not runner._auto_approve:
-                        fixed_state = runner.state_mgr.load()
-                        fixed_state.node_status = "ready"
-                        fixed_state.blocked_reason = None
-                        runner.state_mgr.save()
-                        print(_ui.awaiting_approval(auto=runner._auto_approve))
-                        runner.state_mgr.set_pending_approval(node.id)
-                        return
-
-                    next_id = runner.graph.resolve_next(node.id)
-                    runner._advance_state(node.id, next_id)
-                    print(_ui.step_pass(next_id))
-                    if getattr(args, "auto", False):
-                        runner.run(mode="mvp")
-                    return
-
-                print(_ui.warn("Correção aplicada, mas validators ainda falham — reexecutando node."))
-
-            state = runner.state_mgr.load()
-            state.node_status = "running"
-            state.blocked_reason = None
-            state.last_approval_message = instruction
-            runner.state_mgr.save()
-            print(_ui.info("Estado desbloqueado — continuando..."))
-            runner.run(mode=mode)
-        else:
-            print(_ui.info("Para continuar o processo: ft continue --auto"))
-    else:
-        print(_ui.fail(f"LLM não conseguiu aplicar: {result.output[:300]}"))
 
 
 def _cmd_abort_locked_body(args):
@@ -3719,9 +3488,8 @@ def cmd_setup_env(args):
     from ft.engine import ui as _ui
     from ft.project.bootstrap import BootstrapError, load_init_descriptor
     from ft.project.init_scripts import (
+        execute_and_record_init_template,
         InitScriptError,
-        record_init_template,
-        run_init_template,
     )
 
     print(_ui.warn(
@@ -3731,7 +3499,11 @@ def cmd_setup_env(args):
     project_root = Path(args.project).resolve() if args.project else find_project_root()
     try:
         descriptor = load_init_descriptor(str(args.template))
-        results = run_init_template(descriptor, project_root, mode="fix")
+        results = execute_and_record_init_template(
+            descriptor,
+            project_root,
+            mode="fix",
+        )
     except (BootstrapError, InitScriptError) as exc:
         print(_ui.fail(str(exc)))
         sys.exit(1)
@@ -3739,7 +3511,6 @@ def cmd_setup_env(args):
         for line in result.output.splitlines():
             if line.strip():
                 print(f"  ✓ [{descriptor.name}] {line.strip()}")
-    record_init_template(project_root, descriptor)
     print(f"  Projeto: {project_root}")
 
 
@@ -4588,9 +4359,16 @@ def cmd_run(args):
 
 
 def main():
+    from ft import __version__
+
     parser = argparse.ArgumentParser(
         prog="ft",
         description="ft engine — motor deterministico de processos"
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Modo verboso: mostra output do LLM no terminal")

@@ -164,6 +164,11 @@ class EngineState:
     exploration_log: list[str] = field(default_factory=list)  # requests feitos em modo exploração
     # Snapshot compacto por episódio nomeado; histórico detalhado vive no trace.
     llm_episodes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Conversas persistentes opt-in, indexadas por sprint/lane. IDs pertencem
+    # aos providers e não contêm credenciais.
+    llm_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Metadados do plano interno; o payload completo vive ao lado do state.
+    llm_execution_plan: dict[str, Any] | None = None
     parallel_enabled: bool = False  # ft run/continue --parallel: honrar parallel_group dos nodes
     parallel_max_slots: int = 2  # worktrees simultâneos no fan-out de um parallel_group
     metrics: dict[str, Any] = field(default_factory=lambda: {
@@ -247,6 +252,8 @@ class StateManager:
                 pending_fix=raw.get("pending_fix"),
                 exploration_log=raw.get("exploration_log", []),
                 llm_episodes=raw.get("llm_episodes", {}),
+                llm_sessions=raw.get("llm_sessions", {}),
+                llm_execution_plan=raw.get("llm_execution_plan"),
                 parallel_enabled=bool(raw.get("parallel_enabled", False)),
                 parallel_max_slots=int(raw.get("parallel_max_slots", 2) or 2),
                 metrics=raw.get("metrics", EngineState().metrics),
@@ -356,6 +363,8 @@ class StateManager:
             "pending_fix": self._state.pending_fix,
             "exploration_log": self._state.exploration_log,
             "llm_episodes": self._state.llm_episodes,
+            "llm_sessions": self._state.llm_sessions,
+            "llm_execution_plan": self._state.llm_execution_plan,
             "parallel_enabled": self._state.parallel_enabled,
             "parallel_max_slots": self._state.parallel_max_slots,
             "metrics": self._state.metrics,

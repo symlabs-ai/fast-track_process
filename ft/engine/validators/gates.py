@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ft.engine import paths
+from ft.engine.artifact_paths import resolve_tech_stack_path
 
 from ft.engine.validators.artifacts import (
     file_exists,
@@ -149,7 +150,7 @@ def gate_server_starts(
 
     # Verificar interface_type salvo nos artefatos
     if skip_if_interface:
-        itype_file = Path(project_root) / "docs/tech_stack.md"
+        itype_file = resolve_tech_stack_path(project_root)
         if itype_file.exists():
             content = itype_file.read_text().lower()
             if skip_if_interface.lower() in content:
@@ -257,9 +258,9 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
     """
     import os
 
-    # Ler interface_type do tech_stack.md
+    # Ler interface_type do TECH_STACK.md (com fallback legado).
     root = Path(project_root)
-    tech_stack = root / "docs/tech_stack.md"
+    tech_stack = resolve_tech_stack_path(root)
     interface_type = "unknown"
     if tech_stack.exists():
         import re
@@ -428,7 +429,7 @@ def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
     """Gate de acceptance CLI — verifica que o relatório existe e não tem FAILs."""
     import re
 
-    tech_stack = Path(project_root) / "docs/tech_stack.md"
+    tech_stack = resolve_tech_stack_path(project_root)
     if tech_stack.exists():
         match = re.search(r"interface_type:\s*(\w+)", tech_stack.read_text())
         if match and match.group(1).lower() == "ui":
@@ -439,11 +440,15 @@ def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
         return False, "gate_acceptance_cli FAIL: acceptance-cli-report.md não encontrado"
 
     content = report.read_text()
-    lines = [l for l in content.splitlines() if l.strip()]
+    lines = [line for line in content.splitlines() if line.strip()]
     if len(lines) < 10:
         return False, f"gate_acceptance_cli FAIL: relatório muito curto ({len(lines)} linhas)"
 
-    fail_lines = [l.strip() for l in content.splitlines() if re.search(r'\[FAIL\]', l)]
+    fail_lines = [
+        line.strip()
+        for line in content.splitlines()
+        if re.search(r"\[FAIL\]", line)
+    ]
     if fail_lines:
         preview = "; ".join(fail_lines[:3])
         return False, (
@@ -512,7 +517,7 @@ def gate_pulse_instrumented(project_root: str = ".") -> tuple[bool, str]:
             f"Implemente os tracks ausentes em main.py (entry point do servidor) antes do gate.audit."
         )
 
-    return True, f"gate_pulse_instrumented: PASS — todos os 5 tracks do ForgeBase Pulse implementados"
+    return True, "gate_pulse_instrumented: PASS — todos os 5 tracks do ForgeBase Pulse implementados"
 
 
 def gate_frontend(project_root: str = ".") -> tuple[bool, str]:

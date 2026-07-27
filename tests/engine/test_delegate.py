@@ -17,6 +17,7 @@ from ft.engine.delegate import (
     _executor_timeout_seconds,
     _append_opencode_runtime_diagnostics,
     _extract_codex_output,
+    _extract_provider_session_id,
     _extract_opencode_json_text,
     _is_opencode_internal_log_line,
     _opencode_capture_command,
@@ -86,6 +87,26 @@ class TestBuildExecutorCommand:
         assert ["--model", "fable"] == cmd[cmd.index("--model"):cmd.index("--model") + 2]
         assert ["--effort", "max"] == cmd[cmd.index("--effort"):cmd.index("--effort") + 2]
 
+    def test_builds_claude_new_and_resumed_session_commands(self):
+        session_id = "4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"
+
+        fresh = _build_executor_command(
+            "claude", "primeiro", "/tmp/proj", 7, session_id=session_id
+        )
+        resumed = _build_executor_command(
+            "claude",
+            "segundo",
+            "/tmp/proj",
+            7,
+            session_id=session_id,
+            resume_session=True,
+        )
+
+        assert fresh[fresh.index("--session-id") + 1] == session_id
+        assert "--resume" not in fresh
+        assert resumed[resumed.index("--resume") + 1] == session_id
+        assert "--session-id" not in resumed
+
     @pytest.mark.parametrize("effort", [None, "", "default"])
     def test_claude_default_effort_omits_override(self, effort):
         cmd = _build_executor_command(
@@ -127,6 +148,80 @@ class TestBuildExecutorCommand:
         )
 
         assert ["-c", 'model_reasoning_effort="max"'] == cmd[2:4]
+
+    def test_builds_codex_resume_command_without_unsupported_cwd_flag(self):
+        session_id = "019bf8f4-0f2c-7a73-b616-d4163299012b"
+
+        cmd = _build_executor_command(
+            "codex",
+            "continue",
+            "/tmp/proj",
+            7,
+            session_id=session_id,
+            resume_session=True,
+        )
+
+        assert cmd[:3] == ["codex", "exec", "resume"]
+        assert "-C" not in cmd
+        assert cmd[-2:] == [session_id, "continue"]
+
+    def test_delegate_captures_codex_session_and_timings(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "codex"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-123\"}')\n"
+            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
+            "\"text\":\"DONE\"}}')\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv(
+            "PATH",
+            f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        )
+
+        result = delegate_to_llm(
+            task="faça",
+            project_root=str(tmp_path),
+            llm_engine="codex",
+        )
+
+        assert result.success
+        assert result.session_id == "thread-123"
+        assert result.timings["provider_wall_seconds"] >= 0
+        assert result.timings["startup_to_first_event_seconds"] >= 0
+
+    def test_delegate_keeps_explicit_claude_session_when_stream_omits_id(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "claude"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('{\"type\":\"result\",\"result\":\"DONE\"}')\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv(
+            "PATH",
+            f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        )
+        session_id = "4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"
+
+        result = delegate_to_llm(
+            task="faça",
+            project_root=str(tmp_path),
+            llm_engine="claude",
+            llm_session_id=session_id,
+        )
+
+        assert result.success
+        assert result.session_id == session_id
 
     def test_codex_env_effort_overrides_project_effort(self, monkeypatch):
         monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", "ultra")
@@ -1134,6 +1229,16 @@ class TestBuildExecutorCommand:
         ])
         assert _extract_codex_output(raw) == "DONE"
 
+    def test_extracts_provider_session_ids(self):
+        assert _extract_provider_session_id(
+            "codex",
+            '{"type":"thread.started","thread_id":"thread-123"}',
+        ) == "thread-123"
+        assert _extract_provider_session_id(
+            "claude",
+            '{"type":"result","session_id":"4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"}',
+        ) == "4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"
+
 
 class TestDelegateWithFeedback:
     def test_forwards_retry_options_to_delegate(self):
@@ -1156,6 +1261,8 @@ class TestDelegateWithFeedback:
                 log_path="/tmp/proj/run.jsonl",
                 stream_prefix="codex>",
                 llm_timeout_seconds=77,
+                llm_session_id="thread-123",
+                llm_session_resume=True,
             )
 
         assert result is expected
@@ -1170,6 +1277,8 @@ class TestDelegateWithFeedback:
         assert kwargs["log_path"] == "/tmp/proj/run.jsonl"
         assert kwargs["stream_prefix"] == "codex>"
         assert kwargs["llm_timeout_seconds"] == 77
+        assert kwargs["llm_session_id"] == "thread-123"
+        assert kwargs["llm_session_resume"] is True
 
     def test_forwards_opencode_read_denies_to_delegate(self):
         expected = DelegateResult(

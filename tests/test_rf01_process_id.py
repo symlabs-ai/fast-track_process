@@ -9,7 +9,6 @@ Testa:
 """
 
 import pytest
-from pathlib import Path
 
 from ft.engine.process_registry import ProcessRegistry
 

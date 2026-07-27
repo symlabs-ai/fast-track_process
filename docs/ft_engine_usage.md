@@ -22,8 +22,13 @@ O contrato V3 separa:
 
 ## Instalação
 
+O suporte oficial é Linux/POSIX com Python 3.11 ou 3.12, Git e Bash. macOS é
+best-effort. Windows nativo não é suportado; use WSL2. O isolamento de
+filesystem do OpenCode usa `bwrap` e, portanto, requer Linux.
+
 ```bash
 pip install -e .
+ft --version
 ft --help
 ```
 
@@ -83,9 +88,10 @@ bundle** (`environment/<org>.env.example` é o modelo versionado). O script
 alto se estiver ausente/incompleta. Credenciais nunca entram no template nem
 no repo do projeto; a admin key só registra o projeto e o `.claude/
 settings.local.json` (gitignored) recebe apenas a caller key na URL.
-`tecnospeed` acompanha o mesmo esqueleto, mas a org ainda não está
-provisionada: o template falha com instrução (`/ask devops`) até
-`environment/tecnospeed.env` ser preenchido.
+O workspace Tecnospeed já existe; cada máquina ainda precisa de
+`environment/tecnospeed.env` com as credenciais emitidas pelo DevOps. Sem essa
+configuração, o template falha com instrução (`/ask devops`) antes de gravar o
+marker de conclusão.
 
 ### Diagnóstico e reparo
 
@@ -441,7 +447,7 @@ contexto de um projeto. Essa especificidade fica em fontes visíveis como:
 | `docs/PROJECT_BACKLOG.md` | mudanças desejadas e decisões |
 | `docs/FEATURES.md` | capacidades entregues e evidências |
 | `docs/ui_criteria.md` | telas, componentes e estados |
-| `docs/tech_stack.md` | frameworks, linguagens e dependências |
+| `docs/TECH_STACK.md` | frameworks, linguagens e dependências |
 | `.ft/cycles/<cycle>/task_list.md` | quebra técnica arquivada |
 
 Prompts referenciam caminhos em vez de duplicar conteúdo:
@@ -449,7 +455,7 @@ Prompts referenciam caminhos em vez de duplicar conteúdo:
 ```yaml
 prompt: |
   Implemente a interface do projeto.
-  Leia obrigatoriamente docs/PRD.md, docs/tech_stack.md e
+  Leia obrigatoriamente docs/PRD.md, docs/TECH_STACK.md e
   docs/ui_criteria.md. Siga os contratos dessas fontes.
 ```
 
@@ -610,6 +616,40 @@ gates, decisions e dependências cruzadas são recusados pelo validador do grafo
 `--max-parallel N` limita os workers. Sem a flag, os grupos permanecem
 sequenciais.
 
+### `mvp-builder-fast`
+
+Variante opt-in do processo completo, voltada a reduzir inicializações frias do
+executor sem transferir o controle do grafo para o LLM:
+
+```bash
+ft run . --template mvp-builder-fast --auto --parallel --codex
+```
+
+O engine gera um plano consultivo em
+`state/llm_execution_plan.yml` usando a demanda e os documentos iniciais,
+mantém uma conversa por sprint e cria lanes isoladas para review e fan-out.
+Claude usa `--session-id`/`--resume`; Codex captura o `thread_id` e usa
+`codex exec resume`. Human gates encerram o processo do CLI, mas o identificador
+fica no state para a retomada posterior. No `ft close`, o plano é preservado em
+`.ft/cycles/<cycle>/llm-execution-plan.yml`.
+
+O opt-in é declarado no processo:
+
+```yaml
+session_policy:
+  mode: sprint
+  providers: [claude, codex]
+  initial_plan: internal
+  parallel_strategy: fork
+  recovery: rehydrate
+```
+
+O caminho de produto novo consolida planejamento, frontend, delivery, E2E e
+handoff em macro-nodes. RED, GREEN e refactor continuam separados, e todos os
+gates/validators Python permanecem autoritativos. Uma sessão expirada é
+substituída uma vez por uma conversa reidratada com plano, estado e artefatos.
+Processos sem `session_policy` continuam stateless.
+
 ### `feature`
 
 Implementa uma capacidade em produto existente, com elucidação de escopo,
@@ -635,6 +675,21 @@ primeiro o receipt local; cache compartilhado só existe como experimento opt-in
 para validação declarada hermética. O reconcile propõe YAML, o engine valida os
 IDs permitidos e aplica os documentos canônicos deterministicamente. Entradas
 novas de changelog começam com `#FEAT`.
+
+### `feature-fast`
+
+Mantém o mesmo grafo, contratos, human gates, receipts, rotas de revisão e
+reconciliação do `feature`, com o opt-in de sessões persistentes:
+
+```bash
+ft run . --template feature-fast \
+  --request "Adicionar busca por telefone" --codex gpt-5.6-sol --effort high
+```
+
+O engine cria um plano interno consultivo e mantém uma conversa por sprint.
+`implement` e `evidence` retomam a mesma sessão de build; o node `review` usa
+uma lane isolada; `reconcile` usa a sessão de aceite. Perda da conversa aciona
+uma reidratação única. O grafo e os validators Python continuam autoritativos.
 
 ### `bug`
 
@@ -665,9 +720,12 @@ mudança transversal; nesses casos, abra outro ciclo com `feature`.
 ### Outros
 
 `base` fornece grafo mínimo; `ft-ui-prototype` cobre prototipagem de UI;
-`fast-track-v2` preserva o processo histórico. Todos usam o mesmo comando de
-run e viram forks locais. `symlabs` e `tecnospeed` são templates `kind: init`
-(ambiente por organização) — pertencem ao `ft init --template`, não ao run.
+`fastfy` adota repositórios legados; `material_design_pwa` aplica M3 e PWA a
+uma UI existente; `fast-track-v2` preserva o processo histórico. Todos usam o
+mesmo comando de run e viram forks locais. O bundle `evolve_process` é interno
+ao comando `ft evolve`, não abre ciclo por `ft run`. `symlabs` e `tecnospeed`
+são templates `kind: init` (ambiente por organização) — pertencem ao
+`ft init --template`, não ao run.
 
 ## Encerramento e artefatos
 

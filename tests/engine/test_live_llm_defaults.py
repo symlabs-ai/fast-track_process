@@ -302,7 +302,7 @@ def test_selection_reports_manifest_live_and_explicit_effort_clear(tmp_path: Pat
     }
 
 
-def test_provider_specific_context_is_rebuilt_and_compact_xml_is_initial_only(
+def test_provider_context_never_substitutes_a_compact_product_bundle(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -333,7 +333,7 @@ def test_provider_specific_context_is_rebuilt_and_compact_xml_is_initial_only(
         allow_compact=False,
     )
 
-    assert compact is not None and "<ft_file" in initial_prompt
+    assert compact is None and "<ft_file" not in initial_prompt
     assert retry_compact is None and "<ft_file" not in retry_prompt
     assert codex_compact is None and "<ft_file" not in codex_prompt
 
@@ -409,8 +409,9 @@ def test_parallel_task_captures_defaults_only_after_reaching_worker_slot(
     calls: list[tuple[object, object, object]] = []
 
     class FakeParallelRunner:
-        def __init__(self, project_root, max_slots=2):
+        def __init__(self, project_root, max_slots=2, cycle_id=None):
             assert max_slots == 2
+            assert cycle_id == runner.state_mgr.state.current_cycle
 
         def run_parallel(self, tasks, delegate_fn):
             results = []

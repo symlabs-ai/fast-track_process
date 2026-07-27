@@ -18,7 +18,8 @@ PKG_NAME="$(printf '%s' "$PROJECT_NAME" | tr '-' '_' | tr -cd 'a-zA-Z0-9_')"
 # ---------------------------------------------------------------------------
 ORG="$(basename "${FT_TEMPLATE_DIR:?FT_TEMPLATE_DIR ausente}")"
 ORG_UPPER="$(printf '%s' "$ORG" | tr '[:lower:]-' '[:upper:]_')"
-ENV_FILE="${FT_ENGINE_ROOT:?FT_ENGINE_ROOT ausente}/environment/${ORG}.env"
+CONFIG_ROOT="${FT_ORG_CONFIG_ROOT:-${FT_ENGINE_ROOT:?FT_ENGINE_ROOT ausente}/environment}"
+ENV_FILE="${CONFIG_ROOT}/${ORG}.env"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "  ✗ Config da organização '${ORG}' não encontrada: ${ENV_FILE}" >&2
@@ -115,35 +116,23 @@ fi
 # ---------------------------------------------------------------------------
 SLUG="$PROJECT_NAME"
 
-# CLAUDE.md com gateway_project + referência às regras globais
-if [ ! -f CLAUDE.md ]; then
-  printf 'gateway_project: %s\n\nRegras globais: ~/dev/devops/GENERAL_RULES.md\n' "$SLUG" > CLAUDE.md
-  echo "  ✓ criado CLAUDE.md (gateway_project: ${SLUG})"
-elif ! grep -q "gateway_project" CLAUDE.md; then
-  printf 'gateway_project: %s\n%s' "$SLUG" "$(cat CLAUDE.md)" > CLAUDE.md
-  echo "  ✓ CLAUDE.md atualizado (gateway_project: ${SLUG})"
-fi
-
-# .claude/settings.local.json — ANTHROPIC_BASE_URL roteando pelo gateway.
-# Gitignored (init-default já cobre .claude/settings.local.json).
-mkdir -p .claude
-BASE_URL="${GATEWAY_URL}/u/${CALLER_KEY}/p/${PROVIDER_PATH}/s/${SLUG}"
-cat > .claude/settings.local.json <<EOF
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "${BASE_URL}"
-  }
-}
-EOF
-echo "  ✓ criado .claude/settings.local.json (roteamento ${PROVIDER_PATH})"
-
-# Registro no gateway (best-effort — não bloqueia se a API oscilar).
-# Endpoints de gestão do gateway exigem Authorization: Bearer (get_current_api_key).
+# Registro no gateway é obrigatório. O init só recebe marker depois que projeto
+# e caller (quando configurada) estão confirmados remotamente.
 API="${GATEWAY_URL%/}/_api"
-auth=(-H "Authorization: Bearer ${ADMIN_KEY}" -H "X-Workspace-ID: ${WORKSPACE_ID}")
+AUTH_HEADER_FILE="$(mktemp "${TMPDIR:-/tmp}/ft-gateway-headers.XXXXXX")"
+chmod 600 "$AUTH_HEADER_FILE"
+printf 'Authorization: Bearer %s\nX-Workspace-ID: %s\n' \
+  "$ADMIN_KEY" "$WORKSPACE_ID" > "$AUTH_HEADER_FILE"
+trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
+curl_common=(
+  --silent
+  --show-error
+  --connect-timeout 10
+  --max-time 30
+  --header "@${AUTH_HEADER_FILE}"
+)
 
-# Extrai um campo do projeto de `slug` a partir do JSON da lista. Usa python3
-# (ambiente Python garantido); sem ele, degrada para vazio sem quebrar.
+# Extrai um campo do projeto de `slug` a partir do JSON da lista.
 _project_field() {
   python3 -c '
 import sys, json
@@ -156,27 +145,43 @@ items = data if isinstance(data, list) else (
 for p in items:
     if isinstance(p, dict) and p.get("slug") == sys.argv[2]:
         print(p.get(sys.argv[3], "") or ""); break
-' "$1" "$2" "$3" 2>/dev/null || true
+' "$1" "$2" "$3" 2>/dev/null
 }
 
 plist=""
 _load_projects() {
-  [ -n "$plist" ] || plist="$(curl -s "${API}/projects?status=all" "${auth[@]}" 2>/dev/null || true)"
+  if [ -n "$plist" ]; then
+    return 0
+  fi
+  if ! plist="$(curl "${curl_common[@]}" "${API}/projects?status=all")"; then
+    echo "  ✗ SymGateway: falha ao consultar projetos; provisionamento não confirmado" >&2
+    return 1
+  fi
 }
 
-code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${API}/projects" \
-  "${auth[@]}" -H "Content-Type: application/json" \
-  -d "{\"name\":\"${PROJECT_NAME}\",\"slug\":\"${SLUG}\",\"folder_name\":\"${PROJECT_NAME}\"}" \
-  2>/dev/null || true)"
+project_payload="$(python3 -c '
+import json, sys
+print(json.dumps({"name": sys.argv[1], "slug": sys.argv[2], "folder_name": sys.argv[1]}))
+' "$PROJECT_NAME" "$SLUG")"
+if ! code="$(curl "${curl_common[@]}" -o /dev/null -w '%{http_code}' \
+  -X POST "${API}/projects" -H "Content-Type: application/json" \
+  --data "$project_payload")"; then
+  echo "  ✗ SymGateway: falha de rede ao registrar projeto; init não concluído" >&2
+  exit 1
+fi
 code="${code:-000}"
 case "$code" in
-  200|201) echo "  ✓ SymGateway: projeto '${SLUG}' registrado" ;;
+  2??) echo "  ✓ SymGateway: projeto '${SLUG}' registrado" ;;
   409)
     # Slug já existe no workspace. Confirma que é o NOSSO projeto (folder_name
     # bate) antes de adotar — senão estaríamos roteando para um projeto alheio.
-    _load_projects
+    _load_projects || exit 1
     existing_folder="$(_project_field "$plist" "$SLUG" folder_name)"
-    if [ -n "$existing_folder" ] && [ "$existing_folder" != "$PROJECT_NAME" ]; then
+    if [ -z "$existing_folder" ]; then
+      echo "  ✗ SymGateway: slug '${SLUG}' retornou 409, mas não foi possível confirmar ownership" >&2
+      exit 1
+    fi
+    if [ "$existing_folder" != "$PROJECT_NAME" ]; then
       echo "  ✗ SymGateway: slug '${SLUG}' já pertence a outro projeto no workspace" >&2
       echo "    (folder_name='${existing_folder}', esperado '${PROJECT_NAME}')." >&2
       echo "    Renomeie o diretório ou use outro slug — não vou adotar projeto alheio." >&2
@@ -184,28 +189,65 @@ case "$code" in
     fi
     echo "  → SymGateway: projeto '${SLUG}' já existe — ok"
     ;;
-  401|403) echo "  ✗ SymGateway: sem permissão (HTTP ${code}) — ADMIN_KEY inválida; projeto NÃO registrado" >&2 ;;
-  000)     echo "  ⚠ SymGateway: sem resposta da API — verifique conectividade" ;;
-  *)       echo "  ⚠ SymGateway: registro retornou HTTP ${code} — projeto pode não ter sido registrado" ;;
+  401|403)
+    echo "  ✗ SymGateway: sem permissão (HTTP ${code}) — ADMIN_KEY inválida; projeto NÃO registrado" >&2
+    exit 1
+    ;;
+  000)
+    echo "  ✗ SymGateway: sem resposta da API — init não concluído" >&2
+    exit 1
+    ;;
+  *)
+    echo "  ✗ SymGateway: registro retornou HTTP ${code} — init não concluído" >&2
+    exit 1
+    ;;
 esac
 
 # Linka a caller key existente ao projeto (se CALLER_KEY_ID informado).
 if [ -n "$CALLER_KEY_ID" ]; then
-  _load_projects
+  _load_projects || exit 1
   pid="$(_project_field "$plist" "$SLUG" id)"
-  if [ -n "$pid" ]; then
-    lcode="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-      "${API}/projects/${pid}/api-keys/link" "${auth[@]}" \
-      -H "Content-Type: application/json" -d "{\"api_key_id\":\"${CALLER_KEY_ID}\"}" \
-      2>/dev/null || true)"
-    lcode="${lcode:-000}"
-    case "$lcode" in
-      200|201) echo "  ✓ SymGateway: caller linkada ao projeto" ;;
-      409)     echo "  → SymGateway: caller já linkada — ok" ;;
-      401|403) echo "  ✗ SymGateway: sem permissão para linkar caller (HTTP ${lcode})" >&2 ;;
-      *)       echo "  ⚠ SymGateway: link da caller retornou HTTP ${lcode}" ;;
-    esac
+  if [ -z "$pid" ]; then
+    echo "  ✗ SymGateway: projeto '${SLUG}' sem id; caller não pôde ser linkada" >&2
+    exit 1
   fi
+  link_payload="$(python3 -c '
+import json, sys
+print(json.dumps({"api_key_id": sys.argv[1]}))
+' "$CALLER_KEY_ID")"
+  if ! lcode="$(curl "${curl_common[@]}" -o /dev/null -w '%{http_code}' \
+    -X POST "${API}/projects/${pid}/api-keys/link" \
+    -H "Content-Type: application/json" --data "$link_payload")"; then
+    echo "  ✗ SymGateway: falha de rede ao linkar caller; init não concluído" >&2
+    exit 1
+  fi
+  lcode="${lcode:-000}"
+  case "$lcode" in
+    2??) echo "  ✓ SymGateway: caller linkada ao projeto" ;;
+    409) echo "  → SymGateway: caller já linkada — ok" ;;
+    *)
+      echo "  ✗ SymGateway: link da caller retornou HTTP ${lcode}; init não concluído" >&2
+      exit 1
+      ;;
+  esac
 fi
+
+# Só publica configuração local depois da confirmação remota.
+if [ ! -f CLAUDE.md ]; then
+  printf 'gateway_project: %s\n\nRegras globais: ~/dev/devops/GENERAL_RULES.md\n' "$SLUG" > CLAUDE.md
+  echo "  ✓ criado CLAUDE.md (gateway_project: ${SLUG})"
+elif ! grep -q "gateway_project" CLAUDE.md; then
+  printf 'gateway_project: %s\n%s' "$SLUG" "$(cat CLAUDE.md)" > CLAUDE.md
+  echo "  ✓ CLAUDE.md atualizado (gateway_project: ${SLUG})"
+fi
+
+mkdir -p .claude
+BASE_URL="${GATEWAY_URL}/u/${CALLER_KEY}/p/${PROVIDER_PATH}/s/${SLUG}"
+python3 -c '
+import json, sys
+json.dump({"env": {"ANTHROPIC_BASE_URL": sys.argv[1]}}, sys.stdout, indent=2)
+print()
+' "$BASE_URL" > .claude/settings.local.json
+echo "  ✓ criado .claude/settings.local.json (roteamento ${PROVIDER_PATH})"
 
 echo "  → Projeto ${PROJECT_NAME} pronto no ambiente ${ORG}."

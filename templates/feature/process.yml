@@ -50,7 +50,6 @@ artifact_policy:
     - CHANGELOG.md
     - docs/PRD.md
     - docs/TECH_STACK.md
-    - docs/tech_stack.md
     - docs/ui_criteria.md
     - docs/api_contract.md
     - docs/test_data.md

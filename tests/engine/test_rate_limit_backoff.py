@@ -327,3 +327,53 @@ class TestLargePromptViaStdin:
 
         assert captured["stdin_kwarg"] is None
         assert "tarefa pequena" in captured["cmd"][-1]
+
+    @pytest.mark.parametrize(
+        ("session_id", "resume_session"),
+        [(None, False), ("019bf8f4-0f2c-7a73-b616-d4163299012b", True)],
+    )
+    def test_large_codex_prompt_goes_via_stdin(
+        self,
+        tmp_path,
+        session_id,
+        resume_session,
+    ):
+        import subprocess as sp
+
+        from ft.engine.delegate import _MAX_ARGV_PROMPT_BYTES
+
+        big_task = "x" * (_MAX_ARGV_PROMPT_BYTES + 1)
+        raw_done = (
+            '{"type":"item.completed","item":'
+            '{"type":"agent_message","text":"DONE"}}'
+        )
+        captured = {}
+        fake_git = SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        with (
+            patch(
+                "ft.engine.delegate.subprocess.Popen",
+                side_effect=self._fake_env(captured),
+            ),
+            patch("ft.engine.delegate.subprocess.run", return_value=fake_git),
+            patch(
+                "ft.engine.delegate._stream_process_output",
+                return_value=raw_done,
+            ),
+        ):
+            result = delegate_to_llm(
+                task=big_task,
+                project_root=str(tmp_path),
+                llm_engine="codex",
+                llm_session_id=session_id,
+                llm_session_resume=resume_session,
+            )
+
+        assert result.success is True
+        assert captured["stdin_kwarg"] == sp.PIPE
+        assert all(len(arg) < _MAX_ARGV_PROMPT_BYTES for arg in captured["cmd"])
+        assert captured["cmd"][-1] == "-"
+        assert big_task in captured["stdin_data"]
+        if resume_session:
+            assert "resume" in captured["cmd"]
+            assert session_id in captured["cmd"]

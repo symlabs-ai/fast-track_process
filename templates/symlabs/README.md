@@ -56,9 +56,12 @@ recebe apenas a **caller key** na URL.
 ## Segurança
 
 - Header de gestão do gateway: `Authorization: Bearer <ADMIN_KEY>`.
+- A admin key é passada ao `curl` por arquivo temporário mode `0600`, não pela
+  linha de comando do processo.
 - `.claude/settings.local.json` e `.env` são gitignored (via `init-default`).
-- Registro é best-effort: falhas de rede não bloqueiam o init; falha de auth
-  (401/403) é reportada de forma visível, não silenciosa.
+- Registro, verificação de ownership e link da caller são transacionais:
+  falha de rede, auth (401/403), resposta inesperada ou conflito de ownership
+  bloqueia o init. O marker só é gravado depois de toda a cadeia concluir.
 
 ## Como estender para outra organização
 

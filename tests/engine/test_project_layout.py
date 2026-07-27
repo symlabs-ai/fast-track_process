@@ -206,6 +206,9 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     (state_dir / "engine_state.yml").write_text("runtime")
+    (state_dir / "llm_execution_plan.yml").write_text(
+        "schema_version: 1\nsprints: []\n"
+    )
     from ft.engine.trace import TraceRecorder
 
     trace = TraceRecorder(state_dir / "trace" / "events.jsonl", "cycle-07")
@@ -222,6 +225,11 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
         llm_engine="claude",
         llm_model="claude-fable-5",
         llm_effort="max",
+        llm_execution_plan={
+            "path": "llm_execution_plan.yml",
+            "source": "llm",
+            "generated_at": "2026-07-24T12:00:00+00:00",
+        },
         node_status="done",
         gate_log={"build": "PASS", "review": "PASS"},
         metrics={"steps_completed": 44, "steps_total": 44},
@@ -237,8 +245,12 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     assert (result.cycle_dir / "screenshots" / "home.png").exists()
     assert (result.cycle_dir / "cycle-log.md").exists()
     assert (state_dir / "engine_state.yml").exists()
+    assert not (state_dir / "llm_execution_plan.yml").exists()
     assert trace.path.exists()
     assert not (result.cycle_dir / "engine_state.yml").exists()
+    assert (
+        result.cycle_dir / "llm-execution-plan.yml"
+    ).read_text() == "schema_version: 1\nsprints: []\n"
     report = json.loads((result.cycle_dir / "run-report.json").read_text())
     assert report["run_id"] == "cycle-07"
     assert "run-report.json" in result.moved
@@ -248,6 +260,11 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     assert record["gate_summary"] == {"PASS": 2}
     assert record["llm"]["model"] == "claude-fable-5"
     assert record["llm"]["effort"] == "max"
+    assert record["llm"]["execution_plan"] == {
+        "path": "llm-execution-plan.yml",
+        "source": "llm",
+        "generated_at": "2026-07-24T12:00:00+00:00",
+    }
     assert record["process"]["path"] == ".ft/process/feature/process.yml"
     assert record["process"]["template"] == "feature"
     assert record["process"]["initial_digest"] == "sha256:initial"

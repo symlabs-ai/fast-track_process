@@ -61,7 +61,7 @@ flowchart TD
         PBACKLOG["Criar Project Backlog<br/><i>(document)</i><br/>→ docs/PROJECT_BACKLOG.md"]
         FEATCAT["Criar Catálogo de Features<br/><i>(document)</i><br/>→ docs/FEATURES.md"]
         TASKLIST["Criar Task List<br/><i>(document)</i><br/>→ docs/task_list.md"]
-        TECHSTACK["Definir Tech Stack<br/><i>(document)</i><br/>→ docs/tech_stack.md"]
+        TECHSTACK["Definir Tech Stack<br/><i>(document)</i><br/>→ docs/TECH_STACK.md"]
         TECHGATE{{"Revisão do Tech Stack"}}
         APICONTRACT["Definir Contrato de API ⑂<br/><i>(document · plan-docs)</i><br/>→ docs/api_contract.md"]
         UICRITERIA["Gerar Critérios Visuais ⑂<br/><i>(document · plan-docs)</i><br/>→ docs/ui_criteria.md"]

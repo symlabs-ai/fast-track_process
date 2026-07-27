@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from ft.cli import main as cli_main
+from ft.cli.fix_command import single_fix_target_path, validate_fix_capture
 from ft.engine.delegate import DelegateResult
 from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner, ValidationResult
@@ -906,7 +907,7 @@ class TestFix:
         target.parent.mkdir(parents=True)
         target.write_text("def test_old():\n    pass\n", encoding="utf-8")
 
-        detected = cli_main._single_fix_target_path(
+        detected = single_fix_target_path(
             "Corrija somente project/tests/e2e/test_navigation.py.",
             tmp_path,
         )
@@ -920,9 +921,6 @@ class TestFix:
         target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
         target.parent.mkdir(parents=True)
         target.write_text("def test_old():\n    pass\n", encoding="utf-8")
-        frontend = tmp_path / "project" / "frontend" / "src" / "main.js"
-        frontend.parent.mkdir(parents=True)
-        frontend.write_text("const routes = {'/clientes': 'Clientes'};\n", encoding="utf-8")
         state = EngineState(
             current_node=None,
             node_status="done",
@@ -935,6 +933,9 @@ class TestFix:
 
             def load(self):
                 return state
+
+            def save(self):
+                return None
 
         class Runner:
             def __init__(self):
@@ -984,10 +985,10 @@ class TestFix:
         assert kwargs["opencode_capture_output_path"] == "project/tests/e2e/test_navigation.py"
         assert "CONTEUDO ATUAL" in kwargs["task"]
         assert "def test_old" in kwargs["task"]
-        assert "CONTEXTO DA UI ATUAL" in kwargs["task"]
-        assert "const routes" in kwargs["task"]
 
-    def test_postprocess_opencode_fix_rewrites_invalid_e2e_python(self, tmp_path):
+    def test_postprocess_opencode_fix_rejects_invalid_python_without_rewriting(
+        self, tmp_path
+    ):
         target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
         target.parent.mkdir(parents=True)
         target.write_text("def broken(:\n", encoding="utf-8")
@@ -996,19 +997,14 @@ class TestFix:
             project_root = tmp_path
             _work_dir = str(tmp_path)
 
-            def _write_opencode_e2e_test(self, root):
-                target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+        with pytest.raises(Exception, match="invalid syntax"):
+            validate_fix_capture(
+                Runner(),
+                "project/tests/e2e/test_navigation.py",
+            )
+        assert target.read_text(encoding="utf-8") == "def broken(:\n"
 
-        note = cli_main._postprocess_opencode_fix_capture(
-            Runner(),
-            "project/tests/e2e/test_navigation.py",
-        )
-
-        assert note is not None
-        assert "determinístico" in note
-        assert "def test_ok" in target.read_text(encoding="utf-8")
-
-    def test_postprocess_opencode_fix_rewrites_outerhtml_canvas_e2e(self, tmp_path):
+    def test_postprocess_opencode_fix_preserves_valid_product_code(self, tmp_path):
         target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
         target.parent.mkdir(parents=True)
         target.write_text(
@@ -1022,37 +1018,13 @@ class TestFix:
             project_root = tmp_path
             _work_dir = str(tmp_path)
 
-            def _write_opencode_e2e_test(self, root):
-                target.write_text("def test_ok():\n    assert 'toDataURL()'\n", encoding="utf-8")
-
-        note = cli_main._postprocess_opencode_fix_capture(
+        note = validate_fix_capture(
             Runner(),
             "project/tests/e2e/test_navigation.py",
         )
 
-        assert note is not None
-        assert "toDataURL" in note
-        assert "outerHTML" not in target.read_text(encoding="utf-8")
-
-    def test_arena_board_fix_adds_canvas_testid_without_delegate(self, tmp_path):
-        source = tmp_path / "project" / "frontend" / "src" / "main.js"
-        dist = tmp_path / "project" / "frontend" / "dist" / "src" / "main.js"
-        for target in (source, dist):
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text('<canvas id="arena-canvas" width="280"></canvas>\n', encoding="utf-8")
-
-        class Runner:
-            project_root = tmp_path
-            _work_dir = str(tmp_path)
-
-        note = cli_main._try_apply_opencode_arena_board_fix(
-            Runner(),
-            'adicione data-testid="arena-board" ao canvas',
-        )
-
-        assert note is not None
-        assert 'data-testid="arena-board"' in source.read_text(encoding="utf-8")
-        assert 'data-testid="arena-board"' in dist.read_text(encoding="utf-8")
+        assert note is None
+        assert "outerHTML" in target.read_text(encoding="utf-8")
 
     def _blocked_runner(self, tmp_path):
         state_path = tmp_path / "state" / "engine_state.yml"

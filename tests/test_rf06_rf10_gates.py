@@ -9,8 +9,7 @@ RF-10: gates bloqueados não podem ser contornados sem resolução explícita
 """
 
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from ft.engine.validators.gates import gate_tdd_sequence, gate_coverage_80, gate_e2e_all_pass
 from ft.engine.state import StateManager

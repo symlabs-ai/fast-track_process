@@ -75,6 +75,57 @@ def validate_process(graph: ProcessGraph, validator_registry: dict[str, Any] | N
 
 def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
     """Verifica schema: tipos, executors, campos obrigatórios."""
+    session_policy = graph.meta.get("session_policy")
+    if session_policy is not None:
+        if not isinstance(session_policy, dict):
+            report.add_error(None, "session_policy deve ser um mapping")
+        else:
+            allowed_keys = {
+                "mode",
+                "providers",
+                "initial_plan",
+                "parallel_strategy",
+                "recovery",
+            }
+            unknown = sorted(set(session_policy) - allowed_keys)
+            if unknown:
+                report.add_error(
+                    None,
+                    "session_policy contém campos desconhecidos: "
+                    + ", ".join(unknown),
+                )
+            if session_policy.get("mode") != "sprint":
+                report.add_error(
+                    None,
+                    "session_policy.mode deve ser sprint",
+                )
+            providers = session_policy.get("providers")
+            if (
+                not isinstance(providers, list)
+                or not providers
+                or any(provider not in {"claude", "codex"} for provider in providers)
+                or len(providers) != len(set(providers))
+            ):
+                report.add_error(
+                    None,
+                    "session_policy.providers deve listar claude e/ou codex sem duplicatas",
+                )
+            if session_policy.get("initial_plan") not in {"internal", "disabled"}:
+                report.add_error(
+                    None,
+                    "session_policy.initial_plan deve ser internal ou disabled",
+                )
+            if session_policy.get("parallel_strategy") != "fork":
+                report.add_error(
+                    None,
+                    "session_policy.parallel_strategy deve ser fork",
+                )
+            if session_policy.get("recovery") != "rehydrate":
+                report.add_error(
+                    None,
+                    "session_policy.recovery deve ser rehydrate",
+                )
+
     parallel_policy = graph.meta.get("parallel_policy")
     if parallel_policy is not None:
         if not isinstance(parallel_policy, dict):
@@ -321,6 +372,8 @@ def _check_parallel_groups(graph: ProcessGraph, report: ValidationReport) -> Non
     compartilhados geram conflito de merge, e tipos de controle (gate,
     human_gate, decision, end) não podem ser delegados a um worktree.
     """
+    from ft.engine.parallel import outputs_overlap
+
     groups: dict[str, list[Node]] = {}
     for node in graph.nodes.values():
         if node.parallel_group:
@@ -354,12 +407,12 @@ def _check_parallel_groups(graph: ProcessGraph, report: ValidationReport) -> Non
                 )
         for i, a in enumerate(members):
             for b in members[i + 1:]:
-                shared = set(a.outputs) & set(b.outputs)
-                if shared:
+                overlaps = outputs_overlap(a.outputs, b.outputs)
+                if overlaps:
                     report.add_error(
                         a.id,
-                        f"parallel_group '{group_name}': outputs compartilhados "
-                        f"com {b.id}: {sorted(shared)}",
+                        f"parallel_group '{group_name}': outputs sobrepostos "
+                        f"com {b.id}: {overlaps}",
                     )
 
 

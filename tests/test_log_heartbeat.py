@@ -9,7 +9,18 @@ import json
 import os
 from types import SimpleNamespace
 
-from ft.cli.main import _log_model_prefix, _orchestrator_alive, _track_heartbeat
+from ft.cli.main import (
+    _fmt_elapsed,
+    _log_model_prefix,
+    _log_mtime,
+    _needs_block_blank,
+    _node_from_log_name,
+    _oneline,
+    _orchestrator_alive,
+    _track_heartbeat,
+    _truncate_visible,
+    _wait_reason,
+)
 from ft.engine.delegate import _format_stream_line
 
 
@@ -210,8 +221,6 @@ def test_linha_nao_json_ignorada():
 
 # --- heartbeat de silêncio: tempo + node -----------------------------------
 
-from ft.cli.main import _fmt_elapsed, _node_from_log_name
-
 
 def test_fmt_elapsed_segundos():
     assert _fmt_elapsed(0) == "há 0s"
@@ -240,8 +249,6 @@ def test_node_from_log_name_sem_padrao():
 
 # --- espaçamento de bloco bash (ft log -m): branco só nas bordas -----------
 
-from ft.cli.main import _needs_block_blank
-
 
 def test_bloco_bash_branco_so_nas_bordas():
     # Sequência: texto, 3 bashes, texto  →  branco ao ENTRAR e ao SAIR do bloco,
@@ -265,8 +272,6 @@ def test_transicoes_do_bloco():
 
 
 # --- motivo real da espera: gate humano / bloqueio / LLM -------------------
-
-from ft.cli.main import _wait_reason
 
 
 def test_wait_reason_gate_por_pending_approval():
@@ -301,8 +306,6 @@ def test_wait_reason_rodando_e_none():
 
 
 # --- âncora do contador de silêncio no mtime do log ------------------------
-
-from ft.cli.main import _log_mtime
 
 
 def test_log_mtime_le_mtime_do_arquivo(tmp_path):
@@ -343,8 +346,6 @@ def test_wait_reason_gate_vence_orquestrador_morto():
 
 # --- sanitização de texto do estado (vazamento de cor no bloqueio) ---------
 
-from ft.cli.main import _oneline
-
 
 def test_oneline_colapsa_multilinha():
     assert _oneline("Review falhou:\n\nNow let's check\nthe tests") == "Review falhou: Now let's check the tests"
@@ -372,8 +373,6 @@ def test_wait_reason_blocked_sanitiza_multilinha():
 
 
 # --- truncar linha à largura do terminal (empilhamento do heartbeat longo) --
-
-from ft.cli.main import _truncate_visible
 
 
 def test_truncate_visible_curto_intacto():

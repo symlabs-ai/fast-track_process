@@ -9,7 +9,6 @@ RF-15: ft_acceptance gera matriz de cenários (happy, edge, error)
 """
 
 import pytest
-from pathlib import Path
 
 from ft.engine.agent_policy import AgentPolicy, AgentRole
 from ft.engine.gatekeeper import Gatekeeper, GatekeeperResult
@@ -63,7 +62,10 @@ class TestAgentScope:
         """Agente tentando escrever fora do escopo deve ser rejeitado."""
         policy = AgentPolicy()
         with pytest.raises(PermissionError, match="escopo|scope|permitido"):
-            policy.assert_allowed(AgentRole.FORGE_CODER, "process/fast_track/FAST_TRACK_PROCESS_V2.yml")
+            policy.assert_allowed(
+                AgentRole.FORGE_CODER,
+                ".ft/process/fast-track-v2/process.yml",
+            )
 
     def test_path_within_scope_allowed(self):
         """Agente escrevendo dentro do escopo deve ser permitido."""

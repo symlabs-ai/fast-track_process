@@ -210,9 +210,9 @@ def fix_gate(message: str, feedback: str, goto: str) -> str:
         sep,
     ]
     # Feedback do validator — primeiras 3 linhas não-vazias
-    fb_lines = [l.strip() for l in feedback.splitlines() if l.strip()][:3]
-    for l in fb_lines:
-        lines.append(f"  {RED}{l}{RESET}")
+    fb_lines = [line.strip() for line in feedback.splitlines() if line.strip()][:3]
+    for line in fb_lines:
+        lines.append(f"  {RED}{line}{RESET}")
     lines += [
         sep,
         f"  {DIM}Destino após correção: {goto}{RESET}",
@@ -324,21 +324,21 @@ def problem_explanation(
         f"\n{BOLD_RED}{line}{RESET}",
         f"  {BOLD_RED}Problema encontrado no processo{RESET}",
         f"{BOLD_RED}{line}{RESET}",
-        f"",
+        "",
         f"  {BOLD_WHITE}O que aconteceu:{RESET}",
         f"    {what_happened}",
-        f"",
+        "",
         f"  {BOLD_WHITE}Alternativas:{RESET}",
     ]
     for i, alt in enumerate(alternatives, 1):
         lines.append(f"    {BOLD_YELLOW}{i}.{RESET} {alt}")
-    lines.append(f"")
+    lines.append("")
     lines.append(f"  {BOLD_WHITE}Para aplicar, use:{RESET}")
     lines.append(f"    {BOLD_CYAN}ft fix \"{RESET}aplique a alternativa 1{BOLD_CYAN}\"{RESET}")
-    lines.append(f"")
+    lines.append("")
     lines.append(f"  {DIM}Ou descreva sua própria solução:{RESET}")
     lines.append(f"    {BOLD_CYAN}ft fix \"{RESET}faça X e Y em vez disso{BOLD_CYAN}\"{RESET}")
-    lines.append(f"")
+    lines.append("")
     return "\n".join(lines)
 
 

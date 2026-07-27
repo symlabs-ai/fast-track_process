@@ -7,16 +7,23 @@ de parallel_group no process_validator.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import yaml
 
 from ft.cli.main import apply_parallel_flags
 from ft.engine.graph import Node, load_graph
 from ft.engine.layout import ensure_project_layout, register_project_process
-from ft.engine.parallel import WorktreeResult
+from ft.engine.parallel import (
+    ParallelRunner,
+    WorktreeResult,
+    create_worktree,
+    remove_worktree,
+)
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import StateManager
@@ -201,8 +208,9 @@ def test_fan_in_uses_group_order_even_if_threads_finish_out_of_order(
     merged: list[str] = []
 
     class FakeParallelRunner:
-        def __init__(self, project_root, max_slots=2):
+        def __init__(self, project_root, max_slots=2, *, cycle_id):
             assert max_slots == 4
+            assert cycle_id == "cycle-01"
 
         def run_parallel(self, tasks, delegate_fn):
             # Ordem invertida simula par-b terminando antes de par-a.
@@ -244,8 +252,8 @@ def test_fan_in_blocks_when_one_task_fails(tmp_path: Path) -> None:
     nodes = [runner.graph.get_node("par-a"), runner.graph.get_node("par-b")]
 
     class FakeParallelRunner:
-        def __init__(self, project_root, max_slots=2):
-            pass
+        def __init__(self, project_root, max_slots=2, *, cycle_id):
+            assert cycle_id == "cycle-01"
 
         def run_parallel(self, tasks, delegate_fn):
             return [
@@ -297,7 +305,35 @@ def test_validator_rejects_shared_outputs_in_group() -> None:
              outputs=["docs/x.md"], parallel_group="g", next="end"),
     ]
     _check_parallel_groups(_graph_with(nodes), report)
-    assert any("outputs compartilhados" in i.message for i in report.errors)
+    assert any("outputs sobrepostos" in i.message for i in report.errors)
+
+
+def test_validator_rejects_parent_child_outputs_in_group() -> None:
+    from ft.engine.process_validator import _check_parallel_groups, ValidationReport
+
+    report = ValidationReport()
+    nodes = [
+        Node(
+            id="a",
+            type="document",
+            title="A",
+            executor="llm_coder",
+            outputs=["docs/"],
+            parallel_group="g",
+            next="b",
+        ),
+        Node(
+            id="b",
+            type="document",
+            title="B",
+            executor="llm_coder",
+            outputs=["docs/x.md"],
+            parallel_group="g",
+            next="end",
+        ),
+    ]
+    _check_parallel_groups(_graph_with(nodes), report)
+    assert any("outputs sobrepostos" in issue.message for issue in report.errors)
 
 
 def test_validator_rejects_control_and_python_nodes_in_group() -> None:
@@ -337,3 +373,169 @@ def test_mvp_builder_template_parallel_groups_are_valid() -> None:
             "ft.handoff.03.critical_analysis",
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Git real — isolamento, fan-in e preservação em conflito
+# ---------------------------------------------------------------------------
+
+
+def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _git_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.name", "Fast Track Test")
+    _git(repo, "config", "user.email", "ft-test@example.invalid")
+    (repo / "shared.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "shared.txt")
+    _git(repo, "commit", "-m", "initial")
+    _git(repo, "branch", "-M", "main")
+    return repo
+
+
+def test_real_parallel_runner_commits_merges_and_cleans_worktrees(
+    tmp_path: Path,
+) -> None:
+    repo = _git_repo(tmp_path)
+    parallel_root = tmp_path / "parallel"
+    runner = ParallelRunner(
+        str(repo),
+        max_slots=2,
+        cycle_id="cycle-07-feature",
+        worktrees_root=parallel_root,
+    )
+    tasks = [
+        {
+            "node_id": "docs.a",
+            "task_prompt": "a",
+            "outputs": ["docs/a.md"],
+            "allowed_paths": ["docs/a.md"],
+        },
+        {
+            "node_id": "docs.b",
+            "task_prompt": "b",
+            "outputs": ["docs/b.md"],
+            "allowed_paths": ["docs/b.md"],
+        },
+    ]
+
+    def delegate(*, task, project_root, allowed_paths):
+        target = Path(project_root) / allowed_paths[0]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"{task}\n", encoding="utf-8")
+        return SimpleNamespace(
+            success=True,
+            output="DONE",
+            files_created=[allowed_paths[0]],
+            files_modified=[],
+        )
+
+    results = runner.run_parallel(tasks, delegate)
+    assert {result.branch for result in results} == {
+        "ft-parallel/cycle-07-feature/docs.a",
+        "ft-parallel/cycle-07-feature/docs.b",
+    }
+
+    by_node = {result.node_id: result for result in results}
+    merged = runner.merge_all([by_node["docs.a"], by_node["docs.b"]])
+    assert all(ok for _node_id, ok, _detail in merged)
+    assert (repo / "docs" / "a.md").read_text(encoding="utf-8") == "a\n"
+    assert (repo / "docs" / "b.md").read_text(encoding="utf-8") == "b\n"
+    assert not any(Path(result.worktree_path).exists() for result in results)
+    refs = _git(repo, "branch", "--list", "ft-parallel/*").stdout
+    assert refs.strip() == ""
+
+
+def test_merge_conflict_preserves_parallel_branch_and_worktree(
+    tmp_path: Path,
+) -> None:
+    repo = _git_repo(tmp_path)
+    branch, worktree = create_worktree(
+        "edit-shared",
+        str(repo),
+        "main",
+        cycle_id="cycle-08-conflict",
+        worktrees_root=tmp_path / "parallel",
+    )
+    worktree_path = Path(worktree)
+    (worktree_path / "shared.txt").write_text("parallel\n", encoding="utf-8")
+    _git(worktree_path, "add", "shared.txt")
+    _git(worktree_path, "commit", "-m", "parallel edit")
+
+    (repo / "shared.txt").write_text("main\n", encoding="utf-8")
+    _git(repo, "add", "shared.txt")
+    _git(repo, "commit", "-m", "main edit")
+
+    runner = ParallelRunner(str(repo), cycle_id="cycle-08-conflict")
+    merged = runner.merge_all(
+        [
+            WorktreeResult(
+                node_id="edit-shared",
+                branch=branch,
+                worktree_path=worktree,
+                success=True,
+                output="DONE",
+            )
+        ]
+    )
+
+    assert merged[0][1] is False
+    assert "CONFLICT" in merged[0][2]
+    assert worktree_path.exists()
+    assert (
+        _git(
+            repo,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            f"refs/heads/{branch}",
+            check=False,
+        ).returncode
+        == 0
+    )
+    assert not (repo / ".git" / "MERGE_HEAD").exists()
+
+    # Explicit cleanup is test-only; production intentionally preserves it.
+    _git(repo, "worktree", "remove", "--force", worktree)
+    _git(repo, "branch", "-D", branch)
+
+
+def test_same_node_in_concurrent_cycles_has_distinct_refs_and_paths(
+    tmp_path: Path,
+) -> None:
+    repo = _git_repo(tmp_path)
+    parallel_root = tmp_path / "parallel"
+
+    def create(cycle_id: str) -> tuple[str, str]:
+        return create_worktree(
+            "same.node",
+            str(repo),
+            "main",
+            cycle_id=cycle_id,
+            worktrees_root=parallel_root,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(create, "cycle-09-a")
+        second = executor.submit(create, "cycle-10-b")
+        results = [first.result(), second.result()]
+
+    assert {branch for branch, _path in results} == {
+        "ft-parallel/cycle-09-a/same.node",
+        "ft-parallel/cycle-10-b/same.node",
+    }
+    assert len({path for _branch, path in results}) == 2
+    assert all(Path(path).exists() for _branch, path in results)
+    for branch, path in results:
+        cleaned, detail = remove_worktree(path, branch, str(repo))
+        assert cleaned, detail

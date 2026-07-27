@@ -1,6 +1,7 @@
 # ft engine — Backlog
 
-> Spec: `process/fast_track/docs/ft_engine_spec.md`
+> Documento histórico. Contrato atual: `docs/ft_engine_usage.md`; processo V2
+> distribuído: `templates/fast-track-v2/FAST_TRACK_PROCESS.yml`.
 > Repo: fast-track (prototipo aqui, extrai depois)
 > Status: Fase 1 completa, Fase 2 em andamento
 
@@ -94,7 +95,7 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 
 | # | Task | Descricao | Entrega | Status |
 |---|------|-----------|---------|--------|
-| 6.1 | YAML Fast Track v2 | FAST_TRACK_PROCESS_V2.yml no formato de grafo | `process/fast_track/FAST_TRACK_PROCESS_V2.yml` | done |
+| 6.1 | YAML Fast Track v2 | FAST_TRACK_PROCESS_V2.yml no formato de grafo | `templates/fast-track-v2/FAST_TRACK_PROCESS.yml` | done |
 | 6.2 | Mapeamento completo | 23 nodes, 9 sprints, validators deterministicos | YAML | done |
 | 6.3 | Sprint Expert Gate | Node type review — delega ao LLM especialista, veredicto APPROVED/REJECTED deterministico | `ft/engine/runner.py` | done |
 | 6.4 | Smoke/E2E nodes | gate_smoke + tests_exist nos nodes smoke/e2e | YAML + validators | done |

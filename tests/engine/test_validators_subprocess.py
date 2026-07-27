@@ -1,8 +1,6 @@
 """Tests for validators that call subprocess (mocked)."""
 
-import pytest
 from unittest.mock import patch, MagicMock
-from pathlib import Path
 
 from ft.engine.validators.artifacts import (
     tests_pass as val_tests_pass,
@@ -10,7 +8,7 @@ from ft.engine.validators.artifacts import (
     coverage_min as val_coverage_min,
 )
 from ft.engine.validators.code import lint_clean, format_check
-from ft.engine.validators.gates import gate_delivery, gate_smoke
+from ft.engine.validators.gates import gate_delivery
 
 
 # ---------------------------------------------------------------------------

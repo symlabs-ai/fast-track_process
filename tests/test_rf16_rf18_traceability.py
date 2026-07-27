@@ -7,7 +7,6 @@ RF-18: sessões de agentes salvas em project/docs/sessions/
 """
 
 import pytest
-from pathlib import Path
 
 from ft.engine.state import StateManager
 from ft.engine.session_tracker import SessionTracker
@@ -178,7 +177,7 @@ class TestSessionTracker:
         """Arquivo de sessão deve ser criado em sessions/."""
         sessions_dir = tmp_path / "project" / "docs" / "sessions"
         tracker = SessionTracker(sessions_dir)
-        session_id = tracker.start_session(agent="ft_coach", node="ft.mdd.01.hipotese")
+        tracker.start_session(agent="ft_coach", node="ft.mdd.01.hipotese")
         session_files = list(sessions_dir.glob("*.yml"))
         assert len(session_files) >= 1
 

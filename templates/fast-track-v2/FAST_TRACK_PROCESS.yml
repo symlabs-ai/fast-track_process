@@ -32,7 +32,7 @@ input_policy:
 artifact_policy:
   canonical:
     - docs/PRD.md
-    - docs/tech_stack.md
+    - docs/TECH_STACK.md
     - docs/hipotese.md
     - docs/test_data.md
     - docs/api_contract.md
@@ -159,7 +159,7 @@ nodes:
     executor: llm_coder
     sprint: sprint-02-planning
     outputs:
-      - docs/tech_stack.md
+      - docs/TECH_STACK.md
     requires_approval: true
     prompt: |
       Proponha o Tech Stack para o projeto com base no PRD e na hipotese.
@@ -177,10 +177,10 @@ nodes:
       consumindo APIs de terceiros). Quando houver backend proprio + frontend,
       use `mixed` obrigatoriamente, independentemente do que o PRD disser.
 
-      Produza o documento docs/tech_stack.md com todas as secoes usuais
+      Produza o documento docs/TECH_STACK.md com todas as secoes usuais
       (linguagem, frameworks, dependencias, deploy) mais a linha interface_type.
     validators:
-      - file_exists: docs/tech_stack.md
+      - file_exists: docs/TECH_STACK.md
       - min_lines: 10
       - has_sections:
           - interface_type
@@ -199,7 +199,7 @@ nodes:
       Leia obrigatoriamente:
         - docs/PRD.md
         - docs/TASK_LIST.md
-        - docs/tech_stack.md
+        - docs/TECH_STACK.md
 
       FORMATO OBRIGATÓRIO:
         - Todos os diagramas devem usar sintaxe Mermaid dentro de blocos ```mermaid
@@ -272,7 +272,7 @@ nodes:
 
       Leia obrigatoriamente:
         - docs/PRD.md         (entidades e user stories)
-        - docs/tech_stack.md  (interface_type e stack)
+        - docs/TECH_STACK.md  (interface_type e stack)
         - docs/test_data.md   (entidades da massa de dados)
 
       SE interface_type for cli_only:
@@ -311,7 +311,7 @@ nodes:
     sprint: sprint-02-planning
     validators:
       - file_exists: docs/TASK_LIST.md
-      - file_exists: docs/tech_stack.md
+      - file_exists: docs/TECH_STACK.md
       - file_exists: docs/diagrams/architecture.md
       - file_exists: docs/test_data.md
       - file_exists: docs/api_contract.md
@@ -330,7 +330,7 @@ nodes:
 
       PASSO 1 — Leia obrigatoriamente:
         - docs/PRD.md          (especialmente a seção Contrato de Navegação UI)
-        - docs/tech_stack.md   (para verificar interface_type)
+        - docs/TECH_STACK.md   (para verificar interface_type)
 
       PASSO 2 — Se interface_type for cli_only ou api:
         Crie um ui_criteria.md mínimo com o conteúdo abaixo e encerre com DONE:
@@ -371,7 +371,7 @@ nodes:
     sprint: sprint-02-planning
     validators:
       - read_artifact:
-          path: docs/tech_stack.md
+          path: docs/TECH_STACK.md
           key: interface_type
           pattern: 'interface_type:\s*(\w+)'
     next: decision.interface_type
@@ -692,7 +692,7 @@ nodes:
       Crie o entry point HTTP do projeto: main.py na raiz.
 
       Leia obrigatoriamente:
-        - docs/tech_stack.md     (interface_type e stack)
+        - docs/TECH_STACK.md     (interface_type e stack)
         - docs/api_contract.md   (FONTE DE VERDADE dos endpoints — implemente EXATAMENTE esses paths)
         - docs/PRD.md            (seção 8.6 Contrato de Integração HTTP)
         - src/                           (domínio existente para registrar os routers)
@@ -794,7 +794,7 @@ nodes:
 
       Leia obrigatoriamente:
         - docs/test_data.md     (massa de dados para inserção)
-        - docs/tech_stack.md    (interface_type e stack)
+        - docs/TECH_STACK.md    (interface_type e stack)
         - docs/api_contract.md  (FONTE DE VERDADE dos endpoints HTTP)
         - main.py                       (entry point atual do servidor)
         - src/                          (domínio e routers existentes)
@@ -1064,7 +1064,7 @@ nodes:
       === PASSO 1: LEITURA OBRIGATÓRIA ===
 
       Leia antes de qualquer outra coisa:
-        - docs/tech_stack.md
+        - docs/TECH_STACK.md
         - docs/PRD.md
         - src/ ou backend/ (código do servidor — leia o entry point completo)
         - frontend/src/ (se existir)
@@ -1449,7 +1449,7 @@ nodes:
       precisa testar o produto pessoalmente.
 
       PASSO 1 — Detectar tipo de interface:
-        Leia docs/tech_stack.md e identifique o interface_type (ui, api, cli, mixed).
+        Leia docs/TECH_STACK.md e identifique o interface_type (ui, api, cli, mixed).
 
       PASSO 2 — Apresentar o produto para teste:
 
@@ -1519,7 +1519,7 @@ nodes:
         - docs/PRD.md (o que foi planejado)
         - docs/retro.md (problemas encontrados)
         - docs/TASK_LIST.md (o que foi implementado)
-        - docs/tech_stack.md (decisões técnicas)
+        - docs/TECH_STACK.md (decisões técnicas)
         - docs/stakeholder-feedback.md (feedback do playtest)
         - docs/forgebase-audit.md (auditoria técnica, se existir)
         - docs/e2e-browser-report.md (screenshots, se existir)

@@ -4,6 +4,51 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [Unreleased]
+
+### Sessões persistentes e `mvp-builder-fast`
+
+- Processos podem optar por `session_policy`: Claude retoma por session ID e
+  Codex por thread ID, com afinidade por sprint, lanes paralelas/review e
+  reidratação única quando a conversa do provider deixa de existir.
+- O plano interno consultivo usa a demanda/documentos iniciais, é salvo no
+  state antes do primeiro node e arquivado no fechamento; grafo, validators,
+  decisions, retries e human gates continuam sob controle Python.
+- Novo template `mvp-builder-fast`, derivado do processo completo, consolida
+  sequências seguras e reduz o caminho de produto novo de 32 para 23 turns
+  incluindo o planejamento, sem fundir RED, GREEN ou refactor.
+- Novo template `feature-fast` preserva integralmente o grafo, os human gates,
+  receipts e validators de `feature`, acrescentando plano interno, sessão por
+  sprint e lane independente de review.
+- Trace e relatório final distinguem conversas criadas, retomadas, recuperadas,
+  startup até primeiro evento e duração do turn.
+- Recovery de review após timeout preserva explicitamente os achados semânticos
+  da tentativa interrompida; um formatador posterior não pode transformar uma
+  rejeição parcial em aprovação apenas para satisfazer validators de estrutura.
+
+### Segurança, concorrência e neutralidade do engine
+
+- Fan-out paralelo passou a isolar branch e worktree por ciclo, validar
+  sobreposição pai/filho e preservar conflitos/falhas para diagnóstico.
+- Provisionamento de organizações passou a ser transacional: registro remoto,
+  ownership e link da caller são obrigatórios; marker e roteamento só são
+  gravados após sucesso integral, sem expor a admin key no argv.
+- OpenCode deixou de conter fallbacks de produto: todos os nodes voltam a
+  delegar a tarefa declarada, mantendo apenas política genérica de transporte.
+- Logging, correção, enriquecimento de API e remoção segura de artefatos foram
+  extraídos dos módulos monolíticos para contratos testáveis.
+
+### Empacotamento e contratos
+
+- A versão do runtime passa a vir de `ft/__about__.py`; `ft --version`, logs e
+  metadata do wheel usam a mesma fonte.
+- `docs/TECH_STACK.md` é o caminho canônico; o alias minúsculo continua
+  legível somente para compatibilidade com projetos existentes.
+- Suporte declarado para Linux/POSIX e Python 3.11/3.12, com matriz de CI e
+  smoke test do wheel. Licença MIT e metadata de projeto foram adicionadas.
+- Scaffolds demonstrativos e o processo V2 duplicado na raiz foram removidos;
+  o catálogo em `templates/` é a única fonte distribuída de processos.
+
 ## [v0.15.4] - 2026-07-17
 
 ### Fix: registro no gateway usa Authorization: Bearer + READMEs dos templates
@@ -595,7 +640,7 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [Unreleased]
+## Histórico pré-v0.8.27 (antigo `Unreleased`)
 
 - feat(engine): `ft-engine` agora permite escolher o executor LLM por comando com `--claude` ou `--codex`
 - feat(engine): a escolha do executor é persistida em `project/state/engine_state.yml` (`llm_engine`) e reaplicada em `continue`, `approve`, `reject`, `status` e `run`

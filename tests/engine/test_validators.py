@@ -923,6 +923,12 @@ class TestCheckIndependence:
             ["src/b.py", "src/shared.py"]
         ) is False
 
+    def test_parent_child_overlap(self):
+        assert check_independence(["src/"], ["src/pkg/module.py"]) is False
+
+    def test_path_prefix_is_not_an_overlap(self):
+        assert check_independence(["src/a"], ["src/ab"]) is True
+
 
 # ---------------------------------------------------------------------------
 # gates

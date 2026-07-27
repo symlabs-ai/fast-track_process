@@ -8,7 +8,6 @@ RF-05: métricas acumuladas (steps, cobertura, tokens)
 """
 
 import pytest
-from pathlib import Path
 
 from ft.engine.state import StateManager
 from ft.engine.cycle_manager import CycleManager

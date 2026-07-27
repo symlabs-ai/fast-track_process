@@ -11,6 +11,7 @@ import pytest
 from ft.project import bootstrap_project
 from ft.project.bootstrap import DEFAULT_INIT_TEMPLATE
 from ft.project.init_scripts import (
+    execute_and_record_init_template,
     InitScriptError,
     init_marker_path,
     read_init_marker,
@@ -143,6 +144,40 @@ def test_run_init_template_blocks_on_failure(tmp_path):
 
     with pytest.raises(InitScriptError, match="exit code 3: boom"):
         run_init_template(descriptor, project, mode="init")
+
+
+def test_execute_and_record_does_not_publish_marker_after_script_failure(tmp_path):
+    catalog_root = tmp_path / "catalog"
+    _write_init_template(
+        catalog_root,
+        "remote-org",
+        script_body="echo remote registration failed >&2\nexit 7",
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    descriptor = TemplateCatalog(catalog_root).get_init("remote-org")
+
+    with pytest.raises(InitScriptError, match="exit code 7"):
+        execute_and_record_init_template(descriptor, project)
+
+    assert read_init_marker(project) == {}
+
+
+def test_execute_and_record_publishes_marker_only_after_all_scripts_pass(tmp_path):
+    catalog_root = tmp_path / "catalog"
+    _write_init_template(
+        catalog_root,
+        "remote-org",
+        script_body="echo remote registration confirmed",
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    descriptor = TemplateCatalog(catalog_root).get_init("remote-org")
+
+    results = execute_and_record_init_template(descriptor, project)
+
+    assert results[0].output == "remote registration confirmed"
+    assert read_init_marker(project)["remote-org"]["digest"] == descriptor.source_digest
 
 
 def test_marker_records_and_reads_applied_templates(tmp_path):

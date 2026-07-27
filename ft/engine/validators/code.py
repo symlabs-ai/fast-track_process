@@ -32,7 +32,7 @@ def lint_clean(
 
     # Contar erros
     lines = result.stdout.strip().splitlines()
-    error_lines = [l for l in lines if "Found" in l]
+    error_lines = [line for line in lines if "Found" in line]
     summary = error_lines[-1] if error_lines else f"{len(lines)} problemas"
     return False, f"lint_clean FAIL: {summary}"
 
@@ -60,7 +60,7 @@ def format_check(
         return True, "format_check: codigo formatado"
 
     lines = result.stderr.strip().splitlines() if result.stderr else result.stdout.strip().splitlines()
-    unformatted = [l for l in lines if "would reformat" in l.lower()]
+    unformatted = [line for line in lines if "would reformat" in line.lower()]
     count = len(unformatted)
     return False, f"format_check FAIL: {count} arquivos nao formatados"
 

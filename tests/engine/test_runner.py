@@ -1,12 +1,15 @@
 """Unit tests for ft.engine.runner (LLM mocked)."""
 
-import importlib.util
 import json
 
 import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+from ft.engine.api_context import (
+    enrich_api_contract_feedback,
+    extract_api_endpoint_candidates,
+)
 from ft.engine.graph import load_graph
 from ft.engine.runner import (
     StepRunner,
@@ -14,8 +17,6 @@ from ft.engine.runner import (
     ValidationResult,
     build_task_prompt,
     _brief_cycle_objective,
-    _opencode_compact_bundles_enabled,
-    _opencode_compact_bundle_prompt,
 )
 from ft.engine.delegate import DelegateResult
 from ft.engine.state import EngineState
@@ -932,214 +933,17 @@ nodes:
         )
         node = runner.graph.get_node("ft.plan.03.api_contract")
 
-        feedback = runner._enrich_validation_feedback(node, "api_contract_complete FAIL")
+        feedback = enrich_api_contract_feedback(
+            node.id,
+            "api_contract_complete FAIL",
+            project_root,
+        )
 
         assert "DIAGNOSTICO ESPECIFICO DO CONTRATO DE API" in feedback
         assert "| GET | /health | Health check |" in feedback
         assert "| POST | /api/clientes | Criar cliente |" in feedback
         assert "GET frases soltas sem path" not in feedback
         assert "ARTEFATO INVALIDO ATUAL" not in feedback
-
-    def test_opencode_api_contract_repair_normalizes_table_from_docs(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "| GET | `/api/clientes` | Listar clientes |\n"
-            "| POST | `/api/clientes` | Criar cliente |\n"
-            "| GET | `/api/servicos` | Listar serviços |\n"
-            "| POST | `/api/agendamentos` | Criar agendamento |\n",
-            encoding="utf-8",
-        )
-        (docs / "api_contract.md").write_text(
-            "## Base URL\n\n`http://localhost:8000`\n\n## Endpoints\n\nGET frases soltas\n",
-            encoding="utf-8",
-        )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.plan.03.api_contract
-    type: document
-    title: API Contract
-    executor: claude
-    outputs:
-      - docs/api_contract.md
-    validators:
-      - file_exists: docs/api_contract.md
-      - has_sections:
-          - Base URL
-          - Endpoints
-      - document_quality:
-          path: docs/api_contract.md
-          min_lines_count: 25
-      - api_contract_complete:
-          path: docs/api_contract.md
-          min_endpoints: 3
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.plan.03.api_contract")
-        validation = run_validators(node, str(project_root), state_dir=str(state_dir))
-        assert not validation.passed
-
-        repaired = runner._try_repair_api_contract(node, "opencode", validation)
-
-        content = (docs / "api_contract.md").read_text(encoding="utf-8")
-        assert repaired is True
-        assert "| GET | /health |" in content
-        assert "| POST | /api/clientes |" in content
-        assert runner.state_mgr.load().current_node == "ft.end"
-
-    def test_opencode_api_contract_repair_uses_game_endpoints_for_neon_stack(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "# PRD\n\nNeon Stack e um jogo web de blocos caindo com arena, placar e game over.\n",
-            encoding="utf-8",
-        )
-        (docs / "ui_criteria.md").write_text(
-            "# UI\n\n- C03: Arena/Jogo com peça ativa e score.\n",
-            encoding="utf-8",
-        )
-        (docs / "api_contract.md").write_text(
-            "## Base URL\n\n`http://localhost:8000`\n\n## Endpoints\n\n| GET | /health |\n",
-            encoding="utf-8",
-        )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.plan.03.api_contract
-    type: document
-    title: API Contract
-    executor: claude
-    outputs:
-      - docs/api_contract.md
-    validators:
-      - file_exists: docs/api_contract.md
-      - has_sections:
-          - Base URL
-          - Endpoints
-      - document_quality:
-          path: docs/api_contract.md
-          min_lines_count: 25
-      - api_contract_complete:
-          path: docs/api_contract.md
-          min_endpoints: 3
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.plan.03.api_contract")
-        validation = run_validators(node, str(project_root), state_dir=str(state_dir))
-
-        repaired = runner._try_repair_api_contract(node, "opencode", validation)
-
-        content = (docs / "api_contract.md").read_text(encoding="utf-8")
-        assert repaired is True
-        assert "| GET | /api/daily-seed |" in content
-        assert "| POST | /api/game-sessions |" in content
-        assert "| POST | /api/scores |" in content
-        assert "Cliente:" not in content
-
-    def test_opencode_test_data_repair_uses_relative_game_dates_for_neon_stack(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "# PRD\n\nNeon Stack e um jogo web de blocos caindo com arena, placar e game over.\n",
-            encoding="utf-8",
-        )
-        (docs / "ui_criteria.md").write_text(
-            "# UI\n\n- C03: Arena/Jogo com peça ativa e score.\n",
-            encoding="utf-8",
-        )
-        (docs / "test_data.md").write_text(
-            "# Test Data\n\n- Partida em 2026-07-08 com score 100.\n",
-            encoding="utf-8",
-        )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.plan.05.test_data
-    type: document
-    title: Test Data
-    executor: claude
-    outputs:
-      - docs/test_data.md
-    validators:
-      - file_exists: docs/test_data.md
-      - document_quality:
-          path: docs/test_data.md
-          min_lines_count: 12
-          max_lines_count: 120
-      - relative_dates_only:
-          path: docs/test_data.md
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.plan.05.test_data")
-        validation = run_validators(node, str(project_root), state_dir=str(state_dir))
-
-        repaired = runner._try_repair_test_data(node, "opencode", validation)
-
-        content = (docs / "test_data.md").read_text(encoding="utf-8")
-        assert repaired is True
-        assert "HOJE" in content
-        assert "HOJE+1" in content
-        assert "2026" not in content
-        assert "game-sessions" in content
-        assert "Cliente Acceptance" not in content
-        assert runner.state_mgr.load().current_node == "ft.end"
 
     def test_api_contract_candidates_normalize_task_list_paths_without_api_prefix(self, tmp_path):
         project_root = tmp_path / "project"
@@ -1154,110 +958,12 @@ nodes:
             "4. Criar endpoint GET `/cobrancas` retorna total_pendente.\n",
             encoding="utf-8",
         )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.plan.03.api_contract
-    type: document
-    title: API Contract
-    executor: claude
-    outputs:
-      - docs/api_contract.md
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-        )
-
-        candidates = runner._extract_api_endpoint_candidates()
+        candidates = extract_api_endpoint_candidates(project_root)
 
         assert ("POST", "/api/clientes", "com validação.") in candidates
         assert any(method == "GET" and path == "/api/clientes" for method, path, _ in candidates)
         assert any(method == "POST" and path == "/api/agenda" for method, path, _ in candidates)
         assert any(method == "GET" and path == "/api/cobrancas" for method, path, _ in candidates)
-
-    def test_opencode_api_contract_repair_runs_after_llm_failure(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "| GET | `/api/clientes` | Listar clientes |\n"
-            "| POST | `/api/clientes` | Criar cliente |\n"
-            "| GET | `/api/servicos` | Listar servicos |\n"
-            "| POST | `/api/agendamentos` | Criar agendamento |\n",
-            encoding="utf-8",
-        )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.plan.03.api_contract
-    type: document
-    title: API Contract
-    executor: claude
-    outputs:
-      - docs/api_contract.md
-    validators:
-      - file_exists: docs/api_contract.md
-      - has_sections:
-          - Base URL
-          - Endpoints
-      - document_quality:
-          path: docs/api_contract.md
-          min_lines_count: 25
-      - api_contract_complete:
-          path: docs/api_contract.md
-          min_endpoints: 3
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.plan.03.api_contract")
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DISABLE_FALLBACKS": "1"}),
-            patch(
-                "ft.engine.runner.delegate_to_llm",
-                return_value=DelegateResult(
-                    success=False,
-                    output='Error: "Context size has been exceeded."',
-                    files_created=[],
-                    files_modified=[],
-                ),
-            ) as delegate_mock,
-        ):
-            runner._run_llm_step(node)
-
-        content = (docs / "api_contract.md").read_text(encoding="utf-8")
-        assert delegate_mock.called
-        assert "| GET | /health |" in content
-        assert "| GET | /api/clientes |" in content
-        assert "| POST | /api/agendamentos |" in content
-        assert runner.state_mgr.load().current_node == "ft.end"
 
     def test_opencode_code_nodes_allow_native_edit_tools_by_default(self, tmp_path):
         project_root = tmp_path / "project"
@@ -1374,18 +1080,20 @@ nodes:
         with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect):
             runner._run_llm_step(node)
 
-    def test_opencode_game_frontend_delegates_instead_of_static_fallback(self, tmp_path):
+    def test_opencode_frontend_delegates_project_content_without_substitution(
+        self, tmp_path
+    ):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
         docs = project_root / "docs"
         state_dir.mkdir(parents=True)
         docs.mkdir(parents=True)
         (docs / "PRD.md").write_text(
-            "# PRD\n\nNeon Stack e um jogo web de blocos caindo com arena, pause e game over.\n",
+            "# PRD\n\nLunar Atlas exibe órbitas, fases e missões científicas.\n",
             encoding="utf-8",
         )
         (docs / "ui_criteria.md").write_text(
-            "# UI\n\n- C01: Menu Neon Stack.\n- C03: Arena/Jogo com peca ativa, ghost piece e hold.\n",
+            "# UI\n\n- C01: Mapa lunar.\n- C02: Painel de missão e formulário de observação.\n",
             encoding="utf-8",
         )
 
@@ -1432,7 +1140,8 @@ nodes:
             )
             (frontend / "scripts" / "build.mjs").write_text("console.log('ok')\n", encoding="utf-8")
             (frontend / "src" / "main.js").write_text(
-                "const title = 'Neon Stack';\nconst html = '<form><button type=\"submit\">Criar partida</button></form>';\n",
+                "const title = 'Lunar Atlas';\n"
+                "const html = '<form><button type=\"submit\">Registrar observação</button></form>';\n",
                 encoding="utf-8",
             )
             return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
@@ -1442,269 +1151,11 @@ nodes:
 
         assert delegated.called
         main_js = (project_root / "project/frontend/src/main.js").read_text(encoding="utf-8")
-        assert "Neon Stack" in main_js
-        assert "ServiceMate" not in main_js
-        assert "clientes" not in main_js.lower()
-        assert "catalogo" not in main_js.lower()
-        assert "cobrancas" not in main_js.lower()
+        assert "Lunar Atlas" in main_js
+        assert "Registrar observação" in main_js
         assert runner.state_mgr.load().current_node == "ft.end"
 
-    def test_opencode_game_frontend_repair_writes_playable_canvas_when_provider_cannot_write(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "# PRD\n\nNeon Stack e um jogo web de blocos caindo com arena, pause e game over.\n",
-            encoding="utf-8",
-        )
-        (docs / "ui_criteria.md").write_text(
-            "# UI\n\n- C01: Menu Neon Stack.\n- C03: Arena/Jogo com peca ativa, ghost piece e hold.\n",
-            encoding="utf-8",
-        )
-        (docs / "api_contract.md").write_text(
-            "## Base URL\n\n`http://localhost:8000`\n\n## Endpoints\n\n| Método | Path | Descrição | Request | Response | Erros |\n|---|---|---|---|---|---|\n| GET | /health | ok | - | ok | 500 |\n| POST | /api/game-sessions | Criar partida | {} | {} | 400 |\n",
-            encoding="utf-8",
-        )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.frontend.02.implement
-    type: build
-    title: Implement Frontend
-    executor: claude
-    outputs:
-      - project/frontend/src/
-    validators:
-      - command_succeeds: cd project/frontend && npm run build --silent
-      - command_succeeds: "python -c \\"from pathlib import Path; text=chr(10).join(p.read_text(encoding='utf-8', errors='ignore') for p in Path('project/frontend/src').rglob('*') if p.is_file()).lower(); assert '<form' in text and 'submit' in text and 'criar' in text, 'frontend sem fluxo de criacao via UI'\\""
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.frontend.02.implement")
-        validation = run_validators(node, str(project_root), state_dir=str(state_dir))
-
-        repaired = runner._try_repair_opencode_frontend_implementation(node, "opencode", validation)
-
-        main_js = (project_root / "project/frontend/src/main.js").read_text(encoding="utf-8")
-        assert repaired is True
-        assert "canvas" in main_js
-        assert "requestAnimationFrame" in main_js
-        assert "keydown" in main_js
-        assert "collides" in main_js
-        assert "dropPiece" in main_js
-        assert "ServiceMate" not in main_js
-        assert runner.state_mgr.load().current_node == "ft.end"
-
-    def test_game_playability_guard_rejects_static_arena_mock(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        frontend_src = project_root / "project/frontend/src"
-        state_dir.mkdir(parents=True)
-        frontend_src.mkdir(parents=True)
-        (frontend_src / "main.js").write_text(
-            """
-const board = ['..........'];
-function renderArena() {
-  return '<section><h1>Arena/Jogo</h1><button>Limpar linha</button></section>';
-}
-""",
-            encoding="utf-8",
-        )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-
-        with pytest.raises(RuntimeError, match="gameplay guard falhou"):
-            runner._assert_opencode_game_playability_contract(project_root)
-
-    def test_game_visual_report_requires_playable_e2e_evidence(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        shots = docs / "screenshots/e2e"
-        state_dir.mkdir(parents=True)
-        shots.mkdir(parents=True)
-        docs.mkdir(exist_ok=True)
-        (docs / "ui_criteria.md").write_text(
-            "# UI\n\n- C01: Neon Stack.\n- C03: Arena/Jogo com peca ativa e ghost piece.\n",
-            encoding="utf-8",
-        )
-        (docs / "e2e-report.md").write_text(
-            "# E2E Report\n\nResultado: PASS\n\n| Tela | Ação |\n|---|---|\n| Arena | CREATE GAME |\n",
-            encoding="utf-8",
-        )
-        for idx in range(9):
-            (shots / f"arena-{idx}.png").write_bytes(b"\x89PNG\r\n" + (b"x" * 1500))
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-
-        with pytest.raises(RuntimeError, match="jogabilidade real"):
-            runner._write_opencode_visual_report(project_root)
-
-    def test_completed_game_cycle_reopens_blocked_when_playability_evidence_is_missing(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        frontend_src = project_root / "project/frontend/src"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        frontend_src.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "# PRD\n\nNeon Stack e um jogo web de blocos caindo com arena e game over.\n",
-            encoding="utf-8",
-        )
-        (docs / "ui_criteria.md").write_text(
-            "# UI\n\n- C01: Neon Stack.\n- C03: Arena/Jogo com peca ativa.\n",
-            encoding="utf-8",
-        )
-        (docs / "e2e-report.md").write_text("# E2E\n\nResultado: PASS\n", encoding="utf-8")
-        (frontend_src / "main.js").write_text(
-            "function renderArena(){ return '<h1>Arena/Jogo</h1>'; }\n",
-            encoding="utf-8",
-        )
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.e2e.02.screenshots
-    type: build
-    title: E2E
-    executor: claude
-    next: gate.e2e
-  - id: gate.e2e
-    type: gate
-    title: Gate E2E
-    executor: python
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        state = runner.state_mgr.load()
-        state.completed_nodes = ["ft.e2e.02.screenshots", "gate.e2e", "ft.end"]
-        state.gate_log = {"ft.e2e.02.screenshots": "PASS", "gate.e2e": "PASS", "ft.end": "PASS"}
-        state.current_node = None
-        state.node_status = "done"
-        runner.state_mgr.save()
-
-        assert runner.audit_completed_cycle() is True
-        state = runner.state_mgr.load()
-        assert state.node_status == "blocked"
-        assert state.current_node == "ft.e2e.02.screenshots"
-        assert "gameplay guard falhou" in state.blocked_reason
-        assert state.completed_nodes == []
-
-    def test_opencode_scaffold_uses_deterministic_fallback(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        state_dir.mkdir(parents=True)
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.frontend.01.scaffold
-    type: build
-    title: Scaffold
-    executor: claude
-    outputs:
-      - project/frontend/
-      - .build_ok
-    validators:
-      - file_exists: project/frontend/package.json
-      - file_exists: .build_ok
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.frontend.01.scaffold")
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
-            runner._run_llm_step(node)
-
-        assert (project_root / "project/frontend/package.json").exists()
-        assert (project_root / ".build_ok").exists()
-        assert runner.state_mgr.load().current_node == "ft.end"
-
-    def test_opencode_scaffold_delegates_when_compact_bundles_disabled(self, tmp_path):
+    def test_opencode_scaffold_delegates_by_default(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
         state_dir.mkdir(parents=True)
@@ -1751,340 +1202,16 @@ nodes:
             (project_root / ".build_ok").write_text("ok\n", encoding="utf-8")
             return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
 
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "FT_OPENCODE_DETERMINISTIC_FALLBACKS": "",
-                    "FT_OPENCODE_COMPACT_BUNDLES": "0",
-                },
-            ),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect) as delegate_mock,
-        ):
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            side_effect=delegate_side_effect,
+        ) as delegate_mock:
             runner._run_llm_step(node)
 
         state = runner.state_mgr.load()
         assert delegate_mock.called
         assert state.metrics["llm_calls"] == 1
         assert state.current_node == "ft.end"
-
-    def test_opencode_scaffold_repairs_missing_build_script_after_validation(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        state_dir.mkdir(parents=True)
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.frontend.01.scaffold
-    type: build
-    title: Scaffold
-    executor: claude
-    outputs:
-      - project/frontend/
-      - .build_ok
-    validators:
-      - file_exists: project/frontend/package.json
-      - command_succeeds: cd project/frontend && npm install --silent && npm run build --silent
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-
-        frontend = project_root / "project" / "frontend"
-        frontend.mkdir(parents=True)
-        (frontend / "package.json").write_text('{"name":"bad-scaffold","version":"1.0.0"}\n', encoding="utf-8")
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.frontend.01.scaffold")
-        validation = run_validators(node, str(project_root), state_dir=str(state_dir))
-        assert not validation.passed
-
-        repaired = runner._try_repair_opencode_frontend_scaffold(node, "opencode", validation)
-
-        package_json = (frontend / "package.json").read_text(encoding="utf-8")
-        assert repaired is True
-        assert '"build": "node scripts/build.mjs"' in package_json
-        assert (frontend / "scripts" / "build.mjs").exists()
-        assert (project_root / ".build_ok").exists()
-        assert runner.state_mgr.load().current_node == "ft.end"
-
-    def test_opencode_scaffold_repair_creates_missing_package(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        state_dir.mkdir(parents=True)
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.frontend.01.scaffold
-    type: build
-    title: Scaffold
-    executor: claude
-    outputs:
-      - project/frontend/
-      - .build_ok
-    validators:
-      - file_exists: project/frontend/package.json
-      - command_succeeds: cd project/frontend && npm run build --silent
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-
-        frontend = project_root / "project" / "frontend"
-        frontend.mkdir(parents=True)
-        (frontend / "package.json.creating.package.manifest").write_text('{"name":"wrong"}\n', encoding="utf-8")
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.frontend.01.scaffold")
-        validation = run_validators(node, str(project_root), state_dir=str(state_dir))
-        assert not validation.passed
-
-        repaired = runner._try_repair_opencode_frontend_scaffold(node, "opencode", validation)
-
-        package = json.loads((frontend / "package.json").read_text(encoding="utf-8"))
-        assert repaired is True
-        assert package["scripts"]["build"] == "node scripts/build.mjs"
-        assert (frontend / "scripts" / "build.mjs").exists()
-
-    def test_opencode_frontend_implement_uses_deterministic_fallback(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        frontend = project_root / "project" / "frontend"
-        state_dir.mkdir(parents=True)
-        frontend.mkdir(parents=True)
-        (frontend / "package.json").write_text("{ broken json\n", encoding="utf-8")
-        (frontend / "package.json.newbuildmjsjunk").write_text("junk\n", encoding="utf-8")
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.frontend.02.implement
-    type: build
-    title: Implement Frontend
-    executor: claude
-    outputs:
-      - project/frontend/src/
-    validators:
-      - command_succeeds: "cd project/frontend && npm run build --silent"
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.frontend.02.implement")
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
-            runner._run_llm_step(node)
-
-        assert (frontend / "src/main.js").exists()
-        main_js = (frontend / "src/main.js").read_text(encoding="utf-8")
-        assert 'data-testid="cliente-form"' in main_js
-        assert 'data-testid="servico-form"' in main_js
-        assert 'data-testid="agenda-form"' in main_js
-        assert 'data-testid="cobranca-form"' in main_js
-        assert "Cadastrar cliente" in main_js
-        assert "Criar agendamento" in main_js
-        assert not (frontend / "package.json.newbuildmjsjunk").exists()
-        assert runner.state_mgr.load().current_node == "ft.end"
-
-    def test_opencode_planning_docs_use_deterministic_fallbacks(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        state_dir.mkdir(parents=True)
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.plan.01.task_list
-    type: document
-    title: Task List
-    executor: claude
-    outputs:
-      - docs/task_list.md
-    validators:
-      - file_exists: docs/task_list.md
-    next: ft.plan.03.api_contract
-  - id: ft.plan.03.api_contract
-    type: document
-    title: API
-    executor: claude
-    outputs:
-      - docs/api_contract.md
-    validators:
-      - file_exists: docs/api_contract.md
-      - has_sections:
-          - Base URL
-          - Endpoints
-    next: ft.plan.04.ui_criteria
-  - id: ft.plan.04.ui_criteria
-    type: document
-    title: UI
-    executor: claude
-    outputs:
-      - docs/ui_criteria.md
-    validators:
-      - file_exists: docs/ui_criteria.md
-    next: ft.plan.05.test_data
-  - id: ft.plan.05.test_data
-    type: document
-    title: Data
-    executor: claude
-    outputs:
-      - docs/test_data.md
-    validators:
-      - file_exists: docs/test_data.md
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
-            for node_id in (
-                "ft.plan.01.task_list",
-                "ft.plan.03.api_contract",
-                "ft.plan.04.ui_criteria",
-                "ft.plan.05.test_data",
-            ):
-                runner._run_llm_step(runner.graph.get_node(node_id))
-
-        assert runner.state_mgr.load().current_node == "ft.end"
-        api_contract = (project_root / "docs/api_contract.md").read_text(encoding="utf-8")
-        assert "## Base URL" in api_contract
-        assert "## Endpoints" in api_contract
-        assert "POST /api/clientes" in api_contract
-        assert "POST /api/cobrancas" in api_contract
-        ui_criteria = (project_root / "docs/ui_criteria.md").read_text(encoding="utf-8")
-        assert "C01:" in ui_criteria
-        assert "C13:" in ui_criteria
-        assert "ServiceMate" not in ui_criteria
-        assert "Hoje+1" in (project_root / "docs/test_data.md").read_text(encoding="utf-8")
-
-    def test_opencode_tdd_red_and_green_use_deterministic_fallbacks(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        state_dir.mkdir(parents=True)
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.tdd.01.red
-    type: test_red
-    title: Red
-    executor: claude
-    outputs:
-      - project/tests/
-    validators:
-      - file_exists: project/tests/
-      - command_succeeds: "cd project && python -c \\"from pathlib import Path; import py_compile; files=list(Path('tests').rglob('test_*.py')); assert files; [py_compile.compile(str(p), doraise=True) for p in files]\\""
-    next: ft.tdd.02.green
-  - id: ft.tdd.02.green
-    type: test_green
-    title: Green
-    executor: claude
-    outputs:
-      - project/backend/
-    validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -q"
-    next: ft.tdd.03.refactor
-  - id: ft.tdd.03.refactor
-    type: refactor
-    title: Refactor
-    executor: claude
-    validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -q"
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
-            runner._run_llm_step(runner.graph.get_node("ft.tdd.01.red"))
-            assert (project_root / "project/tests/test_backend_contract.py").exists()
-            assert runner.state_mgr.load().current_node == "ft.tdd.02.green"
-
-            runner._run_llm_step(runner.graph.get_node("ft.tdd.02.green"))
-            assert (project_root / "project/backend/main.py").exists()
-            assert runner.state_mgr.load().current_node == "ft.tdd.03.refactor"
-
-            (project_root / "project/backend/main.py").write_text("broken\n", encoding="utf-8")
-            runner._run_llm_step(runner.graph.get_node("ft.tdd.03.refactor"))
-            assert runner.state_mgr.load().current_node == "ft.end"
 
     def test_rewinds_to_tdd_red_when_completed_red_quality_is_invalid(self, tmp_path):
         project_root = tmp_path / "project"
@@ -2159,39 +1286,32 @@ nodes:
         assert "ft.tdd.01.red" not in state.gate_log
         assert "tests" not in state.artifacts
 
-    def test_rewinds_to_tdd_red_when_game_project_has_admin_e2e_tests(self, tmp_path):
+    def test_does_not_rewind_native_quality_sprint_that_reuses_legacy_ids(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
-        docs = project_root / "docs"
         state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text("# PRD\n\nNeon Stack jogo de blocos caindo com arena e game over.\n")
-        (docs / "ui_criteria.md").write_text("# UI\n\n- C03: Arena/Jogo com peca ativa e hold.\n")
 
         process_path = tmp_path / "process.yml"
         process_path.write_text(
             """
-id: test_process
+id: native_quality
 version: "0.1.0"
-title: "Test"
+title: "Native quality"
 nodes:
   - id: ft.tdd.01.red
-    type: test_red
-    title: Red
+    type: build
+    title: Android quality
     executor: claude
     outputs:
-      - project/tests/
+      - project/android/app/src/test/
     validators:
-      - file_exists: project/tests/
-    next: ft.tdd.02.green
-  - id: ft.tdd.02.green
-    type: test_green
-    title: Green
-    executor: claude
-    outputs:
-      - project/backend/
+      - file_exists: project/android/app/src/test/
+    next: gate.tdd
+  - id: gate.tdd
+    type: gate
+    title: Android quality gate
     validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -q"
+      - command_succeeds: "true"
     next: ft.end
   - id: ft.end
     type: end
@@ -2200,13 +1320,10 @@ nodes:
             encoding="utf-8",
         )
 
-        e2e_dir = project_root / "project" / "tests" / "e2e"
-        e2e_dir.mkdir(parents=True)
-        (e2e_dir / "test_navigation.py").write_text(
-            "def test_admin_routes():\n"
-            "    assert '/clientes' and '/catalogo' and '/agenda' and '/cobrancas'\n",
-            encoding="utf-8",
-        )
+        native_tests = project_root / "project" / "android" / "app" / "src" / "test"
+        native_tests.mkdir(parents=True)
+        marker = native_tests / "ConnectionMachineTest.kt"
+        marker.write_text("class ConnectionMachineTest\n", encoding="utf-8")
 
         runner = StepRunner(
             process_path=process_path,
@@ -2216,216 +1333,20 @@ nodes:
         )
         runner.init_state()
         state = runner.state_mgr.load()
-        state.current_node = "ft.tdd.02.green"
+        state.current_node = "gate.tdd"
         state.completed_nodes = ["ft.tdd.01.red"]
         state.gate_log = {"ft.tdd.01.red": "PASS"}
-        state.artifacts = {"tests": "project/tests/"}
         state.metrics["steps_completed"] = 1
         runner.state_mgr.save()
 
-        rewound = runner._rewind_invalid_tdd_red(runner.graph.get_node("ft.tdd.02.green"), state)
-
-        assert rewound is True
-        state = runner.state_mgr.load()
-        assert state.current_node == "ft.tdd.01.red"
-        assert state.completed_nodes == []
-        assert not (project_root / "project" / "tests").exists()
-
-    def test_opencode_delivery_fallbacks_create_entrypoint_and_makefile(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        state_dir.mkdir(parents=True)
-        frontend = project_root / "project" / "frontend"
-        frontend.mkdir(parents=True)
-        (frontend / "index.html").write_text("<!doctype html><html><body>app</body></html>", encoding="utf-8")
-
-        process_path = project_root / ".ft/process/mvp-builder/process.yml"
-        process_path.parent.mkdir(parents=True)
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.delivery.01.entrypoint
-    type: build
-    title: Entry
-    executor: claude
-    validators:
-      - file_exists: project/backend/main.py
-    next: ft.delivery.03.makefile
-  - id: ft.delivery.03.makefile
-    type: build
-    title: Makefile
-    executor: claude
-    outputs:
-      - project/Makefile
-      - .ft/process/mvp-builder/scripts/serve.sh
-    validators:
-      - file_exists: project/Makefile
-      - file_exists: .ft/process/mvp-builder/scripts/serve.sh
-      - command_succeeds: "bash -n .ft/process/mvp-builder/scripts/serve.sh"
-      - command_succeeds: "make --dry-run dev 2>&1 | head -3"
-      - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \\"$(make -s url)\\""
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
+        rewound = runner._rewind_invalid_tdd_red(
+            runner.graph.get_node("gate.tdd"),
+            state,
         )
 
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
-            runner._run_llm_step(runner.graph.get_node("ft.delivery.01.entrypoint"))
-            assert (project_root / "project/backend/main.py").exists()
-            assert runner.state_mgr.load().current_node == "ft.delivery.03.makefile"
-
-            runner._run_llm_step(runner.graph.get_node("ft.delivery.03.makefile"))
-            assert (project_root / "project/Makefile").exists()
-            assert (project_root / ".ft/process/mvp-builder/scripts/serve.sh").exists()
-
-            spec = importlib.util.spec_from_file_location(
-                "generated_backend_main",
-                project_root / "project/backend/main.py",
-            )
-            assert spec and spec.loader
-            backend_main = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(backend_main)
-            assert backend_main._safe_static_path("/").name == "index.html"
-            assert backend_main._content_type(backend_main._safe_static_path("/")).startswith("text/html")
-            status, cliente = backend_main.api_create_payload(
-                "/api/clientes",
-                {"nome_completo": "Cliente HTTP", "telefone_principal": "+55 11 95555-0001"},
-            )
-            assert status == 201
-            assert cliente["nome_completo"] == "Cliente HTTP"
-            assert any(item["nome_completo"] == "Cliente HTTP" for item in backend_main.api_payload("/api/clientes")[1]["items"])
-            status, servico = backend_main.api_create_payload("/api/catalogo", {"nome": "Servico HTTP", "preco": 99})
-            assert status == 201
-            assert servico["nome"] == "Servico HTTP"
-            status, agendamento = backend_main.api_create_payload(
-                "/api/agendamentos",
-                {"titulo": "Agenda HTTP", "cliente": "Cliente HTTP"},
-            )
-            assert status == 201
-            assert agendamento["titulo"] == "Agenda HTTP"
-            status, cobranca = backend_main.api_create_payload(
-                "/api/cobrancas",
-                {"cliente": "Cliente HTTP", "descricao": "Servico HTTP", "valor": 99},
-            )
-            assert status == 201
-            assert cobranca["status"] == "pendente"
-            assert runner.state_mgr.load().current_node == "ft.end"
-
-    def test_opencode_game_delivery_stack_serves_neon_frontend_and_game_api(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        frontend = project_root / "project" / "frontend"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        frontend.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "# PRD\n\nNeon Stack e um jogo web de blocos caindo com arena e leaderboard.\n",
-            encoding="utf-8",
-        )
-        (frontend / "index.html").write_text("<!doctype html><html><body>Neon Stack</body></html>", encoding="utf-8")
-
-        process_path = project_root / ".ft/process/mvp-builder/process.yml"
-        process_path.parent.mkdir(parents=True)
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-
-        runner._write_opencode_delivery_stack(project_root)
-
-        backend_text = (project_root / "project/backend/main.py").read_text(encoding="utf-8")
-        serve_text = (
-            project_root / ".ft/process/mvp-builder/scripts/serve.sh"
-        ).read_text(encoding="utf-8")
-        assert "NeonStackHandler" in backend_text
-        assert "/api/daily-seed" in backend_text
-        assert "/api/game-sessions" in backend_text
-        assert "/api/scores" in backend_text
-        assert "ServiceMate" not in backend_text
-        assert "SERVICE_MATE" not in serve_text
-
-        spec = importlib.util.spec_from_file_location(
-            "generated_neon_backend_main",
-            project_root / "project/backend/main.py",
-        )
-        assert spec and spec.loader
-        backend_main = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(backend_main)
-        status, seed = backend_main.api_payload("/api/daily-seed")
-        assert status == 200
-        assert seed["seed"] == "NS-HOJE-ARC-01"
-        status, session = backend_main.api_create_payload("/api/game-sessions", {"seed": "NS-E2E"})
-        assert status == 201
-        assert session["status"] == "playing"
-
-    def test_opencode_game_e2e_test_compares_canvas_pixels_not_outer_html(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        docs = project_root / "docs"
-        state_dir.mkdir(parents=True)
-        docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text(
-            "# PRD\n\nNeon Stack e um jogo web de blocos caindo com arena e game over.\n",
-            encoding="utf-8",
-        )
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-
-        runner._write_opencode_game_e2e_test(project_root)
-
-        test_text = (project_root / "project/tests/e2e/test_navigation.py").read_text(encoding="utf-8")
-        assert "toDataURL()" in test_text
-        assert "outerHTML" not in test_text
-        assert 'data-testid="arena-board"' not in test_text
+        assert rewound is False
+        assert marker.is_file()
+        assert runner.state_mgr.load().current_node == "gate.tdd"
 
     def test_opencode_process_evolve_preserves_named_process_in_worktree(self, tmp_path):
         project_root = tmp_path / "project"
@@ -2479,127 +1400,24 @@ nodes:
         runner._work_dir = str(work_dir)
         runner.init_state()
 
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
+        def delegate_side_effect(**kwargs):
+            (work_dir / "docs" / "process-improvements.md").write_text(
+                "# Process Improvements\n\nNenhuma mudança proposta.\n",
+                encoding="utf-8",
+            )
+            return DelegateResult(True, "DONE", [], ["docs/process-improvements.md"])
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            side_effect=delegate_side_effect,
+        ) as delegated:
             runner._run_llm_step(runner.graph.get_node("ft.handoff.05.process_evolve"))
 
+        assert delegated.call_count == 1
         restored = work_dir / ".ft" / "process" / "mvp-builder" / "process.yml"
         assert restored.exists()
         assert restored.stat().st_size > 0
         assert runner.state_mgr.load().current_node == "ft.end"
-
-    def test_opencode_e2e_fallback_requires_browser_screenshots(self, tmp_path):
-        project_root = tmp_path / "project"
-        state_dir = project_root / "state"
-        state_dir.mkdir(parents=True)
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.e2e.01.browser
-    type: build
-    title: E2E Setup
-    executor: claude
-    outputs:
-      - project/tests/e2e/
-    validators:
-      - file_exists: project/tests/e2e/
-      - file_exists: project/tests/e2e/test_navigation.py
-    next: ft.e2e.02.screenshots
-  - id: ft.e2e.02.screenshots
-    type: build
-    title: E2E Run
-    executor: claude
-    outputs:
-      - docs/screenshots/e2e/
-      - docs/e2e-report.md
-    validators:
-      - file_exists: docs/e2e-report.md
-      - command_succeeds: "python -c \\"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 5 and all(p.stat().st_size > 1000 for p in shots)\\""
-    next: ft.final.01.visual_check
-  - id: ft.final.01.visual_check
-    type: build
-    title: Visual
-    executor: claude
-    outputs:
-      - docs/visual-check-report.md
-    validators:
-      - file_exists: docs/visual-check-report.md
-      - command_succeeds: "python -c \\"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'screenshots e2e reais' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\\""
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-""",
-            encoding="utf-8",
-        )
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-
-        def fake_browser_e2e(root: Path) -> None:
-            shots = root / "docs" / "screenshots" / "e2e"
-            shots.mkdir(parents=True, exist_ok=True)
-            rows = []
-            for name in (
-                "inicio",
-                "clientes",
-                "catalogo",
-                "agenda",
-                "cobrancas",
-                "clientes-create",
-                "catalogo-create",
-                "agenda-create",
-                "cobrancas-create",
-            ):
-                path = shots / f"{name}.png"
-                path.write_bytes(b"\\x89PNG\\r\\n" + (b"x" * 1500))
-                action = "CREATE" if "create" in name else "NAVIGATE"
-                rows.append(f"| {name} | {action} | `/{name}` | `{path.relative_to(root)}` | PASS |")
-            (root / "docs" / "e2e-report.md").write_text(
-                "# E2E Report\n\nResultado: PASS\n\n"
-                "Browser: Playwright Chromium headless\n\n"
-                "| Tela | Ação | Path | Screenshot | Resultado |\n|---|---|---|---|---|\n"
-                + "\n".join(rows)
-                + "\n",
-                encoding="utf-8",
-            )
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
-            runner._run_llm_step(runner.graph.get_node("ft.e2e.01.browser"))
-            assert (project_root / "project/tests/e2e/test_navigation.py").exists()
-            e2e_test = (project_root / "project/tests/e2e/test_navigation.py").read_text(encoding="utf-8").lower()
-            assert "placeholder" not in e2e_test
-            assert "create_flows" in e2e_test
-            assert "fill(" in e2e_test
-            assert "cliente-form" in e2e_test
-
-            with patch.object(runner, "_run_opencode_browser_e2e", side_effect=fake_browser_e2e):
-                runner._run_llm_step(runner.graph.get_node("ft.e2e.02.screenshots"))
-
-            runner._run_llm_step(runner.graph.get_node("ft.final.01.visual_check"))
-
-        state = runner.state_mgr.load()
-        assert state.current_node == "ft.end"
-        visual = (project_root / "docs/visual-check-report.md").read_text(encoding="utf-8").lower()
-        assert "screenshots e2e reais" in visual
-        assert "create" in visual
-        assert "placeholder" not in visual
-        assert "não executad" not in visual
 
     def test_decision_skipped_branch_counts_as_progress(self, tmp_path):
         project_root = tmp_path / "project"
@@ -3042,58 +1860,6 @@ nodes:
         state = runner.state_mgr.load()
         assert state.current_node == "ft.end"
 
-    def test_opencode_screenshot_review_uses_deterministic_fallback(self, tmp_path):
-        project_root = tmp_path / "project"
-        docs = project_root / "docs"
-        state_dir = project_root / "state"
-        docs.mkdir(parents=True)
-        state_dir.mkdir()
-
-        process_path = tmp_path / "process.yml"
-        process_path.write_text(
-            """
-id: test_process
-version: "0.1.0"
-title: "Test"
-nodes:
-  - id: ft.frontend.04.screenshot_review
-    type: review
-    title: Screenshot Review
-    description: Tirar screenshots e comparar com docs/ui_criteria.md.
-    executor: claude
-    outputs:
-      - docs/screenshots/
-      - docs/screenshot-review.md
-    validators:
-      - file_exists: docs/screenshot-review.md
-    next: ft.end
-  - id: ft.end
-    type: end
-    title: End
-"""
-        )
-
-        runner = StepRunner(
-            process_path=process_path,
-            state_path=state_dir / "engine_state.yml",
-            project_root=project_root,
-            llm_engine="opencode",
-        )
-        runner.init_state()
-        node = runner.graph.get_node("ft.frontend.04.screenshot_review")
-
-        with (
-            patch.dict("os.environ", {"FT_OPENCODE_DETERMINISTIC_FALLBACKS": "1"}),
-            patch("ft.engine.runner.delegate_to_llm", side_effect=AssertionError("should not delegate")),
-        ):
-            runner._run_review(node)
-
-        report = docs / "screenshot-review.md"
-        assert report.exists()
-        assert "APPROVED WITH NOTES" in report.read_text()
-        assert (docs / "screenshots" / "README.md").exists()
-        assert runner.state_mgr.load().current_node == "ft.end"
-
     def test_review_report_with_blocked_status_does_not_approve(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"
@@ -3253,6 +2019,9 @@ nodes:
 
         def recovery_side_effect(**kwargs):
             assert "RECUPERACAO DE REVIEW APOS INTERRUPCAO/MAX_TURNS" in kwargs["feedback"]
+            assert "ANALISE PARCIAL PRESERVADA" in kwargs["feedback"]
+            assert "regressão material no contrato" in kwargs["feedback"]
+            assert "nao converta um achado parcial" in kwargs["feedback"].lower()
             (docs / "visual-review.md").write_text("Resultado: APPROVED WITH NOTES\n", encoding="utf-8")
             return DelegateResult(
                 success=True,
@@ -3266,7 +2035,10 @@ nodes:
                 "ft.engine.runner.delegate_to_llm",
                 return_value=DelegateResult(
                     success=False,
-                    output="Reached maximum number of turns (60)",
+                    output=(
+                        "Achado parcial: regressão material no contrato.\n"
+                        "Reached maximum number of turns (60)"
+                    ),
                     files_created=[],
                     files_modified=[],
                 ),
@@ -4530,92 +3302,6 @@ class TestBuildTaskPrompt:
         assert "node scripts/build.mjs" in prompt
         assert "npm run build --silent" in prompt
         assert "Nao escreva temporarios na raiz" in prompt
-        assert "service-mate" not in prompt.lower()
-        assert "ServiceMate" not in prompt
-
-    def test_opencode_compact_scaffold_prompt_has_required_file_bundle(self):
-        from ft.engine.graph import Node
-
-        node = Node(
-            id="ft.frontend.01.scaffold",
-            type="build",
-            title="Scaffold Frontend",
-        )
-
-        prompt = _opencode_compact_bundle_prompt(
-            node, ".ft/process/mvp-builder/process.yml"
-        )
-
-        assert prompt is not None
-        for path in (
-            "project/frontend/package.json",
-            "project/frontend/scripts/build.mjs",
-        ):
-            assert f'<ft_file path="{path}">' in prompt
-
-    def test_opencode_compact_frontend_implement_prompt_is_not_hardcoded(self):
-        from ft.engine.graph import Node
-
-        node = Node(
-            id="ft.frontend.02.implement",
-            type="build",
-            title="Implementar Frontend",
-        )
-
-        prompt = _opencode_compact_bundle_prompt(
-            node, ".ft/process/mvp-builder/process.yml"
-        )
-
-        assert prompt is None
-
-    def test_opencode_compact_tdd_prompts_have_backend_contract(self):
-        from ft.engine.graph import Node
-
-        red = _opencode_compact_bundle_prompt(
-            Node(id="ft.tdd.01.red", type="test_red", title="Red"),
-            ".ft/process/mvp-builder/process.yml",
-        )
-        green = _opencode_compact_bundle_prompt(
-            Node(id="ft.tdd.02.green", type="test_green", title="Green"),
-            ".ft/process/mvp-builder/process.yml",
-        )
-
-        assert red is not None
-        assert "project/tests/test_backend.py" in red
-        assert "create_client" in red
-        assert "pytest.raises" in red
-        assert red.count("def test_") >= 3
-        assert green is not None
-        assert "project/backend/app.py" in green
-        assert "list_clients" in green
-        assert "ValueError" in green
-
-    def test_opencode_compact_bundles_enabled_by_default(self, monkeypatch):
-        monkeypatch.delenv("FT_OPENCODE_COMPACT_BUNDLES", raising=False)
-        assert _opencode_compact_bundles_enabled() is True
-        monkeypatch.setenv("FT_OPENCODE_COMPACT_BUNDLES", "0")
-        assert _opencode_compact_bundles_enabled() is False
-
-    def test_opencode_compact_e2e_prompt_is_not_hardcoded(self):
-        from ft.engine.graph import Node
-
-        prompt = _opencode_compact_bundle_prompt(
-            Node(id="ft.e2e.01.browser", type="build", title="E2E"),
-            ".ft/process/mvp-builder/process.yml",
-        )
-
-        assert prompt is None
-
-    def test_opencode_delivery_bundle_uses_selected_named_process_scripts(self):
-        from ft.engine.graph import Node
-
-        prompt = _opencode_compact_bundle_prompt(
-            Node(id="ft.delivery.03.makefile", type="build", title="Delivery"),
-            ".ft/process/custom/process.yml",
-        )
-
-        assert '<ft_file path=".ft/process/custom/scripts/serve.sh">' in prompt
-        assert '$(dirname "$0")/../../../../project' in prompt
 
     def test_review_prompt_includes_description_outputs_and_validators(self):
         from ft.engine.graph import Node

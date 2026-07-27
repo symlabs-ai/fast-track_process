@@ -793,7 +793,7 @@ def coverage_min(min_pct: int, project_root: str = ".") -> tuple[bool, str]:
                 if pct >= min_pct:
                     return True, f"coverage_min: {pct}% (min {min_pct}%)"
                 return False, f"coverage_min FAIL: {pct}% < {min_pct}%"
-    return False, f"coverage_min FAIL: nao consegui extrair cobertura do output"
+    return False, "coverage_min FAIL: nao consegui extrair cobertura do output"
 
 
 def read_artifact(path: str, key: str, pattern: str, project_root: str = ".") -> tuple[bool, str]:

@@ -35,6 +35,9 @@ produto/
 │   │   │   ├── process.yml
 │   │   │   ├── environment.yml
 │   │   │   └── scripts/
+│   │   ├── mvp-builder-fast/           # variante opt-in com session_policy
+│   │   │   ├── process.yml
+│   │   │   └── scripts/
 │   │   └── feature/
 │   │       ├── process.yml
 │   │       ├── environment.yml
@@ -66,7 +69,7 @@ Um arquivo permanece visível quando o usuário precisa introduzi-lo, encontrá-
 revisá-lo ou mantê-lo como fonte de verdade. Exemplos:
 
 - `PRD.md`;
-- `TECH_STACK.md` ou `tech_stack.md`;
+- `TECH_STACK.md` (o alias legado `tech_stack.md` ainda é aceito em leitura);
 - `ui_criteria.md`;
 - `PROJECT_BACKLOG.md`;
 - `FEATURES.md`;

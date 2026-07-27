@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Padrões que indicam rate limit / quota esgotada no output do LLM
@@ -611,6 +611,16 @@ class DelegateResult:
     # stream interrompida, crash ou timeout. Falha de infraestrutura, não de
     # conteúdo — o runner pode retentar a delegação automaticamente.
     died: bool = False
+    # Identificador de conversa retornado pelo provider. O engine persiste esse
+    # valor fora do worktree e o reutiliza somente quando o processo opta por
+    # session_policy. Não é credencial.
+    session_id: str | None = None
+    session_resumed: bool = False
+    # Falha específica de retomada (sessão expirada, removida ou inválida).
+    # Permite ao runner reidratar uma conversa nova sem classificar o problema
+    # como erro de conteúdo do node.
+    session_error: bool = False
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 def _build_executor_command(
@@ -620,6 +630,8 @@ def _build_executor_command(
     max_turns: int,
     model: str | None = None,
     effort: str | None = None,
+    session_id: str | None = None,
+    resume_session: bool = False,
 ) -> list[str]:
     """Monta o comando do executor não-interativo com bypass habilitado."""
     engine = llm_engine.lower().strip()
@@ -637,6 +649,8 @@ def _build_executor_command(
             cmd += ["--model", model]
         if normalized_effort:
             cmd += ["--effort", normalized_effort]
+        if session_id:
+            cmd += ["--resume" if resume_session else "--session-id", session_id]
         cmd += ["-p", prompt]
         return cmd
 
@@ -645,6 +659,8 @@ def _build_executor_command(
             "codex",
             "exec",
         ]
+        if session_id and resume_session:
+            cmd.append("resume")
         reasoning_effort = (
             _normalize_executor_effort(
                 os.environ.get("FT_CODEX_REASONING_EFFORT"),
@@ -658,10 +674,15 @@ def _build_executor_command(
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
-            "-C", project_root,
         ]
+        # ``codex exec resume`` não aceita -C. O subprocesso já recebe cwd,
+        # portanto o diretório continua determinístico nos dois modos.
+        if not (session_id and resume_session):
+            cmd += ["-C", project_root]
         if model:
             cmd += ["-m", model]
+        if session_id and resume_session:
+            cmd.append(session_id)
         cmd.append(prompt)
         return cmd
 
@@ -714,7 +735,7 @@ def _write_log_preamble(log_path: str, llm_engine: str, cmd: list[str], prompt: 
     path.parent.mkdir(parents=True, exist_ok=True)
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with path.open("w", encoding="utf-8") as f:
-        f.write(f"# LLM Delegate Log\n")
+        f.write("# LLM Delegate Log\n")
         f.write(f"started_at: {started_at}\n")
         f.write(f"llm_engine: {llm_engine}\n")
         f.write(f"command: {' '.join(cmd)}\n")
@@ -846,6 +867,42 @@ def _extract_codex_output(raw_output: str) -> str:
     if errors:
         return "\n".join(errors)
     return raw_output
+
+
+def _extract_provider_session_id(llm_engine: str, raw_output: str) -> str | None:
+    """Extrai o identificador durável de conversa dos streams JSONL."""
+    engine = llm_engine.lower().strip()
+    for line in raw_output.splitlines():
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if engine == "codex" and event.get("type") == "thread.started":
+            value = event.get("thread_id")
+        elif engine == "claude":
+            value = event.get("session_id")
+            if value is None and isinstance(event.get("message"), dict):
+                value = event["message"].get("session_id")
+        else:
+            value = None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+_SESSION_ERROR_PATTERNS = re.compile(
+    r"(?:session|conversation|thread)[^\n]{0,100}"
+    r"(?:not found|does not exist|unknown|invalid|expired|deleted|unable to resume)|"
+    r"(?:resume|resuming)[^\n]{0,100}(?:failed|error|invalid)",
+    re.IGNORECASE,
+)
+
+
+def _is_session_resume_error(output: str, *, resumed: bool) -> bool:
+    return bool(resumed and _SESSION_ERROR_PATTERNS.search(output or ""))
 
 
 def _extract_opencode_json_text(raw_output: str) -> str:
@@ -1423,8 +1480,8 @@ def _stream_process_output(
                         output_section = content[idx + len(output_marker):]
                     else:
                         output_section = content[-1024:]
-                    def _useful(l: str) -> bool:
-                        s = l.strip()
+                    def _useful(line: str) -> bool:
+                        s = line.strip()
                         if not s or len(s) < 8:
                             return False
                         if s.startswith("#") or s.startswith("---") or s.startswith("==="):
@@ -1434,7 +1491,11 @@ def _stream_process_output(
                         if s.startswith("{"):  # raw JSON line — skip
                             return False
                         return True
-                    lines = [l.strip() for l in output_section.splitlines() if _useful(l)]
+                    lines = [
+                        line.strip()
+                        for line in output_section.splitlines()
+                        if _useful(line)
+                    ]
                     if lines:
                         status = _clip_stream_status(lines[-1], 120)
                 except Exception:
@@ -1516,6 +1577,7 @@ def _stream_process_output(
                 last_data = time.time()
                 if activity is not None:
                     activity["last"] = last_data
+                    activity.setdefault("first", last_data)
             _stripped_probe = line.strip()
             if _stripped_probe.startswith("{"):
                 try:
@@ -1627,6 +1689,8 @@ def delegate_to_llm(
     raw_output: bool = False,
     llm_effort: str | None = None,
     llm_timeout_seconds: int | None = None,
+    llm_session_id: str | None = None,
+    llm_session_resume: bool = False,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -1645,6 +1709,7 @@ def delegate_to_llm(
         if llm_timeout_seconds is not None
         else None
     )
+    delegate_started_wall = time.time()
 
     paths_str = ", ".join(allowed_paths) if allowed_paths else "src/, tests/, docs/"
     opencode_capture_mode = bool(
@@ -1838,22 +1903,29 @@ REGRAS:
         max_turns,
         model=llm_model,
         effort=llm_effort,
+        session_id=llm_session_id,
+        resume_session=llm_session_resume,
     )
     if opencode_capture_mode or opencode_bundle_mode or opencode_script_mode:
         cmd = _opencode_capture_command(cmd)
 
     # Linux limita cada argumento de execve a ~128 KiB (MAX_ARG_STRLEN).
     # Prompts hyper-mode estouram isso ([Errno 7] Argument list too long) —
-    # acima do limiar, o prompt sai do argv e vai via stdin (o Claude CLI lê
-    # o prompt de stdin quando -p vem sem argumento).
+    # acima do limiar, o prompt sai do argv e vai via stdin. Claude lê stdin
+    # quando ``-p`` fica sem argumento; Codex lê quando recebe ``-`` no lugar
+    # do prompt (inclusive em ``exec resume``).
     stdin_prompt: str | None = None
+    engine = llm_engine.lower().strip()
     if (
-        llm_engine.lower().strip() == "claude"
+        engine in {"claude", "codex"}
         and cmd
         and cmd[-1] == prompt
         and len(prompt.encode("utf-8")) > _MAX_ARGV_PROMPT_BYTES
     ):
-        cmd = cmd[:-1]  # mantém o -p final; prompt segue via stdin
+        if engine == "claude":
+            cmd = cmd[:-1]  # mantém o -p final
+        else:
+            cmd[-1] = "-"
         stdin_prompt = prompt
         print(f"  ⚠️  Prompt grande ({len(prompt) // 1024} KiB) — enviando via stdin.")
 
@@ -1915,6 +1987,7 @@ REGRAS:
             idle_retries = capture_retries if capture_retries is not None else 0
 
     cleaned_runtime = False
+    attempt_activity: dict[str, float] = {}
 
     def _cleanup_delegate_runtime() -> None:
         nonlocal cleaned_runtime, sandbox_tmp
@@ -1953,6 +2026,7 @@ REGRAS:
 
     def _run_executor_attempt() -> tuple[int, bool, str, str | None]:
         """Executa uma tentativa do executor. failure_kind: idle | timeout | None."""
+        nonlocal attempt_activity
         remaining = _remaining_budget()
         if remaining is not None and remaining <= 0:
             msg = _deadline_message()
@@ -1978,7 +2052,8 @@ REGRAS:
             start_new_session=True,
         )
         output_holder: dict[str, str] = {"output": ""}
-        activity = {"last": time.time()}
+        activity = {"last": time.time(), "started": time.time()}
+        attempt_activity = activity
         reader = threading.Thread(
             target=lambda: output_holder.__setitem__(
                 "output",
@@ -2057,6 +2132,27 @@ REGRAS:
             return _extract_claude_json_output(raw)
         return raw
 
+    def _delegate_timings() -> dict[str, float]:
+        now_wall = time.time()
+        started_wall = attempt_activity.get("started")
+        first_wall = attempt_activity.get("first")
+        timings = {
+            "provider_wall_seconds": round(
+                max(0.0, time.time() - delegate_started_wall),
+                3,
+            ),
+        }
+        if started_wall is not None and first_wall is not None:
+            timings["startup_to_first_event_seconds"] = round(
+                max(0.0, first_wall - started_wall),
+                3,
+            )
+            timings["turn_after_first_event_seconds"] = round(
+                max(0.0, now_wall - first_wall),
+                3,
+            )
+        return timings
+
     try:
         deadline_exhausted = False
         idle_attempt = 0
@@ -2072,15 +2168,32 @@ REGRAS:
                 _append_log(retry_msg)
                 continue
             if failure_kind:
+                failed_output = _extract_output(raw_output, llm_engine)
                 _cleanup_delegate_runtime()
                 return DelegateResult(
                     success=False,
-                    output=_extract_output(raw_output, llm_engine),
+                    output=failed_output,
                     files_created=[],
                     files_modified=[],
+                    session_id=(
+                        _extract_provider_session_id(llm_engine, raw_output)
+                        or llm_session_id
+                    ),
+                    session_resumed=bool(
+                        llm_session_id and llm_session_resume
+                    ),
+                    session_error=_is_session_resume_error(
+                        failed_output,
+                        resumed=bool(llm_session_id and llm_session_resume),
+                    ),
+                    timings=_delegate_timings(),
                 )
             break
 
+        provider_session_id = (
+            _extract_provider_session_id(llm_engine, raw_output)
+            or llm_session_id
+        )
         output = _extract_output(raw_output, llm_engine)
 
         # Detectar rate limit e fazer retry com backoff exponencial
@@ -2258,6 +2371,13 @@ REGRAS:
         files_modified=modified,
         rate_limited=rate_limited,
         died=died and not rate_limited,
+        session_id=provider_session_id,
+        session_resumed=bool(llm_session_id and llm_session_resume),
+        session_error=_is_session_resume_error(
+            output,
+            resumed=bool(llm_session_id and llm_session_resume),
+        ),
+        timings=_delegate_timings(),
     )
 
 
@@ -2418,6 +2538,8 @@ def delegate_with_feedback(
     opencode_capture_output_path: str | None = None,
     llm_effort: str | None = None,
     llm_timeout_seconds: int | None = None,
+    llm_session_id: str | None = None,
+    llm_session_resume: bool = False,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -2446,4 +2568,6 @@ Nao modifique o que ja esta funcionando."""
         opencode_early_success_paths=opencode_early_success_paths,
         opencode_capture_output_path=opencode_capture_output_path,
         llm_timeout_seconds=llm_timeout_seconds,
+        llm_session_id=llm_session_id,
+        llm_session_resume=llm_session_resume,
     )

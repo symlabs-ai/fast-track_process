@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 
 import yaml
 
@@ -59,10 +60,28 @@ def record_init_template(
     }
     marker = init_marker_path(project_root)
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(
-        yaml.safe_dump({"templates": templates}, sort_keys=True, allow_unicode=True),
-        encoding="utf-8",
+    payload = yaml.safe_dump(
+        {"templates": templates},
+        sort_keys=True,
+        allow_unicode=True,
     )
+    temporary: Path | None = None
+    try:
+        fd, raw_temporary = tempfile.mkstemp(
+            prefix=f".{marker.name}.",
+            suffix=".tmp",
+            dir=marker.parent,
+        )
+        temporary = Path(raw_temporary)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, marker)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def run_init_template(
@@ -114,4 +133,24 @@ def run_init_template(
                 f"{proc.returncode}: {detail}"
             )
         results.append(InitScriptResult(script=label, output=proc.stdout.strip()))
+    return results
+
+
+def execute_and_record_init_template(
+    descriptor: InitTemplateDescriptor,
+    project_root: str | Path,
+    *,
+    mode: str = "init",
+    adopt: bool = False,
+    commit_message: str | None = None,
+) -> list[InitScriptResult]:
+    """Run the complete template and publish its marker only after success."""
+    results = run_init_template(
+        descriptor,
+        project_root,
+        mode=mode,
+        adopt=adopt,
+        commit_message=commit_message,
+    )
+    record_init_template(project_root, descriptor)
     return results

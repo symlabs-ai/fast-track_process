@@ -395,9 +395,9 @@ nodes:
     sprint: sprint-02-planning
     executor: claude
     outputs:
-      - docs/tech_stack.md
+      - docs/TECH_STACK.md
     validators:
-      - file_exists: docs/tech_stack.md
+      - file_exists: docs/TECH_STACK.md
       - has_sections:
           - Framework
           - Banco de Dados
@@ -407,11 +407,11 @@ nodes:
   - id: ft.plan.02b.tech_gate
     type: human_gate
     title: "Revisão do Tech Stack"
-    description: "Leia docs/tech_stack.md e confirme se as escolhas técnicas estão alinhadas com os requisitos do PRD. Rejeite com justificativa se alguma escolha for inadequada."
+    description: "Leia docs/TECH_STACK.md e confirme se as escolhas técnicas estão alinhadas com os requisitos do PRD. Rejeite com justificativa se alguma escolha for inadequada."
     sprint: sprint-02-planning
     executor: python
     outputs:
-      - docs/tech_stack.md
+      - docs/TECH_STACK.md
     reject_next: ft.plan.02.tech_stack
     next: ft.plan.03.api_contract
 
@@ -505,7 +505,7 @@ nodes:
           task_path: docs/task_list.md
           backlog_path: docs/PROJECT_BACKLOG.md
           min_refs: 1
-      - file_exists: docs/tech_stack.md
+      - file_exists: docs/TECH_STACK.md
       - file_exists: docs/api_contract.md
       - api_contract_complete:
           path: docs/api_contract.md
@@ -544,7 +544,7 @@ nodes:
   - id: ft.frontend.02.implement
     type: build
     title: "Implementar Frontend"
-    description: "Implementar todas as telas e funcionalidades P0 do PRD seguindo os critérios visuais de docs/ui_criteria.md e o contrato de API de docs/api_contract.md. O proxy de /api → backend deve seguir o mecanismo da stack escolhida em docs/tech_stack.md (ex.: rewrites do Next, server.proxy do Vite) — não assuma um bundler/framework específico."
+    description: "Implementar todas as telas e funcionalidades P0 do PRD seguindo os critérios visuais de docs/ui_criteria.md e o contrato de API de docs/api_contract.md. O proxy de /api → backend deve seguir o mecanismo da stack escolhida em docs/TECH_STACK.md (ex.: rewrites do Next, server.proxy do Vite) — não assuma um bundler/framework específico."
     sprint: sprint-03-frontend
     executor: claude
     outputs:
@@ -705,7 +705,7 @@ nodes:
   - id: ft.delivery.01.entrypoint
     type: build
     title: "Criar Entry Point HTTP"
-    description: "Garantir que o servidor HTTP sobe corretamente: use o servidor da stack escolhida em docs/tech_stack.md, na porta configurada do projeto (settings/.env — nunca hardcodar porta), middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
+    description: "Garantir que o servidor HTTP sobe corretamente: use o servidor da stack escolhida em docs/TECH_STACK.md, na porta configurada do projeto (settings/.env — nunca hardcodar porta), middleware de latência (X-Process-Time-Ms), CORS configurado para o frontend, banco inicializado no startup."
     sprint: sprint-05-delivery
     executor: claude
     outputs:

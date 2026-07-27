@@ -100,6 +100,7 @@ SYSTEM_CYCLE_ARTIFACTS = (".build_ok",)
 DEFAULT_CANONICAL_ARTIFACTS = (
     "docs/PRD.md",
     "docs/TECH_STACK.md",
+    # Alias somente para preservar projetos/forks anteriores à canonização.
     "docs/tech_stack.md",
     "docs/ui_criteria.md",
     "docs/PROJECT_BACKLOG.md",
@@ -1500,6 +1501,7 @@ def archive_cycle_artifacts(
     """Move durable per-cycle outputs into ``.ft/cycles/<cycle_id>``.
 
     The function is idempotent and deliberately excludes raw state and LLM logs.
+    A derived internal execution plan is preserved as a durable cycle artifact.
     """
     if not _SAFE_CYCLE_RE.fullmatch(cycle_id):
         raise ValueError(f"id de ciclo inválido: {cycle_id}")
@@ -1523,6 +1525,22 @@ def archive_cycle_artifacts(
     cycle_dir.mkdir(parents=True, exist_ok=True)
 
     move_plan = _cycle_artifact_move_plan(root, cycle_id, graph_meta)
+    execution_plan_path = root / "state" / "llm_execution_plan.yml"
+    if execution_plan_path.is_symlink():
+        raise ValueError(
+            f"arquivo do ciclo recusou link simbólico: {execution_plan_path}"
+        )
+    if execution_plan_path.is_file():
+        plan_destination = cycle_dir / "llm-execution-plan.yml"
+        _assert_project_local_path(root, execution_plan_path)
+        _assert_project_local_path(root, plan_destination)
+        move_plan.append(
+            (
+                execution_plan_path,
+                plan_destination,
+                "llm-execution-plan.yml",
+            )
+        )
     if not overwrite_existing:
         _assert_move_plan_safe(move_plan, project_root=root)
     moved: list[str] = []
@@ -1553,6 +1571,29 @@ def archive_cycle_artifacts(
     )
     selected_process = _safe_manifest_process_path(root, selected_process_path)
     timestamp = datetime.now(timezone.utc).isoformat()
+    llm_record = {
+        "engine": getattr(state, "llm_engine", None) if state is not None else None,
+        "model": getattr(state, "llm_model", None) if state is not None else None,
+        "effort": getattr(state, "llm_effort", None) if state is not None else None,
+    }
+    plan_metadata = (
+        getattr(state, "llm_execution_plan", None) if state is not None else None
+    )
+    if (cycle_dir / "llm-execution-plan.yml").is_file():
+        llm_record["execution_plan"] = {
+            "path": "llm-execution-plan.yml",
+            "source": (
+                plan_metadata.get("source")
+                if isinstance(plan_metadata, dict)
+                else None
+            ),
+            "generated_at": (
+                plan_metadata.get("generated_at")
+                if isinstance(plan_metadata, dict)
+                else None
+            ),
+        }
+
     record = {
         "schema_version": CYCLE_RECORD_VERSION,
         "id": cycle_id,
@@ -1585,11 +1626,7 @@ def archive_cycle_artifacts(
                 getattr(state, "worktree_branch", None) if state is not None else None
             ),
         },
-        "llm": {
-            "engine": getattr(state, "llm_engine", None) if state is not None else None,
-            "model": getattr(state, "llm_model", None) if state is not None else None,
-            "effort": getattr(state, "llm_effort", None) if state is not None else None,
-        },
+        "llm": llm_record,
         "progress": {
             "completed": (
                 "unknown"

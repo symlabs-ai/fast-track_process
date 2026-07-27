@@ -26,7 +26,7 @@ input_policy:
 artifact_policy:
   canonical:
     - docs/PRD.md
-    - docs/tech_stack.md
+    - docs/TECH_STACK.md
     - docs/ui_criteria.md
     - docs/hipotese.md
   cycle:
@@ -222,19 +222,19 @@ nodes:
     executor: llm_coder
     sprint: sprint-01-discovery
     outputs:
-      - docs/tech_stack.md
+      - docs/TECH_STACK.md
     prompt: |
       Com base no PRD em docs/PRD.md, proponha o tech stack.
 
-      Se existir docs/tech_stack.md, use como referência.
+      Se existir docs/TECH_STACK.md, use como referência.
 
-      Escreva docs/tech_stack.md com as decisões técnicas.
+      Escreva docs/TECH_STACK.md com as decisões técnicas.
       Inclua a linha: interface_type: ui
 
       Ao final diga DONE.
     requires_approval: true
     validators:
-      - file_exists: docs/tech_stack.md
+      - file_exists: docs/TECH_STACK.md
       - min_lines: 8
       - has_sections:
           - interface_type
@@ -249,7 +249,7 @@ nodes:
     validators:
       - file_exists: docs/hipotese.md
       - file_exists: docs/PRD.md
-      - file_exists: docs/tech_stack.md
+      - file_exists: docs/TECH_STACK.md
       - demand_coverage:
           prd_path: docs/PRD.md
           demand_path: docs/demanda.md
@@ -313,17 +313,17 @@ nodes:
     executor: llm_coder
     sprint: sprint-01-seed
     outputs:
-      - docs/tech_stack.md
+      - docs/TECH_STACK.md
     prompt: |
-      Leia docs/tech_stack.md (se existir) e copie para docs/tech_stack.md.
+      Leia docs/TECH_STACK.md (se existir) e preserve seu conteúdo em docs/TECH_STACK.md.
 
-      Se docs/tech_stack.md não existir, leia docs/PRD.md e extraia
-      as decisões técnicas mencionadas. Registre em docs/tech_stack.md.
+      Se docs/TECH_STACK.md não existir, leia docs/PRD.md e extraia
+      as decisões técnicas mencionadas. Registre em docs/TECH_STACK.md.
 
       Inclua a linha: interface_type: ui
       Ao final diga DONE.
     validators:
-      - file_exists: docs/tech_stack.md
+      - file_exists: docs/TECH_STACK.md
       - min_lines: 8
       - has_sections:
           - interface_type
@@ -346,7 +346,7 @@ nodes:
       Crie o scaffold do projeto.
 
       LEIA OBRIGATORIAMENTE:
-        - docs/tech_stack.md     (stack, framework, dependências, estrutura de diretórios)
+        - docs/TECH_STACK.md     (stack, framework, dependências, estrutura de diretórios)
         - docs/PRD.md            (contexto do produto)
 
       PASSOS:
@@ -372,13 +372,13 @@ nodes:
 
       LEIA OBRIGATORIAMENTE antes de começar:
         - docs/PRD.md              (user stories — TODAS são obrigatórias)
-        - docs/tech_stack.md       (stack decidido)
+        - docs/TECH_STACK.md       (stack decidido)
         - docs/ui_guidelines.md    (OBRIGATÓRIO — especificações visuais completas)
 
       REGRAS:
         1. Cada User Story do PRD deve ser implementada
         2. Siga TODAS as especificações de docs/ui_guidelines.md (layout, cores, dimensões, animações)
-        3. Use o tech stack definido em docs/tech_stack.md — não substitua
+        3. Use o tech stack definido em docs/TECH_STACK.md — não substitua
         4. Se houver dados de exemplo (YAML, JSON) no projeto, carregue como fixture estática
 
       Ao final diga DONE e liste os componentes criados.

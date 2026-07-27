@@ -22,6 +22,11 @@ template e lê `environment/tecnospeed.env`. A diferença é só a config da org
    409 idempotente com guard de `folder_name`), linka a caller e escreve
    `CLAUDE.md` + `.claude/settings.local.json`.
 
+O registro é obrigatório e transacional: rede/auth, ownership divergente ou
+falha ao linkar a caller interrompem o init, não gravam roteamento parcial nem
+o marker de conclusão. A admin key é passada ao `curl` por arquivo temporário
+mode `0600`, fora da linha de comando.
+
 ## Configuração
 
 ```bash

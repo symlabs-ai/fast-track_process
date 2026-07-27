@@ -7,7 +7,7 @@ era chamado. Bypass agora exige o flag explicito --bypass-human-gates.
 
 from argparse import Namespace
 
-from ft.cli.main import resolve_bypass_human_gates
+from ft.cli.main import _cycle_complete, resolve_bypass_human_gates, resolve_run_mode
 
 
 def test_auto_nao_bypassa_human_gate():
@@ -31,8 +31,6 @@ def test_default_nao_bypassa():
 
 # --- resolve_run_mode: approve --auto avança sozinho (fix do dança de 2 passos)
 
-from ft.cli.main import resolve_run_mode
-
 
 def test_run_mode_auto_vira_mvp():
     assert resolve_run_mode(Namespace(auto=True)) == "mvp"
@@ -51,8 +49,6 @@ def test_run_mode_auto_vence_sprint():
 
 
 # --- _cycle_complete: continue num ciclo done não reinicia (footgun) --------
-
-from ft.cli.main import _cycle_complete
 
 
 class _St:

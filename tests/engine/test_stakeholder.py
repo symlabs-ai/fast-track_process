@@ -1,7 +1,6 @@
 """Unit tests for ft.engine.stakeholder."""
 
 import pytest
-from pathlib import Path
 
 from ft.engine.stakeholder import (
     scan_existing_docs,

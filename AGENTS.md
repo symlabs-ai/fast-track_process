@@ -21,7 +21,8 @@ Há duas operações independentes:
 
 1. `ft init [dir]` prepara a base comum e saudável do repositório: Git com HEAD,
    `.ft/`, manifesto V3, ignores e este playbook. Ele não escolhe nem copia
-   template e não cria `docs/` ou `src/` de produto.
+   template de processo e não cria `docs/` ou `src/` de produto. Opcionalmente,
+   `--template` encadeia um template de inicialização (`kind: init`).
 2. `ft run <dir> --template <T>` seleciona, materializa e executa um template em
    um novo ciclo isolado. Não existe processo principal ou default.
 
@@ -50,9 +51,11 @@ ft init           # repetição idempotente quando o ambiente está saudável
 ft init --fix     # reparo explícito e conservador
 ```
 
-`ft init` aceita o diretório como argumento opcional e nenhuma opção de seleção
-de template. Ao concluir, o projeto possui repositório Git com HEAD e a base
-comum do Fast Track. Uma repetição saudável não altera arquivos.
+`ft init` aceita o diretório como argumento opcional. Ele não oferece seleção de
+processo; `--template` aceita somente um template `kind: init` para provisionar
+o ambiente depois da base comum. Ao concluir, o projeto possui repositório Git
+com HEAD e a base comum do Fast Track. Uma repetição saudável não altera
+arquivos.
 
 `--check` apenas relata invariantes ausentes ou inconsistentes e não escreve no
 projeto. `--fix` pode reconstruir manifesto e catálogo a partir dos processos
@@ -114,11 +117,15 @@ Templates principais:
 |---|---|
 | `base` | Grafo mínimo para projetos que querem compor o próprio processo |
 | `feature` | Evolução incremental de uma capacidade em produto existente |
+| `feature-fast` | Mesmo contrato de `feature`, com plano interno e sessões persistentes por sprint |
 | `bug` | Correção focal com diagnóstico e regressão RED→GREEN |
 | `tweak` | Mudança pequena, focal e de baixo risco |
 | `mvp-builder` | Processo completo recomendado para construir um MVP |
+| `mvp-builder-fast` | Variante opt-in do MVP Builder com plano interno, sessões persistentes por sprint e macro-nodes |
 | `fast-track-v2` | Processo histórico V2 |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
+| `fastfy` | Adoção de repositório legado na base canônica Fast Track |
+| `material_design_pwa` | Evolução de UI existente para Material Design 3 e PWA |
 
 Templates de inicialização (`kind: init`) — usados por `ft init --template`,
 recusados pelo run:
@@ -127,7 +134,7 @@ recusados pelo run:
 |---|---|
 | `init-default` | Base de todo projeto: git, .gitignore, .env.example, commit inicial |
 | `symlabs` | Ambiente da org Symlabs: Poetry/src, .env, CLAUDE.md, registro no SymGateway |
-| `tecnospeed` | Ambiente da org Tecnospeed (mesmo shape; org ainda não provisionada) |
+| `tecnospeed` | Ambiente da org Tecnospeed; exige credenciais locais emitidas pelo DevOps |
 
 Cada template declara sua política de entrada. `--request` e `--input` são
 formas genéricas; o engine recusa combinações ausentes ou incompatíveis antes de

@@ -437,12 +437,15 @@ class TestSemantics:
 
 
 class TestRealProcess:
-    """Testa com o processo V2 real."""
+    """Testa com o processo V2 distribuído no catálogo."""
 
     def test_fast_track_v2_passes(self):
-        process_path = Path(__file__).parent.parent.parent / "process" / "fast_track" / "FAST_TRACK_PROCESS_V2.yml"
-        if not process_path.exists():
-            pytest.skip("FAST_TRACK_PROCESS_V2.yml not found")
+        process_path = (
+            Path(__file__).parent.parent.parent
+            / "templates"
+            / "fast-track-v2"
+            / "FAST_TRACK_PROCESS.yml"
+        )
         graph = load_graph(process_path)
         report = validate_process(graph)
         # Pode ter warnings, mas não deve ter erros
@@ -454,6 +457,7 @@ class TestRealProcess:
         "templates/feature/process.yml",
         "templates/tweak/process.yml",
         "templates/mvp-builder/process.yml",
+        "templates/mvp-builder-fast/process.yml",
         "templates/ft-ui-prototype/process.yml",
     ])
     def test_templates_pass_process_validation(self, template):

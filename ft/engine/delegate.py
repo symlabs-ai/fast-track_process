@@ -41,6 +41,19 @@ _RATE_LIMIT_INFO_EVENT = re.compile(
 
 def _rate_limit_signal(text: str) -> bool:
     return bool(_RATE_LIMIT_PATTERNS.search(_RATE_LIMIT_INFO_EVENT.sub("", text)))
+
+
+def _attempt_rate_limited(llm_engine: str, returncode: int, output: str) -> bool:
+    """Decide se uma tentativa deve entrar em backoff de rate limit.
+
+    Para o claude o exit code é confiável e o texto do agente pode discutir
+    "rate limit" legitimamente (ex.: pesquisa de viabilidade técnica), então
+    uma tentativa bem-sucedida nunca conta. Outros CLIs podem sair com 0
+    mesmo rate-limitados, e para eles o sinal textual é mantido.
+    """
+    if llm_engine == "claude" and returncode == 0:
+        return False
+    return _rate_limit_signal(output)
 # Cronograma default de backoff: ~1h40 de espera acumulada (fora o tempo de
 # execução de cada tentativa) — dimensionado para atravessar indisponibilidades
 # longas da API, não só picos momentâneos.
@@ -2708,7 +2721,7 @@ REGRAS:
         output = _extract_output(raw_output, llm_engine)
 
         # Detectar rate limit e fazer retry com backoff exponencial
-        if _rate_limit_signal(output):
+        if _attempt_rate_limited(llm_engine, returncode, output):
             _backoff_schedule = _rate_limit_backoff_schedule()
             for attempt, wait in enumerate(_backoff_schedule, start=1):
                 print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
@@ -2728,7 +2741,7 @@ REGRAS:
                     returncode = rc2
                     max_wall_exhausted = failure2 == "max_wall"
                     break
-                if not _rate_limit_signal(out2):
+                if not _attempt_rate_limited(llm_engine, rc2, out2):
                     output = out2
                     returncode = rc2
                     break

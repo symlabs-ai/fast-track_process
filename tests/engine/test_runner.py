@@ -2998,6 +2998,40 @@ class TestStatus:
         out = capsys.readouterr().out
         assert "test block reason" in out
 
+    def test_status_does_not_call_recent_completed_delegation_active_when_blocked(
+        self,
+        runner_v2,
+        capsys,
+    ):
+        runner_v2.init_state()
+        log_path = runner_v2.state_mgr.path.parent / "llm_logs" / "finished.jsonl"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "message-1",
+                        "type": "agent_message",
+                        "text": "revisão encerrada",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        state = runner_v2.state_mgr.load()
+        state.last_llm_log = str(log_path)
+        state.active_llm_log = None
+        runner_v2.state_mgr.save()
+        runner_v2.state_mgr.block("receipt inconsistente")
+
+        runner_v2.status()
+
+        out = capsys.readouterr().out
+        assert "BLOCKED: receipt inconsistente" in out
+        assert "EM CONDUÇÃO" not in out
+        assert "TRABALHO EM ANDAMENTO" not in out
+
     def test_status_shows_active_llm_log(self, runner_v2, capsys):
         runner_v2.init_state()
         state = runner_v2.state_mgr.load()

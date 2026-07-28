@@ -6702,7 +6702,10 @@ class StepRunner:
             print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:
             print(ui.fail(f"BLOCKED: {state.blocked_reason}"))
-            if delegation_running:
+            # A recently completed delegation can be followed by a real
+            # validator BLOCK.  Do not call that state "em condução": only an
+            # active provider process may accompany the blocker banner.
+            if delegation_running and recent is not None and recent[1]:
                 _print_delegation_banner()
         if state.pending_fix:
             pf = state.pending_fix

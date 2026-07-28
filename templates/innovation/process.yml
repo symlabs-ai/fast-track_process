@@ -1,0 +1,551 @@
+# Innovation — Discovery → Validation → Business Case → PRD
+#
+# Cobre a fase pré-delivery do funil de inovação. Termina onde os processos de
+# implementação começam: a saída (handoff) é um PRD + business case prontos para
+# alimentar mvp-builder-fast (produto novo) ou feature-fast (produto existente).
+#
+# Princípios:
+# - No-go é sucesso: o processo tem dois fins legítimos — handoff (go) e
+#   archived (no-go documentado em post-mortem). Matar uma ideia barata é
+#   entrega de valor.
+# - Pesquisa automatizada é auditável, não "verdadeira": gates determinísticos
+#   exigem que todo claim tenha fonte (URL), data e confiança. Claim sem fonte
+#   bloqueia.
+# - Fio dos critérios de sucesso: SC-* nascem no business case e devem ser
+#   cobertos por AC-* no PRD (validado deterministicamente).
+
+id: innovation
+version: "0.1.0"
+title: "Innovation — Discovery, Validação e Business Case Automatizados"
+
+execution_policy:
+  entrypoint: run
+  template: innovation
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: false
+  requires_worktree: false
+  local_process_path: .ft/process/innovation/process.yml
+
+session_policy:
+  mode: sprint
+  providers:
+    - claude
+  initial_plan: internal
+  parallel_strategy: fork
+  recovery: rehydrate
+
+input_policy:
+  required: true
+  destination: docs/demanda.md
+  prompt: "Descreva a ideia ou demanda bruta a investigar"
+
+artifact_policy:
+  canonical:
+    - docs/PRD.md
+    - docs/business-case.md
+    - docs/post-mortem.md
+    - docs/handoff.md
+  cycle:
+    - docs/demanda.md
+    - docs/idea.md
+    - docs/hypotheses.md
+    - docs/research/market.md
+    - docs/research/market-evidence.yml
+    - docs/research/competitors.md
+    - docs/research/competitors-evidence.yml
+    - docs/research/feasibility.md
+    - docs/research/feasibility-evidence.yml
+    - docs/validation.md
+    - docs/research-questions.md
+
+nodes:
+  - id: innovation.intake
+    type: discovery
+    title: "Classificar Demanda e Formular Hipóteses"
+    description: >-
+      Recebe a demanda bruta, separa produto de processo, formula o problema
+      sem viés de solução e deriva hipóteses falseáveis numeradas.
+    sprint: innovation-01-research
+    executor: claude
+    max_turns: 24
+    llm_timeout_seconds: 480
+    outputs:
+      - docs/idea.md
+      - docs/hypotheses.md
+    write_scope:
+      - docs/idea.md
+      - docs/hypotheses.md
+    prompt: |
+      Trabalhe exclusivamente na elucidação do problema. Não pesquise na web,
+      não proponha solução e não escreva PRD neste node.
+
+      A demanda bruta está em docs/demanda.md. Ela pode misturar produto,
+      processo e ruído. Classifique e separe.
+
+      Gere docs/idea.md com frontmatter:
+        kind: product | process | mixed
+        summary: <uma linha>
+
+      O corpo deve conter as seções:
+      ## Problema — a dor, sem mencionar solução alguma.
+      ## Quem sofre — personas/segmentos afetados.
+      ## Contexto — o que já se sabe, restrições declaradas na demanda.
+      ## Fora desta investigação — o que a demanda menciona mas não será
+      investigado neste ciclo (ex.: partes de processo quando kind=product).
+
+      Gere docs/hypotheses.md com hipóteses numeradas H-01, H-02... Cada
+      hipótese deve ser falseável: uma afirmação que a pesquisa possa
+      sustentar ou refutar com evidência externa. Cubra pelo menos:
+      - existência/relevância do problema (alguém sofre isso de verdade);
+      - disposição a adotar/pagar;
+      - viabilidade técnica do caminho imaginado.
+
+      Formato de cada hipótese:
+      ## H-NN — <afirmação falseável>
+      - Se verdadeira, esperamos encontrar: <sinais observáveis>
+      - Se falsa, esperamos encontrar: <sinais observáveis>
+
+      Não invente dados de mercado neste node; isso é papel da pesquisa.
+    validators:
+      - file_exists: docs/idea.md
+      - file_exists: docs/hypotheses.md
+      - read_artifact:
+          path: docs/idea.md
+          key: kind
+          pattern: "kind:\\s*(product|process|mixed)"
+      - command_succeeds: "python .ft/process/innovation/scripts/validate_innovation.py intake"
+    next: innovation.research_market
+
+  - id: innovation.research_market
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Pesquisa — Mercado e Problema"
+    description: >-
+      Pesquisa na web se o problema existe, seu tamanho e sinais de demanda.
+      Toda afirmação vira claim com fonte, data e confiança.
+    sprint: innovation-01-research
+    executor: claude
+    max_turns: 30
+    llm_timeout_seconds: 900
+    outputs:
+      - docs/research/market.md
+      - docs/research/market-evidence.yml
+    write_scope:
+      - docs/research/market.md
+      - docs/research/market-evidence.yml
+    prompt: |
+      Pesquise na web evidências sobre MERCADO e PROBLEMA para as hipóteses de
+      docs/hypotheses.md. Foco: o problema existe fora da nossa cabeça? Qual o
+      tamanho? Há sinais de demanda (discussões, reclamações, buscas, gastos)?
+
+      Em uma reentrada (docs/research-questions.md contém respostas do
+      stakeholder), NÃO refaça a pesquisa inteira: preencha somente as lacunas
+      apontadas e preserve os claims já coletados.
+
+      Gere docs/research/market.md: síntese narrativa citando os claims por ID.
+
+      Gere docs/research/market-evidence.yml:
+        schema_version: 1
+        lens: market
+        research_date: <YYYY-MM-DD de hoje>
+        claims:
+          - id: EV-M01
+            statement: <afirmação objetiva>
+            source: <URL real consultada>
+            date: <YYYY-MM-DD da fonte ou do acesso>
+            confidence: high | medium | low
+            supports: [H-01]
+
+      Regras invioláveis:
+      1. Todo claim tem source com URL real que você consultou. Nunca invente
+         URL, número ou citação. Sem fonte, o claim não existe.
+      2. `supports` referencia apenas H-* existentes. Um claim pode contradizer
+         uma hipótese: registre-o mesmo assim (a validação decide o verdict).
+      3. confidence reflete a qualidade da fonte: high = dado primário ou
+         fonte oficial; medium = imprensa/relatório de terceiros; low =
+         anedota, fórum, inferência.
+      4. Se não encontrar evidência para uma hipótese, diga isso em market.md
+         em vez de fabricar.
+    validators:
+      - file_exists: docs/research/market.md
+      - file_exists: docs/research/market-evidence.yml
+    next: innovation.research_competitors
+
+  - id: innovation.research_competitors
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Pesquisa — Concorrentes e Alternativas"
+    description: >-
+      Pesquisa na web quem já resolve o problema, como e a que preço — incluindo
+      a alternativa "não fazer nada" e soluções improvisadas.
+    sprint: innovation-01-research
+    executor: claude
+    max_turns: 30
+    llm_timeout_seconds: 900
+    outputs:
+      - docs/research/competitors.md
+      - docs/research/competitors-evidence.yml
+    write_scope:
+      - docs/research/competitors.md
+      - docs/research/competitors-evidence.yml
+    prompt: |
+      Pesquise na web CONCORRENTES e ALTERNATIVAS para o problema de
+      docs/idea.md, à luz das hipóteses de docs/hypotheses.md. Inclua sempre:
+      soluções diretas, soluções adjacentes/improvisadas (planilha, processo
+      manual) e a opção "conviver com o problema".
+
+      Em uma reentrada (docs/research-questions.md contém respostas do
+      stakeholder), preencha somente as lacunas apontadas e preserve os claims
+      já coletados.
+
+      Gere docs/research/competitors.md: quem, o que oferece, preço quando
+      público, pontos fortes/fracos, lacuna que restaria para nós.
+
+      Gere docs/research/competitors-evidence.yml no mesmo schema da lente
+      market (schema_version: 1, lens: competitors, research_date, claims com
+      id EV-C01..., statement, source, date, confidence, supports).
+
+      As mesmas regras invioláveis se aplicam: URL real consultada em todo
+      claim, supports apenas com H-* existentes, confidence honesta, lacuna
+      declarada em vez de fabricada.
+    validators:
+      - file_exists: docs/research/competitors.md
+      - file_exists: docs/research/competitors-evidence.yml
+    next: innovation.research_feasibility
+
+  - id: innovation.research_feasibility
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Pesquisa — Viabilidade Técnica"
+    description: >-
+      Pesquisa na web se o caminho técnico imaginado é viável: tecnologias,
+      APIs, limites, custos de operação e riscos de dependência.
+    sprint: innovation-01-research
+    executor: claude
+    max_turns: 30
+    llm_timeout_seconds: 900
+    outputs:
+      - docs/research/feasibility.md
+      - docs/research/feasibility-evidence.yml
+    write_scope:
+      - docs/research/feasibility.md
+      - docs/research/feasibility-evidence.yml
+    prompt: |
+      Pesquise na web a VIABILIDADE TÉCNICA das hipóteses de
+      docs/hypotheses.md: tecnologias e APIs necessárias, maturidade, limites
+      (rate limits, licenças, LGPD/compliance), custo de operação estimado por
+      fontes públicas e riscos de dependência de terceiros.
+
+      Em uma reentrada (docs/research-questions.md contém respostas do
+      stakeholder), preencha somente as lacunas apontadas e preserve os claims
+      já coletados.
+
+      Gere docs/research/feasibility.md: síntese narrativa citando claims.
+
+      Gere docs/research/feasibility-evidence.yml no mesmo schema das outras
+      lentes (schema_version: 1, lens: feasibility, research_date, claims com
+      id EV-F01..., statement, source, date, confidence, supports).
+
+      As mesmas regras invioláveis se aplicam: URL real consultada em todo
+      claim, supports apenas com H-* existentes, confidence honesta, lacuna
+      declarada em vez de fabricada. Não escreva código nem PoC neste node.
+    validators:
+      - file_exists: docs/research/feasibility.md
+      - file_exists: docs/research/feasibility-evidence.yml
+    next: innovation.research_gate
+
+  - id: innovation.research_gate
+    type: gate
+    title: "Validar Auditabilidade da Pesquisa"
+    description: >-
+      Confere deterministicamente o schema das três lentes: todo claim tem
+      fonte URL, data, confiança válida e referencia hipóteses existentes.
+      Não julga se a pesquisa é suficiente — isso é papel da validação.
+    sprint: innovation-01-research
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds: "python .ft/process/innovation/scripts/validate_innovation.py research"
+    next: innovation.validation
+
+  - id: innovation.validation
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: review
+    title: "Cruzar Hipóteses com Evidências"
+    description: >-
+      Julga cada hipótese contra os claims coletados e emite verdict por H-* e
+      um verdict geral. Quando inconclusivo, formula perguntas objetivas ao
+      stakeholder.
+    sprint: innovation-01-research
+    executor: claude
+    max_turns: 24
+    llm_timeout_seconds: 480
+    outputs:
+      - docs/validation.md
+      - docs/research-questions.md
+    write_scope:
+      - docs/validation.md
+      - docs/research-questions.md
+    prompt: |
+      Julgue cada hipótese de docs/hypotheses.md exclusivamente contra os
+      claims dos três evidence.yml em docs/research/. Não pesquise mais nada
+      e não considere conhecimento próprio não citado: verdict sem EV-* é
+      inválido.
+
+      Gere docs/validation.md com frontmatter:
+        overall_verdict: supported | refuted | inconclusive
+
+      O corpo deve conter uma tabela com uma linha por hipótese:
+      | H-* | verdict (supported|refuted|inconclusive) | evidências (EV-*) | racional curto |
+
+      Critérios:
+      - supported: evidência de confiança medium/high sustenta a hipótese e
+        nada relevante a contradiz.
+      - refuted: evidência de confiança medium/high contradiz o núcleo.
+      - inconclusive: evidência ausente, fraca (só low) ou conflitante.
+
+      overall_verdict:
+      - refuted: se qualquer hipótese de existência do problema ou de adoção
+        for refuted — sem problema real ou sem adoção, o resto não importa.
+      - supported: se todas as hipóteses centrais forem supported.
+      - inconclusive: caso contrário.
+
+      Gere docs/research-questions.md:
+      - Se overall_verdict for inconclusive: perguntas numeradas e objetivas ao
+        stakeholder — somente o que destravaria um verdict (dado interno que
+        ele possua, acesso, disposição a pagar, restrição). Não pergunte o que
+        a web poderia responder.
+      - Caso contrário: escreva que não há perguntas pendentes.
+    validators:
+      - file_exists: docs/validation.md
+      - file_exists: docs/research-questions.md
+      - command_succeeds: "python .ft/process/innovation/scripts/validate_innovation.py validation"
+    next: innovation.validation_gate
+
+  - id: innovation.validation_gate
+    type: gate
+    title: "Registrar Verdict da Validação"
+    sprint: innovation-01-research
+    executor: python
+    validators:
+      - read_artifact:
+          path: docs/validation.md
+          key: overall_verdict
+          pattern: "overall_verdict:\\s*(supported|refuted|inconclusive)"
+    next: innovation.validation_route
+
+  - id: innovation.validation_route
+    type: decision
+    title: "Encaminhar Verdict"
+    description: >-
+      supported segue para o business case; refuted encerra com post-mortem;
+      inconclusive pede dados ao stakeholder e volta à pesquisa.
+    sprint: innovation-01-research
+    executor: python
+    condition: overall_verdict
+    branches:
+      supported: innovation.business_case
+      refuted: innovation.post_mortem
+      inconclusive: innovation.questions
+      _default: innovation.questions
+
+  - id: innovation.questions
+    type: human_gate
+    title: "Dados que Só o Stakeholder Tem"
+    description: >-
+      Leia docs/research-questions.md e responda com
+      `ft approve "1. ... 2. ..."`. As respostas voltam à pesquisa, que
+      preenche somente as lacunas. Para matar a ideia agora, use ft abort.
+    sprint: innovation-01-research
+    executor: python
+    outputs:
+      - docs/research-questions.md
+    next: innovation.research_market
+
+  - id: innovation.business_case
+    type: document
+    title: "Business Case com Critérios de Sucesso"
+    description: >-
+      Consolida evidências em decisão de investimento: custo, retorno, riscos,
+      alternativas e critérios de sucesso mensuráveis que o delivery herdará.
+    sprint: innovation-02-case
+    executor: claude
+    max_turns: 24
+    llm_timeout_seconds: 480
+    outputs:
+      - docs/business-case.md
+    write_scope:
+      - docs/business-case.md
+    prompt: |
+      Escreva docs/business-case.md a partir de docs/validation.md e dos
+      evidence.yml. Todo número deve citar um EV-* ou ser declarado como
+      estimativa com premissas explícitas — nunca apresente estimativa como
+      fato.
+
+      Frontmatter:
+        recommendation: go | no_go
+        estimated_effort: P | M | G
+        horizon: <prazo em que o piloto deve provar valor, ex. "90 dias">
+
+      Seções obrigatórias:
+      ## Oportunidade — problema validado + tamanho, citando EV-*.
+      ## Alternativas — concorrentes e a opção de não fazer nada; por que
+      nossa entrada ainda faz sentido (ou não).
+      ## Custos e Esforço — estimativa de construção e operação, com premissas.
+      ## Riscos — técnicos, de mercado e de dependência, com severidade.
+      ## Critérios de Sucesso — SC-01, SC-02... Cada um no formato:
+      ### SC-NN — <nome curto>
+      - Métrica: <o que medir>
+      - Alvo: <valor objetivo verificável>
+      - Prazo: <quando medir>
+      Estes SC-* serão os critérios do piloto e devem ser cobertos por
+      critérios de aceite no PRD; escreva-os mensuráveis, não aspiracionais.
+      ## Recomendação — justifique o go|no_go do frontmatter.
+
+      Se as evidências não sustentam um go honesto, recomende no_go. Um no_go
+      bem fundamentado é entrega de valor, não fracasso do processo.
+    validators:
+      - file_exists: docs/business-case.md
+      - read_artifact:
+          path: docs/business-case.md
+          key: recommendation
+          pattern: "recommendation:\\s*(go|no_go)"
+      - has_sections:
+          path: docs/business-case.md
+          sections:
+            - "Oportunidade"
+            - "Alternativas"
+            - "Custos e Esforço"
+            - "Riscos"
+            - "Critérios de Sucesso"
+            - "Recomendação"
+      - command_succeeds: "python .ft/process/innovation/scripts/validate_innovation.py business_case"
+    next: innovation.go_nogo
+
+  - id: innovation.go_nogo
+    type: human_gate
+    title: "Decisão de Investimento (Go/No-Go)"
+    description: >-
+      Único gate humano obrigatório do processo: decisão de investimento não se
+      automatiza com honestidade. Revise docs/business-case.md e os SC-*.
+      Aprove para gerar o PRD; rejeite para encerrar com post-mortem. A
+      recomendação do LLM não substitui sua decisão.
+    sprint: innovation-02-case
+    executor: python
+    outputs:
+      - docs/business-case.md
+    reject_next: innovation.post_mortem
+    next: innovation.prd
+
+  - id: innovation.prd
+    type: document
+    title: "PRD e Handoff para Delivery"
+    description: >-
+      Converte o business case aprovado em PRD com user stories e critérios de
+      aceite que cobrem todos os SC-*, mais o handoff para o processo de
+      delivery adequado.
+    sprint: innovation-03-handoff
+    executor: claude
+    max_turns: 40
+    llm_timeout_seconds: 600
+    outputs:
+      - docs/PRD.md
+      - docs/handoff.md
+    write_scope:
+      - docs/PRD.md
+      - docs/handoff.md
+    prompt: |
+      O stakeholder aprovou o business case. Gere o PRD e o handoff. Não
+      escreva código nem escolha stack além do que a viabilidade já apontou.
+
+      docs/PRD.md deve conter:
+      - Visão e objetivo (1 parágrafo, rastreável à Oportunidade).
+      - User stories numeradas US-01, US-02... com critérios de aceite AC-*.
+      - ## Rastreabilidade — tabela SC-* → AC-*: todo SC-* de
+        docs/business-case.md coberto por pelo menos um AC-* (é validado
+        deterministicamente; SC sem AC bloqueia).
+      - ## Fora do Escopo — explícito, herdando limites da demanda e do
+        business case.
+      - Restrições técnicas herdadas de docs/research/feasibility.md.
+
+      docs/handoff.md deve conter:
+      - next_process no frontmatter: mvp-builder-fast (produto novo) ou
+        feature-fast (evolução de produto existente), com justificativa.
+      - O que copiar para o seed do delivery (PRD, restrições, test data
+        sugerido).
+      - Os SC-* como critérios do piloto: o delivery prova que funciona; o
+        piloto prova que valeu.
+      - Alerta de validade: research_date das lentes; se a pesquisa tiver mais
+        de 8 semanas quando o delivery começar, recomende re-checagem rápida
+        de mercado/concorrência.
+    validators:
+      - file_exists: docs/PRD.md
+      - file_exists: docs/handoff.md
+      - min_user_stories:
+          path: docs/PRD.md
+          min_count: 1
+      - has_sections:
+          path: docs/PRD.md
+          sections:
+            - "Rastreabilidade"
+            - "Fora do Escopo"
+      - read_artifact:
+          path: docs/handoff.md
+          key: next_process
+          pattern: "next_process:\\s*(mvp-builder-fast|feature-fast)"
+      - command_succeeds: "python .ft/process/innovation/scripts/validate_innovation.py prd"
+    next: innovation.end
+
+  - id: innovation.post_mortem
+    type: document
+    title: "Post-Mortem da Ideia"
+    description: >-
+      Documenta por que a ideia não seguiu e o que a reativaria. O dossiê de
+      pesquisa permanece como ativo reutilizável.
+    sprint: innovation-03-handoff
+    executor: claude
+    max_turns: 16
+    llm_timeout_seconds: 300
+    outputs:
+      - docs/post-mortem.md
+    write_scope:
+      - docs/post-mortem.md
+    prompt: |
+      A ideia não seguirá adiante (verdict refuted ou no-go do stakeholder).
+      Gere docs/post-mortem.md:
+
+      ## Por que morreu — a causa real, citando EV-*, verdicts de
+      docs/validation.md e, quando houver, a rejeição do stakeholder. Sem
+      eufemismo.
+      ## O que reativaria — condições observáveis que mudariam a conclusão
+      (ex.: concorrente sair do mercado, custo de API cair abaixo de X, dado
+      interno provar demanda). Se nada reativaria, diga isso.
+      ## Aproveitável — evidências, aprendizados ou fatias do problema que
+      podem servir a outras ideias.
+
+      Não reescreva a pesquisa nem suavize o verdict.
+    validators:
+      - file_exists: docs/post-mortem.md
+      - has_sections:
+          path: docs/post-mortem.md
+          sections:
+            - "Por que morreu"
+            - "O que reativaria"
+            - "Aproveitável"
+      - command_succeeds: "python .ft/process/innovation/scripts/validate_innovation.py post_mortem"
+    next: innovation.end
+
+  - id: innovation.end
+    type: end
+    title: "Investigação Concluída"
+    description: >-
+      Dois desfechos legítimos. Go: docs/handoff.md indica o processo de
+      delivery (mvp-builder-fast ou feature-fast), o que levar para o seed e os
+      SC-* como critérios do futuro piloto. No-go: docs/post-mortem.md registra
+      por que a ideia morreu e o que a reativaria; o dossiê de pesquisa fica
+      disponível para futuras investigações.

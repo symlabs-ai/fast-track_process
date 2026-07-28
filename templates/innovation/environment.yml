@@ -1,0 +1,8 @@
+run_mode: isolated
+max_node_retries: 1
+max_gate_retries: 0
+max_auto_fix: 0
+
+# O processo innovation não toca código de produto: não exige worktree nem
+# projeto inicializado. Os nodes de pesquisa dependem de acesso à web do
+# executor claude; codex/gemini não são suportados nesta versão.

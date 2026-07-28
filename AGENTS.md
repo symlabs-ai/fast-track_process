@@ -98,6 +98,7 @@ ft run . --template mvp-builder --auto
 ft run . --template feature --request "Adicionar busca por telefone" --codex
 ft run . --template feature --input demanda.md --claude
 ft run . --template bug --request "Terminal duplica o eco do input" --codex
+ft run . --template bug-fast --request "Terminal duplica o eco do input" --codex
 ft run . --template tweak --request "Mudar o botão Salvar para azul" --codex
 ```
 
@@ -119,6 +120,7 @@ Templates principais:
 | `feature` | Evolução incremental de uma capacidade em produto existente |
 | `feature-fast` | Feature com sessões persistentes e correção focal seguida de auditoria somente do delta |
 | `bug` | Correção focal com diagnóstico e regressão RED→GREEN |
+| `bug-fast` | Bug em duas chamadas LLM: RED→GREEN, review independente, fix focal e reconciliação Python |
 | `tweak` | Mudança pequena, focal e de baixo risco |
 | `mvp-builder` | Processo completo recomendado para construir um MVP |
 | `mvp-builder-fast` | Variante opt-in do MVP Builder com plano interno, sessões persistentes por sprint e macro-nodes |

@@ -714,6 +714,28 @@ Use `feature` quando houver comportamento novo, contrato, auth/security,
 migração, dados, dependência, infraestrutura ou mudança transversal. Entradas de
 changelog começam com `#BUG`.
 
+### `bug-fast`
+
+Mantém a reprodução RED→GREEN e a suíte completa do `bug`, mas troca a chamada
+documental final por reconciliação Python e acrescenta uma review independente:
+
+```bash
+ft run . --template bug-fast \
+  --request "Terminal duplica o eco do input" \
+  --codex gpt-5.6-sol --effort high
+```
+
+O caminho feliz usa duas chamadas LLM: uma sessão builder e uma lane reviewer.
+Não há planejamento LLM nem reconciliação LLM. A review confirma o receipt sem
+repetir build/test. Se reprovar, o processo ancora B-*, reutiliza a sessão do
+builder para o fix e audita somente o delta; path novo força review completa e
+mudança de contrato/capacidade bloqueia o ciclo com instrução para
+`feature-fast`. O aceite humano continua obrigatório.
+
+Para avaliar performance, separe o wall clock da espera humana e compare
+chamadas, tempo ativo de LLM, retries/timeouts e duração da validação
+determinística no relatório do ciclo.
+
 ### `tweak`
 
 Mudança pequena e de baixo risco, com implementação única, check focal, build

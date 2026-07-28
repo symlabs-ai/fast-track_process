@@ -84,6 +84,7 @@ ft run . --template feature --request "Adicionar busca por telefone" --codex
 ft run . --template feature-fast --request "Adicionar busca por telefone" --codex
 ft run . --template feature --input demanda.md --claude
 ft run . --template bug --request "Terminal duplica o eco do input" --codex
+ft run . --template bug-fast --request "Terminal duplica o eco do input" --codex
 ft run . --template tweak --request "Mudar o botão Salvar para azul" --codex
 ```
 
@@ -178,6 +179,7 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 | `feature` | Evolução incremental de uma capacidade existente |
 | `feature-fast` | Feature com sessões persistentes e correção focal seguida de auditoria somente do delta |
 | `bug` | Correção focal com regressão RED→GREEN |
+| `bug-fast` | Bug em duas chamadas LLM: RED→GREEN, review independente, fix focal e reconciliação Python |
 | `tweak` | Mudança pequena e de baixo risco |
 | `mvp-builder` | Processo completo recomendado para um MVP |
 | `mvp-builder-fast` | Variante opt-in com plano interno, sessões por sprint e macro-nodes seguros |

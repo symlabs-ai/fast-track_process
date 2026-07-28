@@ -399,7 +399,7 @@ def test_pre_run_knowledge_commit_receives_selected_process_policy(
 
 def test_lightweight_templates_opt_out_after_their_own_deterministic_checks() -> None:
     root = Path(__file__).resolve().parents[2]
-    lightweight = {"bug", "tweak"}
+    lightweight = {"bug", "bug-fast", "tweak"}
     for process_path in (root / "templates").glob("*/process.yml"):
         payload = yaml.safe_load(process_path.read_text())
         verify_hooks = payload.get("commit_policy", {}).get("verify_hooks", True)

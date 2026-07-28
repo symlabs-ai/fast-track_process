@@ -23,6 +23,9 @@ FEATURE_DELTA_PREFIX = "feature_delta."
 TWEAK_PROFILE = "tweak.direct"
 BUG_DIRECT_PROFILE = "bug.direct"
 BUG_RECONCILE_PROFILE = "bug.reconcile"
+BUG_FAST_FIX_PROFILE = "bug_fast.fix"
+BUG_FAST_REVIEW_PROFILE = "bug_fast.review"
+BUG_FAST_FIX_REVIEW_PROFILE = "bug_fast.fix_review"
 CONTEXT_BEGIN = "<FT_CONTEXT_PROFILE>"
 CONTEXT_END = "</FT_CONTEXT_PROFILE>"
 
@@ -401,10 +404,122 @@ BUG_PROFILES: Mapping[str, ContextProfileSpec] = {
     ),
 }
 
+BUG_FAST_PROFILES: Mapping[str, ContextProfileSpec] = {
+    BUG_FAST_FIX_PROFILE: ContextProfileSpec(
+        name=BUG_FAST_FIX_PROFILE,
+        max_chars=44_000,
+        paths=(
+            "docs/feature-request.md",
+            "docs/bug-baseline.yml",
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            "docs/bug-review.md",
+            "docs/bug-review.yml",
+            "docs/bug-fix-baseline.yml",
+            "docs/bug-fix-review.md",
+            "docs/bug-fix-review.yml",
+            "docs/stakeholder-feedback.md",
+            *_TECH_STACK_PATHS,
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+        ),
+        compact_receipt=True,
+        include_changed_delta=True,
+        include_product_manifest=True,
+        priority_paths=(
+            "docs/feature-request.md",
+            "docs/bug-baseline.yml",
+            "docs/bug-fix-baseline.yml",
+            "docs/bug-review.md",
+            "docs/bug-review.yml",
+            "docs/bug-fix-review.md",
+            "docs/bug-fix-review.yml",
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            "docs/stakeholder-feedback.md",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+        ),
+        manifest_max_paths=240,
+        git_namespace="bug-fast-fix",
+        delta_before_manifest=True,
+        compact_receipt_paths=("docs/bug-validation.json",),
+        delta_base_path="docs/bug-fix-baseline.yml",
+    ),
+    BUG_FAST_REVIEW_PROFILE: ContextProfileSpec(
+        name=BUG_FAST_REVIEW_PROFILE,
+        max_chars=48_000,
+        paths=(
+            "docs/feature-request.md",
+            "docs/bug-baseline.yml",
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            *_TECH_STACK_PATHS,
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+        ),
+        compact_receipt=True,
+        include_changed_delta=True,
+        include_product_manifest=True,
+        priority_paths=(
+            "docs/feature-request.md",
+            "docs/bug-baseline.yml",
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            "docs/PROJECT_BACKLOG.md",
+            "docs/FEATURES.md",
+        ),
+        manifest_max_paths=240,
+        git_namespace="bug-fast-review",
+        delta_before_manifest=True,
+        compact_receipt_paths=("docs/bug-validation.json",),
+    ),
+    BUG_FAST_FIX_REVIEW_PROFILE: ContextProfileSpec(
+        name=BUG_FAST_FIX_REVIEW_PROFILE,
+        max_chars=44_000,
+        paths=(
+            "docs/feature-request.md",
+            "docs/bug-baseline.yml",
+            "docs/bug-report.md",
+            "docs/bug-validation.json",
+            "docs/bug-review.md",
+            "docs/bug-review.yml",
+            "docs/bug-fix-baseline.yml",
+            "docs/bug-fix-review.md",
+            "docs/bug-fix-review.yml",
+            *_TECH_STACK_PATHS,
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+        ),
+        compact_receipt=True,
+        include_changed_delta=True,
+        include_product_manifest=True,
+        priority_paths=(
+            "docs/bug-fix-baseline.yml",
+            "docs/bug-review.md",
+            "docs/bug-review.yml",
+            "docs/bug-fix-review.md",
+            "docs/bug-fix-review.yml",
+            "docs/bug-validation.json",
+            "docs/bug-report.md",
+        ),
+        manifest_max_paths=240,
+        git_namespace="bug-fast-fix-review",
+        delta_before_manifest=True,
+        compact_receipt_paths=("docs/bug-validation.json",),
+        delta_base_path="docs/bug-fix-baseline.yml",
+    ),
+}
+
 CONTEXT_PROFILES: Mapping[str, ContextProfileSpec] = {
     **FEATURE_DELTA_PROFILES,
     **TWEAK_PROFILES,
     **BUG_PROFILES,
+    **BUG_FAST_PROFILES,
 }
 
 KNOWN_CONTEXT_PROFILES = frozenset(CONTEXT_PROFILES)

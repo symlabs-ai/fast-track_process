@@ -6,6 +6,18 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### `bug-fast`: correção focal em duas chamadas
+
+- Novo template `bug-fast`: uma sessão builder produz RED→GREEN e uma lane
+  independente revisa o diff; o caminho feliz não cria plano nem delegação
+  documental e termina com reconciliação Python idempotente.
+- Review rejeitada gera âncora B-*, fix focal na sessão existente, receipt
+  completo renovado e auditoria somente do delta. Path novo força review
+  completa; mudança de contrato/capacidade bloqueia e encaminha a
+  `feature-fast`.
+- Validators vinculam review e auditoria ao commit, ao fingerprint do receipt,
+  aos paths efetivamente alterados e aos mesmos hashes de teste RED/GREEN.
+
 ### Sessões persistentes e `mvp-builder-fast`
 
 - Processos podem optar por `session_policy`: Claude retoma por session ID e

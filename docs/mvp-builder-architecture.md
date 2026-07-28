@@ -38,7 +38,11 @@ produto/
 │   │   ├── mvp-builder-fast/           # variante opt-in com session_policy
 │   │   │   ├── process.yml
 │   │   │   └── scripts/
-│   │   └── feature/
+│   │   ├── feature/
+│   │   │   ├── process.yml
+│   │   │   ├── environment.yml
+│   │   │   └── scripts/
+│   │   └── bug-fast/                  # RED→GREEN + review em duas chamadas
 │   │       ├── process.yml
 │   │       ├── environment.yml
 │   │       └── scripts/

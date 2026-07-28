@@ -6632,7 +6632,12 @@ class StepRunner:
             print(ui.info(f"LLM model: {state.llm_model}"))
         if state.llm_effort:
             print(ui.info(f"LLM effort: {state.llm_effort}"))
-        print(ui.info(f"Node atual: {state.current_node}"))
+        node_label = state.current_node
+        if state.current_node and state.current_node in self.graph.nodes:
+            node_title = self.graph.nodes[state.current_node].title
+            if node_title:
+                node_label = f"{node_title} [{state.current_node}]"
+        print(ui.info(f"Node atual: {node_label}"))
         print(ui.info(f"Status: {state.node_status}"))
         recent = self._recent_delegation(state)
         delegation_running = recent is not None and recent[0] < 120

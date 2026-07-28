@@ -45,6 +45,18 @@ O gate não julga se a pesquisa é *verdadeira* — julga se é *auditável*: to
 claim tem fonte consultável. A qualidade semântica é desafiada pelo node de
 validação e, em última instância, pelo go/no-go humano.
 
+## Sondas empíricas (fire proof)
+
+A lente de viabilidade não se limita a desk research: quando uma hipótese
+declara teste empírico ou um claim decisivo é verificável com HTTP GET
+read-only, o node executa a sonda (máx. 3 requisições educadas por alvo, sem
+auth, sem contornar captcha), salva a resposta bruta em
+`docs/research/probes/` e registra o claim com `method: probe` e
+confidence high. Na validação, probe prevalece sobre desk research quando
+ambos falam da mesma rota. Motivação: no caso Clari, desk research refutou
+um mecanismo (captcha na SEFAZ) que uma única requisição real provou aberto —
+sonda vale mais que dez claims lidos.
+
 ## Gates humanos
 
 - `innovation.questions` (condicional): só dispara quando o verdict é

@@ -15,7 +15,7 @@
 #   cobertos por AC-* no PRD (validado deterministicamente).
 
 id: innovation
-version: "0.1.0"
+version: "0.2.0"
 title: "Innovation — Discovery, Validação e Business Case Automatizados"
 
 execution_policy:
@@ -56,6 +56,7 @@ artifact_policy:
     - docs/research/competitors-evidence.yml
     - docs/research/feasibility.md
     - docs/research/feasibility-evidence.yml
+    - docs/research/probes/
     - docs/validation.md
     - docs/research-questions.md
 
@@ -234,11 +235,34 @@ nodes:
     write_scope:
       - docs/research/feasibility.md
       - docs/research/feasibility-evidence.yml
+      - docs/research/probes
     prompt: |
       Pesquise na web a VIABILIDADE TÉCNICA das hipóteses de
       docs/hypotheses.md: tecnologias e APIs necessárias, maturidade, limites
       (rate limits, licenças, LGPD/compliance), custo de operação estimado por
       fontes públicas e riscos de dependência de terceiros.
+
+      SONDA EMPÍRICA (fire proof): quando uma hipótese declarar teste empírico
+      ou quando um claim decisivo (capaz de sozinho derrubar ou sustentar uma
+      H-*) puder ser verificado com uma requisição HTTP de leitura, NÃO se
+      contente com desk research — execute a sonda:
+      1. Somente GET em endpoints públicos; nunca autentique, nunca contorne
+         captcha, nunca submeta formulário.
+      2. Máximo 3 requisições por alvo, com intervalo entre elas. Você está
+         tocando serviços de terceiros: comporte-se como um usuário, não como
+         um crawler.
+      3. Salve a resposta bruta em docs/research/probes/<nome>.html (ou .json)
+         e registre o comando exato executado.
+      4. Registre o resultado como claim com `method: probe`, source = URL
+         sondada, confidence: high (observação direta) e o essencial no
+         statement: HTTP status, tamanho, e o que a resposta CONTÉM ou NÃO
+         contém (ex.: "200, DANFE completo item a item, zero ocorrências de
+         captcha").
+      5. Uma sonda que contradiz desk research não é anomalia — é o achado.
+         Registre ambos e aponte o conflito no feasibility.md. Cuidado com
+         generalização: uma rota sem captcha não prova que outra rota (ou
+         outro estado/fornecedor) também não tem; sonde o caminho exato que o
+         produto usaria.
 
       Em uma reentrada (docs/research-questions.md contém respostas do
       stakeholder), preencha somente as lacunas apontadas e preserve os claims
@@ -248,11 +272,14 @@ nodes:
 
       Gere docs/research/feasibility-evidence.yml no mesmo schema das outras
       lentes (schema_version: 1, lens: feasibility, research_date, claims com
-      id EV-F01..., statement, source, date, confidence, supports).
+      id EV-F01..., statement, source, date, confidence, supports; claims de
+      sonda levam `method: probe` e, quando houver, `artifacts` com o path da
+      resposta salva).
 
       As mesmas regras invioláveis se aplicam: URL real consultada em todo
       claim, supports apenas com H-* existentes, confidence honesta, lacuna
-      declarada em vez de fabricada. Não escreva código nem PoC neste node.
+      declarada em vez de fabricada. Não escreva código de produto nem PoC
+      neste node — a sonda é observação, não protótipo.
     validators:
       - file_exists: docs/research/feasibility.md
       - file_exists: docs/research/feasibility-evidence.yml
@@ -308,6 +335,11 @@ nodes:
         nada relevante a contradiz.
       - refuted: evidência de confiança medium/high contradiz o núcleo.
       - inconclusive: evidência ausente, fraca (só low) ou conflitante.
+      - Precedência: claim com `method: probe` (observação direta) prevalece
+        sobre desk research de qualquer confiança quando ambos falam do MESMO
+        caminho/rota. Um probe de uma rota não anula desk research sobre rota
+        diferente — verifique se o objeto é o mesmo antes de aplicar a
+        precedência.
 
       overall_verdict:
       - refuted: se qualquer hipótese de existência do problema ou de adoção

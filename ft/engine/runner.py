@@ -6477,6 +6477,54 @@ class StepRunner:
             return f"{minutes}m{secs:02d}s"
         return f"{secs}s"
 
+    def _node_elapsed_label(self, state) -> str | None:
+        """Tempo no node atual, medido da primeira delegação (nome dos llm_logs)."""
+        if not state.current_node:
+            return None
+        llm_dir = self._llm_log_dir()
+        if not llm_dir.is_dir():
+            return None
+        stamps: list[datetime] = []
+        for path in llm_dir.glob(f"*__{state.current_node}__*.log"):
+            match = re.match(r"(\d{8}-\d{6})__", path.name)
+            if not match:
+                continue
+            try:
+                stamps.append(datetime.strptime(match.group(1), "%Y%m%d-%H%M%S"))
+            except ValueError:
+                continue
+        if not stamps:
+            return None
+        return self._format_elapsed((datetime.now() - min(stamps)).total_seconds())
+
+    def _action_elapsed_label(self, action: str) -> str | None:
+        """Há quanto tempo a mesma ação segue como atual, entre chamadas de status.
+
+        O stream de eventos não carrega relógio por linha; o melhor sinal
+        honesto é 'observada pela primeira vez em', persistido num cache leve.
+        Na primeira observação não há elapsed a mostrar.
+        """
+        import json as _json
+
+        cache = self.state_mgr.path.parent / ".status_action_seen.json"
+        now = time.time()
+        try:
+            entry = _json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            entry = None
+        if isinstance(entry, dict) and entry.get("action") == action:
+            try:
+                return self._format_elapsed(now - float(entry.get("since", now)))
+            except (TypeError, ValueError):
+                pass
+        try:
+            cache.write_text(
+                _json.dumps({"action": action, "since": now}), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        return None
+
     def _cycle_objective_from_input(self) -> str | None:
         """Lê a demanda pinada no ciclo sem depender de uma chamada LLM."""
         from ft.templates.input_policy import InputPolicy, InputPolicyError
@@ -6637,6 +6685,9 @@ class StepRunner:
             node_title = self.graph.nodes[state.current_node].title
             if node_title:
                 node_label = f"{node_title} [{state.current_node}]"
+        node_elapsed = self._node_elapsed_label(state)
+        if node_label and node_elapsed:
+            node_label = f"{node_label} · no node há {node_elapsed}"
         print(ui.highlight(f"Node atual: {node_label}"))
         print(ui.info(f"Status: {state.node_status}"))
         recent = self._recent_delegation(state)
@@ -6659,7 +6710,11 @@ class StepRunner:
                 ))
                 if progress_snapshot is not None:
                     if progress_snapshot.current:
-                        print(ui.dim(f"  Agora: {progress_snapshot.current}"))
+                        action_line = progress_snapshot.current
+                        action_elapsed = self._action_elapsed_label(action_line)
+                        if action_elapsed:
+                            action_line = f"{action_line} (nesta ação há ~{action_elapsed})"
+                        print(ui.dim(f"  Agora: {action_line}"))
                     if progress_snapshot.evolution:
                         print(ui.dim(f"  Evolução: {progress_snapshot.evolution}"))
                     signal = progress_snapshot.signal or "stream/log ativo"

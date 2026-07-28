@@ -365,6 +365,28 @@ nodes:
     executor: python
     outputs:
       - docs/research-questions.md
+    max_turns: 30
+    llm_timeout_seconds: 900
+    bypass_prompt: |
+      Você está respondendo este questionário em nome do stakeholder AUSENTE
+      (modo --bypass-human-gates). Leia docs/research-questions.md e responda
+      TODAS as perguntas numeradas editando o próprio arquivo: abaixo de cada
+      pergunta, adicione a resposta prefixada com `**[LLM Responde / {llm_label}]**`.
+
+      Regras:
+      1. Pesquise na web quando a pergunta admitir resposta por evidência
+         externa e cite a fonte (URL) na própria resposta.
+      2. Quando a pergunta pedir dado interno que você não possui (lista de
+         espera, orçamento, evidência própria de demanda, apetite de risco),
+         declare explicitamente "dado interno indisponível" e assuma a posição
+         mais conservadora possível, justificando-a — a validação seguinte deve
+         poder tratar essa resposta como ausência declarada, não como fato.
+      3. Nunca invente números, clientes, compromissos ou preferências do
+         stakeholder.
+      4. Preserve as perguntas originais intactas.
+      5. Ao final do arquivo, acrescente uma seção `## Resumo do bypass`
+         listando as premissas conservadoras assumidas, para revisão humana
+         posterior.
     next: innovation.research_market
 
   - id: innovation.business_case

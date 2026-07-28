@@ -4602,6 +4602,46 @@ class StepRunner:
         self.state_mgr.block(f"Validacao falhou apos {self._max_node_retries} tentativas: {validation.feedback}")
         print(ui.step_block(f"validação falhou após {self._max_node_retries} tentativas"))
 
+    def _run_bypass_prompt(self, node: Node) -> None:
+        """Delegação LLM no lugar do humano em um gate bypassado.
+
+        A saída é melhor esforço do LLM, nunca decisão humana — o prompt do
+        template deve exigir atribuição explícita (o placeholder {llm_label}
+        é substituído por engine/modelo reais, ex.: 'Claude Opus') para que
+        artefatos a jusante carreguem a proveniência de cada resposta.
+        Falha aqui não bloqueia o bypass: o gate segue sem as respostas,
+        preservando o comportamento anterior do flag.
+        """
+        state = self.state_mgr.state
+        engine = (state.llm_engine or "claude").strip()
+        model = (state.llm_model or "").strip()
+        llm_label = " ".join(
+            part.capitalize() for part in [engine, model] if part
+        )
+        task = node.bypass_prompt.replace("{llm_label}", llm_label)
+        log_path = self._llm_log_dir() / (
+            f"{datetime.now().strftime('%Y%m%d-%H%M%S')}__{node.id}__bypass.log"
+        )
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        print(ui.info(
+            f"Human gate em bypass: delegando resposta ao LLM ({llm_label})"
+        ))
+        result = delegate_to_llm(
+            task=task,
+            project_root=self._work_dir,
+            llm_engine=engine,
+            llm_model=state.llm_model,
+            llm_effort=state.llm_effort,
+            max_turns=node.max_turns or 30,
+            log_path=str(log_path),
+            stream_prefix=self._stream_prefix(engine),
+            llm_timeout_seconds=node.llm_timeout_seconds,
+        )
+        if not result.success:
+            print(ui.warn(
+                f"Bypass LLM não concluiu em {node.id}; o gate segue sem respostas"
+            ))
+
     def _run_human_gate(self, node: Node) -> None:
         """Checkpoint humano obrigatório — pausa até ft approve ser chamado.
 
@@ -4609,6 +4649,8 @@ class StepRunner:
         Bypassa automaticamente se self._bypass_human_gates=True.
         """
         if self._bypass_human_gates:
+            if node.bypass_prompt:
+                self._run_bypass_prompt(node)
             print(ui.info(f"Human gate BYPASSED: {node.title}"))
             next_id = self.graph.resolve_next(node.id)
             self._advance_state(node.id, next_id)

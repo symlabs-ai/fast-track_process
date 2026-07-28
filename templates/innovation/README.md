@@ -62,3 +62,9 @@ validação e, em última instância, pelo go/no-go humano.
   alerta re-checagem se o delivery começar >8 semanas depois.
 - Sem limite automático de rodadas research↔questions; o gate humano é o
   próprio freio. Em `--auto`, um verdict inconclusive para no gate.
+- Com `--bypass-human-gates`, o gate de perguntas não é pulado às cegas: o
+  LLM responde o questionário (pesquisando quando possível), com cada
+  resposta atribuída como `**[LLM Responde / <Engine Modelo>]**` e premissas
+  conservadoras declaradas para dado interno indisponível. O go/no-go
+  bypassado segue direto para o PRD — a decisão de investimento continua
+  sendo recomendável como gate humano.

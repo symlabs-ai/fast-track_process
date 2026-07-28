@@ -49,6 +49,9 @@ class Node:
     preserve_outputs_on_reentry: bool = False
     # Nó de destino quando human_gate é rejeitado (override do predecessor padrão)
     reject_next: str | None = None
+    # Em human_gate com --bypass-human-gates: em vez de pular o gate, delega ao
+    # LLM responder/decidir com este prompt, com atribuição explícita na saída.
+    bypass_prompt: str | None = None
     # Descrição amigável exibida ao usuário quando o step inicia
     description: str | None = None
     # Evento disparado quando o node falha (review ITERATE/REJECTED ou validators)
@@ -339,6 +342,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             ),
             description=node_raw.get("description"),
             reject_next=node_raw.get("reject_next"),
+            bypass_prompt=node_raw.get("bypass_prompt"),
             on_fail=node_raw.get("on_fail"),
             optional=node_raw.get("optional", False),
             hyper_mode_docs=node_raw.get("hyper_mode_docs"),

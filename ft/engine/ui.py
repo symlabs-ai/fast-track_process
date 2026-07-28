@@ -113,6 +113,11 @@ def info(text: str) -> str:
     return f"  {CYAN}→{RESET} {text}"
 
 
+def highlight(text: str) -> str:
+    """Linha de status em amarelo — para os campos que o olho procura primeiro."""
+    return f"  {BOLD_YELLOW}→{RESET} {YELLOW}{text}{RESET}"
+
+
 def dim(text: str) -> str:
     return f"  {DIM}{text}{RESET}"
 

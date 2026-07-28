@@ -6637,7 +6637,7 @@ class StepRunner:
             node_title = self.graph.nodes[state.current_node].title
             if node_title:
                 node_label = f"{node_title} [{state.current_node}]"
-        print(ui.info(f"Node atual: {node_label}"))
+        print(ui.highlight(f"Node atual: {node_label}"))
         print(ui.info(f"Status: {state.node_status}"))
         recent = self._recent_delegation(state)
         delegation_running = recent is not None and recent[0] < 120
@@ -6685,7 +6685,7 @@ class StepRunner:
             progress_line += f" · ciclo rodando há {runtime_label}"
         if activity_label:
             progress_line += f" · última atividade {activity_label}"
-        print(ui.info(progress_line))
+        print(ui.highlight(progress_line))
         # Mostrar URL se node atual é human_gate
         current_node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
         if current_node_obj and current_node_obj.type == "human_gate":

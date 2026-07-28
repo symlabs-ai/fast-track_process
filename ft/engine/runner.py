@@ -6477,6 +6477,26 @@ class StepRunner:
             return f"{minutes}m{secs:02d}s"
         return f"{secs}s"
 
+    def _executed_steps_count(self) -> int | None:
+        """Passos realmente executados no ciclo (linhas do run log, sem INIT).
+
+        Com retries e loops de correção um node pode rodar mais de uma vez,
+        então este total pode exceder a posição no grafo mostrada no
+        Progresso.
+        """
+        log_path = Path(self.project_root) / self._log_filename
+        if not log_path.is_file():
+            return None
+        count = 0
+        try:
+            with log_path.open(encoding="utf-8", errors="ignore") as stream:
+                for line in stream:
+                    if self._LOG_TS_RE.match(line) and "`INIT`" not in line:
+                        count += 1
+        except OSError:
+            return None
+        return count
+
     def _node_elapsed_label(self, state) -> str | None:
         """Tempo no node atual, medido da primeira delegação (nome dos llm_logs)."""
         if not state.current_node:
@@ -6735,12 +6755,29 @@ class StepRunner:
         steps_total = state.metrics.get("steps_total", 0)
         current_step = steps_done + 1 if state.node_status not in ("done", "completed") else steps_done
         progress_line = f"Progresso: {current_step}/{steps_total} (passo atual)"
+        executed_steps = self._executed_steps_count()
+        if executed_steps is not None and executed_steps > 0:
+            progress_line += f" · {executed_steps} passos executados"
         runtime_label, activity_label = self._status_timing_labels()
         if runtime_label:
             progress_line += f" · ciclo rodando há {runtime_label}"
         if activity_label:
             progress_line += f" · última atividade {activity_label}"
         print(ui.highlight(progress_line))
+        usage_summary = summarize_llm_usage(
+            self._llm_log_dir(),
+            default_engine=state.llm_engine,
+            default_model=state.llm_model,
+        )
+        usage_totals = usage_summary.get("totals") or {}
+        tokens_all = usage_totals.get("total_all_tokens", 0)
+        if tokens_all:
+            tokens_output = usage_totals.get("output_tokens", 0)
+            cache_read = usage_totals.get("cache_read_input_tokens", 0)
+            print(ui.info(
+                f"Tokens no ciclo: {tokens_all:,} "
+                f"(output {tokens_output:,} · cache read {cache_read:,})"
+            ))
         # Mostrar URL se node atual é human_gate
         current_node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
         if current_node_obj and current_node_obj.type == "human_gate":

@@ -16,6 +16,8 @@ import subprocess
 from typing import Mapping
 import unicodedata
 
+import yaml
+
 
 FEATURE_DELTA_PREFIX = "feature_delta."
 TWEAK_PROFILE = "tweak.direct"
@@ -68,6 +70,7 @@ class ContextProfileSpec:
     git_namespace: str = "feature-delta"
     delta_before_manifest: bool = False
     compact_receipt_paths: tuple[str, ...] = ()
+    delta_base_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,41 @@ FEATURE_DELTA_PROFILES: Mapping[str, ContextProfileSpec] = {
             "docs/stakeholder-feedback.md",
         ),
     ),
+    "feature_delta.fix": ContextProfileSpec(
+        name="feature_delta.fix",
+        max_chars=48_000,
+        paths=(
+            "docs/feature-request.md",
+            "docs/feature.md",
+            "docs/feature-plan.md",
+            "docs/feature-workset.yml",
+            "docs/feature-fix-baseline.yml",
+            "docs/feature-review.md",
+            "docs/feature-review.yml",
+            "docs/feature-fix-review.md",
+            "docs/feature-fix-review.yml",
+            *_TECH_STACK_PATHS,
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+            _RECEIPT_PATH,
+        ),
+        compact_receipt=True,
+        include_changed_delta=True,
+        priority_paths=(
+            "docs/feature-fix-baseline.yml",
+            "docs/feature-review.md",
+            "docs/feature-review.yml",
+            "docs/feature-fix-review.md",
+            "docs/feature-fix-review.yml",
+            "docs/feature.md",
+            "docs/feature-plan.md",
+            "docs/feature-workset.yml",
+            _RECEIPT_PATH,
+        ),
+        git_namespace="feature-fix",
+        delta_base_path="docs/feature-fix-baseline.yml",
+        delta_before_manifest=True,
+    ),
     "feature_delta.evidence": ContextProfileSpec(
         name="feature_delta.evidence",
         max_chars=40_000,
@@ -195,6 +233,41 @@ FEATURE_DELTA_PROFILES: Mapping[str, ContextProfileSpec] = {
             _RECEIPT_PATH,
         ),
     ),
+    "feature_delta.fix_review": ContextProfileSpec(
+        name="feature_delta.fix_review",
+        max_chars=44_000,
+        paths=(
+            "docs/feature.md",
+            "docs/feature-plan.md",
+            "docs/feature-workset.yml",
+            "docs/feature-fix-baseline.yml",
+            "docs/feature-review.md",
+            "docs/feature-review.yml",
+            "docs/feature-fix-review.md",
+            "docs/feature-fix-review.yml",
+            "docs/implementation-report.md",
+            "docs/feature-evidence.yml",
+            "docs/ui_criteria.md",
+            "docs/api_contract.md",
+            _RECEIPT_PATH,
+        ),
+        compact_receipt=True,
+        include_changed_delta=True,
+        priority_paths=(
+            "docs/feature-fix-baseline.yml",
+            "docs/feature-review.md",
+            "docs/feature-review.yml",
+            "docs/feature-fix-review.md",
+            "docs/feature-fix-review.yml",
+            _RECEIPT_PATH,
+            "docs/feature.md",
+            "docs/feature-plan.md",
+            "docs/feature-workset.yml",
+        ),
+        git_namespace="feature-fix-review",
+        delta_base_path="docs/feature-fix-baseline.yml",
+        delta_before_manifest=True,
+    ),
     "feature_delta.reconcile": ContextProfileSpec(
         name="feature_delta.reconcile",
         max_chars=72_000,
@@ -205,6 +278,8 @@ FEATURE_DELTA_PROFILES: Mapping[str, ContextProfileSpec] = {
             "docs/implementation-report.md",
             "docs/feature-review.md",
             "docs/feature-review.yml",
+            "docs/feature-fix-review.md",
+            "docs/feature-fix-review.yml",
             "docs/feature-id-reservation.yml",
             "docs/stakeholder-feedback.md",
             _RECEIPT_PATH,
@@ -226,6 +301,8 @@ FEATURE_DELTA_PROFILES: Mapping[str, ContextProfileSpec] = {
             "docs/implementation-report.md",
             "docs/feature-review.md",
             "docs/feature-review.yml",
+            "docs/feature-fix-review.md",
+            "docs/feature-fix-review.yml",
             "docs/feature-id-reservation.yml",
             "docs/stakeholder-feedback.md",
             _RECEIPT_PATH,
@@ -638,6 +715,29 @@ def _eligible_delta_path(relative: str) -> bool:
     return bool(path.parts) and path.parts[0].lower() in _DELTA_ROOTS
 
 
+def _anchored_delta_base(
+    root: Path,
+    anchor_path: str | None,
+    fallback: str | None,
+) -> str | None:
+    """Resolve a focal delta anchor from an allowlisted YAML artifact."""
+    if not anchor_path:
+        return fallback
+    candidate = _safe_candidate(root, anchor_path)
+    if candidate is None:
+        return fallback
+    try:
+        payload = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+    value = payload.get("base_commit")
+    if isinstance(value, str) and _GIT_OBJECT_RE.fullmatch(value):
+        return value
+    return fallback
+
+
 def _changed_delta_sections(
     root: Path,
     base_commit: str | None,
@@ -915,9 +1015,14 @@ def compose_context_profile(
         if not spec.include_changed_delta or cap_exhausted:
             return
         extra_delta_paths = paths if spec.include_allowlisted_delta else ()
+        delta_base = _anchored_delta_base(
+            root,
+            spec.delta_base_path,
+            base_commit,
+        )
         for virtual_path, content in _changed_delta_sections(
             root,
-            base_commit,
+            delta_base,
             extra_paths=extra_delta_paths,
             excluded_paths=compact_receipt_paths,
             namespace=spec.git_namespace,

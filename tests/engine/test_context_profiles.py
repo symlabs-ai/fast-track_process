@@ -71,8 +71,10 @@ def test_profile_caps_are_explicit() -> None:
     } == {
         "feature_delta.discovery": 64_000,
         "feature_delta.implement": 48_000,
+        "feature_delta.fix": 48_000,
         "feature_delta.evidence": 40_000,
         "feature_delta.review": 56_000,
+        "feature_delta.fix_review": 44_000,
         "feature_delta.reconcile": 72_000,
     }
 
@@ -363,6 +365,45 @@ def test_git_manifest_diff_and_changed_file_excerpts_are_focal(tmp_path: Path) -
     assert "+PB-001 accepted" in reconcile.context
 
 
+def test_fix_review_delta_uses_frozen_fix_anchor_not_cycle_base(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "tests@example.invalid")
+    _git(tmp_path, "config", "user.name", "Tests")
+    _write(tmp_path, "src/old.py", "OLD = 1\n")
+    _git(tmp_path, "add", "src/old.py")
+    _git(tmp_path, "commit", "-qm", "cycle base")
+    cycle_base = _git(tmp_path, "rev-parse", "HEAD")
+
+    _write(tmp_path, "src/old.py", "OLD = 2\n")
+    _git(tmp_path, "add", "src/old.py")
+    _git(tmp_path, "commit", "-qm", "implementation reviewed")
+    fix_base = _git(tmp_path, "rev-parse", "HEAD")
+
+    _write(
+        tmp_path,
+        "docs/feature-fix-baseline.yml",
+        f"schema_version: 1\nbase_commit: {fix_base}\n",
+    )
+    _write(tmp_path, "docs/feature-review.md", "F-01 rejected\n")
+    _write(tmp_path, "src/fix.py", "FIXED = True\n")
+
+    result = compose_context_profile(
+        "feature_delta.fix_review",
+        tmp_path,
+        "TASK",
+        base_commit=cycle_base,
+    )
+
+    assert f'"base_commit":"{fix_base}"' in result.context
+    assert "current:src/fix.py" in result.context
+    assert "FIXED = True" in result.context
+    assert "src/old.py" not in result.context.split(
+        "### git:feature-fix-review.changed-files", 1
+    )[1].split("\n### ", 1)[0]
+
+
 def test_normal_runner_profile_skips_hyper_kb_and_cycle_memory(tmp_path: Path) -> None:
     runner, node = _runner(tmp_path)
     _write(Path(runner.project_root), "docs/feature.md", "draft survives")
@@ -416,6 +457,78 @@ def test_review_profile_works_for_codex_without_opencode_instructions(
     assert "INSTRUCAO OPENCODE REVIEW" in opencode_prompt
     assert "docs/feature.md" in opencode_deny
     assert "docs/screenshots/feature/" in opencode_deny
+
+
+def test_active_feature_fast_v1_correction_gets_delta_review_context(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "product"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "tests@example.invalid")
+    _git(root, "config", "user.name", "Tests")
+    _write(root, "docs/feature.md", "# Feature\n")
+    _write(root, "src/app.py", "VALUE = 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "reviewed implementation")
+    reviewed = _git(root, "rev-parse", "HEAD")
+
+    _write(
+        root,
+        "docs/feature-review.yml",
+        "schema_version: 1\n"
+        "verdict: REJECTED\n"
+        "review_route: implementation\n"
+        "summary: F-01 precisa de correção.\n",
+    )
+    _write(
+        root,
+        "docs/feature-review.md",
+        "| Finding | Status | Evidência |\n"
+        "|---|---|---|\n"
+        "| F-01 | FAIL | VALUE incorreto. |\n",
+    )
+    _write(root, "src/app.py", "VALUE = 2\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "focal correction")
+
+    process = tmp_path / "feature-fast-v1.yml"
+    process.write_text(
+        "id: feature_fast\n"
+        "version: '1.0.0'\n"
+        "title: Feature Fast v1\n"
+        "nodes:\n"
+        "  - id: feature.review\n"
+        "    type: review\n"
+        "    title: Review\n"
+        "    executor: codex\n"
+        "    context_profile: feature_delta.review\n"
+        "    outputs:\n"
+        "      - docs/feature-review.md\n"
+        "      - docs/feature-review.yml\n"
+        "    next: feature.end\n"
+        "  - {id: feature.end, type: end, title: End}\n",
+        encoding="utf-8",
+    )
+    runner = StepRunner(
+        process_path=process,
+        state_path=root / "state" / "engine_state.yml",
+        project_root=root,
+        llm_engine="codex",
+    )
+    runner.init_state()
+    node = runner.graph.get_node("feature.review")
+
+    prompt, deny = runner._build_review_task_context(
+        node,
+        LLMSelection("codex", "gpt-test", "high"),
+    )
+
+    assert deny == []
+    assert "MODO_COMPATIBILIDADE_FEATURE_FAST_V1=correction_delta_review" in prompt
+    assert f"FIX_DELTA_BASE_COMMIT={reviewed}" in prompt
+    assert "F-01 | FAIL" in prompt
+    assert "src/app.py" in prompt
 
 
 def test_auto_fix_profile_skips_hypermode_and_composes_delegated_prompt(

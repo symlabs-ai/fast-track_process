@@ -5117,6 +5117,10 @@ class StepRunner:
                 self.state_mgr.state,
                 selection,
             )
+            task_prompt = self._feature_fast_v1_delta_review_context(
+                node,
+                task_prompt,
+            )
             if selection.engine != "opencode":
                 return task_prompt, []
         elif selection.engine == "opencode":
@@ -5166,6 +5170,118 @@ class StepRunner:
                 "- A primeira escrita deve criar/atualizar o relatorio .md canonico.\n"
             )
         return task_prompt, deny_read_paths
+
+
+    def _feature_fast_v1_delta_review_context(
+        self,
+        node: Node,
+        task_prompt: str,
+    ) -> str:
+        """Keep v1.0 cycles fast after a rejected implementation review.
+
+        Runtime process digests are immutable, so active v1.0 cycles cannot
+        adopt the explicit v1.1 fix nodes. Their correction commit does,
+        however, contain the rejected review. Inject that frozen review and
+        audit only the correction delta while preserving the v1 validator and
+        graph contracts.
+        """
+        if (
+            self.graph.meta.get("id") != "feature_fast"
+            or str(self.graph.meta.get("version")) != "1.0.0"
+            or node.id != "feature.review"
+        ):
+            return task_prompt
+
+        cached = getattr(self, "_feature_fast_v1_fix_review_context", None)
+        if isinstance(cached, str) and cached:
+            return f"{task_prompt}\n\n{cached}"
+
+        def git_text(*args: str) -> str | None:
+            try:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=self._work_dir,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            if result.returncode != 0:
+                return None
+            return result.stdout
+
+        route_text = git_text("show", "HEAD:docs/feature-review.yml")
+        report_text = git_text("show", "HEAD:docs/feature-review.md")
+        if not route_text or not report_text:
+            return task_prompt
+        try:
+            route = yaml.safe_load(route_text) or {}
+        except yaml.YAMLError:
+            return task_prompt
+        if (
+            not isinstance(route, dict)
+            or route.get("verdict") != "REJECTED"
+            or route.get("review_route") != "implementation"
+        ):
+            return task_prompt
+
+        base_commit = (git_text("rev-parse", "HEAD^") or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{40,64}", base_commit):
+            return task_prompt
+        changed_paths = (
+            git_text(
+                "diff",
+                "--name-only",
+                f"{base_commit}..HEAD",
+                "--",
+                "project",
+                "src",
+            )
+            or ""
+        ).strip()
+        supplemental_evidence = ""
+        supplemental_path = (
+            Path(self._work_dir) / "docs" / "security-gate-receipt.json"
+        )
+        if supplemental_path.is_file() and not supplemental_path.is_symlink():
+            try:
+                supplemental_evidence = supplemental_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )[:12_000]
+            except OSError:
+                supplemental_evidence = ""
+        compatibility_context = (
+            "MODO_COMPATIBILIDADE_FEATURE_FAST_V1=correction_delta_review\n"
+            "Esta é a revisão posterior a uma correção já validada. Audite "
+            "somente os achados da revisão rejeitada e o delta do commit de "
+            "correção; não reabra partes não afetadas da feature.\n"
+            f"FIX_DELTA_BASE_COMMIT={base_commit}\n"
+            "FIX_DELTA_PATHS:\n"
+            f"{changed_paths or '(nenhum path de produto detectado)'}\n\n"
+            "REVIEW_REJEITADA_CONGELADA_YML:\n"
+            f"{route_text[:4_000].rstrip()}\n\n"
+            "REVIEW_REJEITADA_CONGELADA_MD:\n"
+            f"{report_text[:16_000].rstrip()}\n\n"
+            "EVIDENCIA_SUPLEMENTAR_DA_CORRECAO:\n"
+            f"{supplemental_evidence.rstrip() or '(ausente)'}\n\n"
+            "INSTRUCOES_DA_AUDITORIA_DELTA:\n"
+            "- Verifique cada F-* rejeitado contra o diff "
+            f"`git diff {base_commit}..HEAD -- project src`.\n"
+            "- Preserve no novo Markdown os estados anteriores dos AC-* não "
+            "afetados; o contrato v1 ainda exige uma linha para todos os AC-*.\n"
+            "- Use approved somente se todos os achados estiverem corrigidos e "
+            "o receipt atual for válido.\n"
+            "- Use implementation/evidence/scope se o delta ainda falhar ou "
+            "tiver ampliado produto, prova ou contrato.\n"
+            "- Não repita a revisão integral nem a suíte completa.\n"
+        )
+        self._feature_fast_v1_fix_review_context = compatibility_context
+        print(ui.info("Review feature-fast v1: auditoria focal do delta de correção"))
+        return f"{task_prompt}\n\n{compatibility_context}"
 
 
     def _run_review(self, node: Node):

@@ -22,8 +22,8 @@ sobrescreve o fork local.
 
 O engine cria um plano interno consultivo antes do grafo e mantém afinidade de
 conversa por sprint para Claude e Codex. `discovery` ocupa a sessão de escopo;
-`implement` e `evidence` compartilham a sessão de build; a review usa uma lane
-isolada para preservar independência; e `reconcile` usa a sessão de aceite.
+`implement`, `fix` e `evidence` compartilham a sessão de build; as reviews usam
+lanes isoladas para preservar independência; e `reconcile` usa a sessão de aceite.
 Human gates, validators Python, receipts e rotas de rejeição continuam
 autoritativos. Se o provider perder uma sessão, o engine reidrata uma nova
 conversa uma única vez usando plano, estado e artefatos atuais.
@@ -74,9 +74,13 @@ executáveis versionados/não ignorados do projeto e dos scripts do processo.
 Documentos e CHANGELOG reconciliados depois do aceite não entram nesse snapshot.
 O node `evidence` não altera código: ele referencia ACs, testes, comandos e
 artefatos existentes. O gate de evidência prova integridade referencial; a
-review continua responsável por julgar a suficiência semântica. Seu veredicto
-estruturado encaminha defeitos para `implement`, lacunas de prova para
-`evidence`, contradições de escopo para `discovery` e aprovações para o aceite.
+review continua responsável por julgar a suficiência semântica. Seu primeiro
+veredicto de implementação rejeitado segue para `fix_prepare`, que congela a
+review, seus F-* e o commit revisado. `fix` corrige somente esses achados,
+`fix_validate` renova o receipt completo e `fix_review` audita apenas o delta.
+Lacunas de prova voltam a `evidence`, contradições de escopo voltam a
+`discovery` e aprovações seguem para o aceite. Se contrato, AC ou workset forem
+ampliados, a auditoria focal exige `full_review` e retorna ao caminho completo.
 
 Review usa `verify` para reaproveitar a evidência antes do aceite. Depois da
 reconciliação documental, o gate final faz uma única verificação do receipt e
@@ -127,6 +131,8 @@ ativo.
 - implementação, validação do produto, evidência e review são etapas separadas;
 - uma validação completa `make build` + `make test`, com receipt determinístico,
   obrigatória após cada episódio de implementação/correção;
+- correções rejeitadas pela review usam fix focal + receipt completo + auditoria
+  somente do delta; expansão de contrato, AC ou workset volta à review completa;
 - aceite humano antes de atualizar backlog e catálogo;
 - reconciliação final obrigatória de `docs/PROJECT_BACKLOG.md`,
   `docs/FEATURES.md`, documentação canônica afetada e `CHANGELOG.md`;
@@ -141,9 +147,9 @@ vez, fixa path e digest no estado, segue novamente o grafo após rejeições e a
 `close_policy` restrito ao PB selecionado. O processo global é apenas fonte de
 materialização e nunca é executado.
 
-Os cinco nodes LLM usam perfis `feature_delta.*` próprios do processo incremental
+Os sete nodes LLM usam perfis `feature_delta.*` próprios do processo incremental
 em vez de herdar HyperMode do `mvp-builder`. O engine compõe apenas demanda,
 contratos, feedback, diff e recortes focais aplicáveis a discovery, implementação,
-review ou reconcile.
+fix, review ou reconcile.
 
 Consulte `examples/feature.md` para o formato produzido ao final do discovery.

@@ -176,7 +176,7 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 |---|---|
 | `base` | Processo mínimo para composição local |
 | `feature` | Evolução incremental de uma capacidade existente |
-| `feature-fast` | Mesmo contrato de `feature`, com plano interno e sessões persistentes por sprint |
+| `feature-fast` | Feature com sessões persistentes e correção focal seguida de auditoria somente do delta |
 | `bug` | Correção focal com regressão RED→GREEN |
 | `tweak` | Mudança pequena e de baixo risco |
 | `mvp-builder` | Processo completo recomendado para um MVP |

@@ -682,8 +682,8 @@ novas de changelog começam com `#FEAT`.
 
 ### `feature-fast`
 
-Mantém o mesmo grafo, contratos, human gates, receipts, rotas de revisão e
-reconciliação do `feature`, com o opt-in de sessões persistentes:
+Mantém os contratos, human gates, receipts e reconciliação segura do `feature`,
+com sessões persistentes e um caminho focal para correções de review:
 
 ```bash
 ft run . --template feature-fast \
@@ -694,6 +694,12 @@ O engine cria um plano interno consultivo e mantém uma conversa por sprint.
 `implement` e `evidence` retomam a mesma sessão de build; o node `review` usa
 uma lane isolada; `reconcile` usa a sessão de aceite. Perda da conversa aciona
 uma reidratação única. O grafo e os validators Python continuam autoritativos.
+
+Quando a review rejeita um defeito de implementação, o processo não regressa
+para toda a sequência `implement → evidence → review`. Ele congela a review e
+seus F-*, executa um fix focal, renova deterministicamente o receipt completo e
+audita somente o delta. Mudança de contrato, AC ou arquivo fora do workset força
+fallback para evidência e review completas.
 
 ### `bug`
 

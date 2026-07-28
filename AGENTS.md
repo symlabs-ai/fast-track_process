@@ -117,7 +117,7 @@ Templates principais:
 |---|---|
 | `base` | Grafo mínimo para projetos que querem compor o próprio processo |
 | `feature` | Evolução incremental de uma capacidade em produto existente |
-| `feature-fast` | Mesmo contrato de `feature`, com plano interno e sessões persistentes por sprint |
+| `feature-fast` | Feature com sessões persistentes e correção focal seguida de auditoria somente do delta |
 | `bug` | Correção focal com diagnóstico e regressão RED→GREEN |
 | `tweak` | Mudança pequena, focal e de baixo risco |
 | `mvp-builder` | Processo completo recomendado para construir um MVP |

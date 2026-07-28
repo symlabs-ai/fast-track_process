@@ -24,6 +24,7 @@ import yaml
 
 
 AC_RE = re.compile(r"\bAC-\d{2,3}\b", re.IGNORECASE)
+FINDING_RE = re.compile(r"\bF-\d{2,3}\b", re.IGNORECASE)
 PB_RE = re.compile(r"\bPB-\d+[A-Z]?\b", re.IGNORECASE)
 FEAT_RE = re.compile(r"\bFEAT-\d{3}\b", re.IGNORECASE)
 CLARIFICATION_RE = re.compile(
@@ -34,6 +35,9 @@ BASELINE_PATH = "docs/feature-baseline.yml"
 RESERVATION_PATH = "docs/feature-id-reservation.yml"
 EVIDENCE_PATH = "docs/feature-evidence.yml"
 REVIEW_ROUTE_PATH = "docs/feature-review.yml"
+FIX_BASELINE_PATH = "docs/feature-fix-baseline.yml"
+FIX_REVIEW_PATH = "docs/feature-fix-review.md"
+FIX_REVIEW_ROUTE_PATH = "docs/feature-fix-review.yml"
 RECONCILIATION_PATH = "docs/feature-reconciliation.yml"
 RECEIPT_PATH = "docs/feature-validation.json"
 DOCUMENTATION_PATHS = (
@@ -50,6 +54,13 @@ DOCUMENTATION_PATHS = (
 RECONCILIATION_PATHS = frozenset(DOCUMENTATION_PATHS)
 REQUIRED_RECONCILIATION_PATHS = frozenset(
     {"CHANGELOG.md", "docs/PROJECT_BACKLOG.md", "docs/FEATURES.md"}
+)
+FIX_CONTRACT_PATHS = (
+    "docs/feature.md",
+    "docs/feature-plan.md",
+    "docs/feature-workset.yml",
+    "docs/ui_criteria.md",
+    "docs/api_contract.md",
 )
 
 
@@ -892,6 +903,425 @@ def validate_review(root: Path) -> None:
                 "docs/feature-review.md: Resultado APPROVED exige todos os AC como PASS; "
                 "FAIL em " + ", ".join(failed)
             )
+    elif review_route == "implementation" and not _review_findings(report):
+        raise FeatureValidationError(
+            "docs/feature-review.md: REJECTED de implementação exige achados "
+            "numerados F-01, F-02 etc."
+        )
+
+
+def _git_stdout(root: Path, args: list[str], *, binary: bool = False) -> str | bytes:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=not binary,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FeatureValidationError(f"git {' '.join(args)} falhou: {exc}") from exc
+    if result.returncode != 0:
+        stderr = (
+            result.stderr.decode("utf-8", errors="replace")
+            if binary and isinstance(result.stderr, bytes)
+            else str(result.stderr)
+        )
+        raise FeatureValidationError(
+            f"git {' '.join(args)} falhou: "
+            + (stderr.strip() or f"exit {result.returncode}")
+        )
+    return result.stdout
+
+
+def _git_head(root: Path) -> str:
+    value = str(_git_stdout(root, ["rev-parse", "HEAD"])).strip()
+    if not re.fullmatch(r"[0-9a-f]{40,64}", value):
+        raise FeatureValidationError("HEAD Git ausente ou inválido para correção focal")
+    return value
+
+
+def _git_changed_paths_since(root: Path, base_commit: str) -> list[str]:
+    if not re.fullmatch(r"[0-9a-f]{7,64}", base_commit):
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: base_commit inválido")
+    _git_stdout(root, ["cat-file", "-e", f"{base_commit}^{{commit}}"])
+    tracked = _git_stdout(
+        root,
+        ["diff", "--name-only", "-z", base_commit, "--"],
+        binary=True,
+    )
+    untracked = _git_stdout(
+        root,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        binary=True,
+    )
+    values: list[str] = []
+    for raw in (tracked, untracked):
+        assert isinstance(raw, bytes)
+        for value in raw.decode("utf-8", errors="replace").split("\0"):
+            relative = value.strip()
+            candidate = Path(relative)
+            if (
+                not relative
+                or candidate.is_absolute()
+                or ".." in candidate.parts
+                or not candidate.parts
+                or relative in values
+            ):
+                continue
+            values.append(candidate.as_posix())
+    return sorted(values)
+
+
+def _review_findings(report: str) -> list[str]:
+    findings: list[str] = []
+    for match in FINDING_RE.finditer(report):
+        identifier = match.group(0).upper()
+        if identifier not in findings:
+            findings.append(identifier)
+    return findings
+
+
+def _finding_statuses(
+    report: str,
+    finding_ids: list[str],
+) -> dict[str, str]:
+    expected = set(finding_ids)
+    found: dict[str, set[str]] = {
+        finding_id: set() for finding_id in finding_ids
+    }
+    for line in report.splitlines():
+        if "|" in line:
+            cells = [cell.strip() for cell in line.split("|")]
+            for index, cell in enumerate(cells[:-1]):
+                ids = {
+                    match.group(0).upper()
+                    for match in FINDING_RE.finditer(cell)
+                    if match.group(0).upper() in expected
+                }
+                if not ids:
+                    continue
+                status = _exact_review_status(cells[index + 1])
+                if status:
+                    for finding_id in ids:
+                        found[finding_id].add(status)
+            continue
+        for finding_id in finding_ids:
+            match = re.search(
+                rf"\b{re.escape(finding_id)}\b\s*(?::|[-–—])\s*"
+                r"(?:\*\*|__|`)?(PASS|FAIL)(?:\*\*|__|`)?\b",
+                line,
+            )
+            if match:
+                found[finding_id].add(match.group(1))
+
+    missing = [finding_id for finding_id, statuses in found.items() if not statuses]
+    ambiguous = [
+        finding_id for finding_id, statuses in found.items()
+        if len(statuses) > 1
+    ]
+    if missing or ambiguous:
+        details: list[str] = []
+        if missing:
+            details.append("sem status PASS/FAIL: " + ", ".join(missing))
+        if ambiguous:
+            details.append("status ambíguo: " + ", ".join(ambiguous))
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_PATH}: " + "; ".join(details)
+        )
+    return {
+        finding_id: next(iter(statuses))
+        for finding_id, statuses in found.items()
+    }
+
+
+def _fix_baseline(root: Path) -> dict[str, object]:
+    payload = _read_yaml(root, FIX_BASELINE_PATH)
+    if payload.get("schema_version") != 1:
+        raise FeatureValidationError(
+            f"{FIX_BASELINE_PATH}: schema_version deve ser 1"
+        )
+    base_commit = payload.get("base_commit")
+    if not isinstance(base_commit, str) or not re.fullmatch(
+        r"[0-9a-f]{40,64}", base_commit
+    ):
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: base_commit inválido")
+    findings = payload.get("findings")
+    if (
+        not isinstance(findings, list)
+        or not findings
+        or not all(
+            isinstance(item, str) and FINDING_RE.fullmatch(item)
+            for item in findings
+        )
+        or len(findings) != len(set(findings))
+    ):
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: findings inválidos")
+    workset = payload.get("workset")
+    if (
+        not isinstance(workset, list)
+        or not workset
+        or not all(isinstance(item, str) and item for item in workset)
+    ):
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: workset inválido")
+    contract_sha256 = payload.get("contract_sha256")
+    if not isinstance(contract_sha256, dict):
+        raise FeatureValidationError(
+            f"{FIX_BASELINE_PATH}: contract_sha256 inválido"
+        )
+    return payload
+
+
+def prepare_fix(root: Path) -> None:
+    validate_review(root)
+    review_route = _read_yaml(root, REVIEW_ROUTE_PATH)
+    if (
+        review_route.get("verdict") != "REJECTED"
+        or review_route.get("review_route") != "implementation"
+    ):
+        raise FeatureValidationError(
+            "prepare-fix exige review REJECTED com review_route=implementation"
+        )
+    report = _read(root, "docs/feature-review.md")
+    findings = _review_findings(report)
+    if not findings:
+        raise FeatureValidationError(
+            "docs/feature-review.md: review de implementação rejeitada deve "
+            "numerar achados F-01, F-02 etc."
+        )
+    workset_payload = _read_yaml(root, "docs/feature-workset.yml")
+    workset = workset_payload.get("paths")
+    if not isinstance(workset, list) or not all(
+        isinstance(item, str) and item.strip() for item in workset
+    ):
+        raise FeatureValidationError(
+            "docs/feature-workset.yml: paths inválidos para correção focal"
+        )
+    source_sha256 = {
+        relative: _sha256(root / relative)
+        for relative in ("docs/feature-review.md", REVIEW_ROUTE_PATH)
+    }
+    contract_sha256 = {
+        relative: _sha256(root / relative)
+        for relative in FIX_CONTRACT_PATHS
+    }
+    _atomic_write_yaml(
+        root / FIX_BASELINE_PATH,
+        {
+            "schema_version": 1,
+            "base_commit": _git_head(root),
+            "source_review": REVIEW_ROUTE_PATH,
+            "source_sha256": source_sha256,
+            "findings": findings,
+            "workset": [str(item).strip() for item in workset],
+            "contract_sha256": contract_sha256,
+        },
+    )
+
+
+def _product_paths_from_delta(
+    root: Path,
+    base_commit: str,
+    product_root: str,
+) -> list[str]:
+    changed = _git_changed_paths_since(root, base_commit)
+    if product_root == ".":
+        return [
+            path for path in changed
+            if path != "CHANGELOG.md"
+            and path.split("/", 1)[0] not in {
+                ".ft", ".git", "docs", "state",
+            }
+        ]
+    prefix = f"{product_root}/"
+    return [path for path in changed if path.startswith(prefix)]
+
+
+def validate_fix_implementation(root: Path) -> None:
+    _feature_contract(root)
+    baseline = _fix_baseline(root)
+    _, _, product_root = _load_baseline(root)
+    changed = _product_paths_from_delta(
+        root,
+        str(baseline["base_commit"]),
+        product_root,
+    )
+    if not changed:
+        raise FeatureValidationError(
+            "correção focal não alterou nenhum arquivo de produto desde a âncora"
+        )
+
+
+def _path_covered_by_workset(path: str, workset: list[str]) -> bool:
+    for raw in workset:
+        normalized = Path(raw).as_posix().rstrip("/")
+        if normalized in {"", "."}:
+            return True
+        if path == normalized or path.startswith(f"{normalized}/"):
+            return True
+    return False
+
+
+def validate_fix_review(root: Path) -> None:
+    _feature_contract(root)
+    baseline = _fix_baseline(root)
+    base_commit = str(baseline["base_commit"])
+    _git_stdout(root, ["cat-file", "-e", f"{base_commit}^{{commit}}"])
+
+    source_sha256 = baseline.get("source_sha256")
+    assert isinstance(source_sha256, dict)
+    changed_sources = [
+        relative
+        for relative, expected in source_sha256.items()
+        if not isinstance(relative, str)
+        or _sha256(root / relative) != expected
+    ]
+    if changed_sources:
+        raise FeatureValidationError(
+            f"{FIX_BASELINE_PATH}: revisão fonte foi alterada: "
+            + ", ".join(str(item) for item in changed_sources)
+        )
+
+    route = _read_yaml(root, FIX_REVIEW_ROUTE_PATH)
+    if route.get("schema_version") != 1:
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: schema_version deve ser 1"
+        )
+    review_route = route.get("review_route")
+    verdict = route.get("verdict")
+    valid_routes = {
+        "approved", "implementation", "evidence", "full_review", "scope"
+    }
+    if review_route not in valid_routes:
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: review_route inválida"
+        )
+    if verdict not in {"APPROVED", "REJECTED"}:
+        raise FeatureValidationError(f"{FIX_REVIEW_ROUTE_PATH}: verdict inválido")
+    if (review_route == "approved") != (verdict == "APPROVED"):
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: approved exige APPROVED; "
+            "demais rotas exigem REJECTED"
+        )
+    if not isinstance(route.get("summary"), str) or not str(
+        route["summary"]
+    ).strip():
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: summary obrigatório"
+        )
+    if route.get("source_review") != REVIEW_ROUTE_PATH:
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: source_review deve ser {REVIEW_ROUTE_PATH}"
+        )
+    if route.get("base_commit") != base_commit:
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: base_commit diverge da âncora"
+        )
+
+    try:
+        receipt = json.loads(_read(root, RECEIPT_PATH))
+    except json.JSONDecodeError as exc:
+        raise FeatureValidationError(f"{RECEIPT_PATH}: JSON inválido: {exc}") from exc
+    receipt_fingerprint = (
+        receipt.get("fingerprint") if isinstance(receipt, dict) else None
+    )
+    if (
+        not isinstance(receipt_fingerprint, str)
+        or not receipt_fingerprint.strip()
+        or route.get("receipt_fingerprint") != receipt_fingerprint
+    ):
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: receipt_fingerprint diverge do receipt atual"
+        )
+
+    finding_ids = [str(item) for item in baseline["findings"]]
+    findings = route.get("findings")
+    if not isinstance(findings, list) or not all(
+        isinstance(item, dict) for item in findings
+    ):
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: findings deve ser lista"
+        )
+    indexed = {
+        str(item.get("id") or "").upper(): item for item in findings
+    }
+    if set(indexed) != set(finding_ids) or len(indexed) != len(findings):
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: findings deve conter exatamente "
+            + ", ".join(finding_ids)
+        )
+    for finding_id in finding_ids:
+        item = indexed[finding_id]
+        if item.get("status") not in {"PASS", "FAIL"}:
+            raise FeatureValidationError(
+                f"{FIX_REVIEW_ROUTE_PATH}: {finding_id} sem status PASS/FAIL"
+            )
+        if not isinstance(item.get("evidence"), str) or not str(
+            item["evidence"]
+        ).strip():
+            raise FeatureValidationError(
+                f"{FIX_REVIEW_ROUTE_PATH}: {finding_id} sem evidence"
+            )
+
+    report_statuses = _finding_statuses(
+        _read(root, FIX_REVIEW_PATH),
+        finding_ids,
+    )
+    mismatched = [
+        finding_id for finding_id in finding_ids
+        if indexed[finding_id]["status"] != report_statuses[finding_id]
+    ]
+    if mismatched:
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: status diverge do Markdown em "
+            + ", ".join(mismatched)
+        )
+    if review_route == "approved":
+        failed = [
+            finding_id for finding_id in finding_ids
+            if indexed[finding_id]["status"] == "FAIL"
+        ]
+        if failed:
+            raise FeatureValidationError(
+                f"{FIX_REVIEW_ROUTE_PATH}: approved exige todos os F-* PASS; "
+                "FAIL em " + ", ".join(failed)
+            )
+
+    contract_sha256 = baseline["contract_sha256"]
+    assert isinstance(contract_sha256, dict)
+    changed_contracts = [
+        relative
+        for relative, expected in contract_sha256.items()
+        if not isinstance(relative, str)
+        or _sha256(root / relative) != expected
+    ]
+    _, _, product_root = _load_baseline(root)
+    changed_product = _product_paths_from_delta(root, base_commit, product_root)
+    workset = [str(item) for item in baseline["workset"]]
+    escaped_workset = [
+        path for path in changed_product
+        if not _path_covered_by_workset(path, workset)
+    ]
+    if review_route == "approved" and (changed_contracts or escaped_workset):
+        details: list[str] = []
+        if changed_contracts:
+            details.append("contratos alterados: " + ", ".join(changed_contracts))
+        if escaped_workset:
+            details.append("fora do workset: " + ", ".join(escaped_workset))
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: correção expandida exige full_review/scope; "
+            + "; ".join(details)
+        )
+    if changed_contracts and review_route not in {"scope", "full_review"}:
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: contrato alterado exige scope/full_review"
+        )
+    if escaped_workset and review_route not in {"full_review", "scope"}:
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: delta fora do workset exige full_review/scope"
+        )
 
 
 def _table_cells(line: str) -> list[str]:
@@ -1287,12 +1717,17 @@ VALIDATORS = {
     "implementation": validate_implementation,
     "evidence": validate_evidence,
     "review": validate_review,
+    "prepare-fix": prepare_fix,
+    "fix-implementation": validate_fix_implementation,
+    "fix-review": validate_fix_review,
     "proposal": validate_proposal,
     "apply-reconcile": apply_reconciliation,
     "reconcile": validate_reconcile,
 }
 READ_ONLY_VALIDATOR_MODES = tuple(
-    mode for mode in VALIDATORS if mode not in {"reserve", "apply-reconcile"}
+    mode
+    for mode in VALIDATORS
+    if mode not in {"reserve", "prepare-fix", "apply-reconcile"}
 )
 
 

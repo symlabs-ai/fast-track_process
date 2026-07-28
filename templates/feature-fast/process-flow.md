@@ -1,7 +1,7 @@
 # Feature Fast — Diagrama de Fluxo
 
 Fluxo do processo definido em [`process.yml`](./process.yml)
-(`id: feature_fast`, versão `1.0.0`). O template executa um ciclo independente
+(`id: feature_fast`, versão `1.1.0`). O template executa um ciclo independente
 por demanda, precedido por um plano interno consultivo. O grafo e seus gates
 continuam autoritativos.
 
@@ -40,6 +40,12 @@ flowchart TD
         review["review<br/>avaliação semântica independente"]
         review_route{{"review_route<br/>extrair rota estruturada"}}
         review_decision{"review_decision"}
+        fix_prepare{{"fix_prepare<br/>congelar review + F-* + commit"}}
+        fix["fix<br/>somente achados rejeitados"]
+        fix_validate{{"fix_validate<br/>receipt completo renovado"}}
+        fix_review["fix_review<br/>auditoria somente do delta"]
+        fix_review_route{{"fix_review_route<br/>extrair rota focal"}}
+        fix_review_decision{"fix_review_decision"}
     end
 
     subgraph acceptance["feature-03-acceptance"]
@@ -59,7 +65,15 @@ flowchart TD
     evidence_gate -. referência inválida .-> evidence
     review --> review_route --> review_decision
     review_decision -->|approved| accept
-    review_decision -. implementation .-> implement
+    review_decision -->|implementation| fix_prepare --> fix --> fix_validate --> fix_review
+    fix_review --> fix_review_route --> fix_review_decision
+    fix_validate -. falha focal .-> fix
+    fix_review_decision -->|approved| accept
+    fix_review_decision -. implementation .-> fix
+    fix_review_decision -. evidence .-> evidence
+    fix_review_decision -. full_review .-> evidence
+    fix_review_decision -. scope .-> discovery
+    fix_review_decision -. inválida .-> fix_review
     review_decision -. evidence .-> evidence
     review_decision -. scope .-> discovery
     review_decision -. inválida .-> review
@@ -70,7 +84,7 @@ flowchart TD
     classDef gate fill:#bfdbfe,stroke:#1e40af,color:#000;
     classDef terminal fill:#bbf7d0,stroke:#166534,color:#000;
     class questions,scope_gate,accept human;
-    class preflight,discovery_gate,reserve_ids,product_validate,evidence_gate,review_route,final_gate gate;
+    class preflight,discovery_gate,reserve_ids,product_validate,evidence_gate,review_route,fix_prepare,fix_validate,fix_review_route,final_gate gate;
     class start,endnode,close terminal;
 ```
 
@@ -83,6 +97,9 @@ flowchart TD
   válido.
 - `evidence` não altera código e o gate seguinte comprova apenas referências;
   a suficiência semântica permanece na review.
+- Uma rejeição de implementação não reinicia `implement → evidence → review`.
+  Ela congela os F-* e executa `fix → fix_validate → fix_review`; apenas
+  expansão do workset/contrato retorna ao caminho completo.
 - O episódio de implementação tem deadline por chamada e orçamento cumulativo.
   Rotas semânticas `implementation` e `scope`, além de rejeição humana legítima,
   iniciam um episódio novo; esgotamento pausa preservando o diff.

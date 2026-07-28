@@ -5,6 +5,7 @@ O LLM so constroi. Nao decide nada sobre o processo.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,39 @@ DEFAULT_EXECUTOR_TIMEOUT = 1_800
 DEFAULT_CODEX_ULTRA_TIMEOUT = 3_600
 DEFAULT_STREAM_IDLE_TIMEOUT = 480
 DEFAULT_CODEX_IDLE_GRACE = 120
+DEFAULT_PROGRESS_PROBE_INTERVAL = 5
+
+_SOURCE_SUFFIXES = frozenset(
+    {
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cs",
+        ".css",
+        ".go",
+        ".h",
+        ".hpp",
+        ".html",
+        ".java",
+        ".js",
+        ".jsx",
+        ".kt",
+        ".kts",
+        ".m",
+        ".mm",
+        ".php",
+        ".py",
+        ".rb",
+        ".rs",
+        ".scala",
+        ".sh",
+        ".sql",
+        ".swift",
+        ".ts",
+        ".tsx",
+        ".vue",
+    }
+)
 
 
 @dataclass
@@ -64,10 +98,21 @@ class _ProcessLiveness:
     alive: bool
     process_count: int = 0
     cpu_ticks: int = 0
+    read_chars: int = 0
+    write_chars: int = 0
     read_bytes: int = 0
     write_bytes: int = 0
     fd_count: int = 0
     socket_count: int = 0
+
+
+@dataclass(frozen=True)
+class _WorkspaceProgressSnapshot:
+    digest: str
+    file_count: int = 0
+    total_bytes: int = 0
+    source_file_count: int = 0
+    source_bytes: int = 0
 
 
 def _env_positive_int(*names: str) -> int | None:
@@ -113,7 +158,7 @@ def _normalize_executor_effort(value: str | None, *, source: str = "llm_effort")
 
 
 def _executor_timeout_seconds(llm_engine: str, llm_effort: str | None = None) -> int:
-    """Resolve the wall-clock limit for one delegated executor turn."""
+    """Resolve the legacy executor interval, now used as an inactivity alias."""
     engine = llm_engine.strip().lower()
     specific_name = f"FT_{engine.upper()}_EXECUTOR_TIMEOUT"
     configured = _env_positive_int(specific_name, "FT_LLM_EXECUTOR_TIMEOUT")
@@ -133,8 +178,11 @@ def _executor_timeout_seconds(llm_engine: str, llm_effort: str | None = None) ->
     return DEFAULT_EXECUTOR_TIMEOUT
 
 
-def _executor_idle_timeout_seconds(llm_engine: str) -> int | None:
-    """Resolve inactivity timeout without conflating it with the hard deadline."""
+def _executor_idle_timeout_seconds(
+    llm_engine: str,
+    node_timeout: int | None = None,
+) -> int:
+    """Resolve the global rolling inactivity lease for one executor."""
     engine = llm_engine.strip().lower()
     configured = _env_positive_int(
         f"FT_{engine.upper()}_IDLE_TIMEOUT",
@@ -142,13 +190,28 @@ def _executor_idle_timeout_seconds(llm_engine: str) -> int | None:
     )
     if configured is not None:
         return configured
-    if engine in {"codex", "opencode"}:
-        return DEFAULT_STREAM_IDLE_TIMEOUT
-    return None
+    legacy_configured = _env_positive_int(
+        f"FT_{engine.upper()}_EXECUTOR_TIMEOUT",
+        "FT_LLM_EXECUTOR_TIMEOUT",
+    )
+    if legacy_configured is not None:
+        return legacy_configured
+    if node_timeout is not None:
+        return node_timeout
+    return DEFAULT_STREAM_IDLE_TIMEOUT
+
+
+def _executor_max_wall_timeout_seconds(llm_engine: str) -> int | None:
+    """Resolve an opt-in absolute safety cap; productive runs are uncapped by default."""
+    engine = llm_engine.strip().lower()
+    return _env_positive_int(
+        f"FT_{engine.upper()}_MAX_WALL_TIMEOUT",
+        "FT_LLM_MAX_WALL_TIMEOUT",
+    )
 
 
 def _executor_idle_grace_seconds(llm_engine: str) -> int:
-    """Resolve one bounded grace period backed by weak process liveness."""
+    """Resolve the final confirmation window after all progress probes stagnate."""
     engine = llm_engine.strip().lower()
     configured = _env_nonnegative_int(
         f"FT_{engine.upper()}_IDLE_GRACE",
@@ -192,6 +255,159 @@ def _path_relative_to(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _workspace_progress_paths(
+    project_root: str,
+    allowed_paths: list[str] | None,
+) -> list[Path]:
+    """Resolve the whole isolated worktree as the global productivity scope."""
+    root = Path(project_root).resolve()
+    # ``allowed_paths`` continua sendo a fronteira de escrita, mas não a
+    # fronteira de observação: todo ciclo roda em worktree isolada e qualquer
+    # produção real dentro dela é um sinal válido de progresso. Manter o
+    # argumento preserva a API interna usada pelos callers antigos.
+    _ = allowed_paths
+    return [root]
+
+
+def _workspace_progress_snapshot(paths: list[Path], project_root: str) -> _WorkspaceProgressSnapshot:
+    """Fingerprint authored worktree files without reading their contents.
+
+    Em repositórios Git, arquivos versionados e novos não ignorados são
+    enumerados pelo índice. Isso observa toda a worktree sem atravessar caches
+    pesados como ``build/``, ``node_modules/`` ou ``.venv/``. O fallback
+    recursivo mantém a política funcional fora de Git.
+    """
+    root = Path(project_root).resolve()
+    digest = hashlib.blake2b(digest_size=20)
+    file_count = 0
+    total_bytes = 0
+    source_file_count = 0
+    source_bytes = 0
+
+    def record(path: Path, *, missing: bool = False) -> None:
+        nonlocal file_count, total_bytes, source_file_count, source_bytes
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            return
+        if relative == ".git" or relative.startswith(".git/"):
+            return
+        if missing:
+            digest.update(f"M\0{relative}\0".encode("utf-8", errors="surrogateescape"))
+            return
+        try:
+            metadata = path.lstat()
+        except OSError:
+            return
+        kind = "D" if path.is_dir() and not path.is_symlink() else "F"
+        digest.update(
+            (
+                f"{kind}\0{relative}\0{metadata.st_mode}\0"
+                f"{metadata.st_size}\0{metadata.st_mtime_ns}\0"
+            ).encode("utf-8", errors="surrogateescape")
+        )
+        if kind != "F":
+            return
+        file_count += 1
+        total_bytes += metadata.st_size
+        if path.suffix.lower() in _SOURCE_SUFFIXES:
+            source_file_count += 1
+            source_bytes += metadata.st_size
+
+    git_paths: list[Path] | None = None
+    if paths == [root] and (root / ".git").exists():
+        try:
+            listed = subprocess.run(
+                [
+                    "git",
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ],
+                cwd=root,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            listed = None
+        if listed is not None and listed.returncode == 0:
+            git_paths = []
+            for raw in listed.stdout.split(b"\0"):
+                if not raw:
+                    continue
+                relative = Path(os.fsdecode(raw))
+                if relative.is_absolute() or ".." in relative.parts:
+                    continue
+                # Preserve symlink metadata instead of resolving its target
+                # outside the worktree.
+                git_paths.append(root / relative)
+
+    if git_paths is not None:
+        for path in sorted(set(git_paths), key=str):
+            record(path, missing=not path.exists() and not path.is_symlink())
+        return _WorkspaceProgressSnapshot(
+            digest=digest.hexdigest(),
+            file_count=file_count,
+            total_bytes=total_bytes,
+            source_file_count=source_file_count,
+            source_bytes=source_bytes,
+        )
+
+    for watched in paths:
+        if not watched.exists() and not watched.is_symlink():
+            record(watched, missing=True)
+            continue
+        if watched.is_file() or watched.is_symlink():
+            record(watched)
+            continue
+        pending = [watched]
+        while pending:
+            directory = pending.pop()
+            record(directory)
+            try:
+                entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+            except OSError:
+                continue
+            for entry in reversed(entries):
+                path = Path(entry.path)
+                try:
+                    relative = path.relative_to(root)
+                except ValueError:
+                    continue
+                if ".git" in relative.parts:
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(path)
+                    else:
+                        record(path)
+                except OSError:
+                    continue
+
+    return _WorkspaceProgressSnapshot(
+        digest=digest.hexdigest(),
+        file_count=file_count,
+        total_bytes=total_bytes,
+        source_file_count=source_file_count,
+        source_bytes=source_bytes,
+    )
+
+
+def _workspace_progress_diagnostics(
+    baseline: _WorkspaceProgressSnapshot,
+    current: _WorkspaceProgressSnapshot,
+) -> dict[str, int]:
+    return {
+        "files_delta": current.file_count - baseline.file_count,
+        "bytes_delta": current.total_bytes - baseline.total_bytes,
+        "source_files_delta": current.source_file_count - baseline.source_file_count,
+        "source_bytes_delta": current.source_bytes - baseline.source_bytes,
+    }
 
 
 def _looks_like_file_path(raw_path: str, path: Path) -> bool:
@@ -393,6 +609,8 @@ def _process_liveness_snapshot(proc: subprocess.Popen) -> _ProcessLiveness:
 
     pids = _linux_process_tree(proc.pid)
     cpu_ticks = 0
+    read_chars = 0
+    write_chars = 0
     read_bytes = 0
     write_bytes = 0
     fd_count = 0
@@ -411,7 +629,11 @@ def _process_liveness_snapshot(proc: subprocess.Popen) -> _ProcessLiveness:
         try:
             for line in (proc_root / "io").read_text(encoding="utf-8").splitlines():
                 key, _, raw_value = line.partition(":")
-                if key == "read_bytes":
+                if key == "rchar":
+                    read_chars += int(raw_value.strip())
+                elif key == "wchar":
+                    write_chars += int(raw_value.strip())
+                elif key == "read_bytes":
                     read_bytes += int(raw_value.strip())
                 elif key == "write_bytes":
                     write_bytes += int(raw_value.strip())
@@ -431,6 +653,8 @@ def _process_liveness_snapshot(proc: subprocess.Popen) -> _ProcessLiveness:
         alive=True,
         process_count=observed_processes,
         cpu_ticks=cpu_ticks,
+        read_chars=read_chars,
+        write_chars=write_chars,
         read_bytes=read_bytes,
         write_bytes=write_bytes,
         fd_count=fd_count,
@@ -441,61 +665,83 @@ def _process_liveness_snapshot(proc: subprocess.Popen) -> _ProcessLiveness:
 def _liveness_diagnostics(
     baseline: _ProcessLiveness,
     current: _ProcessLiveness,
-    grace_seconds: int | float,
 ) -> dict[str, int]:
     return {
-        "processes": current.process_count,
-        "sockets": current.socket_count,
-        "fds": current.fd_count,
-        "cpu_delta_ticks": max(0, current.cpu_ticks - baseline.cpu_ticks),
-        "read_delta_bytes": max(0, current.read_bytes - baseline.read_bytes),
-        "write_delta_bytes": max(0, current.write_bytes - baseline.write_bytes),
-        "grace_seconds": max(0, int(grace_seconds)),
+        "processes_delta": current.process_count - baseline.process_count,
+        "sockets_delta": current.socket_count - baseline.socket_count,
+        "fds_delta": current.fd_count - baseline.fd_count,
+        "cpu_delta_ticks": current.cpu_ticks - baseline.cpu_ticks,
+        "read_delta_chars": current.read_chars - baseline.read_chars,
+        "write_delta_chars": current.write_chars - baseline.write_chars,
+        "read_delta_bytes": current.read_bytes - baseline.read_bytes,
+        "write_delta_bytes": current.write_bytes - baseline.write_bytes,
     }
 
 
-def _has_weak_liveness(
+def _has_productive_liveness(
     baseline: _ProcessLiveness,
     current: _ProcessLiveness,
 ) -> bool:
     return current.alive and (
-        current.process_count > 1
-        or current.socket_count > 0
-        or current.cpu_ticks > baseline.cpu_ticks
-        or current.read_bytes > baseline.read_bytes
-        or current.write_bytes > baseline.write_bytes
+        current.process_count != baseline.process_count
+        or current.socket_count != baseline.socket_count
+        or current.fd_count != baseline.fd_count
+        or current.cpu_ticks != baseline.cpu_ticks
+        or current.read_chars != baseline.read_chars
+        or current.write_chars != baseline.write_chars
+        or current.read_bytes != baseline.read_bytes
+        or current.write_bytes != baseline.write_bytes
     )
 
 
 def _wait_for_process(
     proc: subprocess.Popen,
-    timeout: float,
+    timeout: float | None,
     early_success_paths: list[Path] | None = None,
     early_success_grace: int = 20,
     activity: dict[str, float] | None = None,
-    idle_timeout: int | None = None,
+    idle_timeout: int | float | None = None,
     idle_grace: int | float = 0,
     on_idle_grace: Callable[[dict[str, int]], None] | None = None,
+    workspace_probe: Callable[[], _WorkspaceProgressSnapshot] | None = None,
+    progress_probe_interval: int | float = DEFAULT_PROGRESS_PROBE_INTERVAL,
+    on_progress: Callable[[str, dict[str, int]], None] | None = None,
 ) -> tuple[int, bool]:
-    """Espera o processo, podendo encerrar cedo quando outputs já existem."""
+    """Wait using a rolling productivity lease plus an optional absolute cap."""
     if not hasattr(proc, "poll"):
         return proc.wait(timeout=timeout), False
 
     started = time.monotonic()
     started_wall = time.time()
+    progress_probe_interval = max(0.05, float(progress_probe_interval))
     satisfied_since: float | None = None
     observed_strong_activity = (
         activity.get("last", started_wall) if activity else started_wall
     )
     liveness_baseline = _process_liveness_snapshot(proc)
+    workspace_baseline = workspace_probe() if workspace_probe is not None else None
+    last_probe = started
     idle_grace_deadline: float | None = None
+
+    def renew(source: str, diagnostics: dict[str, int]) -> None:
+        nonlocal observed_strong_activity, idle_grace_deadline
+        if activity is None:
+            return
+        observed_strong_activity = time.time()
+        activity["last"] = observed_strong_activity
+        key = f"{source}_renewals"
+        activity[key] = activity.get(key, 0.0) + 1.0
+        idle_grace_deadline = None
+        if on_progress is not None:
+            on_progress(source, diagnostics)
+
     while True:
         returncode = proc.poll()
         if returncode is not None:
             return returncode, False
         now = time.monotonic()
         elapsed = now - started
-        if elapsed >= timeout:
+        if timeout is not None and elapsed >= timeout:
             raise subprocess.TimeoutExpired(proc.args, timeout)
         if idle_timeout and activity:
             last_activity = activity.get("last", started_wall)
@@ -503,20 +749,49 @@ def _wait_for_process(
                 observed_strong_activity = last_activity
                 liveness_baseline = _process_liveness_snapshot(proc)
                 idle_grace_deadline = None
-            if time.time() - last_activity > idle_timeout:
-                if idle_grace_deadline is None and idle_grace > 0:
-                    current_liveness = _process_liveness_snapshot(proc)
-                    if _has_weak_liveness(liveness_baseline, current_liveness):
-                        diagnostics = _liveness_diagnostics(
-                            liveness_baseline,
-                            current_liveness,
-                            idle_grace,
+            idle_age = time.time() - activity.get("last", started_wall)
+            should_probe = (
+                now - last_probe >= progress_probe_interval
+                or idle_age >= idle_timeout
+            )
+            if should_probe:
+                current_liveness = _process_liveness_snapshot(proc)
+                if _has_productive_liveness(liveness_baseline, current_liveness):
+                    renew(
+                        "process",
+                        _liveness_diagnostics(liveness_baseline, current_liveness),
+                    )
+                liveness_baseline = current_liveness
+
+                if workspace_probe is not None:
+                    current_workspace = workspace_probe()
+                    if (
+                        workspace_baseline is not None
+                        and current_workspace.digest != workspace_baseline.digest
+                    ):
+                        renew(
+                            "workspace",
+                            _workspace_progress_diagnostics(
+                                workspace_baseline,
+                                current_workspace,
+                            ),
                         )
-                        for key, value in diagnostics.items():
-                            activity[f"liveness_{key}"] = float(value)
-                        idle_grace_deadline = now + idle_grace
-                        if on_idle_grace is not None:
-                            on_idle_grace(diagnostics)
+                    workspace_baseline = current_workspace
+                last_probe = now
+
+            idle_age = time.time() - activity.get("last", started_wall)
+            if idle_age >= idle_timeout:
+                if idle_grace_deadline is None and idle_grace > 0:
+                    idle_grace_deadline = now + idle_grace
+                    if on_idle_grace is not None:
+                        on_idle_grace(
+                            {
+                                "processes": liveness_baseline.process_count,
+                                "sockets": liveness_baseline.socket_count,
+                                "fds": liveness_baseline.fd_count,
+                                "grace_seconds": max(0, int(idle_grace)),
+                            }
+                        )
                 if idle_grace_deadline is None or now >= idle_grace_deadline:
                     raise ExecutorIdleTimeout(proc.args, idle_timeout)
         if early_success_paths and _paths_have_content(early_success_paths):
@@ -527,7 +802,8 @@ def _wait_for_process(
                 return 0, True
         else:
             satisfied_since = None
-        time.sleep(min(1.0, max(0.01, timeout - elapsed)))
+        remaining = None if timeout is None else max(0.01, timeout - elapsed)
+        time.sleep(1.0 if remaining is None else min(1.0, remaining))
 
 
 def _wrap_opencode_sandbox_command(
@@ -1875,9 +2151,10 @@ def delegate_to_llm(
         or llm_timeout_seconds <= 0
     ):
         raise ValueError("llm_timeout_seconds deve ser um inteiro positivo")
-    deadline = (
-        time.monotonic() + llm_timeout_seconds
-        if llm_timeout_seconds is not None
+    max_wall_timeout = _executor_max_wall_timeout_seconds(llm_engine)
+    max_wall_deadline = (
+        time.monotonic() + max_wall_timeout
+        if max_wall_timeout is not None
         else None
     )
     delegate_started_wall = time.time()
@@ -2145,10 +2422,14 @@ REGRAS:
     elif log_path:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 
-    idle_timeout = _executor_idle_timeout_seconds(llm_engine)
+    idle_timeout = _executor_idle_timeout_seconds(llm_engine, llm_timeout_seconds)
     idle_grace = _executor_idle_grace_seconds(llm_engine)
     idle_retries = 0
-    executor_timeout = _executor_timeout_seconds(llm_engine, llm_effort)
+    progress_probe_interval = (
+        _env_positive_int("FT_WORKTREE_PROGRESS_INTERVAL")
+        or DEFAULT_PROGRESS_PROBE_INTERVAL
+    )
+    workspace_paths = _workspace_progress_paths(project_root, allowed_paths)
     if llm_engine.lower().strip() == "opencode":
         configured_retries = _env_nonnegative_int("FT_OPENCODE_IDLE_RETRIES")
         idle_retries = configured_retries if configured_retries is not None else 2
@@ -2161,6 +2442,7 @@ REGRAS:
 
     cleaned_runtime = False
     attempt_activity: dict[str, float] = {}
+    progress_reported_at: dict[str, float] = {}
 
     def _cleanup_delegate_runtime() -> None:
         nonlocal cleaned_runtime, sandbox_tmp
@@ -2180,29 +2462,49 @@ REGRAS:
 
     def _record_idle_grace(diagnostics: dict[str, int]) -> None:
         summary = (
-            "\n[LIVENESS_GRACE] Stream sem evento forte; "
+            "\n[PRODUCTIVITY_CHECK] Nenhuma progressão observável; "
             f"processos={diagnostics['processes']} "
             f"sockets={diagnostics['sockets']} "
-            f"cpu_delta_ticks={diagnostics['cpu_delta_ticks']} "
-            f"io_delta_bytes="
-            f"{diagnostics['read_delta_bytes'] + diagnostics['write_delta_bytes']} "
-            f"grace={diagnostics['grace_seconds']}s.\n"
+            f"fds={diagnostics['fds']} "
+            f"verificação_final={diagnostics['grace_seconds']}s.\n"
         )
         print(
-            "  ! Stream sem evento forte; processo vivo — "
-            f"graça única de {diagnostics['grace_seconds']}s"
+            "  ! Janela de inatividade atingida; worktree/processo estagnados — "
+            f"verificação final por {diagnostics['grace_seconds']}s"
         )
         _append_log(summary)
 
-    def _remaining_budget() -> float | None:
-        if deadline is None:
-            return None
-        return max(0.0, deadline - time.monotonic())
+    def _record_progress(source: str, diagnostics: dict[str, int]) -> None:
+        now = time.monotonic()
+        previous = progress_reported_at.get(source)
+        if previous is not None and now - previous < 60:
+            return
+        progress_reported_at[source] = now
+        if source == "workspace":
+            detail = (
+                f"files_delta={diagnostics['files_delta']} "
+                f"bytes_delta={diagnostics['bytes_delta']} "
+                f"source_files_delta={diagnostics['source_files_delta']} "
+                f"source_bytes_delta={diagnostics['source_bytes_delta']}"
+            )
+        else:
+            detail = (
+                f"cpu_delta_ticks={diagnostics['cpu_delta_ticks']} "
+                f"io_delta_chars="
+                f"{diagnostics['read_delta_chars'] + diagnostics['write_delta_chars']} "
+                f"processes_delta={diagnostics['processes_delta']}"
+            )
+        _append_log(f"\n[PRODUCTIVITY_RENEWED] source={source} {detail}\n")
 
-    def _deadline_message() -> str:
+    def _remaining_max_wall() -> float | None:
+        if max_wall_deadline is None:
+            return None
+        return max(0.0, max_wall_deadline - time.monotonic())
+
+    def _max_wall_message() -> str:
         return (
-            "\n[LLM_DEADLINE] Budget total da delegacao excedeu "
-            f"{llm_timeout_seconds} segundos.\n"
+            "\n[MAX_WALL_TIMEOUT] Teto absoluto opt-in da delegação excedeu "
+            f"{max_wall_timeout} segundos.\n"
         )
 
     def _stop_process(proc: subprocess.Popen) -> None:
@@ -2214,17 +2516,14 @@ REGRAS:
         )
 
     def _run_executor_attempt() -> tuple[int, bool, str, str | None]:
-        """Executa uma tentativa do executor. failure_kind: idle | timeout | None."""
+        """Executa uma tentativa. failure_kind: idle | max_wall | timeout | None."""
         nonlocal attempt_activity
-        remaining = _remaining_budget()
+        remaining = _remaining_max_wall()
         if remaining is not None and remaining <= 0:
-            msg = _deadline_message()
+            msg = _max_wall_message()
             _append_log(msg)
-            return 124, False, msg, "deadline"
-        attempt_timeout = float(executor_timeout)
-        deadline_limited = remaining is not None and remaining < attempt_timeout
-        if deadline_limited:
-            attempt_timeout = max(0.01, remaining)
+            return 124, False, msg, "max_wall"
+        attempt_timeout = max(0.01, remaining) if remaining is not None else None
 
         # Chamar executor em modo nao-interativo, com streaming para arquivo.
         # PATH completo: o template v3 tem frontend Node (npm/vite) — a poda antiga
@@ -2273,22 +2572,28 @@ REGRAS:
                 idle_timeout=idle_timeout,
                 idle_grace=idle_grace,
                 on_idle_grace=_record_idle_grace,
+                workspace_probe=lambda: _workspace_progress_snapshot(
+                    workspace_paths,
+                    project_root,
+                ),
+                progress_probe_interval=progress_probe_interval,
+                on_progress=_record_progress,
             )
         except ExecutorIdleTimeout:
             _stop_process(proc)
             reader.join(timeout=5)
-            msg = f"\n[IDLE_TIMEOUT] Executor sem nova saída por {idle_timeout} segundos.\n"
+            msg = (
+                "\n[INACTIVITY_TIMEOUT] Nenhuma atividade observável no stream, "
+                "worktree ou processo por "
+                f"{idle_timeout} segundos.\n"
+            )
             _append_log(msg)
             return 124, False, output_holder["output"] + msg, "idle"
         except subprocess.TimeoutExpired:
             _stop_process(proc)
             reader.join(timeout=5)
-            if deadline_limited:
-                msg = _deadline_message()
-                failure_kind = "deadline"
-            else:
-                msg = f"\n[TIMEOUT] Executor excedeu {executor_timeout} segundos.\n"
-                failure_kind = "timeout"
+            msg = _max_wall_message()
+            failure_kind = "max_wall"
             _append_log(msg)
             return 124, False, output_holder["output"] + msg, failure_kind
         except BaseException:
@@ -2342,10 +2647,14 @@ REGRAS:
                 max(0.0, now_wall - first_wall),
                 3,
             )
+        for key in ("workspace_renewals", "process_renewals"):
+            value = attempt_activity.get(key)
+            if value is not None:
+                timings[key] = float(value)
         return timings
 
     try:
-        deadline_exhausted = False
+        max_wall_exhausted = False
         idle_attempt = 0
         while True:
             returncode, _early_success, raw_output, failure_kind = _run_executor_attempt()
@@ -2393,11 +2702,11 @@ REGRAS:
             for attempt, wait in enumerate(_backoff_schedule, start=1):
                 print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
                       f"Aguardando {wait}s antes da tentativa {attempt}/{len(_backoff_schedule)}…")
-                remaining = _remaining_budget()
+                remaining = _remaining_max_wall()
                 if remaining is not None and wait >= remaining:
-                    deadline_exhausted = True
+                    max_wall_exhausted = True
                     returncode = 124
-                    output = _deadline_message()
+                    output = _max_wall_message()
                     _append_log(output)
                     break
                 time.sleep(wait)
@@ -2406,7 +2715,7 @@ REGRAS:
                 if failure2:
                     output = out2
                     returncode = rc2
-                    deadline_exhausted = failure2 == "deadline"
+                    max_wall_exhausted = failure2 == "max_wall"
                     break
                 if not _RATE_LIMIT_PATTERNS.search(out2):
                     output = out2
@@ -2479,11 +2788,11 @@ REGRAS:
                 success = False
                 output = script
             else:
-                remaining = _remaining_budget()
+                remaining = _remaining_max_wall()
                 if remaining is not None and remaining <= 0:
-                    deadline_exhausted = True
+                    max_wall_exhausted = True
                     script_ok = False
-                    script_output = _deadline_message()
+                    script_output = _max_wall_message()
                     _append_log(script_output)
                 else:
                     script_deadline_limited = (
@@ -2509,9 +2818,9 @@ REGRAS:
                         and not script_ok
                         and "[TIMEOUT]" in script_output
                     ):
-                        deadline_exhausted = True
-                        script_output += _deadline_message()
-                        _append_log(_deadline_message())
+                        max_wall_exhausted = True
+                        script_output += _max_wall_message()
+                        _append_log(_max_wall_message())
                 success = returncode == 0 and script_ok
                 if success:
                     output = (
@@ -2529,7 +2838,7 @@ REGRAS:
             success = returncode == 0 and token != "BLOCKED"
             died = returncode != 0 and token is None
         rate_limited = (
-            not deadline_exhausted
+            not max_wall_exhausted
             and (not success)
             and bool(_RATE_LIMIT_PATTERNS.search(output))
         )
@@ -2580,47 +2889,22 @@ def delegate_opencode_file_bundle_raw(
     log_path: str | None = None,
     llm_effort: str | None = None,
 ) -> DelegateResult:
-    """Chamada OpenCode mínima para ecoar/materializar um file bundle pequeno."""
-    cmd = _build_executor_command(
-        "opencode",
-        prompt,
-        project_root,
+    """Ecoa/materializa um bundle sob a política global de produtividade."""
+    result = delegate_to_llm(
+        task=prompt,
+        project_root=project_root,
+        allowed_paths=allowed_paths,
         max_turns=1,
-        model=llm_model or DEFAULT_OPENCODE_MODEL,
-        effort=llm_effort,
+        llm_engine="opencode",
+        llm_model=llm_model or DEFAULT_OPENCODE_MODEL,
+        llm_effort=llm_effort,
+        log_path=log_path,
+        opencode_restrict_tools=True,
+        raw_output=True,
     )
-    cmd = _opencode_capture_command(cmd)
-    env = _executor_env(
-        "opencode",
-        opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
-        opencode_text_only=True,
-    )
-    if log_path:
-        _write_log_preamble(log_path, "opencode", cmd, prompt)
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=project_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    except subprocess.TimeoutExpired as exc:
-        output = _timeout_stream_text(exc.stdout) + _timeout_stream_text(exc.stderr) + "\n[TIMEOUT] OpenCode raw excedeu 180 segundos.\n"
-        if log_path:
-            with Path(log_path).open("a", encoding="utf-8") as f:
-                f.write(output)
-        return DelegateResult(False, output, [], [])
-
-    raw = (result.stdout or "") + (result.stderr or "")
-    if log_path:
-        with Path(log_path).open("a", encoding="utf-8") as f:
-            f.write(raw)
-    output = _extract_opencode_json_text(raw)
-    bundle = _clean_opencode_capture_text(output)
-    if result.returncode != 0:
-        return DelegateResult(False, bundle or raw, [], [])
+    bundle = _clean_opencode_capture_text(result.output)
+    if not result.success:
+        return DelegateResult(False, bundle or result.output, [], [])
     if bundle.lstrip().upper().startswith("BLOCKED"):
         return DelegateResult(False, bundle, [], [])
     ok, materialized = _materialize_opencode_file_bundle(
@@ -2641,44 +2925,23 @@ def delegate_opencode_exact_file_raw(
     log_path: str | None = None,
     llm_effort: str | None = None,
 ) -> DelegateResult:
-    """Pede ao OpenCode para ecoar conteudo pequeno e grava em um path conhecido."""
+    """Ecoa conteúdo e grava um path sob a política global de produtividade."""
     prompt = f"Retorne exatamente este texto, sem markdown e sem explicacoes:\n{content}"
-    cmd = _build_executor_command(
-        "opencode",
-        prompt,
-        project_root,
+    result = delegate_to_llm(
+        task=prompt,
+        project_root=project_root,
+        allowed_paths=allowed_paths,
         max_turns=1,
-        model=llm_model or DEFAULT_OPENCODE_MODEL,
-        effort=llm_effort,
+        llm_engine="opencode",
+        llm_model=llm_model or DEFAULT_OPENCODE_MODEL,
+        llm_effort=llm_effort,
+        log_path=log_path,
+        opencode_restrict_tools=True,
+        raw_output=True,
     )
-    cmd = _opencode_capture_command(cmd)
-    env = _executor_env(
-        "opencode",
-        opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
-        opencode_text_only=True,
-    )
-    if log_path:
-        _write_log_preamble(log_path, "opencode", cmd, prompt)
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=project_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    except subprocess.TimeoutExpired as exc:
-        output = _timeout_stream_text(exc.stdout) + _timeout_stream_text(exc.stderr) + "\n[TIMEOUT] OpenCode raw excedeu 180 segundos.\n"
-        return DelegateResult(False, output, [], [])
-
-    raw = (result.stdout or "") + (result.stderr or "")
-    if log_path:
-        with Path(log_path).open("a", encoding="utf-8") as f:
-            f.write(raw)
-    output = _clean_opencode_capture_text(_extract_opencode_json_text(raw)).strip()
-    if result.returncode != 0:
-        return DelegateResult(False, output or raw, [], [])
+    output = _clean_opencode_capture_text(result.output).strip()
+    if not result.success:
+        return DelegateResult(False, output or result.output, [], [])
     if output.lstrip().upper().startswith("BLOCKED"):
         return DelegateResult(False, output, [], [])
     expected = content.strip()

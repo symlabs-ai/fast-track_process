@@ -13,7 +13,6 @@ import io
 import json
 import os
 from pathlib import Path
-import queue
 import re
 import shutil
 import signal
@@ -22,6 +21,18 @@ import tempfile
 import threading
 import time
 from typing import Callable
+
+from ft.engine.delegate import (
+    DEFAULT_PROGRESS_PROBE_INTERVAL,
+    ExecutorIdleTimeout,
+    _env_positive_int,
+    _executor_idle_grace_seconds,
+    _executor_idle_timeout_seconds,
+    _executor_max_wall_timeout_seconds,
+    _wait_for_process,
+    _workspace_progress_paths,
+    _workspace_progress_snapshot,
+)
 
 
 SUPPORTED_AGENTS = {"claude", "codex", "gemini", "opencode"}
@@ -237,6 +248,7 @@ class ExploreStreamNormalizer:
 
 
 def _timeout_seconds() -> int:
+    """Resolve the legacy explore value as an inactivity-window hint."""
     raw = os.environ.get("FT_EXPLORE_TIMEOUT", "").strip()
     if raw:
         try:
@@ -419,57 +431,79 @@ def run_read_only_explore(
 
         assert proc.stdout is not None
         assert proc.stderr is not None
-        lines: "queue.Queue[str | None]" = queue.Queue()
+        normalizer = ExploreStreamNormalizer(selected)
         stderr_parts: list[str] = []
+        activity = {"last": time.time(), "started": time.time()}
 
         def pump_stdout(stream: io.TextIOBase) -> None:
-            try:
-                for line in iter(stream.readline, ""):
-                    lines.put(line)
-            finally:
-                lines.put(None)
+            for line in iter(stream.readline, ""):
+                activity["last"] = time.time()
+                activity.setdefault("first", activity["last"])
+                for chunk in normalizer.feed(line):
+                    if on_chunk is not None:
+                        on_chunk(chunk)
 
         def pump_stderr(stream: io.TextIOBase) -> None:
-            stderr_parts.extend(iter(stream.readline, ""))
+            for line in iter(stream.readline, ""):
+                # Debug/progress logs do not become user text, but they are an
+                # observable liveness signal just like stdout.
+                activity["last"] = time.time()
+                activity.setdefault("first", activity["last"])
+                stderr_parts.append(line)
 
         stdout_thread = threading.Thread(target=pump_stdout, args=(proc.stdout,), daemon=True)
         stderr_thread = threading.Thread(target=pump_stderr, args=(proc.stderr,), daemon=True)
         stdout_thread.start()
         stderr_thread.start()
 
-        normalizer = ExploreStreamNormalizer(selected)
-        deadline = time.monotonic() + _timeout_seconds()
-        timed_out = False
+        idle_timeout = _executor_idle_timeout_seconds(
+            selected,
+            _timeout_seconds(),
+        )
+        max_wall_timeout = _executor_max_wall_timeout_seconds(selected)
+        workspace_paths = _workspace_progress_paths(str(root), None)
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                _stop_process(proc)
-                break
             try:
-                line = lines.get(timeout=min(0.5, remaining))
-            except queue.Empty:
-                continue
-            if line is None:
+                returncode, _early = _wait_for_process(
+                    proc,
+                    timeout=max_wall_timeout,
+                    activity=activity,
+                    idle_timeout=idle_timeout,
+                    idle_grace=_executor_idle_grace_seconds(selected),
+                    workspace_probe=lambda: _workspace_progress_snapshot(
+                        workspace_paths,
+                        str(root),
+                    ),
+                    progress_probe_interval=(
+                        _env_positive_int("FT_WORKTREE_PROGRESS_INTERVAL")
+                        or DEFAULT_PROGRESS_PROBE_INTERVAL
+                    ),
+                )
                 break
-            for chunk in normalizer.feed(line):
-                if on_chunk is not None:
-                    on_chunk(chunk)
+            except ExecutorIdleTimeout:
+                _stop_process(proc)
+                stdout_thread.join(timeout=2)
+                stderr_thread.join(timeout=2)
+                return ExploreResult(
+                    124,
+                    normalizer.text,
+                    "[INACTIVITY_TIMEOUT] executor sem produtividade observável "
+                    f"por {idle_timeout} segundos",
+                )
+            except subprocess.TimeoutExpired:
+                _stop_process(proc)
+                stdout_thread.join(timeout=2)
+                stderr_thread.join(timeout=2)
+                return ExploreResult(
+                    124,
+                    normalizer.text,
+                    "[MAX_WALL_TIMEOUT] executor excedeu o teto absoluto opt-in "
+                    f"de {max_wall_timeout} segundos",
+                )
 
         stdout_thread.join(timeout=2)
-        if timed_out:
-            stderr_thread.join(timeout=2)
-            return ExploreResult(124, normalizer.text, "executor excedeu FT_EXPLORE_TIMEOUT")
-
-        try:
-            returncode = _honest_returncode(
-                proc.wait(timeout=max(0.1, deadline - time.monotonic()))
-            )
-        except subprocess.TimeoutExpired:
-            _stop_process(proc)
-            stderr_thread.join(timeout=2)
-            return ExploreResult(124, normalizer.text, "executor excedeu FT_EXPLORE_TIMEOUT")
         stderr_thread.join(timeout=2)
+        returncode = _honest_returncode(returncode)
         for chunk in normalizer.finish():
             if on_chunk is not None:
                 on_chunk(chunk)

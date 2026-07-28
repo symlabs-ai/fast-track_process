@@ -81,9 +81,10 @@ flowchart TD
   válido.
 - `evidence` não altera código e o gate seguinte comprova apenas referências;
   a suficiência semântica permanece na review.
-- O episódio de implementação tem deadline por chamada e orçamento cumulativo.
-  Rotas semânticas `implementation` e `scope`, além de rejeição humana legítima,
-  iniciam um episódio novo; esgotamento pausa preservando o diff.
+- O episódio de implementação herda a lease global de produtividade: a janela
+  temporal dispara sondas e é renovada por stream, worktree ou processo ativo.
+  O orçamento cumulativo é telemetria; rotas semânticas `implementation` e
+  `scope`, além de rejeição humana legítima, iniciam um episódio novo.
 - `reconcile` propõe conteúdo estruturado, o engine valida IDs autorizados e só
   então aplica os documentos canônicos.
 - Ciclos paralelos exigem PBs preexistentes distintos. FEATs novos são

@@ -307,12 +307,16 @@ combinação com probe fresco e atualiza atomicamente o manifesto. O effort
 | `FT_SKIP_HEALTH_CHECK` | Pula health check da API no início do run |
 | `FT_LLM_ENGINE` | Executor default (`claude`, `codex`, `gemini`, `opencode`) |
 | `FT_LLM_EFFORT` | Effort herdado quando node, flag e state não definem valor |
-| `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de cada turno delegado, em segundos |
-| `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex |
-| `FT_LLM_IDLE_TIMEOUT` | Inatividade máxima sem evento real do stream; não conta o heartbeat visual |
-| `FT_CODEX_IDLE_TIMEOUT` | Override da inatividade do Codex; default 480 segundos |
-| `FT_LLM_IDLE_GRACE` | Graça única após inatividade quando há sinais fracos de liveness |
-| `FT_CODEX_IDLE_GRACE` | Override da graça do Codex; default 120 segundos, `0` desabilita |
+| `FT_LLM_EXECUTOR_TIMEOUT` | Alias legado da janela global de inatividade; não é teto wall-clock |
+| `FT_CODEX_EXECUTOR_TIMEOUT` | Alias legado Codex da janela de inatividade |
+| `FT_LLM_IDLE_TIMEOUT` | Janela sem progresso observável antes da sonda global; não conta heartbeat visual |
+| `FT_CODEX_IDLE_TIMEOUT` | Override Codex da janela; default 480 segundos quando o node não sugere outra |
+| `FT_LLM_IDLE_GRACE` | Janela final de confirmação quando stream, worktree e processo estão estagnados |
+| `FT_CODEX_IDLE_GRACE` | Override Codex da confirmação; default 120 segundos, `0` desabilita |
+| `FT_WORKTREE_PROGRESS_INTERVAL` | Intervalo das sondas de criação, remoção, alteração ou crescimento na worktree isolada |
+| `FT_EXPLORE_TIMEOUT` | Alias legado da janela de inatividade para `ft explore`; não é teto wall-clock |
+| `FT_LLM_MAX_WALL_TIMEOUT` | Teto wall-clock absoluto opt-in; ausente por default |
+| `FT_CODEX_MAX_WALL_TIMEOUT` | Override opt-in do teto absoluto para Codex |
 | `FT_CODEX_REASONING_EFFORT` | Override explícito do reasoning do Codex |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Janela anunciada ao OpenCode |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Limite de saída do OpenCode |
@@ -529,9 +533,17 @@ validators:
 Use `aggregate` quando o diagnóstico conjunto tiver mais valor que a latência.
 `fail_fast` é decisão do node, não uma política global implícita.
 
-Nodes LLM podem combinar deadline por chamada e orçamento cumulativo por
-episódio. O primeiro limita também retries internos do provider; o segundo
-persiste chamadas e tempo entre retomadas do runner:
+Todas as delegações LLM — nodes, helpers auxiliares e `ft explore` —, em todos
+os templates e providers, obedecem à política global de produtividade da
+engine; o processo particular não implementa nem desliga essa semântica.
+`llm_timeout_seconds` é uma janela de inatividade que dispara uma sonda, não um
+deadline: eventos reais do stream, criação/remoção/alteração/crescimento no
+conjunto de arquivos versionados ou novos não ignorados de toda a worktree
+isolada e progressão da árvore de processos renovam a lease quantas vezes forem
+necessárias. Caches ignorados não são percorridos; a atividade de seus comandos
+continua observável por stream e CPU/I/O. `llm_episode_budget_seconds` permanece
+como meta de telemetria; somente `llm_episode_max_calls` limita estruturalmente
+novas chamadas:
 
 ```yaml
 llm_timeout_seconds: 900
@@ -549,8 +561,9 @@ episode_restart:
   scope: implementation
 ```
 
-Ao esgotar o orçamento, o engine pausa, grava um checkpoint compacto no state e
-preserva o diff; não inicia silenciosamente outra chamada.
+Ultrapassar a meta temporal registra telemetria, mas não interrompe uma chamada
+produtiva nem impede a próxima. Um teto wall-clock só existe quando
+`FT_LLM_MAX_WALL_TIMEOUT` ou o override do provider é definido explicitamente.
 
 ### Testes, código e gates
 
@@ -671,8 +684,9 @@ sob lock curto. O state fixa path e digest do fork local.
 Código/testes, validação completa, evidência referencial e review semântica são
 nodes diferentes. A review produz rota estruturada (`approved`,
 `implementation`, `evidence` ou `scope`) e o decision node invalida o progresso
-posterior quando volta no grafo. A implementação possui deadline por chamada e
-orçamento cumulativo por episódio; um hard stop preserva diff e artefatos.
+posterior quando volta no grafo. A implementação usa lease global de
+produtividade renovável e meta temporal de episódio; não há hard stop
+wall-clock por default.
 
 Baseline attestation e implementation receipt são separados. `ensure` verifica
 primeiro o receipt local; cache compartilhado só existe como experimento opt-in

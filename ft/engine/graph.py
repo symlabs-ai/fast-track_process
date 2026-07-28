@@ -58,11 +58,12 @@ class Node:
     optional: bool = False
     # Override provider-specific de reasoning effort para este node
     llm_effort: str | None = None
-    # Budget total de uma delegacao, incluindo retries/backoff internos.
-    # None preserva o timeout global historico do provider.
+    # Sugestão de janela para a política global de inatividade da engine.
+    # Stream, toda a worktree isolada e processo renovam a lease sem teto.
     llm_timeout_seconds: int | None = None
-    # Orçamento cumulativo para uma sequência de chamadas semanticamente
-    # relacionadas. episode_restart em um decision inicia uma nova sequência.
+    # Meta de tempo cumulativo para telemetria de uma sequência semanticamente
+    # relacionada. Não interrompe trabalho produtivo; max_calls continua sendo
+    # o limite estrutural. episode_restart inicia uma nova sequência.
     llm_episode: str | None = None
     llm_episode_budget_seconds: int | None = None
     llm_episode_max_calls: int | None = None

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import math
 import os
 import re
 import subprocess
@@ -131,7 +130,7 @@ def _brief_cycle_objective(raw: str) -> str | None:
 
 
 class LLMEpisodeBudgetExceeded(RuntimeError):
-    """Hard stop preservando o diff quando o orçamento cumulativo termina."""
+    """Compatibility exception retained for older integrations."""
 
 
 def _normalize_review_line(line: str) -> str:
@@ -2524,10 +2523,9 @@ class StepRunner:
             node.llm_episode_budget_seconds is not None
             and consumed >= node.llm_episode_budget_seconds
         ):
-            exhausted_reason = (
-                f"orçamento de {node.llm_episode_budget_seconds}s "
-                f"(consumidos {consumed:.1f}s)"
-            )
+            record["soft_time_budget_exceeded"] = True
+            record["soft_time_budget_seconds"] = node.llm_episode_budget_seconds
+            record["soft_time_budget_consumed_seconds"] = round(consumed, 3)
         if exhausted_reason:
             try:
                 status = subprocess.run(
@@ -2564,14 +2562,8 @@ class StepRunner:
         return record
 
     def _effective_llm_timeout(self, node: Node) -> int | None:
-        timeout = node.llm_timeout_seconds
-        if not node.llm_episode or node.llm_episode_budget_seconds is None:
-            return timeout
-        state = self.state_mgr.state
-        record = state.llm_episodes.get(node.llm_episode, {})
-        consumed = float(record.get("consumed_seconds", 0.0) or 0.0)
-        remaining = max(1, int(node.llm_episode_budget_seconds - consumed))
-        return min(timeout, remaining) if timeout is not None else remaining
+        """Return the rolling inactivity-check interval declared by the node."""
+        return node.llm_timeout_seconds
 
     def _restart_llm_episode(self, state: Any, key: str, reason: str) -> None:
         previous = state.llm_episodes.get(key, {})
@@ -4010,23 +4002,17 @@ class StepRunner:
     def _delegate_with_stream_retry(self, **delegate_kwargs):
         """delegate_to_llm com retry automático quando o processo morre sem veredito.
 
-        Stream interrompida, crash ou timeout do CLI (result.died) é falha de
+        Stream interrompida ou crash do CLI (result.died) é falha de
         infraestrutura, não de conteúdo: retenta a mesma delegação até
         _MAX_STREAM_RETRIES vezes extras antes de devolver a falha. O trabalho
         parcial permanece no working tree, então cada tentativa continua de
-        onde a anterior parou.
+        onde a anterior parou. ``llm_timeout_seconds`` é uma lease de
+        inatividade renovável no delegate; nunca é convertido aqui em deadline
+        cumulativo.
         """
         session_context = delegate_kwargs.pop("_ft_session_context", None)
         attempt = 0
         session_recovered = False
-        configured_timeout = delegate_kwargs.get("llm_timeout_seconds")
-        deadline = (
-            time.monotonic() + float(configured_timeout)
-            if isinstance(configured_timeout, (int, float))
-            and not isinstance(configured_timeout, bool)
-            and configured_timeout > 0
-            else None
-        )
         log_path = delegate_kwargs.get("log_path")
         active_parent = (
             self._active_llm_traces.get(self._display_path(Path(log_path)))
@@ -4034,17 +4020,6 @@ class StepRunner:
             else None
         )
         while True:
-            if deadline is not None:
-                remaining = math.ceil(deadline - time.monotonic())
-                if remaining <= 0:
-                    return DelegateResult(
-                        success=False,
-                        output="deadline cumulativo da invocação LLM esgotado",
-                        files_created=[],
-                        files_modified=[],
-                        died=True,
-                    )
-                delegate_kwargs["llm_timeout_seconds"] = max(1, remaining)
             provider_span: TraceSpan | None = None
             if active_parent is not None:
                 provider_span = self.trace.begin_span(

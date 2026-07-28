@@ -289,14 +289,26 @@ seguros do workspace V3. Migração de layout e reparo não são sinônimos.
 | `FT_LLM_ENGINE` | Executor default (`claude`, `codex`, `gemini`, `opencode`) |
 | `FT_LLM_EFFORT` | Effort herdado quando não há override |
 | `FT_CODEX_REASONING_EFFORT` | Override de reasoning do Codex |
-| `FT_LLM_EXECUTOR_TIMEOUT` | Timeout geral de delegação, em segundos |
-| `FT_CODEX_EXECUTOR_TIMEOUT` | Timeout específico de delegações Codex |
-| `FT_LLM_IDLE_TIMEOUT` | Inatividade máxima sem evento real do stream |
-| `FT_CODEX_IDLE_TIMEOUT` | Override de inatividade do Codex; default 480 segundos |
-| `FT_LLM_IDLE_GRACE` | Graça única quando o processo segue vivo sem evento forte |
-| `FT_CODEX_IDLE_GRACE` | Override da graça do Codex; default 120 segundos |
+| `FT_LLM_EXECUTOR_TIMEOUT` | Alias legado global da janela de inatividade; não limita wall-clock produtivo |
+| `FT_CODEX_EXECUTOR_TIMEOUT` | Alias legado Codex da janela de inatividade |
+| `FT_LLM_IDLE_TIMEOUT` | Janela global sem progresso observável antes da sonda de stream, worktree e processo |
+| `FT_CODEX_IDLE_TIMEOUT` | Override Codex da janela de inatividade; default 480 segundos quando o node não sugere outra |
+| `FT_LLM_IDLE_GRACE` | Janela final de confirmação após uma sonda sem produtividade |
+| `FT_CODEX_IDLE_GRACE` | Override da confirmação Codex; default 120 segundos |
+| `FT_WORKTREE_PROGRESS_INTERVAL` | Intervalo global das sondas de criação, remoção, alteração ou crescimento na worktree isolada |
+| `FT_EXPLORE_TIMEOUT` | Alias legado da janela de inatividade para `ft explore`; não é teto wall-clock |
+| `FT_LLM_MAX_WALL_TIMEOUT` | Teto wall-clock absoluto opt-in; ausente por default |
+| `FT_CODEX_MAX_WALL_TIMEOUT` | Override opt-in do teto absoluto para Codex |
 | `FT_OPENCODE_SANDBOX` | Sandbox de filesystem do OpenCode |
 | `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Scripts SymGateway opt-in |
+
+A supervisão de produtividade é uma política da engine e vale para nodes,
+helpers de delegação e `ft explore`, em todos os templates e providers. Um
+valor de timeout no node apenas sugere a janela de inatividade: stream real,
+arquivos versionados ou novos não ignorados em qualquer ponto da worktree e
+progressão de CPU/I/O/processos renovam essa janela indefinidamente. A engine só
+interrompe após todos esses sinais permanecerem estagnados durante a janela e a
+confirmação final.
 
 ## Referências
 

@@ -536,7 +536,7 @@ class TestApproveReject:
 
 
 class TestDelegationDisplay:
-    def test_llm_episode_budget_hard_stops_before_second_call_and_persists(
+    def test_llm_episode_max_calls_hard_stops_before_second_call_and_persists(
         self, tmp_path
     ):
         project_root = tmp_path / "project"
@@ -598,6 +598,59 @@ nodes:
         )
         persisted = resumed.state_mgr.load()
         assert persisted.llm_episodes == state.llm_episodes
+
+    def test_llm_episode_time_budget_is_telemetry_not_a_productivity_stop(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: soft_budget_process
+version: "1.0.0"
+title: Soft Budget
+nodes:
+  - id: implement
+    type: build
+    title: Implement
+    executor: claude
+    llm_timeout_seconds: 30
+    llm_episode: implementation
+    llm_episode_budget_seconds: 60
+    llm_episode_max_calls: 3
+    outputs: [docs/out.md]
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.llm_episodes["implementation"] = {
+            "ordinal": 1,
+            "calls": 1,
+            "consumed_seconds": 7200.0,
+        }
+        node = runner.graph.get_node("implement")
+
+        record = runner._reserve_llm_episode_call(state, node)
+
+        assert record is not None
+        assert record["calls"] == 2
+        assert record["soft_time_budget_exceeded"] is True
+        assert record["soft_time_budget_seconds"] == 60
+        assert record["soft_time_budget_consumed_seconds"] == 7200.0
+        assert runner._effective_llm_timeout(node) == 30
 
     def test_node_llm_timeout_is_forwarded_to_delegate(self, tmp_path):
         project_root = tmp_path / "project"

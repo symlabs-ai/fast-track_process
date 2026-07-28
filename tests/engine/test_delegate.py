@@ -15,6 +15,7 @@ from ft.engine.delegate import (
     _executor_env,
     _executor_idle_grace_seconds,
     _executor_idle_timeout_seconds,
+    _executor_max_wall_timeout_seconds,
     _env_nonnegative_int,
     _executor_timeout_seconds,
     _append_opencode_runtime_diagnostics,
@@ -27,6 +28,8 @@ from ft.engine.delegate import (
     _run_opencode_script,
     _ProcessLiveness,
     _process_liveness_snapshot,
+    _workspace_progress_paths,
+    _workspace_progress_snapshot,
     _stop_process_tree,
     _stream_process_output,
     _supervised_command,
@@ -66,9 +69,12 @@ class TestBuildExecutorCommand:
     def test_codex_idle_timeout_tracks_real_stream_activity(self, monkeypatch):
         monkeypatch.delenv("FT_CODEX_IDLE_TIMEOUT", raising=False)
         monkeypatch.delenv("FT_LLM_IDLE_TIMEOUT", raising=False)
+        monkeypatch.delenv("FT_CODEX_EXECUTOR_TIMEOUT", raising=False)
+        monkeypatch.delenv("FT_LLM_EXECUTOR_TIMEOUT", raising=False)
 
         assert _executor_idle_timeout_seconds("codex") == 480
-        assert _executor_idle_timeout_seconds("claude") is None
+        assert _executor_idle_timeout_seconds("claude") == 480
+        assert _executor_idle_timeout_seconds("codex", 900) == 900
 
         monkeypatch.setenv("FT_LLM_IDLE_TIMEOUT", "720")
         assert _executor_idle_timeout_seconds("codex") == 720
@@ -76,6 +82,18 @@ class TestBuildExecutorCommand:
 
         monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "900")
         assert _executor_idle_timeout_seconds("codex") == 900
+
+    def test_absolute_wall_timeout_is_opt_in(self, monkeypatch):
+        monkeypatch.delenv("FT_CODEX_MAX_WALL_TIMEOUT", raising=False)
+        monkeypatch.delenv("FT_LLM_MAX_WALL_TIMEOUT", raising=False)
+
+        assert _executor_max_wall_timeout_seconds("codex") is None
+        assert _executor_max_wall_timeout_seconds("claude") is None
+
+        monkeypatch.setenv("FT_LLM_MAX_WALL_TIMEOUT", "7200")
+        assert _executor_max_wall_timeout_seconds("codex") == 7200
+        monkeypatch.setenv("FT_CODEX_MAX_WALL_TIMEOUT", "10800")
+        assert _executor_max_wall_timeout_seconds("codex") == 10800
 
     def test_codex_idle_grace_is_bounded_and_overridable(self, monkeypatch):
         monkeypatch.delenv("FT_CODEX_IDLE_GRACE", raising=False)
@@ -255,6 +273,168 @@ class TestBuildExecutorCommand:
         assert result.success
         assert result.session_id == "thread-active"
 
+    def test_codex_renews_inactivity_lease_when_source_file_grows(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        source = tmp_path / "src" / "progress.py"
+        fake = bin_dir / "codex"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import pathlib, time\n"
+            f"path = pathlib.Path({str(source)!r})\n"
+            "path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "for step in range(4):\n"
+            "    path.write_text('value = ' + repr('x' * (step + 1)) + '\\n')\n"
+            "    time.sleep(0.6)\n"
+            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-worktree\"}', flush=True)\n"
+            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
+            "\"text\":\"DONE\"}}', flush=True)\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv(
+            "PATH",
+            f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        )
+        monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "1")
+        monkeypatch.setenv("FT_CODEX_IDLE_GRACE", "0")
+        monkeypatch.setenv("FT_WORKTREE_PROGRESS_INTERVAL", "1")
+        static = _ProcessLiveness(alive=True, process_count=1)
+
+        with patch(
+            "ft.engine.delegate._process_liveness_snapshot",
+            return_value=static,
+        ):
+            started = time.monotonic()
+            result = delegate_to_llm(
+                task="produza código em silêncio",
+                project_root=str(tmp_path),
+                allowed_paths=["src"],
+                llm_engine="codex",
+                llm_timeout_seconds=1,
+            )
+            elapsed = time.monotonic() - started
+
+        assert result.success is True
+        assert result.session_id == "thread-worktree"
+        assert elapsed >= 2
+        assert result.timings["workspace_renewals"] >= 2
+        assert source.read_text(encoding="utf-8") == "value = 'xxxx'\n"
+
+    def test_codex_renews_inactivity_lease_on_silent_process_progress(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "codex"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import time\n"
+            "time.sleep(2.4)\n"
+            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-process\"}', flush=True)\n"
+            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
+            "\"text\":\"DONE\"}}', flush=True)\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv(
+            "PATH",
+            f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        )
+        monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "1")
+        monkeypatch.setenv("FT_CODEX_IDLE_GRACE", "0")
+        monkeypatch.setenv("FT_WORKTREE_PROGRESS_INTERVAL", "1")
+        ticks = 0
+
+        def progressing(_proc):
+            nonlocal ticks
+            ticks += 1
+            return _ProcessLiveness(
+                alive=True,
+                process_count=1,
+                cpu_ticks=ticks,
+            )
+
+        with patch(
+            "ft.engine.delegate._process_liveness_snapshot",
+            side_effect=progressing,
+        ):
+            result = delegate_to_llm(
+                task="progrida silenciosamente no processo",
+                project_root=str(tmp_path),
+                llm_engine="codex",
+                llm_timeout_seconds=1,
+            )
+
+        assert result.success is True
+        assert result.session_id == "thread-process"
+        assert result.timings["process_renewals"] >= 2
+
+    def test_workspace_snapshot_detects_same_size_source_edit(self, tmp_path):
+        source = tmp_path / "src" / "feature.py"
+        source.parent.mkdir()
+        source.write_text("value = 1\n", encoding="utf-8")
+        paths = _workspace_progress_paths(str(tmp_path), ["src"])
+        before = _workspace_progress_snapshot(paths, str(tmp_path))
+        time.sleep(0.001)
+        source.write_text("value = 2\n", encoding="utf-8")
+        after = _workspace_progress_snapshot(paths, str(tmp_path))
+
+        assert before.digest != after.digest
+        assert before.source_file_count == after.source_file_count == 1
+        assert before.source_bytes == after.source_bytes
+
+    def test_workspace_progress_scope_covers_files_outside_node_write_allowlist(
+        self,
+        tmp_path,
+    ):
+        paths = _workspace_progress_paths(str(tmp_path), ["src"])
+        before = _workspace_progress_snapshot(paths, str(tmp_path))
+        evidence = tmp_path / "docs" / "progress.md"
+        evidence.parent.mkdir()
+        evidence.write_text("produção observável\n", encoding="utf-8")
+        after = _workspace_progress_snapshot(paths, str(tmp_path))
+
+        assert paths == [tmp_path.resolve()]
+        assert before.digest != after.digest
+        assert after.file_count == before.file_count + 1
+
+    def test_opt_in_max_wall_stops_even_a_productive_stream(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "codex"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import time\n"
+            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-capped\"}', flush=True)\n"
+            "while True:\n"
+            "    print('{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}', flush=True)\n"
+            "    time.sleep(0.2)\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv(
+            "PATH",
+            f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        )
+        monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "10")
+        monkeypatch.setenv("FT_CODEX_MAX_WALL_TIMEOUT", "1")
+
+        result = delegate_to_llm(
+            task="execução produtiva porém limitada explicitamente",
+            project_root=str(tmp_path),
+            llm_engine="codex",
+        )
+
+        assert result.success is False
+        assert "[MAX_WALL_TIMEOUT]" in result.output
+
     def test_delegate_keeps_explicit_claude_session_when_stream_omits_id(
         self,
         tmp_path,
@@ -406,15 +586,18 @@ class TestBuildExecutorCommand:
         with pytest.raises(ValueError, match="Executor LLM desconhecido"):
             _build_executor_command("unknown_engine_xyz", "x", "/tmp/proj", 3)
 
-    def test_file_bundle_raw_timeout_returns_delegate_result(self, tmp_path):
-        exc = subprocess.TimeoutExpired(
-            cmd=["opencode", "run"],
-            timeout=180,
-            output="partial stdout",
-            stderr="partial stderr",
+    def test_file_bundle_raw_inherits_global_productivity_supervision(self, tmp_path):
+        supervised = DelegateResult(
+            False,
+            "[INACTIVITY_TIMEOUT] worktree e processo estagnados",
+            [],
+            [],
         )
 
-        with patch("ft.engine.delegate.subprocess.run", side_effect=exc):
+        with patch(
+            "ft.engine.delegate.delegate_to_llm",
+            return_value=supervised,
+        ) as delegated:
             result = delegate_opencode_file_bundle_raw(
                 "<ft_file path=\"docs/out.md\">hello</ft_file>",
                 str(tmp_path),
@@ -422,10 +605,11 @@ class TestBuildExecutorCommand:
             )
 
         assert result.success is False
-        assert "partial stdout" in result.output
-        assert "partial stderr" in result.output
-        assert "[TIMEOUT] OpenCode raw excedeu 180 segundos." in result.output
+        assert "[INACTIVITY_TIMEOUT]" in result.output
         assert result.files_created == []
+        assert delegated.call_args.kwargs["llm_engine"] == "opencode"
+        assert delegated.call_args.kwargs["raw_output"] is True
+        assert delegated.call_args.kwargs["opencode_restrict_tools"] is True
 
     def test_opencode_env_enforces_runtime_config(self):
         env = _executor_env(
@@ -779,7 +963,7 @@ class TestBuildExecutorCommand:
         assert "campos `path`, `oldString`, `newString`" in prompt
         assert "nunca use `filePath`" in prompt
 
-    def test_llm_timeout_caps_one_executor_attempt(self, tmp_path, monkeypatch):
+    def test_llm_inactivity_window_stops_a_stagnant_executor(self, tmp_path, monkeypatch):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "opencode"
@@ -790,6 +974,8 @@ class TestBuildExecutorCommand:
         fake.chmod(0o755)
         monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
         monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_IDLE_GRACE", "0")
+        monkeypatch.setenv("FT_OPENCODE_IDLE_RETRIES", "0")
 
         started = time.monotonic()
         result = delegate_to_llm(
@@ -801,8 +987,8 @@ class TestBuildExecutorCommand:
         elapsed = time.monotonic() - started
 
         assert result.success is False
-        assert "[LLM_DEADLINE]" in result.output
-        assert elapsed < 3
+        assert "[INACTIVITY_TIMEOUT]" in result.output
+        assert elapsed < 4
 
     @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
     def test_llm_timeout_reaps_detached_executor_writer(self, tmp_path, monkeypatch):
@@ -812,7 +998,7 @@ class TestBuildExecutorCommand:
         fake = bin_dir / "opencode"
         fake.write_text(
             "#!/bin/sh\n"
-            "setsid sh -c \"trap '' TERM HUP; sleep 1.5; "
+            "setsid sh -c \"trap '' TERM HUP; sleep 5; "
             f"printf late > {str(marker)!r}\" "
             "</dev/null >/dev/null 2>&1 &\n"
             "sleep 10\n",
@@ -821,6 +1007,8 @@ class TestBuildExecutorCommand:
         fake.chmod(0o755)
         monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
         monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
+        monkeypatch.setenv("FT_OPENCODE_IDLE_GRACE", "0")
+        monkeypatch.setenv("FT_OPENCODE_IDLE_RETRIES", "0")
 
         started = time.monotonic()
         result = delegate_to_llm(
@@ -833,11 +1021,11 @@ class TestBuildExecutorCommand:
         time.sleep(0.7)
 
         assert result.success is False
-        assert "[LLM_DEADLINE]" in result.output
+        assert "[INACTIVITY_TIMEOUT]" in result.output
         assert elapsed < 4
         assert not marker.exists()
 
-    def test_llm_timeout_includes_rate_limit_backoff_and_prevents_retry(
+    def test_opt_in_max_wall_includes_rate_limit_backoff_and_prevents_retry(
         self, tmp_path, monkeypatch
     ):
         bin_dir = tmp_path / "bin"
@@ -855,6 +1043,7 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
         monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
         monkeypatch.setenv("FT_RATE_LIMIT_BACKOFF", "60")
+        monkeypatch.setenv("FT_OPENCODE_MAX_WALL_TIMEOUT", "1")
 
         started = time.monotonic()
         result = delegate_to_llm(
@@ -867,11 +1056,11 @@ class TestBuildExecutorCommand:
 
         assert result.success is False
         assert result.rate_limited is False
-        assert "[LLM_DEADLINE]" in result.output
+        assert "[MAX_WALL_TIMEOUT]" in result.output
         assert count.read_text(encoding="utf-8") == "1"
         assert elapsed < 3
 
-    def test_opencode_script_receives_only_remaining_llm_budget(
+    def test_opencode_script_receives_only_remaining_opt_in_max_wall(
         self, tmp_path, monkeypatch
     ):
         bin_dir = tmp_path / "bin"
@@ -888,6 +1077,7 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
         monkeypatch.setenv("FT_OPENCODE_SCRIPT_MODE", "1")
         monkeypatch.delenv("FT_OPENCODE_BUNDLE_MODE", raising=False)
+        monkeypatch.setenv("FT_OPENCODE_MAX_WALL_TIMEOUT", "10")
 
         with (
             patch(
@@ -914,7 +1104,7 @@ class TestBuildExecutorCommand:
         assert result.success is True
         assert script_runner.call_args.kwargs["timeout_seconds"] == 7.0
 
-    def test_opencode_script_is_not_started_after_llm_budget_expires(
+    def test_opencode_script_is_not_started_after_opt_in_max_wall_expires(
         self, tmp_path, monkeypatch
     ):
         bin_dir = tmp_path / "bin"
@@ -931,6 +1121,7 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("FT_OPENCODE_SANDBOX", "0")
         monkeypatch.setenv("FT_OPENCODE_SCRIPT_MODE", "1")
         monkeypatch.delenv("FT_OPENCODE_BUNDLE_MODE", raising=False)
+        monkeypatch.setenv("FT_OPENCODE_MAX_WALL_TIMEOUT", "10")
 
         with (
             patch(
@@ -952,10 +1143,10 @@ class TestBuildExecutorCommand:
             )
 
         assert result.success is False
-        assert "[LLM_DEADLINE]" in result.output
+        assert "[MAX_WALL_TIMEOUT]" in result.output
         script_runner.assert_not_called()
 
-    def test_opencode_script_without_llm_budget_keeps_legacy_timeout(self, tmp_path):
+    def test_opencode_script_without_max_wall_keeps_script_timeout(self, tmp_path):
         with patch("ft.engine.delegate.subprocess.Popen") as popen:
             process = popen.return_value
             process.communicate.return_value = ("ok\n", "")
@@ -1266,7 +1457,7 @@ class TestBuildExecutorCommand:
             if proc.poll() is None:
                 proc.kill()
 
-    def test_wait_for_process_grants_only_one_weak_liveness_grace(self):
+    def test_wait_for_process_grants_one_final_stagnation_confirmation(self):
         proc = subprocess.Popen(["sleep", "10"])
         diagnostics = []
         started = time.monotonic()

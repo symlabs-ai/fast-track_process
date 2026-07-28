@@ -16,6 +16,7 @@ import pytest
 
 from ft.cli import main as cli_main
 from ft.engine import read_only_explore as explore
+from ft.engine.delegate import _ProcessLiveness
 
 
 def _args(**overrides) -> Namespace:
@@ -154,6 +155,83 @@ def test_runner_entrega_chunks_progressivos_e_exit_code(tmp_path, monkeypatch):
     assert result == explore.ExploreResult(0, "resposta")
     assert chunks == ["resposta"]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_explore_herda_supervisao_global_sem_teto_wall_clock(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeProcess:
+        stdout = io.StringIO("")
+        stderr = io.StringIO("")
+        pid = 123
+
+        def poll(self):
+            return None
+
+    captured: dict[str, object] = {}
+
+    def stagnant(_proc, **kwargs):
+        captured.update(kwargs)
+        raise explore.ExecutorIdleTimeout(["codex"], kwargs["idle_timeout"])
+
+    monkeypatch.setattr(explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(explore, "_wait_for_process", stagnant)
+    monkeypatch.setattr(explore, "_stop_process", lambda _proc: None)
+    monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "2")
+    monkeypatch.setenv("FT_CODEX_IDLE_GRACE", "0")
+    monkeypatch.delenv("FT_CODEX_MAX_WALL_TIMEOUT", raising=False)
+    monkeypatch.delenv("FT_LLM_MAX_WALL_TIMEOUT", raising=False)
+
+    result = explore.run_read_only_explore(
+        request="pergunta longa",
+        project_root=tmp_path,
+        agent="codex",
+    )
+
+    assert result.returncode == 124
+    assert "[INACTIVITY_TIMEOUT]" in (result.error or "")
+    assert captured["timeout"] is None
+    assert captured["idle_timeout"] == 2
+    assert callable(captured["workspace_probe"])
+
+
+def test_explore_debug_stderr_renova_janela_de_inatividade(
+    tmp_path,
+    monkeypatch,
+):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_codex = bin_dir / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys, time\n"
+        "for step in range(3):\n"
+        "    print(f'debug-progress-{step}', file=sys.stderr, flush=True)\n"
+        "    time.sleep(0.6)\n"
+        "print(json.dumps({'type': 'item.completed', "
+        "'item': {'type': 'agent_message', 'text': 'resposta'}}), flush=True)\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH",
+        f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    )
+    monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "1")
+    monkeypatch.setenv("FT_CODEX_IDLE_GRACE", "0")
+    monkeypatch.setattr(
+        "ft.engine.delegate._process_liveness_snapshot",
+        lambda _proc: _ProcessLiveness(alive=True, process_count=1),
+    )
+
+    result = explore.run_read_only_explore(
+        request="pergunta demorada",
+        project_root=tmp_path,
+        agent="codex",
+    )
+
+    assert result == explore.ExploreResult(0, "resposta")
 
 
 def test_runner_reporta_executor_ausente_com_exit_127(tmp_path, monkeypatch):

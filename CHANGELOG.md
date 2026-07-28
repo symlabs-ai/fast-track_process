@@ -6,6 +6,19 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### Supervisão global por produtividade
+
+- Timeouts declarados por nodes e aliases legados de executor passaram a ser
+  janelas renováveis de inatividade, não deadlines wall-clock. A política vale
+  para nodes, helpers e `ft explore`, em todos os templates e providers.
+- Eventos reais de stream, criação/remoção/alteração/crescimento em qualquer
+  arquivo versionado ou novo não ignorado da worktree isolada e progressão da
+  árvore de processos por CPU/I/O renovam a execução indefinidamente.
+- A engine só encerra após uma sonda global e uma confirmação final sem nenhum
+  sinal de atividade. Teto absoluto agora é exclusivamente opt-in por
+  `FT_LLM_MAX_WALL_TIMEOUT` ou override do provider; metas temporais de
+  episódios viraram telemetria e não interrompem trabalho produtivo.
+
 ### `bug-fast`: correção focal em duas chamadas
 
 - Novo template `bug-fast`: uma sessão builder produz RED→GREEN e uma lane

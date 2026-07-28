@@ -67,3 +67,26 @@ def test_success_returns_immediately():
     final, calls = _retry([_result(success=True)])
     assert final.success is True
     assert calls == 1
+
+
+def test_stream_retry_preserves_rolling_inactivity_window_without_wall_deadline():
+    calls = []
+    results = [
+        _result(success=False, died=True),
+        _result(success=True),
+    ]
+
+    def fake_delegate(**kwargs):
+        calls.append(dict(kwargs))
+        return results[len(calls) - 1]
+
+    runner = object.__new__(StepRunner)
+    with patch("ft.engine.runner.delegate_to_llm", side_effect=fake_delegate):
+        final = StepRunner._delegate_with_stream_retry(
+            runner,
+            task="t",
+            llm_timeout_seconds=900,
+        )
+
+    assert final.success is True
+    assert [call["llm_timeout_seconds"] for call in calls] == [900, 900]

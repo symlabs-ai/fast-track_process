@@ -17,6 +17,7 @@ from ft.engine.runner import (
     ValidationResult,
     build_task_prompt,
     _brief_cycle_objective,
+    _llm_progress_snapshot,
 )
 from ft.engine.delegate import DelegateResult
 from ft.engine.state import EngineState
@@ -2843,6 +2844,125 @@ nodes:
 # ---------------------------------------------------------------------------
 
 class TestStatus:
+    def test_progress_snapshot_reports_current_action_evolution_and_signal(
+        self,
+        tmp_path,
+    ):
+        log_path = tmp_path / "active.jsonl"
+        events = [
+            {
+                "type": "item.updated",
+                "item": {
+                    "id": "todo-1",
+                    "type": "todo_list",
+                    "items": [
+                        {"text": "inspecionar", "completed": True},
+                        {"text": "auditar", "completed": False},
+                    ],
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "change-1",
+                    "type": "file_change",
+                    "changes": [
+                        {
+                            "path": "/worktree/project/backend/app/api.py",
+                            "kind": "update",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "cmd-1",
+                    "type": "command_execution",
+                    "command": "git diff --check",
+                    "status": "completed",
+                },
+            },
+            {
+                "type": "item.started",
+                "item": {
+                    "id": "cmd-2",
+                    "type": "command_execution",
+                    "command": (
+                        "ANDROID_SERIAL=sensitive-value sed -n '1,25p' "
+                        "project/android/app/src/androidTest/java/com/wifire/go/"
+                        "PhysicalPb024CommunityE2ETest.kt"
+                    ),
+                    "status": "in_progress",
+                },
+            },
+        ]
+        log_path.write_text(
+            "\n".join(json.dumps(event) for event in events)
+            + "\n[PRODUCTIVITY_RENEWED] source=process cpu_delta_ticks=5\n",
+            encoding="utf-8",
+        )
+
+        snapshot = _llm_progress_snapshot(log_path)
+
+        assert snapshot is not None
+        assert snapshot.current == (
+            "executando inspeção em `PhysicalPb024CommunityE2ETest.kt`"
+        )
+        assert snapshot.evolution == (
+            "tarefas 1/2 · 1 comando concluído · 1 arquivo alterado"
+        )
+        assert snapshot.signal == "CPU/I/O do processo avançando"
+        rendered = " ".join(
+            value
+            for value in (
+                snapshot.current,
+                snapshot.evolution,
+                snapshot.signal,
+            )
+            if value
+        )
+        assert "sensitive-value" not in rendered
+
+    def test_status_expands_active_banner_with_live_progress(
+        self,
+        runner_v2,
+        capsys,
+    ):
+        runner_v2.init_state()
+        log_path = runner_v2.state_mgr.path.parent / "llm_logs" / "current.jsonl"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text(
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "cmd-live",
+                        "type": "command_execution",
+                        "command": (
+                            "sed -n '1,30p' "
+                            "project/backend/tests/test_community_business.py"
+                        ),
+                        "status": "in_progress",
+                    },
+                }
+            )
+            + "\n[PRODUCTIVITY_RENEWED] source=workspace files_delta=1\n",
+            encoding="utf-8",
+        )
+        state = runner_v2.state_mgr.load()
+        state.node_status = "delegated"
+        state.active_llm_log = str(log_path)
+        state.last_llm_log = str(log_path)
+        runner_v2.state_mgr.save()
+
+        runner_v2.status()
+
+        out = capsys.readouterr().out
+        assert "TRABALHO EM ANDAMENTO" in out
+        assert "Agora: executando inspeção em `test_community_business.py`" in out
+        assert "Sinais: worktree alterada" in out
+
     def test_status_preserves_engine_line_and_adds_model_effort(self, runner_v2, capsys):
         runner_v2.init_state()
         state = runner_v2.state_mgr.load()

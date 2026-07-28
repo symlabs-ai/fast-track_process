@@ -236,60 +236,250 @@ def _review_recovery_feedback(
     )
 
 
-def _last_log_activity(log_path: str) -> str | None:
-    """Retorna a última linha de atividade significativa do log JSONL, com timestamp do arquivo."""
+@dataclass(frozen=True)
+class _LLMProgressSnapshot:
+    """Safe, user-facing summary derived from one active provider log."""
+
+    timestamp: str
+    current: str | None = None
+    evolution: str | None = None
+    signal: str | None = None
+
+
+_STATUS_LOG_TAIL_BYTES = 1_048_576
+_STATUS_PATH_RE = re.compile(
+    r"(?:(?:project|docs|src|tests|backend|android|templates|ft|\.ft)/)"
+    r"[A-Za-z0-9_./-]+"
+)
+_STATUS_SENSITIVE_RE = re.compile(
+    r"(?i)\b(?:password|passphrase|senha|secret|token|authorization|"
+    r"api[_ -]?key|android_serial|serial(?:\s+number)?)\b"
+)
+
+
+def _status_target(command: str) -> str | None:
+    """Return a non-sensitive basename from a command, never its arguments."""
+    matches = _STATUS_PATH_RE.findall(command)
+    for raw in reversed(matches):
+        clean = raw.rstrip(".,;:)'\"")
+        basename = Path(clean).name
+        if not basename:
+            continue
+        lowered = basename.casefold()
+        if any(
+            marker in lowered
+            for marker in (
+                ".env",
+                "credential",
+                "keystore",
+                "lab-profile",
+                "local.properties",
+                "secret",
+            )
+        ):
+            continue
+        return basename[:80]
+    return None
+
+
+def _status_command_action(command: str, *, completed: bool = False) -> str:
+    """Translate a raw command into a useful description without echoing secrets."""
+    lowered = command.casefold()
+    target = _status_target(command)
+    suffix = f" em `{target}`" if target else ""
+    prefix = "concluiu" if completed else "executando"
+
+    if "connecteddebugandroidtest" in lowered or re.search(r"(^|\s)adb(?:\s|$)", lowered):
+        return f"{prefix} validação no dispositivo Android"
+    if "gradlew" in lowered:
+        operation = "testes Android" if "test" in lowered else "build Android"
+        return f"{prefix} {operation}"
+    if "pytest" in lowered:
+        return f"{prefix} testes focais{suffix}"
+    if "security/verify" in lowered or "scan-secrets" in lowered:
+        return f"{prefix} auditoria de segurança"
+    if "validate_feature.py" in lowered:
+        return f"{prefix} validação do contrato do processo"
+    if "product.sh verify" in lowered:
+        return f"{prefix} verificação do receipt"
+    if "git diff" in lowered or "git status" in lowered or "git log" in lowered:
+        return f"{prefix} auditoria do delta Git"
+    if re.search(r"(^|\s)rg(?:\s|$)", lowered):
+        return f"{prefix} busca de referências{suffix}"
+    if re.search(r"(^|\s)(?:sed|head|tail)(?:\s|$)", lowered):
+        return f"{prefix} inspeção{suffix}"
+    if "curl " in lowered:
+        return f"{prefix} sonda HTTP"
+    if re.search(r"(^|\s)make(?:\s|$)", lowered):
+        return f"{prefix} build/teste do produto"
+    return f"{prefix} sonda focal"
+
+
+def _status_agent_message(text: str) -> str | None:
+    clean = re.sub(r"\s+", " ", text).strip()
+    if not clean:
+        return None
+    if _STATUS_SENSITIVE_RE.search(clean):
+        return "analisando uma etapa com detalhes sensíveis omitidos"
+    if len(clean) > 140:
+        clean = clean[:139].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+    return clean
+
+
+def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
+    """Summarize current action and recent evolution from a bounded log tail."""
     import json as _json
 
-    p = Path(log_path)
-    if not p.exists():
+    path = Path(log_path)
+    if not path.is_file():
         return None
-
-    mtime = p.stat().st_mtime
-    ts = datetime.fromtimestamp(mtime).strftime("%H:%M:%S")
-
-    # Ler as últimas linhas do arquivo (eficiente para arquivos grandes)
     try:
-        with p.open("rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            read_size = min(size, 8192)
-            f.seek(-read_size, 2)
-            tail = f.read().decode("utf-8", errors="replace")
-    except Exception:
+        mtime = path.stat().st_mtime
+        with path.open("rb") as stream:
+            stream.seek(0, 2)
+            size = stream.tell()
+            read_size = min(size, _STATUS_LOG_TAIL_BYTES)
+            stream.seek(-read_size, 2)
+            raw_tail = stream.read().decode("utf-8", errors="replace")
+    except OSError:
         return None
 
-    activity: str | None = None
-    for line in reversed(tail.splitlines()):
-        line = line.strip()
+    lines = raw_tail.splitlines()
+    if size > read_size and lines:
+        lines = lines[1:]
+
+    active_commands: dict[str, str] = {}
+    last_action: str | None = None
+    last_agent_message: str | None = None
+    last_signal: str | None = None
+    completed_commands = 0
+    touched_paths: set[str] = set()
+    todo_done: int | None = None
+    todo_total: int | None = None
+    reported_findings: int | None = None
+
+    for raw_line in lines:
+        line = raw_line.strip()
         if not line:
             continue
-        if line.startswith("{"):
-            try:
-                event = _json.loads(line)
-                etype = event.get("type", "")
-                if etype == "item.completed":
-                    item = event.get("item", {})
-                    itype = item.get("type", "")
-                    if itype == "command_execution":
-                        cmd = (item.get("command") or "").strip().replace("\n", " ")[:80]
-                        activity = f"$ {cmd}"
-                        break
-                    if itype == "agent_message":
-                        msg = (item.get("text") or "").strip().replace("\n", " ")[:80]
-                        if msg:
-                            activity = f"→ {msg}"
-                            break
-            except Exception:
-                continue
-        else:
-            # Plain text (claude / outros engines)
-            if not line.startswith("[") and len(line) > 5:
-                activity = line[:80]
-                break
+        if line.startswith("[PRODUCTIVITY_RENEWED]"):
+            source_match = re.search(r"\bsource=(workspace|process)\b", line)
+            if source_match:
+                last_signal = (
+                    "worktree alterada"
+                    if source_match.group(1) == "workspace"
+                    else "CPU/I/O do processo avançando"
+                )
+            continue
+        if not line.startswith("{"):
+            continue
+        try:
+            event = _json.loads(line)
+        except (TypeError, _json.JSONDecodeError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or "")
+        item = event.get("item")
+        if not isinstance(item, dict):
+            # Claude stream-json carries text/tool activity inside assistant.
+            if event_type == "assistant":
+                message = event.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                for block in content if isinstance(content, list) else []:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "text":
+                        candidate = _status_agent_message(str(block.get("text") or ""))
+                        if candidate:
+                            last_agent_message = candidate
+                            last_action = candidate
+                    elif block.get("type") == "tool_use":
+                        last_action = f"usando ferramenta {str(block.get('name') or 'de análise')[:40]}"
+            continue
 
-    if activity:
-        return f"[{ts}] {activity}"
-    return f"[{ts}] (sem atividade recente legível)"
+        item_type = str(item.get("type") or "")
+        item_id = str(item.get("id") or event.get("id") or "")
+        completed = event_type == "item.completed" or item.get("status") == "completed"
+        if item_type == "command_execution":
+            action = _status_command_action(
+                str(item.get("command") or ""),
+                completed=completed,
+            )
+            if completed:
+                completed_commands += 1
+                active_commands.pop(item_id, None)
+            elif item_id:
+                active_commands[item_id] = action
+            last_action = action
+        elif item_type == "file_change":
+            changes = item.get("changes")
+            if isinstance(changes, list):
+                for change in changes:
+                    if not isinstance(change, dict):
+                        continue
+                    raw_path = str(change.get("path") or "")
+                    if raw_path:
+                        touched_paths.add(Path(raw_path).name[:80])
+            if touched_paths:
+                verb = "alterou" if completed else "editando"
+                last_action = f"{verb} `{sorted(touched_paths)[-1]}`"
+        elif item_type == "todo_list":
+            todos = item.get("items")
+            if isinstance(todos, list):
+                todo_total = len(todos)
+                todo_done = sum(
+                    1
+                    for todo in todos
+                    if isinstance(todo, dict) and todo.get("completed") is True
+                )
+        elif item_type == "agent_message":
+            candidate = _status_agent_message(str(item.get("text") or ""))
+            if candidate:
+                last_agent_message = candidate
+                last_action = candidate
+                finding_match = re.search(
+                    r"(?i)\b(\d{1,3})\s+(?:finding|findings|achado|achados)\b",
+                    candidate,
+                )
+                if finding_match:
+                    reported_findings = int(finding_match.group(1))
+
+    current = next(reversed(active_commands.values()), None)
+    if current is None:
+        current = last_action or last_agent_message
+
+    evolution_parts: list[str] = []
+    if todo_total is not None and todo_done is not None:
+        evolution_parts.append(f"tarefas {todo_done}/{todo_total}")
+    if completed_commands:
+        evolution_parts.append(
+            f"{completed_commands} comando{'s' if completed_commands != 1 else ''} concluído"
+            f"{'s' if completed_commands != 1 else ''}"
+        )
+    if touched_paths:
+        evolution_parts.append(
+            f"{len(touched_paths)} arquivo{'s' if len(touched_paths) != 1 else ''} alterado"
+            f"{'s' if len(touched_paths) != 1 else ''}"
+        )
+    if reported_findings is not None:
+        evolution_parts.append(f"{reported_findings} achados reportados")
+
+    return _LLMProgressSnapshot(
+        timestamp=datetime.fromtimestamp(mtime).strftime("%H:%M:%S"),
+        current=current,
+        evolution=" · ".join(evolution_parts) or None,
+        signal=last_signal or "stream/log recebendo eventos",
+    )
+
+
+def _last_log_activity(log_path: str | Path) -> str | None:
+    """Compatibility one-line view backed by the richer progress snapshot."""
+    snapshot = _llm_progress_snapshot(log_path)
+    if snapshot is None:
+        return None
+    activity = snapshot.current or "(sem atividade recente legível)"
+    return f"[{snapshot.timestamp}] {activity}"
 
 
 # ---------------------------------------------------------------------------
@@ -6369,6 +6559,25 @@ class StepRunner:
             activity_label = last.strftime(fmt)
         return runtime_label, activity_label
 
+    def _resolve_llm_log_path(self, relative: str | None) -> Path | None:
+        """Resolve a persisted display path against cycle/worktree roots."""
+        if not relative:
+            return None
+        value = Path(relative)
+        candidates = (
+            [value]
+            if value.is_absolute()
+            else [
+                self.state_mgr.path.parent.parent / value,
+                Path(self.project_root) / value,
+                Path(self._work_dir) / value,
+            ]
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
     def _recent_delegation(self, state) -> tuple[float, bool] | None:
         """(idade_em_segundos, ativa?) do LLM log mais fresco, ou None.
 
@@ -6381,17 +6590,8 @@ class StepRunner:
         from datetime import datetime as _dt
 
         def _mtime(rel: str | None) -> float | None:
-            if not rel:
-                return None
-            for base in (
-                self.state_mgr.path.parent.parent,
-                Path(self.project_root),
-                Path(self._work_dir),
-            ):
-                candidate = base / rel
-                if candidate.is_file():
-                    return candidate.stat().st_mtime
-            return None
+            path = self._resolve_llm_log_path(rel)
+            return path.stat().st_mtime if path is not None else None
 
         active_mtime = _mtime(getattr(state, "active_llm_log", None))
         last_mtime = _mtime(getattr(state, "last_llm_log", None))
@@ -6436,6 +6636,13 @@ class StepRunner:
         print(ui.info(f"Status: {state.node_status}"))
         recent = self._recent_delegation(state)
         delegation_running = recent is not None and recent[0] < 120
+        progress_snapshot = None
+        if recent is not None and recent[1]:
+            active_path = self._resolve_llm_log_path(
+                getattr(state, "active_llm_log", None)
+            )
+            if active_path is not None:
+                progress_snapshot = _llm_progress_snapshot(active_path)
 
         def _print_delegation_banner() -> None:
             secs = int(recent[0])
@@ -6445,6 +6652,13 @@ class StepRunner:
                     f"⟳ TRABALHO EM ANDAMENTO — delegação LLM ativa (última escrita {when}). "
                     "Aguarde; não é preciso intervir."
                 ))
+                if progress_snapshot is not None:
+                    if progress_snapshot.current:
+                        print(ui.dim(f"  Agora: {progress_snapshot.current}"))
+                    if progress_snapshot.evolution:
+                        print(ui.dim(f"  Evolução: {progress_snapshot.evolution}"))
+                    signal = progress_snapshot.signal or "stream/log ativo"
+                    print(ui.dim(f"  Sinais: {signal} · última escrita {when}"))
             else:
                 print(ui.success(
                     f"⟳ EM CONDUÇÃO — delegação concluída {when}; o ciclo avança para o "
@@ -6477,9 +6691,13 @@ class StepRunner:
             print(ui.dim("  → ft continue   para entrar no gate"))
         if state.active_llm_log:
             print(ui.dim(f"LLM log ativo: {state.active_llm_log}"))
-            last_activity = _last_log_activity(state.active_llm_log)
-            if last_activity:
-                print(ui.dim(f"  Última atividade: {last_activity}"))
+            if progress_snapshot is None:
+                active_path = self._resolve_llm_log_path(state.active_llm_log)
+                last_activity = _last_log_activity(
+                    active_path or state.active_llm_log
+                )
+                if last_activity:
+                    print(ui.dim(f"  Última atividade: {last_activity}"))
         elif state.last_llm_log:
             print(ui.dim(f"Último LLM log: {state.last_llm_log}"))
         if state.blocked_reason:

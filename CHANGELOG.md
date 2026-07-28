@@ -11,6 +11,9 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 - Timeouts declarados por nodes e aliases legados de executor passaram a ser
   janelas renováveis de inatividade, não deadlines wall-clock. A política vale
   para nodes, helpers e `ft explore`, em todos os templates e providers.
+- Durante uma delegação ativa, `ft status` agora resume a ação corrente, a
+  evolução observável (tarefas, comandos, arquivos e achados) e o sinal que
+  comprova produtividade, sem reproduzir comandos ou valores sensíveis.
 - Eventos reais de stream, criação/remoção/alteração/crescimento em qualquer
   arquivo versionado ou novo não ignorado da worktree isolada e progressão da
   árvore de processos por CPU/I/O renovam a execução indefinidamente.

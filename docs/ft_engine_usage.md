@@ -268,6 +268,20 @@ não fornece aparecem como `—`/`null`, nunca como zero inventado. No close, o
 resumo derivado é arquivado em `.ft/cycles/<cycle>/run-report.json`; logs crus
 permanecem fora do Git.
 
+Durante uma delegação ativa, `ft status` mostra um snapshot vivo logo abaixo
+de `TRABALHO EM ANDAMENTO`:
+
+```text
+Agora: executando testes focais em `test_feature.py`
+Evolução: tarefas 2/3 · 16 comandos concluídos · 2 arquivos alterados
+Sinais: worktree alterada · última escrita há 3s
+```
+
+O snapshot lê somente uma cauda limitada do log do provider, traduz comandos
+em categorias seguras e omite argumentos, credenciais, tokens, senhas e
+identificadores de dispositivo. Ele é apenas informativo: consultar o status
+não pausa nem altera a delegação.
+
 ## Seleção do executor LLM
 
 Escolha o executor no início ou ao continuar um ciclo:

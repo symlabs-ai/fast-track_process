@@ -188,6 +188,11 @@ ft graph --cycle <id>
 ft log --cycle <id>
 ```
 
+Enquanto uma delegação LLM estiver ativa, `ft status` atualiza o bloco
+`TRABALHO EM ANDAMENTO` com a ação corrente, a evolução observável e os sinais
+de produtividade. O resumo é derivado do log e da supervisão da worktree,
+omite argumentos sensíveis e não interfere na execução.
+
 Regra única de seleção:
 
 - nenhum ciclo aplicável: erro claro;

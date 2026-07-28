@@ -291,6 +291,8 @@ seguros do workspace V3. Migração de layout e reparo não são sinônimos.
 | `FT_CODEX_EXECUTOR_TIMEOUT` | Timeout específico de delegações Codex |
 | `FT_LLM_IDLE_TIMEOUT` | Inatividade máxima sem evento real do stream |
 | `FT_CODEX_IDLE_TIMEOUT` | Override de inatividade do Codex; default 480 segundos |
+| `FT_LLM_IDLE_GRACE` | Graça única quando o processo segue vivo sem evento forte |
+| `FT_CODEX_IDLE_GRACE` | Override da graça do Codex; default 120 segundos |
 | `FT_OPENCODE_SANDBOX` | Sandbox de filesystem do OpenCode |
 | `SYM_GATEWAY_PROJECT_KEY` / `SYM_GATEWAY_ADMIN_KEY` | Scripts SymGateway opt-in |
 

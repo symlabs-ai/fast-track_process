@@ -13,6 +13,7 @@ from ft.engine.delegate import (
     _build_executor_command,
     _clean_opencode_capture_text,
     _executor_env,
+    _executor_idle_grace_seconds,
     _executor_idle_timeout_seconds,
     _env_nonnegative_int,
     _executor_timeout_seconds,
@@ -24,6 +25,8 @@ from ft.engine.delegate import (
     _opencode_capture_command,
     _prepare_opencode_sandbox_mounts,
     _run_opencode_script,
+    _ProcessLiveness,
+    _process_liveness_snapshot,
     _stop_process_tree,
     _stream_process_output,
     _supervised_command,
@@ -73,6 +76,18 @@ class TestBuildExecutorCommand:
 
         monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "900")
         assert _executor_idle_timeout_seconds("codex") == 900
+
+    def test_codex_idle_grace_is_bounded_and_overridable(self, monkeypatch):
+        monkeypatch.delenv("FT_CODEX_IDLE_GRACE", raising=False)
+        monkeypatch.delenv("FT_LLM_IDLE_GRACE", raising=False)
+
+        assert _executor_idle_grace_seconds("codex") == 120
+        assert _executor_idle_grace_seconds("opencode") == 0
+
+        monkeypatch.setenv("FT_LLM_IDLE_GRACE", "45")
+        assert _executor_idle_grace_seconds("codex") == 45
+        monkeypatch.setenv("FT_CODEX_IDLE_GRACE", "0")
+        assert _executor_idle_grace_seconds("codex") == 0
 
     @pytest.mark.parametrize("value", [0, -1, True, 1.5, "10"])
     def test_delegate_rejects_invalid_llm_timeout_before_spawn(self, value):
@@ -1250,6 +1265,57 @@ class TestBuildExecutorCommand:
         finally:
             if proc.poll() is None:
                 proc.kill()
+
+    def test_wait_for_process_grants_only_one_weak_liveness_grace(self):
+        proc = subprocess.Popen(["sleep", "10"])
+        diagnostics = []
+        started = time.monotonic()
+        live = _ProcessLiveness(
+            alive=True,
+            process_count=2,
+            cpu_ticks=10,
+            socket_count=1,
+        )
+        try:
+            with (
+                patch(
+                    "ft.engine.delegate._process_liveness_snapshot",
+                    return_value=live,
+                ),
+                pytest.raises(ExecutorIdleTimeout),
+            ):
+                _wait_for_process(
+                    proc,
+                    timeout=10,
+                    activity={"last": time.time() - 2},
+                    idle_timeout=1,
+                    idle_grace=1,
+                    on_idle_grace=diagnostics.append,
+                )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+        assert 0.8 <= time.monotonic() - started < 3
+        assert len(diagnostics) == 1
+        assert diagnostics[0]["processes"] == 2
+        assert diagnostics[0]["sockets"] == 1
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer procfs Linux")
+    def test_process_liveness_snapshot_avoids_command_lines_and_counts_tree(self):
+        proc = subprocess.Popen(
+            ["bash", "-c", "sleep 10 & wait"],
+            start_new_session=True,
+        )
+        try:
+            time.sleep(0.1)
+            snapshot = _process_liveness_snapshot(proc)
+        finally:
+            _stop_process_tree(proc)
+
+        assert snapshot.alive is True
+        assert snapshot.process_count >= 2
+        assert snapshot.fd_count > 0
 
     def test_stop_process_tree_kills_child_process_group(self):
         proc = subprocess.Popen(

@@ -311,6 +311,8 @@ combinação com probe fresco e atualiza atomicamente o manifesto. O effort
 | `FT_CODEX_EXECUTOR_TIMEOUT` | Override do timeout de turnos Codex |
 | `FT_LLM_IDLE_TIMEOUT` | Inatividade máxima sem evento real do stream; não conta o heartbeat visual |
 | `FT_CODEX_IDLE_TIMEOUT` | Override da inatividade do Codex; default 480 segundos |
+| `FT_LLM_IDLE_GRACE` | Graça única após inatividade quando há sinais fracos de liveness |
+| `FT_CODEX_IDLE_GRACE` | Override da graça do Codex; default 120 segundos, `0` desabilita |
 | `FT_CODEX_REASONING_EFFORT` | Override explícito do reasoning do Codex |
 | `FT_OPENCODE_CONTEXT_LIMIT` / `FT_OPENCODE_CONTEXT_WINDOW` | Janela anunciada ao OpenCode |
 | `FT_OPENCODE_OUTPUT_LIMIT` / `FT_OPENCODE_MAX_OUTPUT` | Limite de saída do OpenCode |

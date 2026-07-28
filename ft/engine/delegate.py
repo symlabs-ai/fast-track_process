@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,6 +45,7 @@ DEFAULT_OPENCODE_OUTPUT_LIMIT = 32_768
 DEFAULT_EXECUTOR_TIMEOUT = 1_800
 DEFAULT_CODEX_ULTRA_TIMEOUT = 3_600
 DEFAULT_STREAM_IDLE_TIMEOUT = 480
+DEFAULT_CODEX_IDLE_GRACE = 120
 
 
 @dataclass
@@ -55,6 +57,17 @@ class _SandboxMount:
 
 class ExecutorIdleTimeout(subprocess.TimeoutExpired):
     """Executor ficou vivo, mas sem emitir nova saída por tempo demais."""
+
+
+@dataclass(frozen=True)
+class _ProcessLiveness:
+    alive: bool
+    process_count: int = 0
+    cpu_ticks: int = 0
+    read_bytes: int = 0
+    write_bytes: int = 0
+    fd_count: int = 0
+    socket_count: int = 0
 
 
 def _env_positive_int(*names: str) -> int | None:
@@ -132,6 +145,18 @@ def _executor_idle_timeout_seconds(llm_engine: str) -> int | None:
     if engine in {"codex", "opencode"}:
         return DEFAULT_STREAM_IDLE_TIMEOUT
     return None
+
+
+def _executor_idle_grace_seconds(llm_engine: str) -> int:
+    """Resolve one bounded grace period backed by weak process liveness."""
+    engine = llm_engine.strip().lower()
+    configured = _env_nonnegative_int(
+        f"FT_{engine.upper()}_IDLE_GRACE",
+        "FT_LLM_IDLE_GRACE",
+    )
+    if configured is not None:
+        return configured
+    return DEFAULT_CODEX_IDLE_GRACE if engine == "codex" else 0
 
 
 def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -> list[str]:
@@ -336,6 +361,112 @@ def _supervised_command(cmd: list[str]) -> list[str]:
     return [sys.executable, str(supervisor), "--", *cmd]
 
 
+def _linux_process_tree(root_pid: int) -> list[int]:
+    """Return root plus descendants using procfs without reading command lines."""
+    pending = [root_pid]
+    seen: set[int] = set()
+    while pending:
+        pid = pending.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            children = Path(f"/proc/{pid}/task/{pid}/children").read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            continue
+        pending.extend(
+            int(value)
+            for value in children.split()
+            if value.isdigit()
+        )
+    return sorted(seen)
+
+
+def _process_liveness_snapshot(proc: subprocess.Popen) -> _ProcessLiveness:
+    """Collect non-sensitive weak liveness counters for one supervised tree."""
+    if proc.poll() is not None:
+        return _ProcessLiveness(alive=False)
+    if not sys.platform.startswith("linux"):
+        return _ProcessLiveness(alive=True, process_count=1)
+
+    pids = _linux_process_tree(proc.pid)
+    cpu_ticks = 0
+    read_bytes = 0
+    write_bytes = 0
+    fd_count = 0
+    socket_count = 0
+    observed_processes = 0
+    for pid in pids:
+        proc_root = Path(f"/proc/{pid}")
+        try:
+            stat_tail = (proc_root / "stat").read_text(
+                encoding="utf-8"
+            ).rpartition(") ")[2].split()
+            cpu_ticks += int(stat_tail[11]) + int(stat_tail[12])
+            observed_processes += 1
+        except (OSError, ValueError, IndexError):
+            continue
+        try:
+            for line in (proc_root / "io").read_text(encoding="utf-8").splitlines():
+                key, _, raw_value = line.partition(":")
+                if key == "read_bytes":
+                    read_bytes += int(raw_value.strip())
+                elif key == "write_bytes":
+                    write_bytes += int(raw_value.strip())
+        except (OSError, ValueError):
+            pass
+        try:
+            for descriptor in (proc_root / "fd").iterdir():
+                fd_count += 1
+                try:
+                    if os.readlink(descriptor).startswith("socket:["):
+                        socket_count += 1
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    return _ProcessLiveness(
+        alive=True,
+        process_count=observed_processes,
+        cpu_ticks=cpu_ticks,
+        read_bytes=read_bytes,
+        write_bytes=write_bytes,
+        fd_count=fd_count,
+        socket_count=socket_count,
+    )
+
+
+def _liveness_diagnostics(
+    baseline: _ProcessLiveness,
+    current: _ProcessLiveness,
+    grace_seconds: int | float,
+) -> dict[str, int]:
+    return {
+        "processes": current.process_count,
+        "sockets": current.socket_count,
+        "fds": current.fd_count,
+        "cpu_delta_ticks": max(0, current.cpu_ticks - baseline.cpu_ticks),
+        "read_delta_bytes": max(0, current.read_bytes - baseline.read_bytes),
+        "write_delta_bytes": max(0, current.write_bytes - baseline.write_bytes),
+        "grace_seconds": max(0, int(grace_seconds)),
+    }
+
+
+def _has_weak_liveness(
+    baseline: _ProcessLiveness,
+    current: _ProcessLiveness,
+) -> bool:
+    return current.alive and (
+        current.process_count > 1
+        or current.socket_count > 0
+        or current.cpu_ticks > baseline.cpu_ticks
+        or current.read_bytes > baseline.read_bytes
+        or current.write_bytes > baseline.write_bytes
+    )
+
+
 def _wait_for_process(
     proc: subprocess.Popen,
     timeout: float,
@@ -343,6 +474,8 @@ def _wait_for_process(
     early_success_grace: int = 20,
     activity: dict[str, float] | None = None,
     idle_timeout: int | None = None,
+    idle_grace: int | float = 0,
+    on_idle_grace: Callable[[dict[str, int]], None] | None = None,
 ) -> tuple[int, bool]:
     """Espera o processo, podendo encerrar cedo quando outputs já existem."""
     if not hasattr(proc, "poll"):
@@ -351,6 +484,11 @@ def _wait_for_process(
     started = time.monotonic()
     started_wall = time.time()
     satisfied_since: float | None = None
+    observed_strong_activity = (
+        activity.get("last", started_wall) if activity else started_wall
+    )
+    liveness_baseline = _process_liveness_snapshot(proc)
+    idle_grace_deadline: float | None = None
     while True:
         returncode = proc.poll()
         if returncode is not None:
@@ -361,8 +499,26 @@ def _wait_for_process(
             raise subprocess.TimeoutExpired(proc.args, timeout)
         if idle_timeout and activity:
             last_activity = activity.get("last", started_wall)
+            if last_activity != observed_strong_activity:
+                observed_strong_activity = last_activity
+                liveness_baseline = _process_liveness_snapshot(proc)
+                idle_grace_deadline = None
             if time.time() - last_activity > idle_timeout:
-                raise ExecutorIdleTimeout(proc.args, idle_timeout)
+                if idle_grace_deadline is None and idle_grace > 0:
+                    current_liveness = _process_liveness_snapshot(proc)
+                    if _has_weak_liveness(liveness_baseline, current_liveness):
+                        diagnostics = _liveness_diagnostics(
+                            liveness_baseline,
+                            current_liveness,
+                            idle_grace,
+                        )
+                        for key, value in diagnostics.items():
+                            activity[f"liveness_{key}"] = float(value)
+                        idle_grace_deadline = now + idle_grace
+                        if on_idle_grace is not None:
+                            on_idle_grace(diagnostics)
+                if idle_grace_deadline is None or now >= idle_grace_deadline:
+                    raise ExecutorIdleTimeout(proc.args, idle_timeout)
         if early_success_paths and _paths_have_content(early_success_paths):
             if satisfied_since is None:
                 satisfied_since = now
@@ -1990,6 +2146,7 @@ REGRAS:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 
     idle_timeout = _executor_idle_timeout_seconds(llm_engine)
+    idle_grace = _executor_idle_grace_seconds(llm_engine)
     idle_retries = 0
     executor_timeout = _executor_timeout_seconds(llm_engine, llm_effort)
     if llm_engine.lower().strip() == "opencode":
@@ -2020,6 +2177,22 @@ REGRAS:
         if log_path:
             with Path(log_path).open("a", encoding="utf-8") as f:
                 f.write(message)
+
+    def _record_idle_grace(diagnostics: dict[str, int]) -> None:
+        summary = (
+            "\n[LIVENESS_GRACE] Stream sem evento forte; "
+            f"processos={diagnostics['processes']} "
+            f"sockets={diagnostics['sockets']} "
+            f"cpu_delta_ticks={diagnostics['cpu_delta_ticks']} "
+            f"io_delta_bytes="
+            f"{diagnostics['read_delta_bytes'] + diagnostics['write_delta_bytes']} "
+            f"grace={diagnostics['grace_seconds']}s.\n"
+        )
+        print(
+            "  ! Stream sem evento forte; processo vivo — "
+            f"graça única de {diagnostics['grace_seconds']}s"
+        )
+        _append_log(summary)
 
     def _remaining_budget() -> float | None:
         if deadline is None:
@@ -2098,6 +2271,8 @@ REGRAS:
                 early_success_grace=early_success_grace,
                 activity=activity,
                 idle_timeout=idle_timeout,
+                idle_grace=idle_grace,
+                on_idle_grace=_record_idle_grace,
             )
         except ExecutorIdleTimeout:
             _stop_process(proc)

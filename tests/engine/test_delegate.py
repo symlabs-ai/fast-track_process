@@ -13,6 +13,7 @@ from ft.engine.delegate import (
     _build_executor_command,
     _clean_opencode_capture_text,
     _executor_env,
+    _executor_idle_timeout_seconds,
     _env_nonnegative_int,
     _executor_timeout_seconds,
     _append_opencode_runtime_diagnostics,
@@ -58,6 +59,20 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("FT_CODEX_EXECUTOR_TIMEOUT", "5400")
 
         assert _executor_timeout_seconds("codex") == 5400
+
+    def test_codex_idle_timeout_tracks_real_stream_activity(self, monkeypatch):
+        monkeypatch.delenv("FT_CODEX_IDLE_TIMEOUT", raising=False)
+        monkeypatch.delenv("FT_LLM_IDLE_TIMEOUT", raising=False)
+
+        assert _executor_idle_timeout_seconds("codex") == 480
+        assert _executor_idle_timeout_seconds("claude") is None
+
+        monkeypatch.setenv("FT_LLM_IDLE_TIMEOUT", "720")
+        assert _executor_idle_timeout_seconds("codex") == 720
+        assert _executor_idle_timeout_seconds("claude") == 720
+
+        monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "900")
+        assert _executor_idle_timeout_seconds("codex") == 900
 
     @pytest.mark.parametrize("value", [0, -1, True, 1.5, "10"])
     def test_delegate_rejects_invalid_llm_timeout_before_spawn(self, value):
@@ -192,6 +207,38 @@ class TestBuildExecutorCommand:
         assert result.session_id == "thread-123"
         assert result.timings["provider_wall_seconds"] >= 0
         assert result.timings["startup_to_first_event_seconds"] >= 0
+
+    def test_codex_idle_monitor_renews_on_real_json_events(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "codex"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import time\n"
+            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-active\"}', flush=True)\n"
+            "time.sleep(0.6)\n"
+            "print('{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}', flush=True)\n"
+            "time.sleep(0.6)\n"
+            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
+            "\"text\":\"DONE\"}}', flush=True)\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        monkeypatch.setenv(
+            "PATH",
+            f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        )
+        monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "1")
+
+        result = delegate_to_llm(
+            task="faça",
+            project_root=str(tmp_path),
+            llm_engine="codex",
+            llm_timeout_seconds=3,
+        )
+
+        assert result.success
+        assert result.session_id == "thread-active"
 
     def test_delegate_keeps_explicit_claude_session_when_stream_omits_id(
         self,

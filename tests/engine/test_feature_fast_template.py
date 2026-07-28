@@ -110,7 +110,7 @@ def test_feature_fast_session_boundaries_match_process_roles() -> None:
     review = graph.get_node("feature.review")
     assert review.sprint == "feature-02-build"
     assert review.type == "review"
-    assert review.llm_timeout_seconds == 1200
+    assert review.llm_timeout_seconds == 1800
     assert graph.get_node("feature.reconcile").sprint == "feature-03-acceptance"
 
 

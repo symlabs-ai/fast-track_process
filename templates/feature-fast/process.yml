@@ -432,7 +432,7 @@ nodes:
     sprint: feature-02-build
     executor: claude
     max_turns: 50
-    llm_timeout_seconds: 1200
+    llm_timeout_seconds: 1800
     outputs:
       - docs/feature-review.md
       - docs/feature-review.yml

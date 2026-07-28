@@ -43,6 +43,7 @@ DEFAULT_OPENCODE_CONTEXT_LIMIT = 200_000
 DEFAULT_OPENCODE_OUTPUT_LIMIT = 32_768
 DEFAULT_EXECUTOR_TIMEOUT = 1_800
 DEFAULT_CODEX_ULTRA_TIMEOUT = 3_600
+DEFAULT_STREAM_IDLE_TIMEOUT = 480
 
 
 @dataclass
@@ -117,6 +118,20 @@ def _executor_timeout_seconds(llm_engine: str, llm_effort: str | None = None) ->
     if engine == "codex" and effective_effort == "ultra":
         return DEFAULT_CODEX_ULTRA_TIMEOUT
     return DEFAULT_EXECUTOR_TIMEOUT
+
+
+def _executor_idle_timeout_seconds(llm_engine: str) -> int | None:
+    """Resolve inactivity timeout without conflating it with the hard deadline."""
+    engine = llm_engine.strip().lower()
+    configured = _env_positive_int(
+        f"FT_{engine.upper()}_IDLE_TIMEOUT",
+        "FT_LLM_IDLE_TIMEOUT",
+    )
+    if configured is not None:
+        return configured
+    if engine in {"codex", "opencode"}:
+        return DEFAULT_STREAM_IDLE_TIMEOUT
+    return None
 
 
 def _opencode_read_patterns(paths: list[str], project_root: str | None = None) -> list[str]:
@@ -1974,15 +1989,16 @@ REGRAS:
     elif log_path:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 
-    idle_timeout = None
+    idle_timeout = _executor_idle_timeout_seconds(llm_engine)
     idle_retries = 0
     executor_timeout = _executor_timeout_seconds(llm_engine, llm_effort)
     if llm_engine.lower().strip() == "opencode":
-        idle_timeout = _env_positive_int("FT_OPENCODE_IDLE_TIMEOUT") or 480
         configured_retries = _env_nonnegative_int("FT_OPENCODE_IDLE_RETRIES")
         idle_retries = configured_retries if configured_retries is not None else 2
         if opencode_capture_mode:
-            idle_timeout = _env_positive_int("FT_OPENCODE_CAPTURE_IDLE_TIMEOUT") or min(idle_timeout, 120)
+            idle_timeout = _env_positive_int(
+                "FT_OPENCODE_CAPTURE_IDLE_TIMEOUT"
+            ) or min(idle_timeout or DEFAULT_STREAM_IDLE_TIMEOUT, 120)
             capture_retries = _env_nonnegative_int("FT_OPENCODE_CAPTURE_IDLE_RETRIES")
             idle_retries = capture_retries if capture_retries is not None else 0
 

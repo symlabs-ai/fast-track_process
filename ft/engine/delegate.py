@@ -30,6 +30,17 @@ _RATE_LIMIT_PATTERNS = re.compile(
     r"RESOURCE_EXHAUSTED|rateLimitExceeded",
     re.IGNORECASE,
 )
+# O claude CLI (stream-json) emite eventos informativos "rate_limit_event" com
+# "status":"allowed" mesmo em chamadas bem-sucedidas; sem remover essas linhas
+# antes da busca, o padrão acima descarta respostas boas em loop de backoff.
+_RATE_LIMIT_INFO_EVENT = re.compile(
+    r"^.*\"type\"\s*:\s*\"rate_limit_event\".*\"status\"\s*:\s*\"allowed\".*$",
+    re.MULTILINE,
+)
+
+
+def _rate_limit_signal(text: str) -> bool:
+    return bool(_RATE_LIMIT_PATTERNS.search(_RATE_LIMIT_INFO_EVENT.sub("", text)))
 # Cronograma default de backoff: ~1h40 de espera acumulada (fora o tempo de
 # execução de cada tentativa) — dimensionado para atravessar indisponibilidades
 # longas da API, não só picos momentâneos.
@@ -2697,7 +2708,7 @@ REGRAS:
         output = _extract_output(raw_output, llm_engine)
 
         # Detectar rate limit e fazer retry com backoff exponencial
-        if _RATE_LIMIT_PATTERNS.search(output):
+        if _rate_limit_signal(output):
             _backoff_schedule = _rate_limit_backoff_schedule()
             for attempt, wait in enumerate(_backoff_schedule, start=1):
                 print(f"\n  ⚠️  Rate limit detectado ({llm_engine}). "
@@ -2717,7 +2728,7 @@ REGRAS:
                     returncode = rc2
                     max_wall_exhausted = failure2 == "max_wall"
                     break
-                if not _RATE_LIMIT_PATTERNS.search(out2):
+                if not _rate_limit_signal(out2):
                     output = out2
                     returncode = rc2
                     break
@@ -2840,7 +2851,7 @@ REGRAS:
         rate_limited = (
             not max_wall_exhausted
             and (not success)
-            and bool(_RATE_LIMIT_PATTERNS.search(output))
+            and _rate_limit_signal(output)
         )
         _cleanup_delegate_runtime()
     except BaseException:

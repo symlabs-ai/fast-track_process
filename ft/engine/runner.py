@@ -4651,8 +4651,29 @@ class StepRunner:
         if self._bypass_human_gates:
             if node.bypass_prompt:
                 self._run_bypass_prompt(node)
-            print(ui.info(f"Human gate BYPASSED: {node.title}"))
             next_id = self.graph.resolve_next(node.id)
+            reject_when = getattr(node, "bypass_reject_when", None)
+            if (
+                isinstance(reject_when, dict)
+                and reject_when.get("path")
+                and reject_when.get("pattern")
+                and node.reject_next
+            ):
+                artifact = Path(self.project_root) / str(reject_when["path"])
+                try:
+                    content = artifact.read_text(encoding="utf-8")
+                except OSError:
+                    content = ""
+                if re.search(str(reject_when["pattern"]), content):
+                    print(ui.warn(
+                        f"Human gate BYPASSED com rejeição: {node.title} — "
+                        f"'{reject_when['pattern']}' casou em {reject_when['path']}; "
+                        f"seguindo por reject_next ({node.reject_next})"
+                    ))
+                    self._advance_state(node.id, node.reject_next)
+                    self.state_mgr.save()
+                    return
+            print(ui.info(f"Human gate BYPASSED: {node.title}"))
             self._advance_state(node.id, next_id)
             self.state_mgr.save()
             return

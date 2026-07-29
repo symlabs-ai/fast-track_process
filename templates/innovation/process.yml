@@ -15,7 +15,7 @@
 #   cobertos por AC-* no PRD (validado deterministicamente).
 
 id: innovation
-version: "0.2.0"
+version: "0.3.0"
 title: "Innovation — Discovery, Validação e Business Case Automatizados"
 
 execution_policy:
@@ -504,6 +504,9 @@ nodes:
     outputs:
       - docs/business-case.md
     reject_next: innovation.post_mortem
+    bypass_reject_when:
+      path: docs/business-case.md
+      pattern: "recommendation:\\s*no_go"
     next: innovation.prd
 
   - id: innovation.prd

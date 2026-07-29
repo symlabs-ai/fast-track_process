@@ -10,23 +10,23 @@ flowchart TD
     START(["ft run . --template innovation<br/>--input demanda.md"]) --> INTAKE
 
     subgraph SPRINT1["Sprint 01 — Research"]
-        INTAKE["🧠 intake<br/>classifica demanda,<br/>formula H-NN falseáveis"]
+        INTAKE["🧠 intake<br/>Recebe a demanda bruta, separa produto<br/>de processo, formula o problema sem viés<br/>de solução e deriva hipóteses<br/>falseáveis numeradas (H-NN)"]
         INTAKE --> |"gate: kind válido,<br/>H-NN no padrão"| RM
 
-        RM["🔎 research_market<br/>problema existe? tamanho?<br/>sinais de demanda"]
-        RC["🔎 research_competitors<br/>quem já resolve, preços,<br/>alternativa 'não fazer nada'"]
-        RF["🔎⚡ research_feasibility<br/>viabilidade técnica<br/>+ SONDAS fire-proof<br/>(HTTP GET real, máx. 3/alvo)"]
+        RM["🔎 research_market<br/>Pesquisa na web se o problema existe,<br/>seu tamanho e sinais de demanda.<br/>Toda afirmação vira claim com<br/>fonte, data e confiança"]
+        RC["🔎 research_competitors<br/>Pesquisa quem já resolve o problema,<br/>como e a que preço — incluindo a<br/>alternativa 'não fazer nada' e<br/>soluções improvisadas"]
+        RF["🔎⚡ research_feasibility<br/>Pesquisa se o caminho técnico é viável:<br/>tecnologias, APIs, limites e custos.<br/>Claims decisivos viram SONDA real<br/>(HTTP GET, máx. 3/alvo, resposta salva)"]
         RM --> RC --> RF
 
-        RF --> RG{"research_gate<br/>todo claim tem<br/>URL + data + confiança?<br/>supports → H-* existente?"}
+        RF --> RG{"research_gate<br/>Confere deterministicamente o schema<br/>das três lentes: todo claim tem fonte<br/>URL, data e confiança, e referencia<br/>hipóteses existentes. Não julga mérito"}
         RG --> |PASS| VAL
 
-        VAL["⚖️ validation<br/>cruza H-* × EV-*<br/>probe > desk (mesma rota)"]
-        VAL --> VG{"validation_gate<br/>overall_verdict"}
+        VAL["⚖️ validation<br/>Julga cada hipótese exclusivamente<br/>contra os claims coletados e emite<br/>verdict por H-* e geral. Observação<br/>direta (probe) prevalece sobre<br/>desk research da mesma rota"]
+        VAL --> VG{"validation_gate<br/>Registra o verdict de forma<br/>determinística para o roteamento"}
 
-        VG --> ROUTE{{"validation_route"}}
+        VG --> ROUTE{{"validation_route<br/>supported → business case<br/>refuted → post-mortem<br/>inconclusive → stakeholder"}}
         ROUTE --> |inconclusive| QUESTIONS
-        QUESTIONS["👤 questions (human gate)<br/>dados que só o stakeholder tem<br/>─────<br/>bypass: LLM responde com<br/>[LLM Responde / Modelo]<br/>+ premissas conservadoras"]
+        QUESTIONS["👤 questions (human gate)<br/>Perguntas que a web não responde:<br/>dado interno, acesso, disposição a<br/>pagar. Respostas via ft approve<br/>─────<br/>bypass: LLM responde com atribuição<br/>[LLM Responde / Modelo] e<br/>premissas conservadoras declaradas"]
         QUESTIONS --> |"respostas voltam<br/>(preenche só lacunas)"| RM
     end
 
@@ -34,27 +34,27 @@ flowchart TD
     ROUTE --> |supported| BC
 
     subgraph SPRINT2["Sprint 02 — Business Case"]
-        BC["📊 business_case<br/>custo, retorno, riscos,<br/>SC-NN com Métrica/Alvo/Prazo"]
-        BC --> BCG{"gate: recommendation,<br/>effort, SC mensuráveis"}
+        BC["📊 business_case<br/>Consolida evidências em decisão de<br/>investimento: custo, retorno, riscos,<br/>alternativas e critérios de sucesso<br/>SC-NN mensuráveis (Métrica/Alvo/Prazo)<br/>que o delivery herdará"]
+        BC --> BCG{"gate<br/>recommendation go|no_go presente,<br/>esforço estimado, todo SC-*<br/>com Métrica, Alvo e Prazo"}
         BCG --> |PASS| GONOGO
-        GONOGO["👤 go_nogo (human gate)<br/>decisão de investimento<br/>─────<br/>bypass: segue direto"]
+        GONOGO["👤 go_nogo (human gate)<br/>Único gate humano obrigatório:<br/>decisão de investimento não se<br/>automatiza com honestidade. A<br/>recomendação do LLM não substitui<br/>a decisão do stakeholder<br/>─────<br/>bypass: segue direto para o PRD"]
     end
 
     GONOGO --> |reject| PM
     GONOGO --> |approve| PRD
 
     subgraph SPRINT3["Sprint 03 — Handoff"]
-        PRD["📝 prd<br/>US-NN + AC-NN,<br/>rastreabilidade SC→AC,<br/>handoff.md (next_process)"]
-        PRD --> PRDG{"gate: todo SC-*<br/>coberto por AC-*,<br/>next_process válido"}
+        PRD["📝 prd<br/>Converte o business case aprovado em<br/>PRD com user stories US-NN e critérios<br/>de aceite AC-NN cobrindo todos os SC-*,<br/>mais handoff.md apontando o processo<br/>de delivery adequado"]
+        PRD --> PRDG{"gate<br/>Todo SC-* coberto por AC-* na tabela<br/>de rastreabilidade; next_process é<br/>mvp-builder-fast ou feature-fast"}
 
-        PM["🪦 post_mortem<br/>por que morreu (cita EV-*),<br/>o que reativaria,<br/>aproveitável"]
+        PM["🪦 post_mortem<br/>Documenta por que a ideia não seguiu<br/>— citando as evidências EV-* — o que<br/>a reativaria (condições observáveis)<br/>e o que é aproveitável. O dossiê<br/>permanece como ativo reutilizável"]
     end
 
     PRDG --> |PASS| END_GO
     PM --> |"gate: seções + EV-* reais"| END_NOGO
 
-    END_GO(["✅ GO — handoff.md<br/>→ ft run --template<br/>mvp-builder-fast | feature-fast<br/>SC-* viram critérios do piloto"])
-    END_NOGO(["🗄️ NO-GO — dossiê arquivado<br/>post-mortem com condições<br/>de reativação observáveis"])
+    END_GO(["✅ GO — handoff.md indica o delivery<br/>(mvp-builder-fast | feature-fast),<br/>o que copiar para o seed e os SC-*<br/>como critérios do futuro piloto"])
+    END_NOGO(["🗄️ NO-GO — ideia investigada e morta<br/>barata, com dossiê auditável e<br/>condições de reativação observáveis.<br/>Fim legítimo do processo"])
 
     style INTAKE fill:#e8f0fe,stroke:#4285f4
     style RM fill:#e8f0fe,stroke:#4285f4

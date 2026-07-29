@@ -148,3 +148,50 @@ O minimo para rodar um processo de 5 steps de ponta a ponta.
 **Solução:** remover `ft/` do template no repo `forgebase`. O engine deve ser instalado globalmente (pip ou PYTHONPATH) e nunca copiado para dentro do projeto. O `ft run` deve ser chamado com `PYTHONPATH=/path/to/fast-track python -m ft.cli.main` para garantir isolamento.
 
 **Workaround atual:** sincronizar manualmente `cp ft/engine/validators/gates.py <projeto>/ft/engine/validators/gates.py` quando o engine é atualizado.
+
+---
+
+## [Innovation 2026-07] Débitos remanescentes dos ciclos de validação
+
+Origem: 6 ciclos do processo `innovation` (Clari v1-v4, AgendaZap) + validação
+integral do ramo GO. Débitos operacionais já quitados em `b01ab1f` (abort de
+zumbis, herança de flags no continue, `ft process repin`, validação de kwargs
+de validators, `ft validate` global). Restam três, de auditoria/robustez:
+
+### 1. Sinal estruturado de rate limit por executor
+
+**Problema:** a detecção de rate limit é substring-match no output extraído
+(`_RATE_LIMIT_PATTERNS` em `delegate.py`). Para o claude, dois falsos
+positivos já ocorreram e foram tratados pontualmente (`rate_limit_event`
+informativo com status=allowed, `b90ca39`; texto do agente discutindo "rate
+limit" como assunto de pesquisa, `414dbb6` — exit 0 nunca conta). Codex,
+Gemini e OpenCode seguem com detecção puramente textual e podem sofrer o
+falso positivo de conteúdo (qualquer produto cuja pesquisa mencione "rate
+limit"/"quota"/"429").
+
+**Solução:** por executor, extrair o sinal de erro do canal estruturado
+(exit code + evento/JSON de erro do CLI) e restringir o grep textual ao
+stderr/último erro, nunca ao conteúdo produzido pelo agente.
+
+### 2. Auditoria dos atalhos "outputs existem → pular node"
+
+**Problema:** `_run_review` pulava a etapa quando os artefatos antigos
+passavam nos validators, ignorando `no_pre_seed` — causou loop infinito de
+bypass no innovation (validation stale de 0.1s; corrigido em `c78eeff`).
+A classe de risco permanece: outros caminhos de skip por pre-seed/early-check
+(document, build, gate com resume) podem ignorar flags de reexecução
+(`no_pre_seed`, `preserve_outputs_on_reentry`) em reentradas de grafo cíclico.
+
+**Solução:** inventariar todos os pontos de skip no runner, garantir que
+respeitam `no_pre_seed` e cobrir com teste de reentrada (padrão do
+`test_innovation_go_branch.py`).
+
+### 3. Timestamp por linha nos llm_logs
+
+**Problema:** os eventos do stream não carregam relógio. O `ft status` estima
+"nesta ação há ~Xs" com cache de observação entre chamadas (aproximação) e o
+tempo por ação/ferramenta não é reconstruível post-mortem a partir do log.
+
+**Solução:** prefixar cada linha gravada nos llm_logs com timestamp ISO (ou
+gravar sidecar .jsonl com `ts`), e trocar a estimativa do status pela leitura
+exata. Também melhora o `ft analyse-cycle` planejado (duração por node/ação).

@@ -327,15 +327,67 @@ def _check_graph_integrity(graph: ProcessGraph, report: ValidationReport) -> Non
             report.add_error(end_id, "nó end não é alcançável a partir do primeiro nó")
 
 
+# Chaves consumidas pelo engine antes de chamar a função do validator —
+# nunca fazem parte da assinatura (ver _run_validators no runner).
+_ENGINE_LEVEL_VALIDATOR_KEYS = frozenset({"stop_on_failure", "resume_command"})
+
+
 def _check_validators(graph: ProcessGraph, registry: dict[str, Any], report: ValidationReport) -> None:
-    """Verifica que validators referenciados nos nós existem no registry."""
+    """Verifica que validators existem no registry e, na forma dict, que os
+    kwargs batem com a assinatura da função — um kwarg errado passava silencioso
+    aqui e explodia em TypeError só quando o gate rodava."""
+    import inspect
+
     if not registry:
         return  # Sem registry, não pode verificar
     for node in graph.nodes.values():
         for validator_spec in node.validators:
-            for name in validator_spec.keys():
-                if name not in registry:
+            for name, args in validator_spec.items():
+                if name in _ENGINE_LEVEL_VALIDATOR_KEYS:
+                    continue
+                fn = registry.get(name)
+                if fn is None:
                     report.add_warning(node.id, f"validator '{name}' não encontrado no registry")
+                    continue
+                if not isinstance(args, dict):
+                    continue
+                try:
+                    params = inspect.signature(fn).parameters
+                except (TypeError, ValueError):
+                    continue
+                accepts_var_kw = any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+                )
+                provided = set(args) - _ENGINE_LEVEL_VALIDATOR_KEYS
+                if not accepts_var_kw:
+                    unknown = sorted(provided - set(params))
+                    if unknown:
+                        accepted = ", ".join(
+                            k for k in params if k != "project_root"
+                        )
+                        report.add_error(
+                            node.id,
+                            f"validator '{name}' não aceita argumento(s): "
+                            f"{', '.join(unknown)} (aceitos: {accepted})",
+                        )
+                required = {
+                    p.name
+                    for p in params.values()
+                    if p.default is inspect.Parameter.empty
+                    and p.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
+                    and p.name != "project_root"
+                }
+                missing = sorted(required - provided)
+                if missing:
+                    report.add_error(
+                        node.id,
+                        f"validator '{name}' sem argumento(s) obrigatório(s): "
+                        f"{', '.join(missing)}",
+                    )
 
 
 def _check_semantics(graph: ProcessGraph, report: ValidationReport) -> None:

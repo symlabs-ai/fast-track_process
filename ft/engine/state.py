@@ -171,6 +171,11 @@ class EngineState:
     llm_execution_plan: dict[str, Any] | None = None
     parallel_enabled: bool = False  # ft run/continue --parallel: honrar parallel_group dos nodes
     parallel_max_slots: int = 2  # worktrees simultâneos no fan-out de um parallel_group
+    # Flags do run original, persistidos para que ft continue os herde por
+    # padrão (com override explícito) — esquecer de repassá-los transformava
+    # retomada autônoma em passo único ou parava num gate que era para pular.
+    run_bypass_human_gates: bool = False
+    run_autonomous: bool = False
     metrics: dict[str, Any] = field(default_factory=lambda: {
         "steps_completed": 0,
         "steps_total": 0,
@@ -256,6 +261,8 @@ class StateManager:
                 llm_execution_plan=raw.get("llm_execution_plan"),
                 parallel_enabled=bool(raw.get("parallel_enabled", False)),
                 parallel_max_slots=int(raw.get("parallel_max_slots", 2) or 2),
+                run_bypass_human_gates=bool(raw.get("run_bypass_human_gates", False)),
+                run_autonomous=bool(raw.get("run_autonomous", False)),
                 metrics=raw.get("metrics", EngineState().metrics),
                 _lock=raw.get("_lock"),
             )
@@ -367,6 +374,8 @@ class StateManager:
             "llm_execution_plan": self._state.llm_execution_plan,
             "parallel_enabled": self._state.parallel_enabled,
             "parallel_max_slots": self._state.parallel_max_slots,
+            "run_bypass_human_gates": self._state.run_bypass_human_gates,
+            "run_autonomous": self._state.run_autonomous,
             "metrics": self._state.metrics,
             "_lock": self._state._lock,
         }

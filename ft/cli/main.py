@@ -694,7 +694,12 @@ def _ensure_runtime_selected(args, runner=None) -> bool:
     return True
 
 
-def _select_cycle_for_command(root: Path, requested: str | None = None):
+def _select_cycle_for_command(
+    root: Path,
+    requested: str | None = None,
+    *,
+    allow_not_ready: bool = False,
+):
     """Select exactly one open cycle and render domain errors without traceback.
 
     There is deliberately no "latest" fallback.  From the owning checkout one
@@ -715,7 +720,12 @@ def _select_cycle_for_command(root: Path, requested: str | None = None):
     if selected is None and paths.is_worktree_path(location):
         selected = location.name
     try:
-        return select_cycle(owner, selected, include_terminal=True)
+        return select_cycle(
+            owner,
+            selected,
+            include_terminal=True,
+            allow_not_ready=allow_not_ready,
+        )
     except (
         AmbiguousCycleError,
         CycleNotFoundError,
@@ -1101,6 +1111,28 @@ def cmd_continue(args):
     apply_parallel_flags(runner, args)
 
     mode = resolve_run_mode(args)
+    # Herança dos flags do run original (override explícito via --no-*).
+    from ft.engine import ui as _flags_ui
+    if (
+        not runner._bypass_human_gates
+        and getattr(state, "run_bypass_human_gates", False)
+        and not getattr(args, "no_bypass_human_gates", False)
+    ):
+        runner._bypass_human_gates = True
+        print(_flags_ui.dim(
+            "  Herdando --bypass-human-gates do run original "
+            "(--no-bypass-human-gates para desativar)"
+        ))
+    if (
+        mode == "step"
+        and getattr(state, "run_autonomous", False)
+        and not getattr(args, "no_auto", False)
+        and not getattr(args, "sprint", False)
+    ):
+        mode = "mvp"
+        print(_flags_ui.dim(
+            "  Herdando modo autônomo do run original (--no-auto para avançar um passo)"
+        ))
     recovered = runner.recover_orphaned_delegation(mode=mode)
     if recovered:
         recovered_state = runner.state_mgr.load()
@@ -3061,11 +3093,19 @@ def cmd_validate(args):
         print(f"ERRO: alvo de validação inválido: {exc}")
         sys.exit(1)
     if not process_path:
-        print(
-            f"ERRO: template local não materializado: {selector}. "
-            f"Use `ft run . --template {selector}` para materializá-lo."
-        )
-        sys.exit(1)
+        global_candidate = engine_root() / "templates" / selector / "process.yml"
+        if global_candidate.is_file():
+            print(
+                f"  Template local não materializado; validando o template "
+                f"GLOBAL: {global_candidate.parent.name}/process.yml"
+            )
+            process_path = global_candidate
+        else:
+            print(
+                f"ERRO: template local não materializado: {selector}. "
+                f"Use `ft run . --template {selector}` para materializá-lo."
+            )
+            sys.exit(1)
 
     rel = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
     print(f"Validando {rel}...\n")
@@ -3257,18 +3297,68 @@ def cmd_fix(args):
 
 
 
+def _abort_zombie_cycle(args, root: Path, cycle, work: Path) -> None:
+    """Descarta um ciclo sem worktree Git válida (preparing/crash/corrompido)."""
+    import shutil as _shutil
+    import subprocess as _sp
+    from ft.engine import ui as _ui
+
+    print()
+    print(_ui.warn(
+        f"ABORT (zumbi): ciclo {cycle.name} sem worktree Git válida "
+        f"(status {cycle.status}) — vai remover diretório e registro"
+    ))
+    print(_ui.dim(f"  Diretório: {work}"))
+    print()
+    if not getattr(args, "force", False):
+        confirm = input("Confirma? [s/N]: ").strip().lower()
+        if confirm not in ("s", "sim", "y", "yes"):
+            print(_ui.dim("Abortado pelo usuário."))
+            return
+
+    owner = canonical_project_root(root)
+    if work.exists():
+        _sp.run(
+            ["git", "worktree", "remove", str(work), "--force"],
+            cwd=owner, capture_output=True, text=True,
+        )
+        if work.exists():
+            try:
+                _shutil.rmtree(work)
+            except OSError as exc:
+                print(_ui.fail(f"Erro ao remover diretório: {exc}"))
+                return
+    _sp.run(["git", "worktree", "prune"], cwd=owner, capture_output=True, text=True)
+    branch_check = _sp.run(
+        ["git", "branch", "--list", cycle.name],
+        cwd=owner, capture_output=True, text=True,
+    )
+    if branch_check.stdout.strip():
+        _sp.run(
+            ["git", "branch", "-D", cycle.name],
+            cwd=owner, capture_output=True, text=True,
+        )
+        print(_ui.success(f"Branch removida: {cycle.name}"))
+    print(_ui.success(f"Ciclo zumbi removido: {cycle.name}"))
+
+
 def _cmd_abort_locked_body(args):
     """Aborta o ciclo: descarta worktree e branch sem merge nenhum."""
     import subprocess as _sp
     from ft.engine import ui as _ui
 
     root = find_project_root()
-    cycle = _select_cycle_for_command(root, getattr(args, "cycle", None))
+    cycle = _select_cycle_for_command(
+        root, getattr(args, "cycle", None), allow_not_ready=True
+    )
     work = cycle.worktree
     git_file = work / ".git"
     is_git_worktree = git_file.exists() and git_file.is_file()
     if not is_git_worktree:
-        raise RuntimeError(f"ciclo {cycle.name} não possui worktree Git válida")
+        # Ciclo zumbi (crash durante preparação, worktree corrompida): não há
+        # o que preservar — limpar registro é exatamente o propósito do abort.
+        _abort_zombie_cycle(args, root, cycle, work)
+        return
 
     original_root = None
     branch = ""
@@ -3330,6 +3420,56 @@ def _cmd_abort_locked_body(args):
             print(_ui.success(f"Branch removida: {branch}"))
 
     print(_ui.success("Ciclo abortado. Nenhum merge realizado."))
+
+
+def cmd_process_repin(args):
+    """Re-fixa o digest do processo de um ciclo ativo após edição deliberada.
+
+    O pin de integridade bloqueia (corretamente) qualquer divergência do
+    process.yml local; este comando é a via sancionada para hotfix em ciclo
+    vivo — recalcula o digest do arquivo atual e o grava no state.
+    """
+    from ft.engine import ui as _ui
+    from ft.engine.layout import process_digest
+    from ft.engine.state import mutate_state_payload
+
+    root = find_project_root()
+    record = _select_cycle_for_command(root, getattr(args, "cycle", None))
+    state_path = record.state_path
+    if not state_path or not state_path.is_file():
+        print(_ui.fail(f"ciclo {record.name} sem state legível"))
+        return
+    payload = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+    pinned_path = payload.get("process_path")
+    pinned_digest = payload.get("process_digest")
+    if not pinned_path or not pinned_digest:
+        print(_ui.fail(f"ciclo {record.name} não fixa process_path/digest"))
+        return
+    process_file = record.worktree / pinned_path
+    if not process_file.is_file():
+        print(_ui.fail(f"processo não encontrado: {process_file}"))
+        return
+    current = process_digest(process_file)
+    if current == pinned_digest:
+        print(_ui.info(f"digest já corresponde ({current[:27]}…) — nada a re-fixar"))
+        return
+
+    print(_ui.warn(f"RE-PIN do processo do ciclo {record.name}"))
+    print(_ui.dim(f"  Arquivo: {pinned_path}"))
+    print(_ui.dim(f"  Antigo:  {pinned_digest[:34]}…"))
+    print(_ui.dim(f"  Novo:    {current[:34]}…"))
+    print(_ui.dim("  O ciclo passará a executar o processo editado."))
+    if not getattr(args, "yes", False):
+        confirm = input("Confirma? [s/N]: ").strip().lower()
+        if confirm not in ("s", "sim", "y", "yes"):
+            print(_ui.dim("Cancelado pelo usuário."))
+            return
+
+    def _apply(data: dict) -> None:
+        data["process_digest"] = current
+
+    mutate_state_payload(state_path, _apply)
+    print(_ui.success(f"Digest re-fixado: {current[:34]}…"))
 
 
 def cmd_abort(args):
@@ -4355,6 +4495,13 @@ def cmd_run(args):
     # and remain free to progress in their own worktrees.
     runner.init_state()
     apply_parallel_flags(runner, args)
+    # Persistir os flags do run para que ft continue os herde por padrão.
+    _run_state_mgr = getattr(runner, "state_mgr", None)
+    if _run_state_mgr is not None:
+        _run_state = _run_state_mgr.load()
+        _run_state.run_bypass_human_gates = bool(runner._bypass_human_gates)
+        _run_state.run_autonomous = True  # ft run é sempre autônomo (mode=mvp)
+        _run_state_mgr.save()
     runner.run(mode="mvp")
 
 
@@ -4420,8 +4567,12 @@ def main():
     cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
     cont.add_argument("--sprint", action="store_true", help="Avancar ate fim da sprint")
     cont.add_argument("--auto", action="store_true", help="Avancar ate MVP (modo autonomo; PARA em human_gates)")
+    cont.add_argument("--no-auto", action="store_true", dest="no_auto",
+                      help="Não herdar o modo autônomo do run original (avança um passo)")
     cont.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
                       help="Pular human_gates automaticamente (LLM decide)")
+    cont.add_argument("--no-bypass-human-gates", action="store_true", dest="no_bypass_human_gates",
+                      help="Não herdar --bypass-human-gates do run original")
     cont.add_argument("--cycle", help="Ciclo específico a retomar (ex: cycle-07)")
     cont.add_argument("--parallel", action="store_true",
                       help="Honrar parallel_group do processo (persiste no estado do run)")
@@ -4662,11 +4813,26 @@ def main():
         action="store_true",
         help="Aplicar fast-forwards sem confirmação (merges sempre confirmam)",
     )
+    proc_repin = proc_sub.add_parser(
+        "repin",
+        help="Re-fixar o digest do processo de um ciclo ativo (hotfix deliberado)",
+        description=(
+            "Recalcula o digest do process.yml local do ciclo e atualiza o pin "
+            "em state/engine_state.yml. Use após editar deliberadamente o "
+            "processo de um ciclo vivo; sem isso, ft continue bloqueia com "
+            "'divergiu do digest fixado'."
+        ),
+    )
+    proc_repin.add_argument("--cycle", help="Ciclo alvo (obrigatório se houver mais de um)")
+    proc_repin.add_argument(
+        "--yes", "-y", action="store_true", help="Re-fixar sem confirmação"
+    )
 
     # abort
     ab = sub.add_parser("abort", help="Abortar ciclo: descarta worktree e branch sem merge")
     add_llm_engine_flags(ab)
-    ab.add_argument("--force", action="store_true", help="Abortar sem prompt de confirmação")
+    ab.add_argument("--force", "--yes", "-y", action="store_true", dest="force",
+                    help="Abortar sem prompt de confirmação (aceita ciclos zumbis/preparing)")
     ab.add_argument("--cycle", help="Ciclo específico a abortar")
 
     # cancel
@@ -4765,6 +4931,8 @@ def main():
         elif args.command == "process":
             if args.process_command == "update":
                 cmd_process_update(args)
+            elif args.process_command == "repin":
+                cmd_process_repin(args)
         elif args.command == "abort":
             cmd_abort(args)
         elif args.command == "cancel":

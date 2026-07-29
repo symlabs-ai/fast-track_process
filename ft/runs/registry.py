@@ -410,7 +410,11 @@ class CycleRegistry:
         requested: str | None = None,
         *,
         include_terminal: bool = True,
+        allow_not_ready: bool = False,
     ) -> CycleRecord:
+        """allow_not_ready existe para comandos destrutivos (abort): um ciclo
+        zumbi em preparing/invalid é exatamente o que se quer abortar, e o
+        guard de prontidão o tornava ilimpável."""
         records = self.open_cycles(include_terminal=include_terminal)
         if requested is not None:
             name = validate_cycle_name(requested)
@@ -419,7 +423,7 @@ class CycleRegistry:
                 available = ", ".join(record.cycle_id for record in records)
                 suffix = f" Ciclos abertos: {available}" if available else ""
                 raise CycleNotFoundError(f"ciclo não encontrado: {name}.{suffix}")
-            if not match.ready:
+            if not match.ready and not allow_not_ready:
                 reason = match.state_error or f"status {match.status}"
                 raise CycleNotReadyError(
                     f"ciclo {name} não está pronto: {reason}"
@@ -432,7 +436,7 @@ class CycleRegistry:
         if len(records) > 1:
             raise AmbiguousCycleError(record.cycle_id for record in records)
         record = records[0]
-        if not record.ready:
+        if not record.ready and not allow_not_ready:
             reason = record.state_error or f"status {record.status}"
             raise CycleNotReadyError(
                 f"ciclo {record.cycle_id} não está pronto: {reason}"
@@ -461,10 +465,12 @@ def select_cycle(
     requested: str | None = None,
     *,
     include_terminal: bool = True,
+    allow_not_ready: bool = False,
 ) -> CycleRecord:
     """Select exactly one open cycle, or fail with actionable ambiguity."""
 
     return CycleRegistry(project_root).select(
         requested,
         include_terminal=include_terminal,
+        allow_not_ready=allow_not_ready,
     )

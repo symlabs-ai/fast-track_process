@@ -569,7 +569,10 @@ class TestApiHealthCheck:
 
 
 class TestAbort:
-    def test_abort_rejects_non_git_runtime(self, tmp_path, monkeypatch):
+    def test_abort_force_cleans_non_git_zombie_runtime(self, tmp_path, monkeypatch):
+        """Ciclo sem worktree Git válida (crash em preparing) é exatamente o
+        que o abort deve conseguir descartar; antes ele levantava RuntimeError
+        e o zumbi ficava ilimpável por qualquer comando."""
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "service_mate_15"
         ensure_project_layout(project)
@@ -596,10 +599,9 @@ class TestAbort:
             opencode=None,
             verbose=False,
         )
-        with pytest.raises(RuntimeError, match="worktree Git válida"):
-            cli_main.cmd_abort(args)
+        cli_main.cmd_abort(args)
 
-        assert cycle.exists()
+        assert not cycle.exists()
         assert other_cycle.exists()
 
 

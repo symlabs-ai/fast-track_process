@@ -508,6 +508,83 @@ class TestRecoverOrphanedDelegation:
         assert runner_v2.state_mgr.load().node_status == "delegated"
 
 
+class TestRetryBlockedValidation:
+    @staticmethod
+    def _blocked_build(runner):
+        runner.init_state()
+        node = runner.graph.get_node("step.03.implementacao")
+        node.validators = [
+            {
+                "command_succeeds": {
+                    "command": "python -c 'print(\"full\")'",
+                    "resume_command": "python -c 'print(\"verify\")'",
+                }
+            }
+        ]
+        state = runner.state_mgr.load()
+        state.current_node = node.id
+        state.node_status = "blocked"
+        state.blocked_reason = (
+            "Validacao falhou apos 0 tentativas: ambiente incompleto"
+        )
+        runner.state_mgr.save()
+        return node
+
+    def test_retry_uses_resume_then_full_without_redelegating(self, runner_v2):
+        self._blocked_build(runner_v2)
+
+        with (
+            patch("ft.engine.runner.run_validators") as validators,
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+            patch.object(runner_v2, "_record_node_summary") as record_summary,
+            patch("ft.engine.runner.delegate_to_llm") as delegate,
+        ):
+            validators.side_effect = [
+                ValidationResult(False, True, "receipt ausente", []),
+                ValidationResult(True, False, None, []),
+            ]
+
+            handled = runner_v2.retry_blocked_validation_without_llm(
+                mode="step"
+            )
+
+        assert handled is True
+        assert validators.call_count == 2
+        assert validators.call_args_list[0].kwargs["resume"] is True
+        assert "resume" not in validators.call_args_list[1].kwargs
+        delegate.assert_not_called()
+        auto_commit.assert_called_once()
+        record_summary.assert_called_once()
+        state = runner_v2.state_mgr.load()
+        assert state.current_node == "gate.02.delivery"
+        assert state.node_status == "ready"
+
+    def test_retry_keeps_real_full_failure_blocked_for_ft_fix(self, runner_v2):
+        self._blocked_build(runner_v2)
+
+        with (
+            patch("ft.engine.runner.run_validators") as validators,
+            patch.object(runner_v2, "_maybe_auto_commit") as auto_commit,
+            patch("ft.engine.runner.delegate_to_llm") as delegate,
+        ):
+            validators.side_effect = [
+                ValidationResult(False, True, "receipt ausente", []),
+                ValidationResult(False, True, "1 regression failed", []),
+            ]
+
+            handled = runner_v2.retry_blocked_validation_without_llm(
+                mode="step"
+            )
+
+        assert handled is True
+        delegate.assert_not_called()
+        auto_commit.assert_not_called()
+        state = runner_v2.state_mgr.load()
+        assert state.current_node == "step.03.implementacao"
+        assert state.node_status == "blocked"
+        assert "1 regression failed" in str(state.blocked_reason)
+
+
 # ---------------------------------------------------------------------------
 # approve / reject
 # ---------------------------------------------------------------------------

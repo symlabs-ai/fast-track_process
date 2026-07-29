@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "1.2.0"
+version: "1.3.0"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -426,8 +426,19 @@ nodes:
       testes, contratos ou artefatos anteriores e não rode build/suíte completa.
       Sondas focais somente quando indispensáveis.
 
+      Faça uma única passagem adversarial abrangente. Para cada AC, verifique:
+      entregável concreto (não apenas modelo/teste), existência e execução real
+      dos comandos citados, linhas/owners/bloqueios canônicos, coerência entre
+      resultado e receipts, cobertura semântica entre plataformas, modelo de
+      snapshot sem autorreferência e ao menos uma falsificação que prove
+      fail-closed. Receipt histórico só pode ser reutilizado se ele próprio
+      carregar a âncora de dependências/revisão da execução original; baseline
+      capturada no início do ciclo não prova o predecessor. Âncora ausente
+      significa NOT_VERIFIED, nunca PASS.
+
       Verifique todos os AC-*, teste correspondente, compatibilidade, escopo e
-      coerência do delta. Gere docs/feature-pre-review.md com uma tabela
+      coerência do delta e reporte todos os achados conhecidos na mesma revisão,
+      em vez de revelar um por reentrada. Gere docs/feature-pre-review.md com uma tabela
       AC/PASS|FAIL/evidência. Achados de implementação devem ser numerados
       P-01, P-02... Gere docs/feature-pre-review.yml com `schema_version: 1`,
       o `review_id` exato de `feature-impact.yml`, `verdict`, `review_route` e
@@ -710,32 +721,19 @@ nodes:
     type: gate
     title: "Validar Estado Corrigido"
     description: >-
-      Confirma que houve um delta de produto desde a âncora e renova o receipt
-      completo com build+test. Não há nova coleta narrativa de evidências.
+      Confirma apenas que houve um delta focal de produto desde a âncora. A
+      suíte completa fica adiada até a auditoria aprovar o fix, evitando
+      repeti-la em tentativas intermediárias.
     sprint: feature-02-build
     executor: python
     validation_mode: fail_fast
-    outputs:
-      - docs/feature-validation.json
     validators:
       - command_succeeds:
           command: "python .ft/process/feature-fast/scripts/validate_feature.py fix-implementation"
           stop_on_failure: true
-      - command_succeeds:
-          command: >-
-            bash .ft/process/feature-fast/scripts/product.sh ensure --record
-            docs/feature-validation.json
-          resume_command: >-
-            bash .ft/process/feature-fast/scripts/product.sh verify
-            docs/feature-validation.json
-          timeout: 300
-      - command_succeeds:
-          command: "python .ft/process/feature-fast/scripts/validate_feature.py fix-receipts"
-          stop_on_failure: true
     on_fail:
       human_gate: >-
-        A correção focal, sua validação ou um receipt impactado falhou; ajuste
-        somente o achado ou regenere apenas a lane indicada.
+        A correção focal não satisfaz sua âncora; ajuste somente o achado.
       goto: feature.fix
     next: feature.fix_review
 
@@ -759,12 +757,13 @@ nodes:
       - docs/feature-fix-review.yml
     prompt: |
       Execute uma auditoria independente somente da correção. A âncora,
-      a revisão rejeitada, o receipt atual e o diff desde `base_commit` já
+      a revisão rejeitada, o receipt completo anterior ao fix e o diff desde `base_commit` já
       estão no contexto `feature_delta.fix_review`.
 
       Para cada F-* original, registre exatamente PASS ou FAIL e uma evidência
       verificável. Não reabra ACs, código ou decisões não tocados pelo delta.
-      Não repita build/test; o validator confirma o receipt. Se necessário,
+      Não repita build/test; o validator confirma o receipt ancorado. Uma nova
+      suíte completa só roda depois que esta auditoria aprovar. Se necessário,
       rode apenas uma sonda focal sem alterar o produto.
 
       Gere docs/feature-fix-review.md com a tabela dos F-* e a análise de
@@ -772,7 +771,8 @@ nodes:
       `schema_version: 1`, `verdict`, `review_route`, `summary`,
       `source_review: docs/feature-review.yml`, o `source_review_id` exato da
       âncora, `base_commit`,
-      `receipt_fingerprint` e `findings` (lista de `id`, `status`, `evidence`).
+      `receipt_fingerprint` do receipt ancorado e `findings` (lista de `id`,
+      `status`, `evidence`).
 
       Rotas válidas:
       - approved: todos os F-* corrigidos sem expansão;
@@ -784,9 +784,6 @@ nodes:
     validators:
       - file_exists: docs/feature-fix-review.md
       - file_exists: docs/feature-fix-review.yml
-      - command_succeeds:
-          command: "bash .ft/process/feature-fast/scripts/product.sh verify docs/feature-validation.json"
-          stop_on_failure: true
       - command_succeeds: "python .ft/process/feature-fast/scripts/validate_feature.py fix-review"
     next: feature.fix_review_route
 
@@ -809,7 +806,7 @@ nodes:
     executor: python
     condition: review_route
     branches:
-      approved: feature.acceptance
+      approved: feature.fix_full_validate
       implementation: feature.fix
       evidence: feature.impact_prepare
       full_review: feature.impact_prepare
@@ -818,6 +815,39 @@ nodes:
     episode_restart:
       implementation: feature_implementation
       scope: feature_implementation
+
+  - id: feature.fix_full_validate
+    type: gate
+    title: "Validar Fix Aprovado por Completo"
+    description: >-
+      Após a auditoria focal aprovar o delta, renova uma única vez o receipt de
+      build+test e as lanes impactadas antes do aceite.
+    sprint: feature-02-build
+    executor: python
+    validation_mode: fail_fast
+    outputs:
+      - docs/feature-validation.json
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py fix-implementation"
+          stop_on_failure: true
+      - command_succeeds:
+          command: >-
+            bash .ft/process/feature-fast/scripts/product.sh ensure --record
+            docs/feature-validation.json
+          resume_command: >-
+            bash .ft/process/feature-fast/scripts/product.sh verify
+            docs/feature-validation.json
+          timeout: 300
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py fix-receipts"
+          stop_on_failure: true
+    on_fail:
+      human_gate: >-
+        A suíte completa ou um receipt impactado do fix aprovado falhou;
+        corrija somente a regressão observada.
+      goto: feature.fix
+    next: feature.acceptance
 
   - id: feature.acceptance
     type: human_gate

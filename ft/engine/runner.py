@@ -4620,6 +4620,88 @@ class StepRunner:
         self.state_mgr.block(f"Validacao falhou apos {self._max_node_retries} tentativas: {validation.feedback}")
         print(ui.step_block(f"validação falhou após {self._max_node_retries} tentativas"))
 
+    @staticmethod
+    def _has_validator_resume_command(node: Node) -> bool:
+        return any(
+            isinstance(spec.get("command_succeeds"), dict)
+            and "resume_command" in spec["command_succeeds"]
+            for spec in node.validators
+        )
+
+    def retry_blocked_validation_without_llm(
+        self,
+        *,
+        mode: str,
+    ) -> bool:
+        """Retry a post-delegation validator without paying another LLM call.
+
+        A successful builder may be blocked only because its deterministic
+        validator lacked dependencies or a receipt.  ``ft retry`` first tries
+        the declared ``resume_command`` and, when that lightweight check cannot
+        recover, executes the normal validator once.  A remaining product
+        failure stays blocked for an explicit ``ft fix`` instead of silently
+        re-running the builder.
+        """
+
+        state = self.state_mgr.load()
+        node_id = state.current_node
+        if (
+            state.node_status != "blocked"
+            or not isinstance(state.blocked_reason, str)
+            or not state.blocked_reason.startswith("Validacao falhou apos ")
+            or not node_id
+            or node_id not in self.graph.nodes
+        ):
+            return False
+        node = self.graph.get_node(node_id)
+        if not self._has_validator_resume_command(node):
+            return False
+
+        self._auto_approve = mode == "mvp"
+        print(ui.warn(
+            f"Retry de {node_id}: validando artefatos preservados sem nova chamada LLM"
+        ))
+        state.node_status = "validating"
+        state.blocked_reason = None
+        self.state_mgr.save()
+
+        validation = self._run_validators(node, resume=True)
+        if not validation.passed:
+            self._print_validation(validation)
+            print(ui.warn(
+                "Validação leve não foi suficiente — executando a validação "
+                "normal uma única vez, ainda sem LLM"
+            ))
+            validation = self._run_validators(node)
+        self._print_validation(validation)
+
+        if not validation.passed:
+            self.state_mgr.block(
+                "Validacao preservada falhou sem nova chamada LLM: "
+                + str(validation.feedback or "validação falhou")
+            )
+            print(ui.step_block("validação preservada ainda falha; use ft fix"))
+            return True
+
+        for output_path in node.outputs:
+            self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+        self._maybe_auto_commit(node)
+        self._record_node_summary(
+            node,
+            "NODE_SUMMARY:\n"
+            "- fiz: retry determinístico dos artefatos preservados\n"
+            "- verificado: resume/full validator passou sem nova chamada LLM",
+        )
+        if node.requires_approval and not self._auto_approve:
+            self.state_mgr.set_pending_approval(node.id)
+            print(ui.awaiting_approval(auto=False))
+            return True
+
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id)
+        print(ui.step_pass(next_id, "PASS (retry sem LLM)"))
+        return True
+
     def _run_bypass_prompt(self, node: Node) -> None:
         """Delegação LLM no lugar do humano em um gate bypassado.
 

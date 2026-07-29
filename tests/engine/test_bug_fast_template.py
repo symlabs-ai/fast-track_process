@@ -354,6 +354,10 @@ def test_bug_fast_catalog_graph_and_sessions() -> None:
         "scope": "bug.scope_block",
         "_default": "bug.review",
     }
+    assert graph.get_node("bug.fix_review_decision").branches["approved"] == (
+        "bug.fix_full_validate"
+    )
+    assert graph.get_node("bug.fix_full_validate").next == "bug.acceptance"
     assert {
         "bug_fast.fix",
         "bug_fast.review",
@@ -447,8 +451,6 @@ def test_bug_fast_rejected_review_anchors_and_audits_only_fix(
     assert green.returncode == 0, green.stderr
     fixed = _run(root, "fix-implementation")
     assert fixed.returncode == 0, fixed.stderr
-    full = _run(root, "full")
-    assert full.returncode == 0, full.stderr
 
     _write(
         root,
@@ -467,7 +469,7 @@ def test_bug_fast_rejected_review_anchors_and_audits_only_fix(
                 "summary": "Fix focal aprovado.",
                 "source_review": "docs/bug-review.yml",
                 "base_commit": anchor["base_commit"],
-                "receipt_fingerprint": _receipt(root)["fingerprint"],
+                "receipt_fingerprint": anchor["receipt_fingerprint"],
                 "findings": [
                     {
                         "id": "B-01",
@@ -481,12 +483,42 @@ def test_bug_fast_rejected_review_anchors_and_audits_only_fix(
     )
     audited = _run(root, "fix-review")
     assert audited.returncode == 0, audited.stderr
+    assert not (root / "validation-calls.log").exists()
+
+    full = _run(root, "full")
+    assert full.returncode == 0, full.stderr
     reconciled = _run(root, "reconcile-apply")
     assert reconciled.returncode == 0, reconciled.stderr
 
     assert (root / "validation-calls.log").read_text(encoding="utf-8") == (
         "build\ntest\n"
     )
+
+
+def test_bug_fast_tracks_shared_src_changes_with_project_product(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    assert _run(root, "baseline").returncode == 0
+    assert _run(root, "begin").returncode == 0
+    _write(root, "project/tests/test_add.py", _test_source())
+    red = _product(root, "red")
+    assert red.returncode == 0, red.stderr
+    _write(
+        root,
+        "project/app.py",
+        "def add(left: int, right: int) -> int:\n"
+        "    return left + right\n",
+    )
+    _write(root, "src/shared_contract.py", "SNAPSHOT_VERSION = 1\n")
+    green = _product(root, "green")
+    assert green.returncode == 0, green.stderr
+    _report(root)
+
+    implemented = _run(root, "implementation")
+
+    assert implemented.returncode == 0, implemented.stderr
+    assert "3 arquivo(s)" in implemented.stdout
 
 
 def test_bug_fast_scope_route_blocks_with_feature_fast_instruction(

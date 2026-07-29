@@ -3270,6 +3270,25 @@ def cmd_retry(args):
 
     node_id = state.current_node
     print(_ui.info(f"Retentando node: {node_id}"))
+    mode = "mvp" if getattr(args, "auto", False) else "step"
+
+    retry_validation = getattr(
+        runner,
+        "retry_blocked_validation_without_llm",
+        None,
+    )
+    if callable(retry_validation) and retry_validation(mode=mode):
+        resumed = runner.state_mgr.load()
+        if (
+            mode == "mvp"
+            and resumed.node_status not in {
+                "blocked",
+                "awaiting_approval",
+                "pending_fix",
+            }
+        ):
+            runner.run(mode=mode)
+        return
 
     # Limpar estado bloqueado e reset do contador de auto-fix
     state.node_status = "ready"
@@ -3277,7 +3296,6 @@ def cmd_retry(args):
     runner.state_mgr.save()
     runner._auto_fix_counts.pop(node_id, None)
 
-    mode = "mvp" if getattr(args, "auto", False) else "step"
     runner.run(mode=mode)
 
 

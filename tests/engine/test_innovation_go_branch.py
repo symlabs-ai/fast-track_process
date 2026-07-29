@@ -129,17 +129,25 @@ def _fake_delegate(scenario: str):
 
     def fake(**kwargs):
         task = kwargs.get("task", "")
+        lowered_task = task.casefold()
         root = Path(kwargs.get("project_root", "."))
+        allowed = {
+            str(path).strip().rstrip("/")
+            for path in (kwargs.get("allowed_paths") or [])
+        }
         created: list[str] = []
-        if "business-case.md" in task:
-            content = BUSINESS_CASE_GO if scenario == "go" else BUSINESS_CASE_NO_GO
-            (root / "docs/business-case.md").write_text(content, encoding="utf-8")
-            created = ["docs/business-case.md"]
-        elif "PRD.md" in task or "handoff" in task:
+        if "docs/post-mortem.md" in allowed:
+            (root / "docs/post-mortem.md").write_text(POST_MORTEM, encoding="utf-8")
+            created = ["docs/post-mortem.md"]
+        elif {"docs/PRD.md", "docs/handoff.md"}.intersection(allowed):
             (root / "docs/PRD.md").write_text(PRD, encoding="utf-8")
             (root / "docs/handoff.md").write_text(HANDOFF, encoding="utf-8")
             created = ["docs/PRD.md", "docs/handoff.md"]
-        elif "post-mortem" in task:
+        elif "docs/business-case.md" in allowed:
+            content = BUSINESS_CASE_GO if scenario == "go" else BUSINESS_CASE_NO_GO
+            (root / "docs/business-case.md").write_text(content, encoding="utf-8")
+            created = ["docs/business-case.md"]
+        elif "post-mortem" in lowered_task:
             (root / "docs/post-mortem.md").write_text(POST_MORTEM, encoding="utf-8")
             created = ["docs/post-mortem.md"]
         return DelegateResult(

@@ -85,6 +85,7 @@ MAX_FIX_CHANGED_LINES = 250
 MAX_CAPTURE_CHARS = 30_000
 REGRESSION_TIMEOUT_SECONDS = 90
 FULL_COMMAND_TIMEOUT_SECONDS = 180
+PRODUCT_CHANGE_ROOTS = frozenset({"project", "src", "test", "tests"})
 _INLINE_EVAL_FLAGS = frozenset({"-c", "-e", "--eval", "--evaluate"})
 _ASSERTION_FAILURE_RE = re.compile(
     r"(?i)(?:assert(?:ion|ionerror|ionfailederror)?|failed asserting|"
@@ -497,11 +498,10 @@ def _changed_paths(root: Path, base_commit: str) -> list[str]:
 
 
 def _changed_product_paths(root: Path, baseline: dict[str, Any]) -> list[str]:
-    prefix = str(baseline["product_root"]).rstrip("/") + "/"
     return [
         path
         for path in _changed_paths(root, str(baseline["base_commit"]))
-        if path.startswith(prefix)
+        if Path(path).parts and Path(path).parts[0] in PRODUCT_CHANGE_ROOTS
     ]
 
 
@@ -771,6 +771,8 @@ def _allowed_implementation_path(root: Path, relative: str, product_root: str) -
     if not path.parts or path.is_absolute() or ".." in path.parts:
         return False
     if relative.startswith(product_root.rstrip("/") + "/"):
+        return True
+    if path.parts[0] in PRODUCT_CHANGE_ROOTS:
         return True
     if path.parts[0] == "state":
         return True
@@ -1341,12 +1343,11 @@ def command_prepare_fix(root: Path) -> None:
         return
 
     baseline = _baseline(root)
-    product_root = str(baseline["product_root"])
     head = _head(root)
     pending_product = [
         path
         for path in _changed_paths(root, head)
-        if path.startswith(product_root.rstrip("/") + "/")
+        if Path(path).parts and Path(path).parts[0] in PRODUCT_CHANGE_ROOTS
     ]
     if pending_product:
         raise BugValidationError(
@@ -1374,12 +1375,10 @@ def command_prepare_fix(root: Path) -> None:
 
 
 def _fix_changed_product_paths(root: Path, anchor: dict[str, Any]) -> list[str]:
-    baseline = _baseline(root)
-    prefix = str(baseline["product_root"]).rstrip("/") + "/"
     return [
         path
         for path in _changed_paths(root, str(anchor["base_commit"]))
-        if path.startswith(prefix)
+        if Path(path).parts and Path(path).parts[0] in PRODUCT_CHANGE_ROOTS
     ]
 
 
@@ -1409,9 +1408,7 @@ def validate_fix_implementation(root: Path) -> None:
 
 
 def validate_fix_review(root: Path) -> dict[str, Any]:
-    command_verify(root)
     anchor = _fix_baseline(root)
-    receipt = _load_json(root, VALIDATION_PATH)
     payload = _load_yaml(root, FIX_REVIEW_PATH)
     if payload.get("schema_version") != SCHEMA_VERSION:
         raise BugValidationError(f"{FIX_REVIEW_PATH}: schema_version deve ser 1")
@@ -1426,9 +1423,9 @@ def validate_fix_review(root: Path) -> dict[str, Any]:
         raise BugValidationError(f"{FIX_REVIEW_PATH}: source_review inválido")
     if payload.get("base_commit") != anchor.get("base_commit"):
         raise BugValidationError(f"{FIX_REVIEW_PATH}: base_commit diverge da âncora")
-    if payload.get("receipt_fingerprint") != receipt.get("fingerprint"):
+    if payload.get("receipt_fingerprint") != anchor.get("receipt_fingerprint"):
         raise BugValidationError(
-            f"{FIX_REVIEW_PATH}: receipt_fingerprint diverge do receipt atual"
+            f"{FIX_REVIEW_PATH}: receipt_fingerprint diverge do receipt ancorado"
         )
     findings = _review_findings(payload, label=FIX_REVIEW_PATH, fix_review=True)
     expected_ids = set(str(item) for item in anchor["findings"])

@@ -5,7 +5,7 @@
 # `.ft/process/bug-fast/` e executa somente a cópia local versionada.
 
 id: bug_fast
-version: "1.0.0"
+version: "1.1.0"
 title: "Bug Fast — RED→GREEN, Review e Reconciliação Determinística"
 
 execution_policy:
@@ -218,6 +218,11 @@ nodes:
       Não altere produto, teste, relatório, receipt ou documentos canônicos.
       Não repita build nem suíte completa. Se indispensável, rode somente uma
       sonda focal sem efeitos com `product.sh focal -- <comando> [args...]`.
+      Faça uma passagem adversarial completa e reporte todos os achados
+      acionáveis de uma vez: reprodução real, causa raiz, comando existente,
+      teste falsificável, paths tocados, coerência do receipt e ausência de
+      expansão de contrato. Não fragmente achados conhecidos em várias
+      reentradas.
 
       Gere docs/bug-review.md mencionando cada path de produto alterado e
       avaliando regressão, correção mínima, receipt e escopo. Gere também
@@ -339,14 +344,8 @@ nodes:
       expansão transversal, pare e deixe a review encaminhar para feature-fast.
     validators:
       - command_succeeds:
-          command: >-
-            python .ft/process/bug-fast/scripts/validate_bug.py fix-implementation
-            && python .ft/process/bug-fast/scripts/validate_bug.py full
-          resume_command: >-
-            python .ft/process/bug-fast/scripts/validate_bug.py fix-implementation
-            && python .ft/process/bug-fast/scripts/validate_bug.py implementation
-            && python .ft/process/bug-fast/scripts/validate_bug.py verify
-          timeout: 420
+          command: "python .ft/process/bug-fast/scripts/validate_bug.py fix-implementation"
+          timeout: 30
     next: bug.fix_review
 
   - id: bug.fix_review
@@ -370,7 +369,9 @@ nodes:
     prompt: |
       Audite somente o delta do fix desde docs/bug-fix-baseline.yml e os B-*
       originais. Não reabra julgamentos não afetados, não altere produto e não
-      repita build/test. O validator confirma o receipt atual.
+      repita build/test. O validator confirma o receipt completo ancorado antes
+      do fix; uma nova suíte completa só será executada depois da aprovação
+      desta auditoria.
 
       Gere docs/bug-fix-review.md mencionando cada path do delta e cada B-*.
       Gere docs/bug-fix-review.yml:
@@ -380,7 +381,7 @@ nodes:
         summary: texto não vazio
         source_review: docs/bug-review.yml
         base_commit: commit da âncora
-        receipt_fingerprint: fingerprint do receipt atual
+        receipt_fingerprint: fingerprint do receipt ancorado
         findings:
           - id: B-01
             status: PASS | FAIL
@@ -392,9 +393,6 @@ nodes:
       mudança de contrato/capacidade que deve migrar para feature-fast.
     validation_mode: fail_fast
     validators:
-      - command_succeeds:
-          command: "python .ft/process/bug-fast/scripts/validate_bug.py verify"
-          stop_on_failure: true
       - file_exists: docs/bug-fix-review.md
       - file_exists: docs/bug-fix-review.yml
       - command_succeeds:
@@ -420,7 +418,7 @@ nodes:
     executor: python
     condition: review_route
     branches:
-      approved: bug.acceptance
+      approved: bug.fix_full_validate
       fix: bug.fix
       full_review: bug.review
       scope: bug.scope_block
@@ -428,6 +426,35 @@ nodes:
     episode_restart:
       fix: bug_fix
       scope: bug_fix
+
+  - id: bug.fix_full_validate
+    type: gate
+    title: "Validar Fix Aprovado por Completo"
+    description: >-
+      Depois da auditoria focal aprovar o delta, executa build+test uma única
+      vez e renova o receipt antes do aceite. Tentativas intermediárias de fix
+      não pagam novamente a suíte completa.
+    sprint: bug-01-fix
+    executor: python
+    validation_mode: fail_fast
+    outputs:
+      - docs/bug-validation.json
+    validators:
+      - command_succeeds:
+          command: >-
+            python .ft/process/bug-fast/scripts/validate_bug.py fix-implementation
+            && python .ft/process/bug-fast/scripts/validate_bug.py full
+          resume_command: >-
+            python .ft/process/bug-fast/scripts/validate_bug.py fix-implementation
+            && python .ft/process/bug-fast/scripts/validate_bug.py implementation
+            && python .ft/process/bug-fast/scripts/validate_bug.py verify
+          timeout: 420
+    on_fail:
+      human_gate: >-
+        A suíte completa do fix aprovado falhou; corrija somente a regressão
+        observada e preserve os achados ancorados.
+      goto: bug.fix
+    next: bug.acceptance
 
   - id: bug.scope_block
     type: gate

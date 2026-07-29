@@ -1667,6 +1667,14 @@ def _fix_baseline(root: Path) -> dict[str, object]:
         raise FeatureValidationError(
             f"{FIX_BASELINE_PATH}: contract_sha256 inválido"
         )
+    receipt_fingerprint = payload.get("receipt_fingerprint")
+    if not isinstance(receipt_fingerprint, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        receipt_fingerprint,
+    ):
+        raise FeatureValidationError(
+            f"{FIX_BASELINE_PATH}: receipt_fingerprint inválido"
+        )
     return payload
 
 
@@ -1702,6 +1710,22 @@ def prepare_fix(root: Path) -> None:
         relative: _sha256(root / relative)
         for relative in FIX_CONTRACT_PATHS
     }
+    try:
+        receipt = json.loads(_read(root, RECEIPT_PATH))
+    except json.JSONDecodeError as exc:
+        raise FeatureValidationError(
+            f"{RECEIPT_PATH}: JSON inválido: {exc}"
+        ) from exc
+    receipt_fingerprint = (
+        receipt.get("fingerprint") if isinstance(receipt, dict) else None
+    )
+    if not isinstance(receipt_fingerprint, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        receipt_fingerprint,
+    ):
+        raise FeatureValidationError(
+            f"{RECEIPT_PATH}: fingerprint obrigatório antes do fix"
+        )
     _atomic_write_yaml(
         root / FIX_BASELINE_PATH,
         {
@@ -1719,6 +1743,7 @@ def prepare_fix(root: Path) -> None:
                 {str(item).strip() for item in impact_keys if str(item).strip()}
             ),
             "contract_sha256": contract_sha256,
+            "receipt_fingerprint": receipt_fingerprint,
         },
     )
 
@@ -1847,20 +1872,9 @@ def validate_fix_review(root: Path) -> None:
             f"{FIX_REVIEW_ROUTE_PATH}: base_commit diverge da âncora"
         )
 
-    try:
-        receipt = json.loads(_read(root, RECEIPT_PATH))
-    except json.JSONDecodeError as exc:
-        raise FeatureValidationError(f"{RECEIPT_PATH}: JSON inválido: {exc}") from exc
-    receipt_fingerprint = (
-        receipt.get("fingerprint") if isinstance(receipt, dict) else None
-    )
-    if (
-        not isinstance(receipt_fingerprint, str)
-        or not receipt_fingerprint.strip()
-        or route.get("receipt_fingerprint") != receipt_fingerprint
-    ):
+    if route.get("receipt_fingerprint") != baseline.get("receipt_fingerprint"):
         raise FeatureValidationError(
-            f"{FIX_REVIEW_ROUTE_PATH}: receipt_fingerprint diverge do receipt atual"
+            f"{FIX_REVIEW_ROUTE_PATH}: receipt_fingerprint diverge do receipt ancorado"
         )
 
     finding_ids = [str(item) for item in baseline["findings"]]

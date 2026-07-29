@@ -70,6 +70,13 @@ case "${1:-start}" in
     ;;
 esac
 
+if grep -Eiq '^[[:space:]]*interface:[[:space:]]*internal([[:space:]]|$)' \
+  "$ROOT/docs/feature.md" 2>/dev/null; then
+  rm -f .serve.pid .serve_url .serve.log
+  printf 'serve: entrega interna sem endpoint de demonstração; nada para iniciar\n'
+  exit 0
+fi
+
 owned_server_is_ready() {
   test -s .serve.pid && test -s .serve_url || return 1
   local pid url cwd

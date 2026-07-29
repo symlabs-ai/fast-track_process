@@ -227,7 +227,7 @@ def _focal_fix_project(
         "review_route: approved\n"
         "summary: Sem falha semântica óbvia.\n",
     )
-    receipt_fingerprint = "sha256:reviewed"
+    receipt_fingerprint = "sha256:" + ("1" * 64)
     _write(
         tmp_path,
         "docs/feature-validation.json",
@@ -311,7 +311,7 @@ def test_feature_fast_graph_and_session_policy_are_valid() -> None:
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature_fast"
-    assert graph.meta["version"] == "1.2.0"
+    assert graph.meta["version"] == "1.3.0"
     assert graph.meta["execution_policy"]["max_acceptance_criteria_per_cycle"] == 6
     assert graph.meta["session_policy"] == {
         "mode": "sprint",
@@ -404,13 +404,16 @@ def test_feature_fast_uses_focal_fix_and_delta_review_topology() -> None:
     assert graph.get_node("feature.fix_validate").next == "feature.fix_review"
     assert graph.get_node("feature.fix_review").next == "feature.fix_review_route"
     assert graph.get_node("feature.fix_review_decision").branches == {
-        "approved": "feature.acceptance",
+        "approved": "feature.fix_full_validate",
         "implementation": "feature.fix",
         "evidence": "feature.impact_prepare",
         "full_review": "feature.impact_prepare",
         "scope": "feature.discovery",
         "_default": "feature.fix_review",
     }
+    assert graph.get_node("feature.fix_full_validate").next == (
+        "feature.acceptance"
+    )
     assert graph.get_node("feature.scope_gate").next == "feature.receipt_baseline"
     assert graph.get_node("feature.implement").next == "feature.impact_prepare"
     assert graph.get_node("feature.pre_review").next == "feature.pre_review_route"
@@ -442,6 +445,44 @@ def test_feature_fast_runtime_references_are_self_contained() -> None:
     assert ".ft/process/feature/" not in combined
 
 
+def test_feature_fast_internal_acceptance_does_not_require_make_url(
+    tmp_path: Path,
+) -> None:
+    scripts = tmp_path / ".ft" / "process" / "feature-fast" / "scripts"
+    scripts.mkdir(parents=True)
+    (tmp_path / ".ft" / "manifest.yml").write_text(
+        "schema_version: 3\nprocesses: {}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "feature.md").write_text(
+        "---\ninterface: internal\n---\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "project").mkdir()
+    (tmp_path / "project" / "Makefile").write_text(
+        "build:\n\t@true\n\ntest:\n\t@true\n",
+        encoding="utf-8",
+    )
+    for name in ("product.sh", "serve.sh"):
+        source = ROOT / "templates" / "feature-fast" / "scripts" / name
+        target = scripts / name
+        target.write_bytes(source.read_bytes())
+        target.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(scripts / "serve.sh")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "entrega interna" in result.stdout
+    assert not (tmp_path / ".serve_url").exists()
+
+
 def test_feature_fast_fix_validator_anchors_and_approves_only_focal_delta(
     tmp_path: Path,
 ) -> None:
@@ -468,12 +509,7 @@ def test_feature_fast_fix_validator_anchors_and_approves_only_focal_delta(
     fixed = _run_fast_validator(root, "fix-implementation")
     assert fixed.returncode == 0, fixed.stderr
 
-    fingerprint = "sha256:fixed"
-    _write(
-        root,
-        "docs/feature-validation.json",
-        json.dumps({"fingerprint": fingerprint}),
-    )
+    fingerprint = baseline["receipt_fingerprint"]
     _write(
         root,
         "docs/feature-fix-review.md",
@@ -511,14 +547,9 @@ def test_feature_fast_fix_validator_requires_full_review_outside_workset(
     baseline = yaml.safe_load(
         (root / "docs/feature-fix-baseline.yml").read_text(encoding="utf-8")
     )
-    fingerprint = "sha256:expanded"
+    fingerprint = baseline["receipt_fingerprint"]
     _write(root, "project/app.py", "VALUE = 2\n")
     _write(root, "project/outside.py", "EXPANDED = True\n")
-    _write(
-        root,
-        "docs/feature-validation.json",
-        json.dumps({"fingerprint": fingerprint}),
-    )
     _write(
         root,
         "docs/feature-fix-review.md",
@@ -717,12 +748,7 @@ def test_feature_fast_semantic_impact_allows_a_new_related_test(
         "project/tests/app_test.py",
         "def test_related_value():\n    assert 2 == 2\n",
     )
-    fingerprint = "sha256:semantic"
-    _write(
-        root,
-        "docs/feature-validation.json",
-        json.dumps({"fingerprint": fingerprint}),
-    )
+    fingerprint = baseline["receipt_fingerprint"]
     _write(
         root,
         "docs/feature-fix-review.md",

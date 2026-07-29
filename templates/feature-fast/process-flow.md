@@ -1,7 +1,7 @@
 # Feature Fast — Diagrama de Fluxo
 
 Fluxo do processo definido em [`process.yml`](./process.yml)
-(`id: feature_fast`, versão `1.2.0`). O template executa um ciclo independente
+(`id: feature_fast`, versão `1.3.0`). O template executa um ciclo independente
 por demanda, precedido por um plano interno consultivo. O grafo e seus gates
 continuam autoritativos.
 
@@ -48,10 +48,11 @@ flowchart TD
         review_decision{"review_decision"}
         fix_prepare{{"fix_prepare<br/>congelar review + F-* + commit"}}
         fix["fix<br/>somente achados rejeitados"]
-        fix_validate{{"fix_validate<br/>receipt completo renovado"}}
+        fix_validate{{"fix_validate<br/>delta focal válido"}}
         fix_review["fix_review<br/>auditoria somente do delta"]
         fix_review_route{{"fix_review_route<br/>extrair rota focal"}}
         fix_review_decision{"fix_review_decision"}
+        fix_full_validate{{"fix_full_validate<br/>build + test uma vez"}}
     end
 
     subgraph acceptance["feature-03-acceptance"]
@@ -80,7 +81,7 @@ flowchart TD
     review_decision -->|implementation| fix_prepare --> fix --> fix_validate --> fix_review
     fix_review --> fix_review_route --> fix_review_decision
     fix_validate -. falha focal .-> fix
-    fix_review_decision -->|approved| accept
+    fix_review_decision -->|approved| fix_full_validate --> accept
     fix_review_decision -. implementation .-> fix
     fix_review_decision -. evidence .-> impact_prepare
     fix_review_decision -. full_review .-> impact_prepare
@@ -96,7 +97,7 @@ flowchart TD
     classDef gate fill:#bfdbfe,stroke:#1e40af,color:#000;
     classDef terminal fill:#bbf7d0,stroke:#166534,color:#000;
     class questions,scope_gate,accept human;
-    class preflight,discovery_gate,reserve_ids,receipt_baseline,impact_prepare,pre_review_route,product_validate,evidence_gate,review_prepare,review_route,fix_prepare,fix_validate,fix_review_route,final_gate gate;
+    class preflight,discovery_gate,reserve_ids,receipt_baseline,impact_prepare,pre_review_route,product_validate,evidence_gate,review_prepare,review_route,fix_prepare,fix_validate,fix_review_route,fix_full_validate,final_gate gate;
     class start,endnode,close terminal;
 ```
 
@@ -116,6 +117,9 @@ flowchart TD
 - Uma rejeição de implementação não reinicia `implement → evidence → review`.
   Ela congela os F-* e executa `fix → fix_validate → fix_review`; apenas
   expansão do workset/contrato retorna ao caminho completo.
+- Tentativas intermediárias do fix executam somente validação e auditoria
+  focais. `fix_full_validate` paga build+test e renova receipts uma única vez,
+  depois da aprovação focal e antes do aceite.
 - Toda review recebe um ID ligado ao snapshot atual. Receipts adicionais
   declaram seus paths: uma lane física só é refeita quando essas dependências
   mudam, inclusive durante um fix focal; caso contrário, sua prova anterior é

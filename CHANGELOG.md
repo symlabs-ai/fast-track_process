@@ -27,6 +27,10 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   sinal de atividade. Teto absoluto agora é exclusivamente opt-in por
   `FT_LLM_MAX_WALL_TIMEOUT` ou override do provider; metas temporais de
   episódios viraram telemetria e não interrompem trabalho produtivo.
+- `ft retry` agora retoma primeiro o comando de validação de nodes bloqueados
+  depois de uma delegação bem-sucedida. Se o artefato já estiver válido, o
+  grafo avança sem redelegar ao builder; uma falha real permanece bloqueada
+  para `ft fix`, sem repetir silenciosamente uma chamada LLM cara.
 
 ### `bug-fast`: correção focal em duas chamadas
 
@@ -34,13 +38,16 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   independente revisa o diff; o caminho feliz não cria plano nem delegação
   documental e termina com reconciliação Python idempotente.
 - Review rejeitada gera âncora B-*, fix focal na sessão existente, receipt
-  completo renovado e auditoria somente do delta. Path novo força review
-  completa; mudança de contrato/capacidade bloqueia e encaminha a
-  `feature-fast`.
+  focal renovado e auditoria somente do delta. A suíte completa roda uma única
+  vez após a aprovação focal; path novo força review completa e mudança de
+  contrato/capacidade bloqueia e encaminha a `feature-fast`.
 - Validators vinculam review e auditoria ao commit, ao fingerprint do receipt,
   aos paths efetivamente alterados e aos mesmos hashes de teste RED/GREEN.
+- O escopo de implementação considera todas as raízes de produto declaradas
+  (`project/`, `src/`, `test/` e `tests/`), permitindo corrigir código
+  compartilhado sem afrouxar o controle de paths.
 
-### `feature-fast` 1.2: fatias, impacto e reviews atuais
+### `feature-fast` 1.3: fatias, impacto e reviews atuais
 
 - Ciclos claros ficam limitados a 6 ACs; demandas maiores retornam ao discovery
   para serem divididas em fatias verticais independentes de 4–6 ACs.
@@ -52,6 +59,13 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 - Receipts adicionais podem declarar suas dependências. A engine registra
   `rerun` apenas quando esses paths mudaram e `reuse` quando a lane permaneceu
   intacta, inclusive para ensaios físicos.
+- Loops de correção executam somente o teste focal até a auditoria do delta ser
+  aprovada; o build/test completo e os receipts impactados são renovados uma
+  vez, imediatamente antes da aceitação.
+- Reviews adversariais devem concentrar todos os achados acionáveis em uma
+  passagem e provar dependências históricas antes de reutilizar evidência de
+  outro ciclo. Interfaces internas deixam de exigir servidor HTTP no passo de
+  demonstração.
 
 ### Atualização de processos a partir de pins imutáveis
 

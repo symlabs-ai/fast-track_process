@@ -77,7 +77,10 @@ artefatos existentes. O gate de evidência prova integridade referencial; a
 review continua responsável por julgar a suficiência semântica. Seu primeiro
 veredicto de implementação rejeitado segue para `fix_prepare`, que congela a
 review, seus F-* e o commit revisado. `fix` corrige somente esses achados,
-`fix_validate` renova o receipt completo e `fix_review` audita apenas o delta.
+`fix_validate` confirma o delta focal e `fix_review` audita apenas esse delta.
+Somente depois da aprovação, `fix_full_validate` renova o receipt completo e as
+lanes impactadas uma vez, antes do aceite. Tentativas intermediárias não
+repetem build+test.
 Lacunas de prova voltam a `evidence`, contradições de escopo voltam a
 `discovery` e aprovações seguem para o aceite. Se contrato, AC ou workset forem
 ampliados, a auditoria focal exige `full_review` e retorna ao caminho completo.

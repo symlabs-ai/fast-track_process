@@ -24,8 +24,10 @@ elimina uma chamada de planejamento; builder e reviewer ocupam sessões
 persistentes independentes dentro da sprint.
 
 Quando a review encontra um defeito, `bug-fast` ancora seus achados B-*, reusa
-a sessão do builder para um fix focal, renova o receipt completo e audita
-somente o delta do fix. O restante do julgamento permanece fechado. Se o delta
+a sessão do builder para um fix focal e audita somente o delta. A suíte completa
+e o receipt são renovados uma única vez depois da aprovação focal, antes do
+aceite; tentativas intermediárias executam apenas GREEN e auditoria. O restante
+do julgamento permanece fechado. Se o delta
 escapar dos paths originais, passa por review completa; se exigir contrato,
 capacidade, auth/security, migration, dados, dependência, infraestrutura ou
 mudança transversal, o ciclo bloqueia e orienta:

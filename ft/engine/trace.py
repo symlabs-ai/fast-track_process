@@ -466,6 +466,34 @@ def _span_rows(
     return rows
 
 
+def execution_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Summarize graph work without confusing progress with loop executions.
+
+    A node may legitimately execute more than once after a review, retry or
+    stakeholder rejection.  ``unique_nodes`` describes graph coverage while
+    ``node_executions`` and ``reexecutions`` expose the real process cost.
+    """
+    node_rows = [
+        row
+        for row in rows
+        if row.get("category") == "node"
+        and isinstance(row.get("node_id"), str)
+        and str(row.get("node_id")).strip()
+    ]
+    counts: dict[str, int] = {}
+    for row in node_rows:
+        node_id = str(row["node_id"])
+        counts[node_id] = counts.get(node_id, 0) + 1
+    open_executions = sum(1 for row in node_rows if row.get("status") == "open")
+    return {
+        "unique_nodes": len(counts),
+        "node_executions": len(node_rows),
+        "reexecutions": sum(max(0, count - 1) for count in counts.values()),
+        "open_executions": open_executions,
+        "by_node": dict(sorted(counts.items())),
+    }
+
+
 def build_run_report(
     trace_path: str | Path,
     *,
@@ -536,6 +564,7 @@ def build_run_report(
             "cache_read_tokens": token_total("cache_read_tokens"),
             "cache_write_tokens": token_total("cache_write_tokens"),
         },
+        "execution": execution_summary(rows),
         "spans": rows,
     }
 

@@ -14,6 +14,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 - Durante uma delegação ativa, `ft status` agora resume a ação corrente, a
   evolução observável (tarefas, comandos, arquivos e achados) e o sinal que
   comprova produtividade, sem reproduzir comandos ou valores sensíveis.
+- Cada linha nova do provider recebe timestamp em um sidecar que contém apenas
+  hash e relógio; a duração da ação atual deixa de depender da primeira consulta
+  de status, sem alterar o JSON/log nativo nem copiar conteúdo sensível.
+- Progresso de grafo, execuções reais e reexecuções agora são contadores
+  separados no status e no `run-report.json`; posições cíclicas nunca excedem o
+  total do grafo (`14/13` deixa de ser representável).
 - Eventos reais de stream, criação/remoção/alteração/crescimento em qualquer
   arquivo versionado ou novo não ignorado da worktree isolada e progressão da
   árvore de processos por CPU/I/O renovam a execução indefinidamente.
@@ -33,6 +39,19 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   `feature-fast`.
 - Validators vinculam review e auditoria ao commit, ao fingerprint do receipt,
   aos paths efetivamente alterados e aos mesmos hashes de teste RED/GREEN.
+
+### `feature-fast` 1.2: fatias, impacto e reviews atuais
+
+- Ciclos claros ficam limitados a 6 ACs; demandas maiores retornam ao discovery
+  para serem divididas em fatias verticais independentes de 4–6 ACs.
+- Uma pré-review semântica focal ocorre antes do build/test completo, reduzindo
+  validações caras desperdiçadas por defeitos de contrato, teste ou escopo.
+- O workset é expandido pelo delta e por testes/pares relacionados. Reviews
+  completas e focais usam IDs ligados ao snapshot atual e recusam artefatos
+  obsoletos.
+- Receipts adicionais podem declarar suas dependências. A engine registra
+  `rerun` apenas quando esses paths mudaram e `reuse` quando a lane permaneceu
+  intacta, inclusive para ensaios físicos.
 
 ### Sessões persistentes e `mvp-builder-fast`
 

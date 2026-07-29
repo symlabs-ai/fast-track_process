@@ -82,7 +82,20 @@ Lacunas de prova voltam a `evidence`, contradições de escopo voltam a
 `discovery` e aprovações seguem para o aceite. Se contrato, AC ou workset forem
 ampliados, a auditoria focal exige `full_review` e retorna ao caminho completo.
 
-Review usa `verify` para reaproveitar a evidência antes do aceite. Depois da
+Antes da suíte completa, uma pré-revisão semântica focal verifica todos os ACs,
+testes, compatibilidade e escopo. Demandas claras com mais de 6 ACs são
+recusadas até serem divididas em fatias verticais de 4–6 ACs. O workset inicial
+é expandido pelo delta real e por testes/pares semanticamente relacionados.
+
+Review usa `verify` para reaproveitar a evidência antes do aceite. Cada
+pré-review e review completa recebe um ID determinístico ligado ao impacto,
+evidência e receipts atuais; artefatos de uma iteração anterior não são aceitos.
+`feature-workset.yml` pode declarar `receipt_dependencies` para lanes caras.
+O processo compara seus paths antes/depois: uma lane física impactada exige
+novo receipt; uma lane inalterada registra `reuse` e não repete o ensaio.
+Essa mesma checagem ocorre depois de um fix focal: o receipt físico anterior
+continua válido enquanto nenhuma dependência declarada tiver sido alterada.
+Depois da
 reconciliação documental, o gate final faz uma única verificação do receipt e
 dos documentos reconciliados; qualquer mudança material exige outro `full`.
 Na reconciliação, o LLM propõe apenas a linha do PB, a linha da FEAT, uma entrada
@@ -126,9 +139,11 @@ ativo.
 ## Contrato
 
 - uma demanda e uma feature alvo por ciclo;
+- no máximo 6 ACs por ciclo claro; demandas maiores viram fatias verticais;
 - perguntas iterativas antes de congelar o escopo;
 - nenhum código antes do human gate de escopo;
-- implementação, validação do produto, evidência e review são etapas separadas;
+- implementação, pré-review, validação do produto, evidência e review são
+  etapas separadas;
 - uma validação completa `make build` + `make test`, com receipt determinístico,
   obrigatória após cada episódio de implementação/correção;
 - correções rejeitadas pela review usam fix focal + receipt completo + auditoria
@@ -147,7 +162,7 @@ vez, fixa path e digest no estado, segue novamente o grafo após rejeições e a
 `close_policy` restrito ao PB selecionado. O processo global é apenas fonte de
 materialização e nunca é executado.
 
-Os sete nodes LLM usam perfis `feature_delta.*` próprios do processo incremental
+Os oito nodes LLM usam perfis `feature_delta.*` próprios do processo incremental
 em vez de herdar HyperMode do `mvp-builder`. O engine compõe apenas demanda,
 contratos, feedback, diff e recortes focais aplicáveis a discovery, implementação,
 fix, review ou reconcile.

@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "1.1.0"
+version: "1.2.0"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -17,6 +17,7 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/feature-fast/process.yml
   merge_command: ft close --merge full
+  max_acceptance_criteria_per_cycle: 6
 
 session_policy:
   mode: sprint
@@ -37,6 +38,7 @@ correction_policy:
   scope_rejection_restarts_at: feature.discovery
   acceptance_rejection_restarts_at: feature.implement
   mandatory_after_implementation:
+    - feature.pre_review
     - feature.review
     - feature.fix_review
     - feature.acceptance
@@ -74,10 +76,15 @@ artifact_policy:
     - docs/feature.md
     - docs/feature-plan.md
     - docs/feature-workset.yml
+    - docs/feature-receipt-baseline.yml
     - docs/feature-id-reservation.yml
+    - docs/feature-impact.yml
+    - docs/feature-pre-review.md
+    - docs/feature-pre-review.yml
     - docs/implementation-report.md
     - docs/feature-evidence.yml
     - docs/feature-validation.json
+    - docs/feature-review-context.yml
     - docs/feature-review.md
     - docs/feature-review.yml
     - docs/feature-fix-baseline.yml
@@ -195,6 +202,10 @@ nodes:
 
       feature.md deve conter Objetivo, Comportamento Esperado, Critérios de
       Aceite com IDs AC-01, AC-02..., Fora do Escopo e Restrições.
+      Um ciclo feature-fast claro pode conter no máximo 6 ACs. Quando a demanda
+      for maior, proponha fatias verticais independentes de 4–6 ACs, marque
+      `clarification_status: required` e pergunte qual primeira fatia deve ser
+      executada; não comprima nem descarte requisitos silenciosamente.
 
       feature-plan.md deve referenciar o mesmo PB-* e FEAT-*, listar impacto
       técnico, contratos afetados, tarefas ordenadas, estratégia de testes,
@@ -206,6 +217,13 @@ nodes:
       que levaram ao escopo atual. Gere também docs/feature-workset.yml com uma
       lista curta de paths e testes provavelmente relevantes. Esse workset é uma
       dica focal e pode estar incompleto: nunca o trate como bloqueio rígido.
+      Use `schema_version: 1` e `paths`. Quando houver um receipt adicional
+      caro (por exemplo ensaio físico), declare também
+      `receipt_dependencies`, lista opcional com `id`, `mode:
+      automated|physical`, `receipt` e `depends_on` (globs relativos). Não
+      declare a lane `product`, pois o processo a inclui automaticamente. Essa
+      dependência permite reutilizar um ensaio físico apenas quando nenhum path
+      que ele observa mudou.
       Não altere código, PROJECT_BACKLOG nem FEATURES neste node.
     validators:
       - file_exists: docs/feature-discovery.md
@@ -294,6 +312,25 @@ nodes:
       - docs/feature.md
       - docs/feature-plan.md
     reject_next: feature.discovery
+    next: feature.receipt_baseline
+
+  - id: feature.receipt_baseline
+    type: gate
+    title: "Congelar Dependências dos Receipts"
+    description: >-
+      Registra deterministicamente a lane de validação completa e eventuais
+      receipts adicionais declarados no workset antes de qualquer mudança no
+      produto. Isso permite decidir rerun/reuse por impacto real.
+    sprint: feature-01-scope
+    executor: python
+    outputs:
+      - docs/feature-receipt-baseline.yml
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py prepare-receipt-baseline"
+          stop_on_failure: true
+      - file_exists: docs/feature-receipt-baseline.yml
     next: feature.implement
 
   - id: feature.implement
@@ -340,7 +377,94 @@ nodes:
          chamada em código e testes. O node evidence fará essa coleta.
       7. Em uma correção solicitada, considere o feedback mais recente e mantenha
          todo o restante aprovado funcionando.
-    next: feature.product_validate
+    next: feature.impact_prepare
+
+  - id: feature.impact_prepare
+    type: gate
+    title: "Calcular Impacto da Implementação"
+    description: >-
+      Expande o workset com o delta real e testes/pares semanticamente
+      relacionados, calcula quais receipts foram impactados e emite o ID
+      imutável da pré-revisão.
+    sprint: feature-02-build
+    executor: python
+    outputs:
+      - docs/feature-impact.yml
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py prepare-impact"
+          stop_on_failure: true
+      - file_exists: docs/feature-impact.yml
+    on_fail:
+      human_gate: "O delta não forma uma implementação testável; corrija o produto antes de validar."
+      goto: feature.implement
+    next: feature.pre_review
+
+  - id: feature.pre_review
+    no_pre_seed: true
+    type: review
+    review_route_path: docs/feature-pre-review.yml
+    context_profile: feature_delta.pre_review
+    title: "Pré-revisão Semântica Focal"
+    description: >-
+      Audita contrato, testes e escopo antes do build/test completo. Uma falha
+      semântica volta ao código sem desperdiçar a suíte cara.
+    sprint: feature-02-build
+    executor: claude
+    max_turns: 24
+    llm_timeout_seconds: 600
+    outputs:
+      - docs/feature-pre-review.md
+      - docs/feature-pre-review.yml
+    write_scope:
+      - docs/feature-pre-review.md
+      - docs/feature-pre-review.yml
+    prompt: |
+      Faça uma pré-revisão semântica focal antes da validação completa. Use o
+      contrato, plano, diff e `docs/feature-impact.yml`; não altere produto,
+      testes, contratos ou artefatos anteriores e não rode build/suíte completa.
+      Sondas focais somente quando indispensáveis.
+
+      Verifique todos os AC-*, teste correspondente, compatibilidade, escopo e
+      coerência do delta. Gere docs/feature-pre-review.md com uma tabela
+      AC/PASS|FAIL/evidência. Achados de implementação devem ser numerados
+      P-01, P-02... Gere docs/feature-pre-review.yml com `schema_version: 1`,
+      o `review_id` exato de `feature-impact.yml`, `verdict`, `review_route` e
+      `summary`. Rotas: approved, implementation ou scope.
+    validation_mode: fail_fast
+    validators:
+      - file_exists: docs/feature-pre-review.md
+      - file_exists: docs/feature-pre-review.yml
+      - command_succeeds: "python .ft/process/feature-fast/scripts/validate_feature.py pre-review"
+    next: feature.pre_review_route
+
+  - id: feature.pre_review_route
+    type: gate
+    title: "Registrar Rota da Pré-revisão"
+    sprint: feature-02-build
+    executor: python
+    validators:
+      - read_artifact:
+          path: docs/feature-pre-review.yml
+          key: review_route
+          pattern: "review_route:\\s*(approved|implementation|scope)"
+    next: feature.pre_review_decision
+
+  - id: feature.pre_review_decision
+    type: decision
+    title: "Encaminhar Pré-revisão"
+    sprint: feature-02-build
+    executor: python
+    condition: review_route
+    branches:
+      approved: feature.product_validate
+      implementation: feature.implement
+      scope: feature.discovery
+      _default: feature.pre_review
+    episode_restart:
+      implementation: feature_implementation
+      scope: feature_implementation
 
   - id: feature.product_validate
     type: gate
@@ -423,9 +547,31 @@ nodes:
     on_fail:
       human_gate: "As referências de evidência estão incompletas; regenere somente a evidência."
       goto: feature.evidence
+    next: feature.review_prepare
+
+  - id: feature.review_prepare
+    type: gate
+    title: "Congelar Contexto da Revisão Completa"
+    description: >-
+      Confirma a pré-revisão, evidências e receipts atuais; decide rerun/reuse
+      por lane e gera um review_id ligado ao snapshot exato.
+    sprint: feature-02-build
+    executor: python
+    outputs:
+      - docs/feature-review-context.yml
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py prepare-review"
+          stop_on_failure: true
+      - file_exists: docs/feature-review-context.yml
+    on_fail:
+      human_gate: "Um receipt impactado está ausente ou obsoleto; execute somente a lane indicada."
+      goto: feature.product_validate
     next: feature.review
 
   - id: feature.review
+    no_pre_seed: true
     type: review
     review_route_path: docs/feature-review.yml
     context_profile: feature_delta.review
@@ -459,9 +605,12 @@ nodes:
       numere cada achado acionável como F-01, F-02 etc.; não agrupe defeitos
       independentes sob o mesmo ID. Gere também
       docs/feature-review.yml com schema_version: 1, verdict, review_route e
-      summary. `review_route` deve ser exatamente approved, implementation,
-      evidence ou scope: use implementation para defeito no produto, evidence
-      para prova ausente/inadequada e scope para contradição do contrato.
+      summary, além do `review_id` e `receipt_fingerprint` exatos de
+      docs/feature-review-context.yml. `review_route` deve ser exatamente
+      approved, implementation, evidence ou scope: use implementation para
+      defeito no produto, evidence para prova ausente/inadequada e scope para
+      contradição do contrato. Nunca reutilize IDs ou artefatos de uma revisão
+      anterior.
     validation_mode: fail_fast
     validators:
       - file_exists: docs/feature-review.md
@@ -580,8 +729,13 @@ nodes:
             bash .ft/process/feature-fast/scripts/product.sh verify
             docs/feature-validation.json
           timeout: 300
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py fix-receipts"
+          stop_on_failure: true
     on_fail:
-      human_gate: "A correção focal ou sua validação falhou; ajuste somente os achados preservados."
+      human_gate: >-
+        A correção focal, sua validação ou um receipt impactado falhou; ajuste
+        somente o achado ou regenere apenas a lane indicada.
       goto: feature.fix
     next: feature.fix_review
 
@@ -616,7 +770,8 @@ nodes:
       Gere docs/feature-fix-review.md com a tabela dos F-* e a análise de
       regressão do delta. Gere docs/feature-fix-review.yml com:
       `schema_version: 1`, `verdict`, `review_route`, `summary`,
-      `source_review: docs/feature-review.yml`, `base_commit`,
+      `source_review: docs/feature-review.yml`, o `source_review_id` exato da
+      âncora, `base_commit`,
       `receipt_fingerprint` e `findings` (lista de `id`, `status`, `evidence`).
 
       Rotas válidas:
@@ -656,8 +811,8 @@ nodes:
     branches:
       approved: feature.acceptance
       implementation: feature.fix
-      evidence: feature.evidence
-      full_review: feature.evidence
+      evidence: feature.impact_prepare
+      full_review: feature.impact_prepare
       scope: feature.discovery
       _default: feature.fix_review
     episode_restart:

@@ -191,7 +191,9 @@ ft log --cycle <id>
 Enquanto uma delegação LLM estiver ativa, `ft status` atualiza o bloco
 `TRABALHO EM ANDAMENTO` com a ação corrente, a evolução observável e os sinais
 de produtividade. O resumo é derivado do log e da supervisão da worktree,
-omite argumentos sensíveis e não interfere na execução.
+omite argumentos sensíveis e não interfere na execução. Logs novos mantêm um
+sidecar só de hashes/timestamps, portanto “nesta ação há” usa o instante real
+sem copiar prompt, comando ou segredo.
 
 Regra única de seleção:
 

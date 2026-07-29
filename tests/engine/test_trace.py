@@ -100,6 +100,42 @@ def test_report_uses_real_wall_range_and_null_for_unavailable_provider_metrics(t
         "cache_read_tokens": None,
         "cache_write_tokens": None,
     }
+    assert report["execution"] == {
+        "unique_nodes": 1,
+        "node_executions": 1,
+        "reexecutions": 0,
+        "open_executions": 0,
+        "by_node": {"build": 1},
+    }
+
+
+def test_report_separates_unique_nodes_from_reexecutions(tmp_path):
+    recorder = TraceRecorder(tmp_path / "events.jsonl", "cycle-loop")
+    for status in ("rejected", "ok"):
+        node = recorder.begin_span(
+            category="node",
+            name="Review",
+            node_id="feature.review",
+            ordinal=recorder.next_ordinal("node", "feature.review"),
+        )
+        node.finish(status=status)
+    open_fix = recorder.begin_span(
+        category="node",
+        name="Fix",
+        node_id="feature.fix",
+        ordinal=1,
+    )
+
+    report = build_run_report(recorder.path)
+
+    assert report["execution"] == {
+        "unique_nodes": 2,
+        "node_executions": 3,
+        "reexecutions": 1,
+        "open_executions": 1,
+        "by_node": {"feature.fix": 1, "feature.review": 2},
+    }
+    assert open_fix.finished is False
 
 
 def test_report_enriches_llm_usage_and_marks_crashed_span_open(tmp_path):

@@ -263,7 +263,9 @@ ft close --cycle <id>
 
 `ft status --report` usa o trace append-only do ciclo. O relatório distingue
 wall time real de tempo ativo de LLM, validators, espera humana, fila e close;
-tentativas e ordinais sobrevivem a reinícios do runner. Métricas que o provider
+tentativas e ordinais sobrevivem a reinícios do runner. `execution` separa
+nodes únicos, execuções totais, reexecuções e tentativas abertas; o progresso
+do grafo nunca é usado como aproximação do custo real. Métricas que o provider
 não fornece aparecem como `—`/`null`, nunca como zero inventado. No close, o
 resumo derivado é arquivado em `.ft/cycles/<cycle>/run-report.json`; logs crus
 permanecem fora do Git.
@@ -728,6 +730,13 @@ para toda a sequência `implement → evidence → review`. Ele congela a review
 seus F-*, executa um fix focal, renova deterministicamente o receipt completo e
 audita somente o delta. Mudança de contrato, AC ou arquivo fora do workset força
 fallback para evidência e review completas.
+
+Desde a versão 1.2, um ciclo claro aceita no máximo 6 ACs; escopos maiores são
+divididos em fatias verticais de 4–6 ACs. O delta passa por pré-review semântica
+antes do build/test completo. Um manifesto de impacto expande o workset com
+arquivos e testes relacionados, gera IDs imutáveis de review e decide
+`rerun|reuse` para receipts adicionais conforme seus paths declarados. Assim,
+um ensaio físico só é repetido quando uma dependência física realmente mudou.
 
 ### `bug`
 

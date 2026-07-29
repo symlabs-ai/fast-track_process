@@ -20,6 +20,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ft.engine.llm_activity import (
+    activity_log_path,
+    append_activity,
+    write_activity,
+)
+
 # Padrões que indicam rate limit / quota esgotada no output do LLM
 _RATE_LIMIT_PATTERNS = re.compile(
     r"rate[ _.-]?limit|"
@@ -1204,6 +1210,7 @@ def _write_log_preamble(log_path: str, llm_engine: str, cmd: list[str], prompt: 
     """Escreve cabeçalho útil para inspeção de um step delegado."""
     path = Path(log_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    activity_log_path(path).unlink(missing_ok=True)
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with path.open("w", encoding="utf-8") as f:
         f.write("# LLM Delegate Log\n")
@@ -1978,10 +1985,14 @@ def _stream_process_output(
             time.sleep(10)
 
     log_file = None
+    activity_file = None
     heartbeat = None
     try:
         if log_path:
             log_file = Path(log_path).open("a", encoding="utf-8")
+            activity_path = activity_log_path(log_path)
+            activity_path.parent.mkdir(parents=True, exist_ok=True)
+            activity_file = activity_path.open("a", encoding="utf-8")
 
         if not stream_prefix:
             heartbeat = threading.Thread(target=_print_heartbeat, daemon=True)
@@ -2017,7 +2028,19 @@ def _stream_process_output(
                 "ft_reconciled_from": str(tp),
             })
             if log_file:
-                log_file.write(f"# ft: reconciliado via transcript ({reason})\n{synth}\n")
+                reconcile_note = f"# ft: reconciliado via transcript ({reason})"
+                log_file.write(f"{reconcile_note}\n{synth}\n")
+                if activity_file:
+                    write_activity(
+                        activity_file,
+                        reconcile_note,
+                        source="engine",
+                    )
+                    write_activity(
+                        activity_file,
+                        synth,
+                        source="reconciled_stream",
+                    )
                 log_file.flush()
             return synth + "\n"
 
@@ -2064,6 +2087,8 @@ def _stream_process_output(
             chunks.append(line)
             if log_file:
                 log_file.write(line)
+                if activity_file:
+                    write_activity(activity_file, line, source="stream")
                 # Para engines JSON (claude stream-json, codex --json),
                 # também escreve linha legível logo após o JSON bruto
                 if llm_engine in ("claude", "codex"):
@@ -2135,6 +2160,8 @@ def _stream_process_output(
     finally:
         if log_file:
             log_file.close()
+        if activity_file:
+            activity_file.close()
         if not stream_prefix:
             # Limpa a linha de status ao terminar
             print(f"\r{' ' * (term_width)}\r", end="", flush=True)
@@ -2483,6 +2510,7 @@ REGRAS:
         if log_path:
             with Path(log_path).open("a", encoding="utf-8") as f:
                 f.write(message)
+            append_activity(log_path, message, source="engine")
 
     def _record_idle_grace(diagnostics: dict[str, int]) -> None:
         summary = (

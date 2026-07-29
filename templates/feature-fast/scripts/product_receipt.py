@@ -298,7 +298,7 @@ def _snapshot(
         "tools": _tool_versions(),
         "project_identity": _project_identity(root),
         "validation_contract": {
-            "template": "feature",
+            "template": "feature-fast",
             "validation_kind": validation_kind,
             "hermetic": os.environ.get("FT_FEATURE_VALIDATION_HERMETIC") == "1",
         },

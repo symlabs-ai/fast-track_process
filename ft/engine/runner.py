@@ -45,6 +45,7 @@ from ft.engine.git_ops import (
 from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
 from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
 from ft.engine.llm_logs import build_llm_log_path, display_log_path
+from ft.engine.llm_activity import activity_digest, recent_activity_timestamps
 from ft.engine.layout import (
     archive_cycle_artifacts,
     is_cycle_artifact,
@@ -52,7 +53,11 @@ from ft.engine.layout import (
     validate_local_process_path,
 )
 from ft.engine.llm_defaults import LLMSelection, LiveLLMSettings, normalize_llm_effort
-from ft.engine.trace import TraceRecorder, TraceSpan, build_run_report
+from ft.engine.trace import (
+    TraceRecorder,
+    TraceSpan,
+    build_run_report,
+)
 from ft.engine import ui
 from ft.providers.opencode_policy import opencode_deny_edit_tools_enabled
 from ft.engine.parallel import ParallelRunner
@@ -242,6 +247,7 @@ class _LLMProgressSnapshot:
 
     timestamp: str
     current: str | None = None
+    current_started_at: datetime | None = None
     evolution: str | None = None
     signal: str | None = None
 
@@ -343,13 +349,15 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
             raw_tail = stream.read().decode("utf-8", errors="replace")
     except OSError:
         return None
+    activity_timestamps = recent_activity_timestamps(path)
 
     lines = raw_tail.splitlines()
     if size > read_size and lines:
         lines = lines[1:]
 
-    active_commands: dict[str, str] = {}
+    active_commands: dict[str, tuple[str, datetime | None]] = {}
     last_action: str | None = None
+    last_action_started_at: datetime | None = None
     last_agent_message: str | None = None
     last_signal: str | None = None
     completed_commands = 0
@@ -362,6 +370,7 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
         line = raw_line.strip()
         if not line:
             continue
+        observed_at = activity_timestamps.get(activity_digest(line))
         if line.startswith("[PRODUCTIVITY_RENEWED]"):
             source_match = re.search(r"\bsource=(workspace|process)\b", line)
             if source_match:
@@ -394,8 +403,10 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
                         if candidate:
                             last_agent_message = candidate
                             last_action = candidate
+                            last_action_started_at = observed_at
                     elif block.get("type") == "tool_use":
                         last_action = f"usando ferramenta {str(block.get('name') or 'de análise')[:40]}"
+                        last_action_started_at = observed_at
             continue
 
         item_type = str(item.get("type") or "")
@@ -410,8 +421,9 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
                 completed_commands += 1
                 active_commands.pop(item_id, None)
             elif item_id:
-                active_commands[item_id] = action
+                active_commands[item_id] = (action, observed_at)
             last_action = action
+            last_action_started_at = observed_at
         elif item_type == "file_change":
             changes = item.get("changes")
             if isinstance(changes, list):
@@ -424,6 +436,7 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
             if touched_paths:
                 verb = "alterou" if completed else "editando"
                 last_action = f"{verb} `{sorted(touched_paths)[-1]}`"
+                last_action_started_at = observed_at
         elif item_type == "todo_list":
             todos = item.get("items")
             if isinstance(todos, list):
@@ -438,6 +451,7 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
             if candidate:
                 last_agent_message = candidate
                 last_action = candidate
+                last_action_started_at = observed_at
                 finding_match = re.search(
                     r"(?i)\b(\d{1,3})\s+(?:finding|findings|achado|achados)\b",
                     candidate,
@@ -445,9 +459,12 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
                 if finding_match:
                     reported_findings = int(finding_match.group(1))
 
-    current = next(reversed(active_commands.values()), None)
-    if current is None:
+    active = next(reversed(active_commands.values()), None)
+    if active is None:
         current = last_action or last_agent_message
+        current_started_at = last_action_started_at
+    else:
+        current, current_started_at = active
 
     evolution_parts: list[str] = []
     if todo_total is not None and todo_done is not None:
@@ -468,6 +485,7 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
     return _LLMProgressSnapshot(
         timestamp=datetime.fromtimestamp(mtime).strftime("%H:%M:%S"),
         current=current,
+        current_started_at=current_started_at,
         evolution=" · ".join(evolution_parts) or None,
         signal=last_signal or "stream/log recebendo eventos",
     )
@@ -6544,13 +6562,21 @@ class StepRunner:
             return f"{minutes}m{secs:02d}s"
         return f"{secs}s"
 
-    def _executed_steps_count(self) -> int | None:
-        """Passos realmente executados no ciclo (linhas do run log, sem INIT).
+    def _execution_progress_summary(self) -> dict[str, Any] | None:
+        """Return real node executions, keeping them separate from graph progress."""
+        trace_report = build_run_report(
+            self.trace.path,
+            run_id=self.state_mgr.state.current_cycle,
+        )
+        summary = trace_report.get("execution")
+        if (
+            isinstance(summary, dict)
+            and isinstance(summary.get("node_executions"), int)
+            and summary["node_executions"] > 0
+        ):
+            return summary
 
-        Com retries e loops de correção um node pode rodar mais de uma vez,
-        então este total pode exceder a posição no grafo mostrada no
-        Progresso.
-        """
+        # Compatibility fallback for cycles created before execution tracing.
         log_path = Path(self.project_root) / self._log_filename
         if not log_path.is_file():
             return None
@@ -6562,7 +6588,15 @@ class StepRunner:
                         count += 1
         except OSError:
             return None
-        return count
+        if count <= 0:
+            return None
+        return {
+            "unique_nodes": None,
+            "node_executions": count,
+            "reexecutions": None,
+            "open_executions": 0,
+            "by_node": {},
+        }
 
     def _node_elapsed_label(self, state) -> str | None:
         """Tempo no node atual, medido da primeira delegação (nome dos llm_logs)."""
@@ -6584,17 +6618,29 @@ class StepRunner:
             return None
         return self._format_elapsed((datetime.now() - min(stamps)).total_seconds())
 
-    def _action_elapsed_label(self, action: str) -> str | None:
+    def _action_elapsed_label(
+        self,
+        action: str,
+        *,
+        started_at: datetime | None = None,
+    ) -> str | None:
         """Há quanto tempo a mesma ação segue como atual, entre chamadas de status.
 
-        O stream de eventos não carrega relógio por linha; o melhor sinal
-        honesto é 'observada pela primeira vez em', persistido num cache leve.
-        Na primeira observação não há elapsed a mostrar.
+        Logs novos usam o timestamp exato do sidecar. Ciclos legados caem no
+        cache de primeira observação, sem reescrever o stream nativo.
         """
         import json as _json
 
-        cache = self.state_mgr.path.parent / ".status_action_seen.json"
         now = time.time()
+        if started_at is not None:
+            normalized = started_at
+            if normalized.tzinfo is None:
+                normalized = normalized.replace(tzinfo=timezone.utc)
+            return self._format_elapsed(
+                max(0.0, now - normalized.timestamp())
+            )
+
+        cache = self.state_mgr.path.parent / ".status_action_seen.json"
         try:
             entry = _json.loads(cache.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -6798,7 +6844,10 @@ class StepRunner:
                 if progress_snapshot is not None:
                     if progress_snapshot.current:
                         action_line = progress_snapshot.current
-                        action_elapsed = self._action_elapsed_label(action_line)
+                        action_elapsed = self._action_elapsed_label(
+                            action_line,
+                            started_at=progress_snapshot.current_started_at,
+                        )
                         if action_elapsed:
                             action_line = f"{action_line} (nesta ação há ~{action_elapsed})"
                         print(ui.dim(f"  Agora: {action_line}"))
@@ -6820,11 +6869,21 @@ class StepRunner:
             print(ui.info(f"Sprint: {current_sprint}"))
         steps_done = state.metrics.get("steps_completed", 0)
         steps_total = state.metrics.get("steps_total", 0)
-        current_step = steps_done + 1 if state.node_status not in ("done", "completed") else steps_done
+        if state.node_status in ("done", "completed"):
+            current_step = min(steps_done, steps_total)
+        elif steps_total > 0:
+            current_step = min(steps_done + 1, steps_total)
+        else:
+            current_step = 0
         progress_line = f"Progresso: {current_step}/{steps_total} (passo atual)"
-        executed_steps = self._executed_steps_count()
-        if executed_steps is not None and executed_steps > 0:
-            progress_line += f" · {executed_steps} passos executados"
+        execution = self._execution_progress_summary()
+        if execution is not None:
+            executed_steps = execution["node_executions"]
+            reexecutions = execution.get("reexecutions")
+            progress_line += f" · {executed_steps} execuções"
+            if isinstance(reexecutions, int) and reexecutions > 0:
+                retry_label = "reexecução" if reexecutions == 1 else "reexecuções"
+                progress_line += f" ({reexecutions} {retry_label})"
         runtime_label, activity_label = self._status_timing_labels()
         if runtime_label:
             progress_line += f" · ciclo rodando há {runtime_label}"
@@ -7003,6 +7062,14 @@ class StepRunner:
                 f"  Progresso        : {state.metrics.get('steps_completed', 0)}/"
                 f"{state.metrics.get('steps_total', 0)} nodes"
             )
+            execution = trace_report.get("execution") or {}
+            if execution:
+                print(
+                    "  Execuções        : "
+                    f"{execution.get('node_executions', 0)} total, "
+                    f"{execution.get('unique_nodes', 0)} nodes únicos, "
+                    f"{execution.get('reexecutions', 0)} reexecuções"
+                )
             return
 
         logs_dir = self._llm_log_dir()

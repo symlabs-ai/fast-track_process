@@ -1,7 +1,7 @@
 # Feature Fast — Diagrama de Fluxo
 
 Fluxo do processo definido em [`process.yml`](./process.yml)
-(`id: feature_fast`, versão `1.1.0`). O template executa um ciclo independente
+(`id: feature_fast`, versão `1.2.0`). O template executa um ciclo independente
 por demanda, precedido por um plano interno consultivo. O grafo e seus gates
 continuam autoritativos.
 
@@ -30,13 +30,19 @@ flowchart TD
         questions[/"questions<br/>responder pendências"/]
         reserve_ids{{"reserve_ids<br/>PB distinto + FEAT reservado"}}
         scope_gate[/"scope_gate<br/>aprovar escopo"/]
+        receipt_baseline{{"receipt_baseline<br/>dependências antes do delta"}}
     end
 
     subgraph build["feature-02-build"]
         implement["implement<br/>somente código e testes"]
+        impact_prepare{{"impact_prepare<br/>workset dinâmico + lanes"}}
+        pre_review["pre_review<br/>semântica antes da suíte completa"]
+        pre_review_route{{"pre_review_route<br/>extrair rota"}}
+        pre_review_decision{"pre_review_decision"}
         product_validate{{"product_validate<br/>ensure local: build + test"}}
         evidence["evidence<br/>somente referências e relatório"]
         evidence_gate{{"evidence_gate<br/>integridade referencial"}}
+        review_prepare{{"review_prepare<br/>review_id + receipts atuais"}}
         review["review<br/>avaliação semântica independente"]
         review_route{{"review_route<br/>extrair rota estruturada"}}
         review_decision{"review_decision"}
@@ -60,7 +66,13 @@ flowchart TD
     questions -. respostas .-> discovery
     clarity -->|clear| reserve_ids --> scope_gate
     scope_gate -. rejeição .-> discovery
-    scope_gate --> implement --> product_validate --> evidence --> evidence_gate --> review
+    scope_gate --> receipt_baseline --> implement --> impact_prepare --> pre_review
+    pre_review --> pre_review_route --> pre_review_decision
+    pre_review_decision -->|approved| product_validate
+    pre_review_decision -. implementation .-> implement
+    pre_review_decision -. scope .-> discovery
+    pre_review_decision -. inválida .-> pre_review
+    product_validate --> evidence --> evidence_gate --> review_prepare --> review
     product_validate -. falha focal .-> implement
     evidence_gate -. referência inválida .-> evidence
     review --> review_route --> review_decision
@@ -70,8 +82,8 @@ flowchart TD
     fix_validate -. falha focal .-> fix
     fix_review_decision -->|approved| accept
     fix_review_decision -. implementation .-> fix
-    fix_review_decision -. evidence .-> evidence
-    fix_review_decision -. full_review .-> evidence
+    fix_review_decision -. evidence .-> impact_prepare
+    fix_review_decision -. full_review .-> impact_prepare
     fix_review_decision -. scope .-> discovery
     fix_review_decision -. inválida .-> fix_review
     review_decision -. evidence .-> evidence
@@ -84,7 +96,7 @@ flowchart TD
     classDef gate fill:#bfdbfe,stroke:#1e40af,color:#000;
     classDef terminal fill:#bbf7d0,stroke:#166534,color:#000;
     class questions,scope_gate,accept human;
-    class preflight,discovery_gate,reserve_ids,product_validate,evidence_gate,review_route,fix_prepare,fix_validate,fix_review_route,final_gate gate;
+    class preflight,discovery_gate,reserve_ids,receipt_baseline,impact_prepare,pre_review_route,product_validate,evidence_gate,review_prepare,review_route,fix_prepare,fix_validate,fix_review_route,final_gate gate;
     class start,endnode,close terminal;
 ```
 
@@ -92,6 +104,10 @@ flowchart TD
 
 - `preflight` e os demais gates caros usam `validation_mode: fail_fast`; checks
   estáticos vêm antes de build/test.
+- Demandas com mais de 6 ACs voltam ao discovery para serem divididas em
+  fatias verticais de 4–6 ACs; um único ciclo não absorve escopo gigante.
+- `impact_prepare` expande o workset pelo delta e por testes/pares relacionados.
+  `pre_review` detecta defeitos semânticos antes de pagar o build/test completo.
 - `implement` não produz evidência narrativa. `product_validate` roda a suíte
   completa uma vez por snapshot e `ensure` reutiliza somente o receipt local
   válido.
@@ -100,6 +116,10 @@ flowchart TD
 - Uma rejeição de implementação não reinicia `implement → evidence → review`.
   Ela congela os F-* e executa `fix → fix_validate → fix_review`; apenas
   expansão do workset/contrato retorna ao caminho completo.
+- Toda review recebe um ID ligado ao snapshot atual. Receipts adicionais
+  declaram seus paths: uma lane física só é refeita quando essas dependências
+  mudam, inclusive durante um fix focal; caso contrário, sua prova anterior é
+  reutilizada explicitamente.
 - O episódio de implementação herda a lease global de produtividade: a janela
   temporal dispara sondas e é renovada por stream, worktree ou processo ativo.
   O orçamento cumulativo é telemetria; rotas semânticas `implementation` e

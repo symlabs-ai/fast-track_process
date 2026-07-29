@@ -186,12 +186,19 @@ A classe de risco permanece: outros caminhos de skip por pre-seed/early-check
 respeitam `no_pre_seed` e cobrir com teste de reentrada (padrão do
 `test_innovation_go_branch.py`).
 
-### 3. Timestamp por linha nos llm_logs
+### 3. Timestamp por linha nos llm_logs — status ao vivo resolvido em 2026-07-29
 
 **Problema:** os eventos do stream não carregam relógio. O `ft status` estima
 "nesta ação há ~Xs" com cache de observação entre chamadas (aproximação) e o
 tempo por ação/ferramenta não é reconstruível post-mortem a partir do log.
 
-**Solução:** prefixar cada linha gravada nos llm_logs com timestamp ISO (ou
-gravar sidecar .jsonl com `ts`), e trocar a estimativa do status pela leitura
-exata. Também melhora o `ft analyse-cycle` planejado (duração por node/ação).
+**Solução aplicada:** cada linha nova do stream é registrada em um sidecar
+`.activity` com timestamp ISO e SHA-256 da linha, sem duplicar prompts, comandos
+ou segredos e sem alterar o formato nativo do provider. O `ft status` correlaciona
+o hash e usa o relógio exato; ciclos antigos preservam o fallback de primeira
+observação. O sidecar não tem extensão `.jsonl`/`.log`, portanto não contamina
+métricas de tokens nem a descoberta de logs LLM.
+
+**Pendente:** incorporar a linha do tempo sanitizada ao relatório arquivado para
+que o futuro `ft analyse-cycle` consiga reconstruir duração por ação depois que
+o runtime externo do ciclo for removido.

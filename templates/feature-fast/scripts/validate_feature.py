@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import fnmatch
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ import yaml
 
 AC_RE = re.compile(r"\bAC-\d{2,3}\b", re.IGNORECASE)
 FINDING_RE = re.compile(r"\bF-\d{2,3}\b", re.IGNORECASE)
+PRE_FINDING_RE = re.compile(r"\bP-\d{2,3}\b", re.IGNORECASE)
 PB_RE = re.compile(r"\bPB-\d+[A-Z]?\b", re.IGNORECASE)
 FEAT_RE = re.compile(r"\bFEAT-\d{3}\b", re.IGNORECASE)
 CLARIFICATION_RE = re.compile(
@@ -40,6 +42,12 @@ FIX_REVIEW_PATH = "docs/feature-fix-review.md"
 FIX_REVIEW_ROUTE_PATH = "docs/feature-fix-review.yml"
 RECONCILIATION_PATH = "docs/feature-reconciliation.yml"
 RECEIPT_PATH = "docs/feature-validation.json"
+RECEIPT_BASELINE_PATH = "docs/feature-receipt-baseline.yml"
+IMPACT_PATH = "docs/feature-impact.yml"
+PRE_REVIEW_PATH = "docs/feature-pre-review.md"
+PRE_REVIEW_ROUTE_PATH = "docs/feature-pre-review.yml"
+REVIEW_CONTEXT_PATH = "docs/feature-review-context.yml"
+MAX_ACCEPTANCE_CRITERIA = 6
 DOCUMENTATION_PATHS = (
     "CHANGELOG.md",
     "docs/PRD.md",
@@ -125,6 +133,109 @@ def _atomic_write_yaml(path: Path, payload: dict[str, object]) -> None:
         path,
         yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
     )
+
+
+def _canonical_digest(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _safe_relative_path(raw: object, label: str, *, allow_glob: bool = False) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise FeatureValidationError(f"{label}: path vazio/inválido")
+    value = raw.strip()
+    lexical = value
+    if allow_glob:
+        wildcard_at = min(
+            (index for token in ("*", "?", "[") if (index := value.find(token)) >= 0),
+            default=len(value),
+        )
+        lexical = value[:wildcard_at].rstrip("/")
+    candidate = Path(lexical or ".")
+    full_candidate = Path(value)
+    if (
+        value.startswith("/")
+        or candidate.is_absolute()
+        or full_candidate.is_absolute()
+        or ".." in full_candidate.parts
+    ):
+        raise FeatureValidationError(f"{label}: path fora da raiz: {value}")
+    return Path(value).as_posix()
+
+
+def _workset_contract(
+    root: Path,
+) -> tuple[list[str], list[dict[str, object]]]:
+    payload = _read_yaml(root, "docs/feature-workset.yml")
+    if payload.get("schema_version") != 1:
+        raise FeatureValidationError(
+            "docs/feature-workset.yml exige schema_version: 1"
+        )
+    raw_paths = payload.get("paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise FeatureValidationError(
+            "docs/feature-workset.yml exige paths como lista não vazia"
+        )
+    paths = [
+        _safe_relative_path(
+            raw,
+            "docs/feature-workset.yml:paths",
+            allow_glob=True,
+        )
+        for raw in raw_paths
+    ]
+    raw_dependencies = payload.get("receipt_dependencies", [])
+    if not isinstance(raw_dependencies, list) or not all(
+        isinstance(item, dict) for item in raw_dependencies
+    ):
+        raise FeatureValidationError(
+            "docs/feature-workset.yml: receipt_dependencies deve ser lista"
+        )
+    dependencies: list[dict[str, object]] = []
+    identifiers: set[str] = set()
+    for index, item in enumerate(raw_dependencies):
+        identifier = str(item.get("id") or "").strip().lower()
+        label = f"docs/feature-workset.yml:receipt_dependencies[{index}]"
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9_-]{1,39}", identifier)
+            or identifier == "product"
+            or identifier in identifiers
+        ):
+            raise FeatureValidationError(f"{label}: id inválido/duplicado")
+        identifiers.add(identifier)
+        mode = str(item.get("mode") or "").strip().lower()
+        if mode not in {"automated", "physical"}:
+            raise FeatureValidationError(
+                f"{label}: mode deve ser automated|physical"
+            )
+        receipt = _safe_relative_path(item.get("receipt"), f"{label}:receipt")
+        raw_patterns = item.get("depends_on")
+        if not isinstance(raw_patterns, list) or not raw_patterns:
+            raise FeatureValidationError(
+                f"{label}: depends_on deve ser lista não vazia"
+            )
+        patterns = [
+            _safe_relative_path(
+                pattern,
+                f"{label}:depends_on",
+                allow_glob=True,
+            )
+            for pattern in raw_patterns
+        ]
+        dependencies.append(
+            {
+                "id": identifier,
+                "mode": mode,
+                "receipt": receipt,
+                "depends_on": patterns,
+            }
+        )
+    return paths, dependencies
 
 
 def _frontmatter(text: str, path: str) -> dict[str, object]:
@@ -533,36 +644,7 @@ def validate_discovery(root: Path) -> None:
     questions = _read(root, "docs/feature-questions.md")
     _read(root, "docs/feature.md")
     _read(root, "docs/feature-plan.md")
-    workset_text = _read(root, "docs/feature-workset.yml")
-    try:
-        workset = yaml.safe_load(workset_text) or {}
-    except yaml.YAMLError as exc:
-        raise FeatureValidationError(
-            f"docs/feature-workset.yml: YAML inválido: {exc}"
-        ) from exc
-    if not isinstance(workset, dict) or workset.get("schema_version") != 1:
-        raise FeatureValidationError(
-            "docs/feature-workset.yml exige schema_version: 1"
-        )
-    workset_paths = workset.get("paths")
-    if not isinstance(workset_paths, list) or not all(
-        isinstance(path, str) and path.strip() for path in workset_paths
-    ):
-        raise FeatureValidationError(
-            "docs/feature-workset.yml exige paths como lista de strings"
-        )
-    invalid_workset_paths = [
-        path
-        for path in workset_paths
-        if Path(path).is_absolute()
-        or ".." in Path(path).parts
-        or not Path(path).parts
-    ]
-    if invalid_workset_paths:
-        raise FeatureValidationError(
-            "docs/feature-workset.yml contém paths inválidos: "
-            + ", ".join(invalid_workset_paths)
-        )
+    _workset_contract(root)
     # O workset é deliberadamente apenas uma dica focal. Paths previstos pelo
     # discovery podem ainda não existir e nunca restringem o write_scope.
     match = CLARIFICATION_RE.search(discovery)
@@ -578,6 +660,13 @@ def validate_discovery(root: Path) -> None:
         return
 
     metadata, _, acceptance_ids = _feature_contract(root)
+    if len(acceptance_ids) > MAX_ACCEPTANCE_CRITERIA:
+        raise FeatureValidationError(
+            "ciclo feature-fast excede o limite de "
+            f"{MAX_ACCEPTANCE_CRITERIA} ACs ({len(acceptance_ids)} encontrados); "
+            "divida a demanda em fatias verticais independentes de 4–6 ACs e "
+            "mantenha somente a primeira fatia neste ciclo"
+        )
     plan = _read(root, "docs/feature-plan.md")
     required_refs = [metadata["backlog_item"], *acceptance_ids]
     if metadata["target_feature"] != "NEW":
@@ -793,6 +882,300 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
     return paths
 
 
+def _git_visible_files(root: Path) -> list[str]:
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "-c",
+                "-o",
+                "--exclude-standard",
+                "-z",
+                "--",
+            ],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FeatureValidationError(
+            f"não foi possível enumerar arquivos para o impacto: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        raise FeatureValidationError(
+            "git ls-files falhou: "
+            + (
+                result.stderr.decode("utf-8", errors="replace").strip()
+                or f"exit {result.returncode}"
+            )
+        )
+    files: list[str] = []
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        relative = os.fsdecode(raw)
+        candidate = root / relative
+        if candidate.is_file():
+            files.append(Path(relative).as_posix())
+    return sorted(set(files))
+
+
+def _dependency_matches(path: str, pattern: str) -> bool:
+    normalized = Path(pattern).as_posix()
+    if any(token in normalized for token in ("*", "?", "[")):
+        return fnmatch.fnmatchcase(path, normalized)
+    prefix = normalized.rstrip("/")
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def _dependency_snapshot(
+    root: Path,
+    patterns: list[str],
+    *,
+    visible_files: list[str] | None = None,
+) -> dict[str, object]:
+    files = visible_files if visible_files is not None else _git_visible_files(root)
+    matched = sorted(
+        path
+        for path in files
+        if any(_dependency_matches(path, pattern) for pattern in patterns)
+    )
+    records = [
+        {"path": path, "sha256": _sha256(root / path)}
+        for path in matched
+    ]
+    return {
+        "fingerprint": _canonical_digest(records),
+        "file_count": len(records),
+        "paths": matched,
+    }
+
+
+def _receipt_lanes(root: Path) -> list[dict[str, object]]:
+    _, dependencies = _workset_contract(root)
+    _, _, product_root = _load_baseline(root)
+    product_pattern = "**" if product_root == "." else f"{product_root}/"
+    return [
+        {
+            "id": "product",
+            "mode": "automated",
+            "receipt": RECEIPT_PATH,
+            "depends_on": [product_pattern],
+        },
+        *dependencies,
+    ]
+
+
+def _product_visible_files(
+    visible_files: list[str],
+    product_root: str,
+) -> list[str]:
+    if product_root != ".":
+        prefix = f"{product_root}/"
+        return [path for path in visible_files if path.startswith(prefix)]
+    return [
+        path
+        for path in visible_files
+        if path != "CHANGELOG.md"
+        and path.split("/", 1)[0] not in {".ft", ".git", "docs", "state"}
+    ]
+
+
+def prepare_receipt_baseline(root: Path) -> None:
+    _feature_contract(root)
+    visible = _git_visible_files(root)
+    _, _, product_root = _load_baseline(root)
+    lanes: list[dict[str, object]] = []
+    for lane in _receipt_lanes(root):
+        patterns = [str(item) for item in lane["depends_on"]]
+        snapshot = _dependency_snapshot(
+            root,
+            patterns,
+            visible_files=(
+                _product_visible_files(visible, product_root)
+                if lane["id"] == "product"
+                else visible
+            ),
+        )
+        lanes.append({**lane, "baseline": snapshot})
+    _atomic_write_yaml(
+        root / RECEIPT_BASELINE_PATH,
+        {
+            "schema_version": 1,
+            "feature_sha256": _sha256(root / "docs/feature.md"),
+            "workset_sha256": _sha256(root / "docs/feature-workset.yml"),
+            "lanes": lanes,
+        },
+    )
+
+
+def _receipt_baseline(root: Path) -> dict[str, object]:
+    payload = _read_yaml(root, RECEIPT_BASELINE_PATH)
+    if payload.get("schema_version") != 1:
+        raise FeatureValidationError(
+            f"{RECEIPT_BASELINE_PATH}: schema_version deve ser 1"
+        )
+    if payload.get("feature_sha256") != _sha256(root / "docs/feature.md"):
+        raise FeatureValidationError(
+            f"{RECEIPT_BASELINE_PATH}: contrato mudou após a baseline de receipts"
+        )
+    if payload.get("workset_sha256") != _sha256(
+        root / "docs/feature-workset.yml"
+    ):
+        raise FeatureValidationError(
+            f"{RECEIPT_BASELINE_PATH}: workset mudou após a baseline de receipts"
+        )
+    lanes = payload.get("lanes")
+    if not isinstance(lanes, list) or not lanes or not all(
+        isinstance(item, dict) for item in lanes
+    ):
+        raise FeatureValidationError(f"{RECEIPT_BASELINE_PATH}: lanes inválidas")
+    current_contract = _receipt_lanes(root)
+    baseline_contract = [
+        {
+            key: item.get(key)
+            for key in ("id", "mode", "receipt", "depends_on")
+        }
+        for item in lanes
+    ]
+    if baseline_contract != current_contract:
+        raise FeatureValidationError(
+            f"{RECEIPT_BASELINE_PATH}: grafo de dependências foi alterado"
+        )
+    return payload
+
+
+def _semantic_key(path: str) -> str | None:
+    stem = Path(path).stem.casefold()
+    stem = re.sub(r"^(?:test|spec)[_-]?", "", stem)
+    stem = re.sub(r"(?:[_-]?(?:test|tests|spec|specs))$", "", stem)
+    stem = re.sub(r"[^a-z0-9]+", "", stem)
+    return stem if len(stem) >= 3 else None
+
+
+def _related_product_paths(
+    root: Path,
+    changed: list[str],
+    product_root: str,
+    *,
+    visible_files: list[str],
+) -> list[str]:
+    keys = {_semantic_key(path) for path in changed}
+    keys.discard(None)
+    if not keys:
+        return []
+    if product_root == ".":
+        candidates = [
+            path
+            for path in visible_files
+            if path.split("/", 1)[0] not in {".ft", "docs", "state"}
+            and path != "CHANGELOG.md"
+        ]
+    else:
+        prefix = f"{product_root}/"
+        candidates = [path for path in visible_files if path.startswith(prefix)]
+    return sorted(
+        path
+        for path in candidates
+        if _semantic_key(path) in keys
+    )
+
+
+def _build_impact(root: Path) -> dict[str, object]:
+    validate_implementation(root)
+    baseline = _receipt_baseline(root)
+    _, _, product_root = _load_baseline(root)
+    changed = sorted(_changed_product_paths(root, product_root))
+    workset, _ = _workset_contract(root)
+    visible = _git_visible_files(root)
+    related = _related_product_paths(
+        root,
+        changed,
+        product_root,
+        visible_files=visible,
+    )
+    impact_paths = sorted(set([*workset, *changed, *related]))
+    impact_keys = sorted(
+        key
+        for key in {_semantic_key(path) for path in [*changed, *related]}
+        if key is not None
+    )
+
+    lanes: list[dict[str, object]] = []
+    raw_lanes = baseline["lanes"]
+    assert isinstance(raw_lanes, list)
+    for lane in raw_lanes:
+        assert isinstance(lane, dict)
+        patterns = [str(item) for item in lane["depends_on"]]
+        current = _dependency_snapshot(
+            root,
+            patterns,
+            visible_files=(
+                _product_visible_files(visible, product_root)
+                if lane["id"] == "product"
+                else visible
+            ),
+        )
+        previous = lane.get("baseline")
+        if not isinstance(previous, dict):
+            raise FeatureValidationError(
+                f"{RECEIPT_BASELINE_PATH}: baseline ausente em {lane.get('id')}"
+            )
+        impacted = current["fingerprint"] != previous.get("fingerprint")
+        lanes.append(
+            {
+                "id": lane["id"],
+                "mode": lane["mode"],
+                "receipt": lane["receipt"],
+                "depends_on": patterns,
+                "baseline_fingerprint": previous.get("fingerprint"),
+                "current_fingerprint": current["fingerprint"],
+                "file_count": current["file_count"],
+                "impacted": impacted,
+                "reuse_allowed": not impacted,
+            }
+        )
+
+    identity = {
+        "feature_sha256": _sha256(root / "docs/feature.md"),
+        "plan_sha256": _sha256(root / "docs/feature-plan.md"),
+        "workset_sha256": _sha256(root / "docs/feature-workset.yml"),
+        "product_files": [
+            {"path": path, "sha256": _sha256(root / path)}
+            for path in changed
+        ],
+        "impact_paths": impact_paths,
+        "impact_keys": impact_keys,
+        "lanes": lanes,
+    }
+    return {
+        "schema_version": 1,
+        "pre_review_id": _canonical_digest(identity),
+        "changed_product_paths": changed,
+        "related_paths": related,
+        "impact_paths": impact_paths,
+        "impact_keys": impact_keys,
+        "receipt_lanes": lanes,
+    }
+
+
+def prepare_impact(root: Path) -> None:
+    _atomic_write_yaml(root / IMPACT_PATH, _build_impact(root))
+
+
+def _current_impact(root: Path) -> dict[str, object]:
+    stored = _read_yaml(root, IMPACT_PATH)
+    current = _build_impact(root)
+    if stored != current:
+        raise FeatureValidationError(
+            f"{IMPACT_PATH}: impacto obsoleto; regenere antes da revisão"
+        )
+    return stored
+
+
 def validate_implementation(root: Path) -> None:
     _feature_contract(root)
     _, _, product_root = _load_baseline(root)
@@ -873,8 +1256,183 @@ def validate_evidence(root: Path) -> None:
         )
 
 
+def validate_pre_review(root: Path) -> None:
+    _, _, acceptance_ids = _feature_contract(root)
+    impact = _current_impact(root)
+    report = _read(root, PRE_REVIEW_PATH)
+    route = _read_yaml(root, PRE_REVIEW_ROUTE_PATH)
+    if route.get("schema_version") != 1:
+        raise FeatureValidationError(
+            f"{PRE_REVIEW_ROUTE_PATH}: schema_version deve ser 1"
+        )
+    if route.get("review_id") != impact.get("pre_review_id"):
+        raise FeatureValidationError(
+            f"{PRE_REVIEW_ROUTE_PATH}: review_id diverge do impacto atual"
+        )
+    review_route = route.get("review_route")
+    verdict = route.get("verdict")
+    if review_route not in {"approved", "implementation", "scope"}:
+        raise FeatureValidationError(
+            f"{PRE_REVIEW_ROUTE_PATH}: review_route inválida"
+        )
+    if verdict not in {"APPROVED", "REJECTED"}:
+        raise FeatureValidationError(
+            f"{PRE_REVIEW_ROUTE_PATH}: verdict inválido"
+        )
+    if (review_route == "approved") != (verdict == "APPROVED"):
+        raise FeatureValidationError(
+            f"{PRE_REVIEW_ROUTE_PATH}: approved exige APPROVED; "
+            "demais rotas exigem REJECTED"
+        )
+    if not isinstance(route.get("summary"), str) or not str(
+        route["summary"]
+    ).strip():
+        raise FeatureValidationError(
+            f"{PRE_REVIEW_ROUTE_PATH}: summary obrigatório"
+        )
+    statuses = _review_ac_statuses(
+        report,
+        acceptance_ids,
+        PRE_REVIEW_PATH,
+    )
+    if review_route == "approved":
+        failed = [
+            acceptance_id
+            for acceptance_id, status in statuses.items()
+            if status == "FAIL"
+        ]
+        if failed:
+            raise FeatureValidationError(
+                f"{PRE_REVIEW_PATH}: APPROVED exige todos os AC como PASS; "
+                "FAIL em " + ", ".join(failed)
+            )
+    if review_route == "implementation" and not PRE_FINDING_RE.search(report):
+        raise FeatureValidationError(
+            f"{PRE_REVIEW_PATH}: rejeição de implementação exige achados P-01..."
+        )
+
+
+def _receipt_record_for_lane(
+    root: Path,
+    lane: dict[str, object],
+) -> dict[str, object]:
+    receipt = _safe_relative_path(
+        lane.get("receipt"),
+        f"{IMPACT_PATH}:{lane.get('id')}:receipt",
+    )
+    path = root / receipt
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        raise FeatureValidationError(
+            f"receipt obrigatório ausente/fora da raiz: {receipt}"
+        ) from exc
+    if not resolved.is_file():
+        raise FeatureValidationError(f"receipt deve ser arquivo: {receipt}")
+
+    patterns = [str(item) for item in lane.get("depends_on", [])]
+    visible = _git_visible_files(root)
+    _, _, product_root = _load_baseline(root)
+    dependency_files = [
+        path
+        for path in (
+            _product_visible_files(visible, product_root)
+            if lane.get("id") == "product"
+            else visible
+        )
+        if any(_dependency_matches(path, pattern) for pattern in patterns)
+    ]
+    newest_dependency = max(
+        ((root / relative).stat().st_mtime for relative in dependency_files),
+        default=0.0,
+    )
+    impacted = lane.get("impacted") is True
+    if impacted and path.stat().st_mtime < newest_dependency:
+        raise FeatureValidationError(
+            f"receipt {receipt} está obsoleto para a lane {lane.get('id')}; "
+            "as dependências mudaram e o ensaio deve ser reexecutado"
+        )
+    return {
+        "id": lane.get("id"),
+        "mode": lane.get("mode"),
+        "receipt": receipt,
+        "receipt_sha256": _sha256(path),
+        "dependency_fingerprint": lane.get("current_fingerprint"),
+        "decision": "rerun" if impacted else "reuse",
+    }
+
+
+def _build_review_context(root: Path) -> dict[str, object]:
+    validate_pre_review(root)
+    validate_evidence(root)
+    impact = _current_impact(root)
+    raw_lanes = impact.get("receipt_lanes")
+    if not isinstance(raw_lanes, list) or not all(
+        isinstance(item, dict) for item in raw_lanes
+    ):
+        raise FeatureValidationError(f"{IMPACT_PATH}: receipt_lanes inválidas")
+    receipts = [
+        _receipt_record_for_lane(root, lane)
+        for lane in raw_lanes
+    ]
+    identity = {
+        "pre_review_id": impact.get("pre_review_id"),
+        "feature_sha256": _sha256(root / "docs/feature.md"),
+        "plan_sha256": _sha256(root / "docs/feature-plan.md"),
+        "evidence_sha256": _sha256(root / EVIDENCE_PATH),
+        "implementation_report_sha256": _sha256(
+            root / "docs/implementation-report.md"
+        ),
+        "receipts": receipts,
+    }
+    product = next(
+        (item for item in receipts if item.get("id") == "product"),
+        None,
+    )
+    if not isinstance(product, dict):
+        raise FeatureValidationError("grafo de receipts não contém lane product")
+    try:
+        product_payload = json.loads(_read(root, RECEIPT_PATH))
+    except json.JSONDecodeError as exc:
+        raise FeatureValidationError(f"{RECEIPT_PATH}: JSON inválido: {exc}") from exc
+    product_fingerprint = (
+        product_payload.get("fingerprint")
+        if isinstance(product_payload, dict)
+        else None
+    )
+    if not isinstance(product_fingerprint, str) or not product_fingerprint:
+        raise FeatureValidationError(
+            f"{RECEIPT_PATH}: fingerprint obrigatório"
+        )
+    return {
+        "schema_version": 1,
+        "review_id": _canonical_digest(identity),
+        "pre_review_id": impact.get("pre_review_id"),
+        "receipt_fingerprint": product_fingerprint,
+        "impact_paths": impact.get("impact_paths"),
+        "impact_keys": impact.get("impact_keys"),
+        "receipts": receipts,
+    }
+
+
+def prepare_review_context(root: Path) -> None:
+    _atomic_write_yaml(root / REVIEW_CONTEXT_PATH, _build_review_context(root))
+
+
+def _current_review_context(root: Path) -> dict[str, object]:
+    stored = _read_yaml(root, REVIEW_CONTEXT_PATH)
+    current = _build_review_context(root)
+    if stored != current:
+        raise FeatureValidationError(
+            f"{REVIEW_CONTEXT_PATH}: contexto/review_id obsoleto"
+        )
+    return stored
+
+
 def validate_review(root: Path) -> None:
     _, _, acceptance_ids = _feature_contract(root)
+    context = _current_review_context(root)
     report = _read(root, "docs/feature-review.md")
     route = _read_yaml(root, REVIEW_ROUTE_PATH)
     if route.get("schema_version") != 1:
@@ -885,6 +1443,16 @@ def validate_review(root: Path) -> None:
         raise FeatureValidationError(f"{REVIEW_ROUTE_PATH}: review_route inválida")
     if verdict not in {"APPROVED", "REJECTED"}:
         raise FeatureValidationError(f"{REVIEW_ROUTE_PATH}: verdict inválido")
+    if route.get("review_id") != context.get("review_id"):
+        raise FeatureValidationError(
+            f"{REVIEW_ROUTE_PATH}: review_id diverge do contexto atual"
+        )
+    if route.get("receipt_fingerprint") != context.get(
+        "receipt_fingerprint"
+    ):
+        raise FeatureValidationError(
+            f"{REVIEW_ROUTE_PATH}: receipt_fingerprint diverge do contexto atual"
+        )
     if not isinstance(route.get("summary"), str) or not str(route["summary"]).strip():
         raise FeatureValidationError(f"{REVIEW_ROUTE_PATH}: summary obrigatório")
     if (review_route == "approved") != (verdict == "APPROVED"):
@@ -1066,6 +1634,34 @@ def _fix_baseline(root: Path) -> dict[str, object]:
         or not all(isinstance(item, str) and item for item in workset)
     ):
         raise FeatureValidationError(f"{FIX_BASELINE_PATH}: workset inválido")
+    impact_paths = payload.get("impact_paths")
+    if (
+        not isinstance(impact_paths, list)
+        or not impact_paths
+        or not all(isinstance(item, str) and item for item in impact_paths)
+    ):
+        raise FeatureValidationError(
+            f"{FIX_BASELINE_PATH}: impact_paths inválidos"
+        )
+    impact_keys = payload.get("impact_keys")
+    if (
+        not isinstance(impact_keys, list)
+        or not all(
+            isinstance(item, str) and re.fullmatch(r"[a-z0-9]{3,}", item)
+            for item in impact_keys
+        )
+    ):
+        raise FeatureValidationError(
+            f"{FIX_BASELINE_PATH}: impact_keys inválidos"
+        )
+    source_review_id = payload.get("source_review_id")
+    if not isinstance(source_review_id, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        source_review_id,
+    ):
+        raise FeatureValidationError(
+            f"{FIX_BASELINE_PATH}: source_review_id inválido"
+        )
     contract_sha256 = payload.get("contract_sha256")
     if not isinstance(contract_sha256, dict):
         raise FeatureValidationError(
@@ -1076,6 +1672,8 @@ def _fix_baseline(root: Path) -> dict[str, object]:
 
 def prepare_fix(root: Path) -> None:
     validate_review(root)
+    review_context = _current_review_context(root)
+    impact = _current_impact(root)
     review_route = _read_yaml(root, REVIEW_ROUTE_PATH)
     if (
         review_route.get("verdict") != "REJECTED"
@@ -1091,14 +1689,11 @@ def prepare_fix(root: Path) -> None:
             "docs/feature-review.md: review de implementação rejeitada deve "
             "numerar achados F-01, F-02 etc."
         )
-    workset_payload = _read_yaml(root, "docs/feature-workset.yml")
-    workset = workset_payload.get("paths")
-    if not isinstance(workset, list) or not all(
-        isinstance(item, str) and item.strip() for item in workset
-    ):
-        raise FeatureValidationError(
-            "docs/feature-workset.yml: paths inválidos para correção focal"
-        )
+    workset, _ = _workset_contract(root)
+    impact_paths = impact.get("impact_paths")
+    impact_keys = impact.get("impact_keys")
+    if not isinstance(impact_paths, list) or not isinstance(impact_keys, list):
+        raise FeatureValidationError(f"{IMPACT_PATH}: impacto inválido")
     source_sha256 = {
         relative: _sha256(root / relative)
         for relative in ("docs/feature-review.md", REVIEW_ROUTE_PATH)
@@ -1113,9 +1708,16 @@ def prepare_fix(root: Path) -> None:
             "schema_version": 1,
             "base_commit": _git_head(root),
             "source_review": REVIEW_ROUTE_PATH,
+            "source_review_id": review_context["review_id"],
             "source_sha256": source_sha256,
             "findings": findings,
-            "workset": [str(item).strip() for item in workset],
+            "workset": workset,
+            "impact_paths": sorted(
+                {str(item).strip() for item in impact_paths if str(item).strip()}
+            ),
+            "impact_keys": sorted(
+                {str(item).strip() for item in impact_keys if str(item).strip()}
+            ),
             "contract_sha256": contract_sha256,
         },
     )
@@ -1154,11 +1756,32 @@ def validate_fix_implementation(root: Path) -> None:
         )
 
 
+def validate_fix_receipts(root: Path) -> None:
+    """Require only the receipt lanes whose declared dependencies changed.
+
+    The impact remains anchored to the pre-implementation dependency baseline.
+    A previously refreshed physical receipt therefore stays valid across a
+    focal fix unless that fix makes one of its dependency files newer.
+    """
+    impact = _build_impact(root)
+    raw_lanes = impact.get("receipt_lanes")
+    if not isinstance(raw_lanes, list) or not all(
+        isinstance(item, dict) for item in raw_lanes
+    ):
+        raise FeatureValidationError(f"{IMPACT_PATH}: receipt_lanes inválidas")
+    for lane in raw_lanes:
+        _receipt_record_for_lane(root, lane)
+
+
 def _path_covered_by_workset(path: str, workset: list[str]) -> bool:
     for raw in workset:
         normalized = Path(raw).as_posix().rstrip("/")
         if normalized in {"", "."}:
             return True
+        if any(token in normalized for token in ("*", "?", "[")):
+            if fnmatch.fnmatchcase(path, normalized):
+                return True
+            continue
         if path == normalized or path.startswith(f"{normalized}/"):
             return True
     return False
@@ -1214,6 +1837,10 @@ def validate_fix_review(root: Path) -> None:
     if route.get("source_review") != REVIEW_ROUTE_PATH:
         raise FeatureValidationError(
             f"{FIX_REVIEW_ROUTE_PATH}: source_review deve ser {REVIEW_ROUTE_PATH}"
+        )
+    if route.get("source_review_id") != baseline.get("source_review_id"):
+        raise FeatureValidationError(
+            f"{FIX_REVIEW_ROUTE_PATH}: source_review_id diverge da âncora"
         )
     if route.get("base_commit") != base_commit:
         raise FeatureValidationError(
@@ -1299,10 +1926,12 @@ def validate_fix_review(root: Path) -> None:
     ]
     _, _, product_root = _load_baseline(root)
     changed_product = _product_paths_from_delta(root, base_commit, product_root)
-    workset = [str(item) for item in baseline["workset"]]
+    workset = [str(item) for item in baseline["impact_paths"]]
+    impact_keys = {str(item) for item in baseline["impact_keys"]}
     escaped_workset = [
         path for path in changed_product
         if not _path_covered_by_workset(path, workset)
+        and _semantic_key(path) not in impact_keys
     ]
     if review_route == "approved" and (changed_contracts or escaped_workset):
         details: list[str] = []
@@ -1714,11 +2343,16 @@ VALIDATORS = {
     "baseline": validate_baseline,
     "discovery": validate_discovery,
     "reserve": validate_reserve,
+    "prepare-receipt-baseline": prepare_receipt_baseline,
     "implementation": validate_implementation,
+    "prepare-impact": prepare_impact,
+    "pre-review": validate_pre_review,
     "evidence": validate_evidence,
+    "prepare-review": prepare_review_context,
     "review": validate_review,
     "prepare-fix": prepare_fix,
     "fix-implementation": validate_fix_implementation,
+    "fix-receipts": validate_fix_receipts,
     "fix-review": validate_fix_review,
     "proposal": validate_proposal,
     "apply-reconcile": apply_reconciliation,
@@ -1727,7 +2361,15 @@ VALIDATORS = {
 READ_ONLY_VALIDATOR_MODES = tuple(
     mode
     for mode in VALIDATORS
-    if mode not in {"reserve", "prepare-fix", "apply-reconcile"}
+    if mode
+    not in {
+        "reserve",
+        "prepare-receipt-baseline",
+        "prepare-impact",
+        "prepare-review",
+        "prepare-fix",
+        "apply-reconcile",
+    }
 )
 
 

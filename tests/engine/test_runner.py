@@ -2924,6 +2924,39 @@ class TestStatus:
         )
         assert "sensitive-value" not in rendered
 
+    def test_progress_snapshot_uses_exact_activity_sidecar_timestamp(
+        self,
+        tmp_path,
+    ):
+        from datetime import datetime, timezone
+
+        from ft.engine.llm_activity import activity_log_path, activity_record
+
+        log_path = tmp_path / "active.jsonl"
+        event = json.dumps(
+            {
+                "type": "item.started",
+                "item": {
+                    "id": "cmd-live",
+                    "type": "command_execution",
+                    "command": "pytest tests/test_app.py -q",
+                    "status": "in_progress",
+                },
+            }
+        )
+        log_path.write_text(event + "\n", encoding="utf-8")
+        observed = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
+        activity_log_path(log_path).write_text(
+            activity_record(event, observed_at=observed) or "",
+            encoding="utf-8",
+        )
+
+        snapshot = _llm_progress_snapshot(log_path)
+
+        assert snapshot is not None
+        assert snapshot.current == "executando testes focais em `test_app.py`"
+        assert snapshot.current_started_at == observed
+
     def test_status_expands_active_banner_with_live_progress(
         self,
         runner_v2,
@@ -3073,6 +3106,42 @@ class TestStatus:
         assert "Progresso: 5/5" in out
         refreshed = runner_v2.state_mgr.load()
         assert refreshed.metrics["steps_completed"] == 5
+
+    def test_status_clamps_current_position_and_reports_reexecutions(
+        self,
+        runner_v2,
+        capsys,
+    ):
+        runner_v2.init_state()
+        state = runner_v2.state_mgr.load()
+        state.completed_nodes = [
+            node_id
+            for node_id, node in runner_v2.graph.nodes.items()
+            if node.type != "end"
+        ]
+        state.metrics["steps_completed"] = len(state.completed_nodes)
+        state.current_node = "step.03.implementacao"
+        state.node_status = "ready"
+        runner_v2.state_mgr.save()
+        for status in ("rejected", "ok"):
+            span = runner_v2.trace.begin_span(
+                category="node",
+                name="Implementação",
+                node_id="step.03.implementacao",
+                ordinal=runner_v2.trace.next_ordinal(
+                    "node",
+                    "step.03.implementacao",
+                ),
+            )
+            span.finish(status=status)
+
+        runner_v2.status()
+        out = capsys.readouterr().out
+
+        total = state.metrics["steps_total"]
+        assert f"Progresso: {total}/{total} (passo atual)" in out
+        assert f"{total + 1}/{total}" not in out
+        assert "2 execuções (1 reexecução)" in out
 
     def test_status_backfills_inserted_decision_nodes_when_branch_already_traversed(self, tmp_path, capsys):
         project_root = tmp_path / "project_root"

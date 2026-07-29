@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -82,7 +83,11 @@ def _run_fast_validator(
     )
 
 
-def _focal_fix_project(tmp_path: Path) -> Path:
+def _focal_fix_project(
+    tmp_path: Path,
+    *,
+    physical_lane: bool = False,
+) -> Path:
     _write(
         tmp_path,
         "docs/feature-request.md",
@@ -112,7 +117,17 @@ def _focal_fix_project(tmp_path: Path) -> Path:
         "schema_version: 1\n"
         "paths:\n"
         "  - project/app.py\n"
-        "  - project/tests/test_app.py\n",
+        "  - project/tests/test_app.py\n"
+        + (
+            "receipt_dependencies:\n"
+            "  - id: physical_lab\n"
+            "    mode: physical\n"
+            "    receipt: docs/physical-lab.json\n"
+            "    depends_on:\n"
+            "      - project/device/**\n"
+            if physical_lane
+            else ""
+        ),
     )
     _write(
         tmp_path,
@@ -137,31 +152,19 @@ def _focal_fix_project(tmp_path: Path) -> Path:
         "features: []\n"
         "documentation_sha256: {}\n",
     )
-    _write(
-        tmp_path,
-        "docs/feature-review.md",
-        "Resultado: REJECTED\n\n"
-        "| AC | Status | Evidência |\n"
-        "|---|---|---|\n"
-        "| AC-01 | FAIL | F-01: valor incorreto. |\n\n"
-        "| Finding | Status | Evidência |\n"
-        "|---|---|---|\n"
-        "| F-01 | FAIL | app retorna 1. |\n",
-    )
-    _write(
-        tmp_path,
-        "docs/feature-review.yml",
-        "schema_version: 1\n"
-        "verdict: REJECTED\n"
-        "review_route: implementation\n"
-        "summary: F-01 precisa de correção.\n",
-    )
-    _write(tmp_path, "project/app.py", "VALUE = 1\n")
+    _write(tmp_path, "project/app.py", "VALUE = 0\n")
     _write(
         tmp_path,
         "project/tests/test_app.py",
-        "def test_value():\n    assert True\n",
+        "def test_value():\n    assert 0 == 0\n",
     )
+    if physical_lane:
+        _write(tmp_path, "project/device/probe.kt", "const val VERSION = 1\n")
+        _write(
+            tmp_path,
+            "docs/physical-lab.json",
+            json.dumps({"result": "pass", "adapter": "lab"}),
+        )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
         ["git", "config", "user.email", "tests@example.invalid"],
@@ -178,6 +181,112 @@ def _focal_fix_project(tmp_path: Path) -> Path:
         cwd=tmp_path,
         check=True,
     )
+    subprocess.run(
+        ["git", "commit", "-qm", "reviewed implementation"],
+        cwd=tmp_path,
+        check=True,
+    )
+    receipt_baseline = _run_fast_validator(
+        tmp_path,
+        "prepare-receipt-baseline",
+    )
+    assert receipt_baseline.returncode == 0, receipt_baseline.stderr
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "receipt baseline"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "branch", "-M", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "checkout", "-qb", "cycle"], cwd=tmp_path, check=True)
+
+    _write(tmp_path, "project/app.py", "VALUE = 1\n")
+    _write(
+        tmp_path,
+        "project/tests/test_app.py",
+        "def test_value():\n    assert 1 == 1\n",
+    )
+    impact_result = _run_fast_validator(tmp_path, "prepare-impact")
+    assert impact_result.returncode == 0, impact_result.stderr
+    impact = yaml.safe_load(
+        (tmp_path / "docs/feature-impact.yml").read_text(encoding="utf-8")
+    )
+    _write(
+        tmp_path,
+        "docs/feature-pre-review.md",
+        "| AC | Status | Evidência |\n"
+        "|---|---|---|\n"
+        "| AC-01 | PASS | teste focal presente. |\n",
+    )
+    _write(
+        tmp_path,
+        "docs/feature-pre-review.yml",
+        "schema_version: 1\n"
+        f"review_id: {impact['pre_review_id']}\n"
+        "verdict: APPROVED\n"
+        "review_route: approved\n"
+        "summary: Sem falha semântica óbvia.\n",
+    )
+    receipt_fingerprint = "sha256:reviewed"
+    _write(
+        tmp_path,
+        "docs/feature-validation.json",
+        json.dumps(
+            {
+                "fingerprint": receipt_fingerprint,
+                "commands": [],
+            }
+        ),
+    )
+    _write(
+        tmp_path,
+        "docs/implementation-report.md",
+        "| AC | Status | Evidência |\n"
+        "|---|---|---|\n"
+        "| AC-01 | PASS | project/tests/test_app.py. |\n",
+    )
+    _write(
+        tmp_path,
+        "docs/feature-evidence.yml",
+        "schema_version: 1\n"
+        "receipt: docs/feature-validation.json\n"
+        "commands: []\n"
+        "acceptance:\n"
+        "  - id: AC-01\n"
+        "    status: PASS\n"
+        "    tests:\n"
+        "      - project/tests/test_app.py\n"
+        "    artifacts: []\n",
+    )
+    review_context_result = _run_fast_validator(tmp_path, "prepare-review")
+    assert review_context_result.returncode == 0, review_context_result.stderr
+    review_context = yaml.safe_load(
+        (tmp_path / "docs/feature-review-context.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    _write(
+        tmp_path,
+        "docs/feature-review.md",
+        "Resultado: REJECTED\n\n"
+        "| AC | Status | Evidência |\n"
+        "|---|---|---|\n"
+        "| AC-01 | FAIL | F-01: valor incorreto. |\n\n"
+        "| Finding | Status | Evidência |\n"
+        "|---|---|---|\n"
+        "| F-01 | FAIL | app retorna 1. |\n",
+    )
+    _write(
+        tmp_path,
+        "docs/feature-review.yml",
+        "schema_version: 1\n"
+        f"review_id: {review_context['review_id']}\n"
+        f"receipt_fingerprint: {receipt_fingerprint}\n"
+        "verdict: REJECTED\n"
+        "review_route: implementation\n"
+        "summary: F-01 precisa de correção.\n",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     subprocess.run(
         ["git", "commit", "-qm", "reviewed implementation"],
         cwd=tmp_path,
@@ -202,7 +311,8 @@ def test_feature_fast_graph_and_session_policy_are_valid() -> None:
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature_fast"
-    assert graph.meta["version"] == "1.1.0"
+    assert graph.meta["version"] == "1.2.0"
+    assert graph.meta["execution_policy"]["max_acceptance_criteria_per_cycle"] == 6
     assert graph.meta["session_policy"] == {
         "mode": "sprint",
         "providers": ["claude", "codex"],
@@ -229,7 +339,13 @@ def test_feature_fast_preserves_feature_safety_contract() -> None:
 
     base_nodes = {node["id"]: node for node in base["nodes"]}
     fast_nodes = {node["id"]: node for node in fast["nodes"]}
-    unchanged_ids = set(base_nodes) - {"feature.review_decision"}
+    changed_topology_ids = {
+        "feature.scope_gate",
+        "feature.implement",
+        "feature.evidence_gate",
+        "feature.review_decision",
+    }
+    unchanged_ids = set(base_nodes) - changed_topology_ids
     assert {
         node_id: _node_contract(fast_nodes[node_id])
         for node_id in unchanged_ids
@@ -290,11 +406,21 @@ def test_feature_fast_uses_focal_fix_and_delta_review_topology() -> None:
     assert graph.get_node("feature.fix_review_decision").branches == {
         "approved": "feature.acceptance",
         "implementation": "feature.fix",
-        "evidence": "feature.evidence",
-        "full_review": "feature.evidence",
+        "evidence": "feature.impact_prepare",
+        "full_review": "feature.impact_prepare",
         "scope": "feature.discovery",
         "_default": "feature.fix_review",
     }
+    assert graph.get_node("feature.scope_gate").next == "feature.receipt_baseline"
+    assert graph.get_node("feature.implement").next == "feature.impact_prepare"
+    assert graph.get_node("feature.pre_review").next == "feature.pre_review_route"
+    assert graph.get_node("feature.pre_review_decision").branches == {
+        "approved": "feature.product_validate",
+        "implementation": "feature.implement",
+        "scope": "feature.discovery",
+        "_default": "feature.pre_review",
+    }
+    assert graph.get_node("feature.evidence_gate").next == "feature.review_prepare"
 
 
 def test_feature_fast_runtime_references_are_self_contained() -> None:
@@ -363,6 +489,7 @@ def test_feature_fast_fix_validator_anchors_and_approves_only_focal_delta(
         "review_route: approved\n"
         "summary: Correção focal aprovada.\n"
         "source_review: docs/feature-review.yml\n"
+        f"source_review_id: {baseline['source_review_id']}\n"
         f"base_commit: {baseline['base_commit']}\n"
         f"receipt_fingerprint: {fingerprint}\n"
         "findings:\n"
@@ -405,6 +532,7 @@ def test_feature_fast_fix_validator_requires_full_review_outside_workset(
         "review_route: approved\n"
         "summary: Correção aprovada.\n"
         "source_review: docs/feature-review.yml\n"
+        f"source_review_id: {baseline['source_review_id']}\n"
         f"base_commit: {baseline['base_commit']}\n"
         f"receipt_fingerprint: {fingerprint}\n"
         "findings:\n"
@@ -428,3 +556,197 @@ def test_feature_fast_fix_validator_requires_full_review_outside_workset(
     )
     fallback = _run_fast_validator(root, "fix-review")
     assert fallback.returncode == 0, fallback.stderr
+
+
+def test_feature_fast_requires_large_demands_to_be_sliced_at_six_acs(
+    tmp_path: Path,
+) -> None:
+    root = _focal_fix_project(tmp_path)
+    feature = (root / "docs/feature.md").read_text(encoding="utf-8")
+    feature = feature.replace(
+        "- AC-01: busca correta.",
+        "\n".join(f"- AC-{index:02d}: comportamento {index}." for index in range(1, 8)),
+    )
+    _write(root, "docs/feature.md", feature)
+    _write(
+        root,
+        "docs/feature-plan.md",
+        "PB-002 FEAT-001 " + " ".join(f"AC-{index:02d}" for index in range(1, 8)),
+    )
+    _write(root, "docs/feature-discovery.md", "clarification_status: clear\n")
+    _write(root, "docs/feature-questions.md", "Nenhuma pergunta pendente.\n")
+
+    result = _run_fast_validator(root, "discovery")
+
+    assert result.returncode == 1
+    assert "excede o limite de 6 ACs" in result.stderr
+    assert "fatias verticais" in result.stderr
+
+
+def test_feature_fast_rejects_a_stale_full_review_id(tmp_path: Path) -> None:
+    root = _focal_fix_project(tmp_path)
+    route_path = root / "docs/feature-review.yml"
+    route = route_path.read_text(encoding="utf-8")
+    route_path.write_text(
+        route.replace(
+            next(
+                line for line in route.splitlines()
+                if line.startswith("review_id:")
+            ),
+            "review_id: sha256:" + "0" * 64,
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_fast_validator(root, "review")
+
+    assert result.returncode == 1
+    assert "review_id diverge do contexto atual" in result.stderr
+
+
+def test_feature_fast_reuses_physical_receipt_only_until_dependency_changes(
+    tmp_path: Path,
+) -> None:
+    root = _focal_fix_project(tmp_path, physical_lane=True)
+    context = yaml.safe_load(
+        (root / "docs/feature-review-context.yml").read_text(encoding="utf-8")
+    )
+    physical = next(
+        lane for lane in context["receipts"] if lane["id"] == "physical_lab"
+    )
+    assert physical["decision"] == "reuse"
+
+    _write(root, "project/device/probe.kt", "const val VERSION = 2\n")
+    impact_result = _run_fast_validator(root, "prepare-impact")
+    assert impact_result.returncode == 0, impact_result.stderr
+    impact = yaml.safe_load(
+        (root / "docs/feature-impact.yml").read_text(encoding="utf-8")
+    )
+    physical_impact = next(
+        lane
+        for lane in impact["receipt_lanes"]
+        if lane["id"] == "physical_lab"
+    )
+    assert physical_impact["impacted"] is True
+    assert physical_impact["reuse_allowed"] is False
+
+    pre_route = yaml.safe_load(
+        (root / "docs/feature-pre-review.yml").read_text(encoding="utf-8")
+    )
+    pre_route["review_id"] = impact["pre_review_id"]
+    _write(
+        root,
+        "docs/feature-pre-review.yml",
+        yaml.safe_dump(pre_route, allow_unicode=True, sort_keys=False),
+    )
+    product_receipt = (
+        root / "docs/feature-validation.json"
+    ).read_text(encoding="utf-8")
+    _write(root, "docs/feature-validation.json", product_receipt)
+
+    stale = _run_fast_validator(root, "prepare-review")
+
+    assert stale.returncode == 1
+    assert "physical-lab.json está obsoleto" in stale.stderr
+    assert "ensaio deve ser reexecutado" in stale.stderr
+
+
+def test_feature_fast_fix_reuses_or_refreshes_physical_receipt_by_dependency(
+    tmp_path: Path,
+) -> None:
+    root = _focal_fix_project(tmp_path, physical_lane=True)
+    prepared = _run_fast_validator(root, "prepare-fix")
+    assert prepared.returncode == 0, prepared.stderr
+
+    device = root / "project/device/probe.kt"
+    physical_receipt = root / "docs/physical-lab.json"
+    _write(root, "project/app.py", "VALUE = 2\n")
+    _write(
+        root,
+        "project/tests/test_app.py",
+        "def test_value():\n    assert 2 == 2\n",
+    )
+    _write(root, "docs/feature-validation.json", '{"fingerprint":"sha256:fixed"}\n')
+
+    unchanged = _run_fast_validator(root, "fix-receipts")
+    assert unchanged.returncode == 0, unchanged.stderr
+
+    _write(root, "project/device/probe.kt", "const val VERSION = 2\n")
+    product_receipt = root / "docs/feature-validation.json"
+    baseline_ns = max(
+        path.stat().st_mtime_ns
+        for path in (root / "project").rglob("*")
+        if path.is_file()
+    )
+    os.utime(physical_receipt, ns=(baseline_ns, baseline_ns))
+    os.utime(
+        device,
+        ns=(baseline_ns + 1_000_000_000, baseline_ns + 1_000_000_000),
+    )
+    os.utime(
+        product_receipt,
+        ns=(baseline_ns + 2_000_000_000, baseline_ns + 2_000_000_000),
+    )
+
+    stale = _run_fast_validator(root, "fix-receipts")
+    assert stale.returncode == 1
+    assert "physical-lab.json está obsoleto" in stale.stderr
+
+    os.utime(
+        physical_receipt,
+        ns=(baseline_ns + 3_000_000_000, baseline_ns + 3_000_000_000),
+    )
+    refreshed = _run_fast_validator(root, "fix-receipts")
+    assert refreshed.returncode == 0, refreshed.stderr
+
+
+def test_feature_fast_semantic_impact_allows_a_new_related_test(
+    tmp_path: Path,
+) -> None:
+    root = _focal_fix_project(tmp_path)
+    prepared = _run_fast_validator(root, "prepare-fix")
+    assert prepared.returncode == 0, prepared.stderr
+    baseline = yaml.safe_load(
+        (root / "docs/feature-fix-baseline.yml").read_text(encoding="utf-8")
+    )
+    assert "app" in baseline["impact_keys"]
+
+    _write(root, "project/app.py", "VALUE = 2\n")
+    _write(
+        root,
+        "project/tests/app_test.py",
+        "def test_related_value():\n    assert 2 == 2\n",
+    )
+    fingerprint = "sha256:semantic"
+    _write(
+        root,
+        "docs/feature-validation.json",
+        json.dumps({"fingerprint": fingerprint}),
+    )
+    _write(
+        root,
+        "docs/feature-fix-review.md",
+        "| Finding | Status | Evidência |\n"
+        "|---|---|---|\n"
+        "| F-01 | PASS | app_test.py cobre a correção. |\n",
+    )
+    _write(
+        root,
+        "docs/feature-fix-review.yml",
+        "schema_version: 1\n"
+        "verdict: APPROVED\n"
+        "review_route: approved\n"
+        "summary: Correção focal e teste relacionado.\n"
+        "source_review: docs/feature-review.yml\n"
+        f"source_review_id: {baseline['source_review_id']}\n"
+        f"base_commit: {baseline['base_commit']}\n"
+        f"receipt_fingerprint: {fingerprint}\n"
+        "findings:\n"
+        "  - id: F-01\n"
+        "    status: PASS\n"
+        "    evidence: app_test.py cobre a correção\n",
+    )
+
+    result = _run_fast_validator(root, "fix-review")
+
+    assert result.returncode == 0, result.stderr

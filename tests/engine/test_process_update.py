@@ -8,6 +8,7 @@ o merge via git merge-file e o comando CLI.
 from __future__ import annotations
 
 import shutil
+import stat
 from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
@@ -287,6 +288,36 @@ def test_fast_forward_updates_fork_and_ancestor(project, fake_engine):
     assert _scan(project, fake_engine).state == pu.STATE_IN_SYNC
 
 
+def test_fast_forward_from_immutable_runtime_pin_stays_atomic(
+    project,
+    fake_engine,
+):
+    """Read-only catalog modes must not leak into staging or the local fork."""
+    _evolve_global(fake_engine)
+    template = fake_engine / "templates" / "feature"
+    for path in sorted(template.rglob("*"), reverse=True):
+        if path.is_file():
+            executable = path.stat().st_mode & stat.S_IXUSR
+            path.chmod(0o555 if executable else 0o444)
+        elif path.is_dir():
+            path.chmod(0o555)
+    template.chmod(0o555)
+
+    state = _scan(project, fake_engine)
+    staging, _ = pu.prepare_fast_forward(project, state)
+
+    assert (staging / "process.yml").stat().st_mode & stat.S_IWUSR
+    pu.apply_update(project, state, staging)
+
+    local = project / ".ft" / "process" / "feature"
+    assert "# evolved-global" in (local / "process.yml").read_text(
+        encoding="utf-8"
+    )
+    assert (local / "process.yml").stat().st_mode & stat.S_IWUSR
+    assert (local / "scripts").stat().st_mode & stat.S_IWUSR
+    assert _scan(project, fake_engine).state == pu.STATE_IN_SYNC
+
+
 # -------------------------------------------------------------------- merge
 
 
@@ -363,6 +394,37 @@ def test_apply_update_rolls_back_on_failure(project, fake_engine):
     # Fork restaurado byte a byte; backup consumido pelo rollback.
     assert process_digest(state.local_process) == before
     assert not pu.backup_dir_for(project, "feature").exists()
+
+
+def test_apply_update_preserves_original_error_when_rollback_also_fails(
+    project,
+    fake_engine,
+):
+    _evolve_global(fake_engine)
+    state = _scan(project, fake_engine)
+    staging, _ = pu.prepare_fast_forward(project, state)
+    real_remove = pu._remove_tree
+
+    def fail_partial_cleanup(path, *, ignore_errors=False):
+        if Path(path) == state.local_dir:
+            raise PermissionError("rollback-denied")
+        return real_remove(path, ignore_errors=ignore_errors)
+
+    with (
+        patch.object(
+            pu,
+            "refresh_process_digests",
+            side_effect=RuntimeError("apply-boom"),
+        ),
+        patch.object(pu, "_remove_tree", side_effect=fail_partial_cleanup),
+        pytest.raises(RuntimeError) as captured,
+    ):
+        pu.apply_update(project, state, staging)
+
+    message = str(captured.value)
+    assert "aplicação=apply-boom" in message
+    assert "rollback=rollback-denied" in message
+    assert pu.backup_dir_for(project, "feature").is_dir()
 
 
 # ------------------------------------------------------------ coordenadas

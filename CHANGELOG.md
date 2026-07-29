@@ -53,6 +53,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   `rerun` apenas quando esses paths mudaram e `reuse` quando a lane permaneceu
   intacta, inclusive para ensaios físicos.
 
+### Atualização de processos a partir de pins imutáveis
+
+- `ft process update` normaliza permissões de bundles copiados de runtimes
+  read-only, sem propagar modos imutáveis para staging, fork local ou `.base`.
+- Limpeza e rollback tornam árvores copiadas graváveis antes da remoção; uma
+  falha de aplicação não mascara o erro original nem deixa o fork parcialmente
+  apagado por diretórios sem permissão de escrita.
+
 ### Sessões persistentes e `mvp-builder-fast`
 
 - Processos podem optar por `session_policy`: Claude retoma por session ID e

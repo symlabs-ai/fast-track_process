@@ -20,7 +20,9 @@ a aprovação humana pertence ao CLI.
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -164,6 +166,47 @@ def _is_generated(name: str) -> bool:
     )
 
 
+def _make_owner_writable(directory: Path) -> None:
+    """Normalize copied bundles so immutable source modes never leak locally."""
+    if not directory.exists():
+        return
+    for current, dirnames, filenames in os.walk(directory):
+        current_path = Path(current)
+        current_path.chmod(
+            current_path.stat().st_mode
+            | stat.S_IRUSR
+            | stat.S_IWUSR
+            | stat.S_IXUSR
+        )
+        for dirname in dirnames:
+            path = current_path / dirname
+            if not path.is_symlink():
+                path.chmod(
+                    path.stat().st_mode
+                    | stat.S_IRUSR
+                    | stat.S_IWUSR
+                    | stat.S_IXUSR
+                )
+        for filename in filenames:
+            path = current_path / filename
+            if not path.is_symlink():
+                path.chmod(
+                    path.stat().st_mode | stat.S_IRUSR | stat.S_IWUSR
+                )
+
+
+def _remove_tree(directory: Path, *, ignore_errors: bool = False) -> None:
+    """Remove a bundle even when it originated in a read-only runtime pin."""
+    if not directory.exists():
+        return
+    try:
+        _make_owner_writable(directory)
+        shutil.rmtree(directory)
+    except OSError:
+        if not ignore_errors:
+            raise
+
+
 def _copy_bundle(source: Path, destination: Path) -> None:
     """Copia um bundle de processo com as mesmas exclusões da materialização."""
 
@@ -183,6 +226,7 @@ def _copy_bundle(source: Path, destination: Path) -> None:
             shutil.copytree(child, target, ignore=_ignore)
         else:
             shutil.copy2(child, target)
+    _make_owner_writable(destination)
 
 
 def materialize_global_to(template_dir: Path, process_name: str, destination: Path) -> None:
@@ -203,7 +247,7 @@ def write_base_snapshot(local_dir: Path, source_dir: Path | None = None) -> Path
     """
     snapshot = base_snapshot_dir(local_dir)
     if snapshot.exists():
-        shutil.rmtree(snapshot)
+        _remove_tree(snapshot)
     _copy_bundle(source_dir or local_dir, snapshot)
     return snapshot
 
@@ -447,7 +491,7 @@ def build_merge_staging(
         )
 
     if staging_dir.exists():
-        shutil.rmtree(staging_dir)
+        _remove_tree(staging_dir)
     staging_dir.mkdir(parents=True)
 
     result = MergeResult(staging_dir=staging_dir)
@@ -546,7 +590,7 @@ def apply_update(
     root = Path(project_root).resolve()
     backup = backup_dir_for(root, state.name)
     if backup.exists():
-        shutil.rmtree(backup)
+        _remove_tree(backup)
     backup.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(state.local_dir), str(backup))
 
@@ -565,15 +609,22 @@ def apply_update(
             state.name,
             source_digest=process_digest(global_file) if global_file else None,
         )
-    except Exception:
+    except Exception as apply_error:
         # Restaura o fork original: o update é atômico do ponto de vista do usuário.
-        if state.local_dir.exists():
-            shutil.rmtree(state.local_dir)
-        shutil.move(str(backup), str(state.local_dir))
+        try:
+            if state.local_dir.exists():
+                _remove_tree(state.local_dir)
+            shutil.move(str(backup), str(state.local_dir))
+        except Exception as rollback_error:
+            raise RuntimeError(
+                "falha ao aplicar atualização e ao restaurar o backup: "
+                f"aplicação={apply_error}; rollback={rollback_error}; "
+                f"backup preservado em {backup}"
+            ) from apply_error
         raise
     finally:
         if staged_dir.exists():
-            shutil.rmtree(staged_dir, ignore_errors=True)
+            _remove_tree(staged_dir, ignore_errors=True)
 
     return backup
 
@@ -589,7 +640,7 @@ def prepare_fast_forward(
     root = Path(project_root).resolve()
     staging = staging_dir_for(root, state.name)
     if staging.exists():
-        shutil.rmtree(staging)
+        _remove_tree(staging)
     staging.parent.mkdir(parents=True, exist_ok=True)
     materialize_global_to(state.template_dir, state.name, staging)
 

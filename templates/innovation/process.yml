@@ -555,7 +555,7 @@ nodes:
       - file_exists: docs/handoff.md
       - min_user_stories:
           path: docs/PRD.md
-          min_count: 1
+          n: 1
       - has_sections:
           path: docs/PRD.md
           sections:

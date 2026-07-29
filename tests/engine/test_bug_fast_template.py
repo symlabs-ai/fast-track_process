@@ -521,6 +521,40 @@ def test_bug_fast_tracks_shared_src_changes_with_project_product(
     assert "3 arquivo(s)" in implemented.stdout
 
 
+def test_bug_fast_counts_reconciled_receipts_as_derived_artifacts(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    assert _run(root, "baseline").returncode == 0
+    assert _run(root, "begin").returncode == 0
+    _write(root, "project/tests/test_add.py", _test_source())
+    red = _product(root, "red")
+    assert red.returncode == 0, red.stderr
+    _write(
+        root,
+        "project/app.py",
+        "def add(left: int, right: int) -> int:\n"
+        "    return left + right\n",
+    )
+    for index in range(6):
+        _write(
+            root,
+            f"project/gate/receipts/lane-{index}.json",
+            '{"status": "BLOCKED"}\n',
+        )
+    _write(root, "project/gate/pb001-package.json", '{"decision": "NO-GO"}\n')
+    _write(root, "project/gate/pb001-result.json", '{"status": "BLOCKED"}\n')
+    green = _product(root, "green")
+    assert green.returncode == 0, green.stderr
+    _report(root)
+
+    implemented = _run(root, "implementation")
+
+    assert implemented.returncode == 0, implemented.stderr
+    assert "10 arquivo(s)" in implemented.stdout
+    assert "2 primário(s) e 8 derivado(s)" in implemented.stdout
+
+
 def test_bug_fast_scope_route_blocks_with_feature_fast_instruction(
     tmp_path: Path,
 ) -> None:

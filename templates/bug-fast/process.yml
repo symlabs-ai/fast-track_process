@@ -5,7 +5,7 @@
 # `.ft/process/bug-fast/` e executa somente a cópia local versionada.
 
 id: bug_fast
-version: "1.1.0"
+version: "1.1.1"
 title: "Bug Fast — RED→GREEN, Review e Reconciliação Determinística"
 
 execution_policy:

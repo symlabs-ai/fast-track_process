@@ -46,6 +46,9 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 - O escopo de implementação considera todas as raízes de produto declaradas
   (`project/`, `src/`, `test/` e `tests/`), permitindo corrigir código
   compartilhado sem afrouxar o controle de paths.
+- O orçamento de paths separa código/teste primário de receipts e resultados
+  derivados, mantendo teto total e limite agregado de linhas sem bloquear a
+  reconciliação obrigatória de fingerprints.
 
 ### `feature-fast` 1.3: fatias, impacto e reviews atuais
 

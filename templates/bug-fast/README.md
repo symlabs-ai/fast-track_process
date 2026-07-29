@@ -32,6 +32,11 @@ escapar dos paths originais, passa por review completa; se exigir contrato,
 capacidade, auth/security, migration, dados, dependência, infraestrutura ou
 mudança transversal, o ciclo bloqueia e orienta:
 
+O orçamento focal limita separadamente arquivos primários e artefatos derivados
+(`receipts`, `artifacts`, `generated`, package/result). O limite agregado de
+linhas e um teto total de arquivos continuam valendo para impedir expansão
+silenciosa de escopo.
+
 ```bash
 ft abort --cycle <id>
 ft run . --template feature-fast --request "..." --codex

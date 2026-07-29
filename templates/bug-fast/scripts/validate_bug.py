@@ -79,13 +79,21 @@ FORBIDDEN_FILENAMES = {
     "yarn.lock",
 }
 MAX_FILES = 8
+MAX_TOTAL_FILES = 24
 MAX_CHANGED_LINES = 500
 MAX_FIX_FILES = 4
+MAX_FIX_TOTAL_FILES = 12
 MAX_FIX_CHANGED_LINES = 250
 MAX_CAPTURE_CHARS = 30_000
 REGRESSION_TIMEOUT_SECONDS = 90
 FULL_COMMAND_TIMEOUT_SECONDS = 180
 PRODUCT_CHANGE_ROOTS = frozenset({"project", "src", "test", "tests"})
+DERIVED_ARTIFACT_DIRS = frozenset({"artifacts", "generated", "receipts"})
+DERIVED_ARTIFACT_SUFFIXES = (
+    "-package.json",
+    "-receipt.json",
+    "-result.json",
+)
 _INLINE_EVAL_FLAGS = frozenset({"-c", "-e", "--eval", "--evaluate"})
 _ASSERTION_FAILURE_RE = re.compile(
     r"(?i)(?:assert(?:ion|ionerror|ionfailederror)?|failed asserting|"
@@ -459,7 +467,11 @@ def _write_baseline(root: Path) -> None:
             "docs/PROJECT_BACKLOG.md": _read(root, "docs/PROJECT_BACKLOG.md"),
             "docs/FEATURES.md": _read(root, "docs/FEATURES.md"),
         },
-        "limits": {"max_files": MAX_FILES, "max_changed_lines": MAX_CHANGED_LINES},
+        "limits": {
+            "max_primary_files": MAX_FILES,
+            "max_total_files": MAX_TOTAL_FILES,
+            "max_changed_lines": MAX_CHANGED_LINES,
+        },
     }
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
@@ -517,6 +529,41 @@ def _is_test_path(relative: str) -> bool:
         or ".test." in name
         or ".spec." in name
     )
+
+
+def _is_derived_artifact_path(relative: str) -> bool:
+    path = Path(relative)
+    lowered_parts = {part.lower() for part in path.parts}
+    name = path.name.lower()
+    return bool(
+        lowered_parts.intersection(DERIVED_ARTIFACT_DIRS)
+        or name.endswith(DERIVED_ARTIFACT_SUFFIXES)
+    )
+
+
+def _validate_change_budget(
+    changed: list[str],
+    *,
+    primary_limit: int,
+    total_limit: int,
+    label: str,
+) -> tuple[int, int]:
+    primary = [
+        relative
+        for relative in changed
+        if not _is_derived_artifact_path(relative)
+    ]
+    derived_count = len(changed) - len(primary)
+    if len(changed) > total_limit:
+        raise BugValidationError(
+            f"{label} alterou {len(changed)} arquivos no total; limite {total_limit}"
+        )
+    if len(primary) > primary_limit:
+        raise BugValidationError(
+            f"{label} alterou {len(primary)} arquivos primários; "
+            f"limite {primary_limit} (mais {derived_count} derivado(s))"
+        )
+    return len(primary), derived_count
 
 
 def _test_hashes(root: Path, paths: list[str]) -> dict[str, str]:
@@ -1050,10 +1097,12 @@ def validate_implementation(root: Path) -> str:
         raise BugValidationError("produto mudou depois do GREEN; execute GREEN novamente")
 
     changed = _changed_product_paths(root, baseline)
-    if len(changed) > MAX_FILES:
-        raise BugValidationError(
-            f"bug alterou {len(changed)} arquivos de produto; limite {MAX_FILES}"
-        )
+    primary_count, derived_count = _validate_change_budget(
+        changed,
+        primary_limit=MAX_FILES,
+        total_limit=MAX_TOTAL_FILES,
+        label="bug",
+    )
     changed_lines = _changed_line_count(root, baseline, changed)
     if changed_lines > MAX_CHANGED_LINES:
         raise BugValidationError(
@@ -1072,7 +1121,8 @@ def validate_implementation(root: Path) -> str:
         raise BugValidationError("bug não alterou código de produto")
     print(
         f"bug implementation PASS: {len(changed)} arquivo(s), "
-        f"{changed_lines} linha(s)"
+        f"{changed_lines} linha(s), {primary_count} primário(s) e "
+        f"{derived_count} derivado(s)"
     )
     return current_fingerprint
 
@@ -1366,7 +1416,8 @@ def command_prepare_fix(root: Path) -> None:
         "findings": [finding["id"] for finding in findings],
         "initial_product_paths": _changed_product_paths(root, baseline),
         "limits": {
-            "max_files": MAX_FIX_FILES,
+            "max_primary_files": MAX_FIX_FILES,
+            "max_total_files": MAX_FIX_TOTAL_FILES,
             "max_changed_lines": MAX_FIX_CHANGED_LINES,
         },
     }
@@ -1388,10 +1439,12 @@ def validate_fix_implementation(root: Path) -> None:
     changed = _fix_changed_product_paths(root, anchor)
     if not changed:
         raise BugValidationError("fix focal não alterou o produto desde a âncora")
-    if len(changed) > MAX_FIX_FILES:
-        raise BugValidationError(
-            f"fix alterou {len(changed)} arquivos; limite {MAX_FIX_FILES}"
-        )
+    primary_count, derived_count = _validate_change_budget(
+        changed,
+        primary_limit=MAX_FIX_FILES,
+        total_limit=MAX_FIX_TOTAL_FILES,
+        label="fix",
+    )
     changed_lines = _changed_line_count(
         root,
         {"base_commit": anchor["base_commit"]},
@@ -1403,7 +1456,8 @@ def validate_fix_implementation(root: Path) -> None:
         )
     print(
         f"bug fix implementation PASS: {len(changed)} arquivo(s), "
-        f"{changed_lines} linha(s)"
+        f"{changed_lines} linha(s), {primary_count} primário(s) e "
+        f"{derived_count} derivado(s)"
     )
 
 

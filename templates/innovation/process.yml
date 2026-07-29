@@ -347,6 +347,16 @@ nodes:
       - supported: se todas as hipóteses centrais forem supported.
       - inconclusive: caso contrário.
 
+      REGRA DE REENTRADA (anti-loop): se docs/research-questions.md já contém
+      respostas — do stakeholder ou marcadas [LLM Responde / ...] — as lacunas
+      ali respondidas estão RESOLVIDAS ou DECLARADAS IRRESOLÚVEIS. Uma resposta
+      "dado interno indisponível" é ausência definitiva de evidência, não
+      pendência: incorpore-a ao julgamento (em geral enfraquecendo a hipótese)
+      e emita verdict DEFINITIVO — supported com riscos declarados, ou refuted.
+      É proibido emitir inconclusive novamente pelos mesmos motivos já
+      perguntados; inconclusive em reentrada só é legítimo para lacuna NOVA,
+      surgida de evidência nova, e exige perguntas inéditas.
+
       Gere docs/research-questions.md:
       - Se overall_verdict for inconclusive: perguntas numeradas e objetivas ao
         stakeholder — somente o que destravaria um verdict (dado interno que

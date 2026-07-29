@@ -5519,7 +5519,10 @@ class StepRunner:
             if isinstance(correction_policy, dict)
             else []
         )
-        requires_fresh_review = node.id in mandatory_reviews
+        requires_fresh_review = (
+            node.id in mandatory_reviews
+            or getattr(node, "no_pre_seed", False)
+        )
         if early_check.passed and not requires_fresh_review:
             print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
             for output_path in node.outputs:
@@ -5528,8 +5531,9 @@ class StepRunner:
             self._advance_state(node.id, next_id, "PASS")
             return
         if early_check.passed:
-            print(ui.warn("Expert Review: review obrigatório após implementação — regenerando"))
-            self._remove_node_outputs_from_worktree(node.id)
+            print(ui.warn("Expert Review: review deve rodar de novo (mandatory/no_pre_seed) — regenerando"))
+            if not getattr(node, "preserve_outputs_on_reentry", False):
+                self._remove_node_outputs_from_worktree(node.id)
         else:
             blocking_reason = (
                 None

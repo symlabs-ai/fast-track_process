@@ -6,6 +6,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### CI com baseline explícita do Ruff
+
+- A seleção histórica `E4`, `E7`, `E9` e `F` passou a ser declarada no
+  `pyproject.toml`; upgrades do Ruff deixam de ativar centenas de regras novas
+  implicitamente e bloquear releases por débito preexistente fora do diff.
+
 ## [v0.16.0] - 2026-07-30
 
 ### Resumo histórico em `ft runs --done`

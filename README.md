@@ -148,6 +148,7 @@ ft graph --cycle <id>
 ft approve "nota opcional" --cycle <id>
 ft reject "motivo objetivo" --cycle <id>
 ft fix "instrução" --cycle <id>
+ft fix "instrução" --audit-origin --cycle <id>  # fix + somente review de origem
 ft retry --cycle <id>
 ft abort --cycle <id>
 ft close --cycle <id>

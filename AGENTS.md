@@ -259,6 +259,7 @@ motivo objetivo porque o texto vira contexto do retry.
 | node bloqueado, repetir igual | `ft retry --cycle <id>` |
 | review em `pending_fix`, mas a causa externa mudou | `ft retry --cycle <id>` repete somente o review e descarta o encaminhamento ao fix |
 | correção dirigida | `ft fix "o que corrigir" --cycle <id>` |
+| correção focal sem reabrir gates aprovados | `ft fix "o que corrigir" --audit-origin --cycle <id>` executa o fix e repete somente o review que encontrou o defeito |
 | descartar sem merge | `ft abort --cycle <id>` |
 | cancelar com justificativa | `ft cancel "motivo" --cycle <id>` |
 

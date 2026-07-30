@@ -5295,6 +5295,14 @@ def main():
     add_llm_engine_flags(fx)
     fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
     fx.add_argument("--auto", action="store_true", help="Continuar em modo MVP após correção")
+    fx.add_argument(
+        "--audit-origin",
+        action="store_true",
+        help=(
+            "Após o fix, repetir somente o review que encontrou o defeito, "
+            "preservando gates já aprovados"
+        ),
+    )
     fx.add_argument("--cycle", help="Ciclo específico a corrigir")
 
     # close

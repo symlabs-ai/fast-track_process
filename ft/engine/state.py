@@ -170,7 +170,11 @@ class EngineState:
     blocked_reason: str | None = None
     pending_approval: str | None = None  # node_id aguardando approve/reject
     last_approval_message: str | None = None  # mensagem do ultimo ft approve (consumida pelo proximo LLM)
-    pending_fix: dict | None = None  # {goto: node_id, feedback: str} quando on_fail aguarda ft fix
+    pending_fix: dict | None = None  # {goto, feedback, origin} quando on_fail aguarda ft fix
+    # Rota temporária de uma correção dirigida. Quando ``ft fix
+    # --audit-origin`` é usado, o fix volta diretamente ao review que produziu
+    # o finding, sem reexecutar reviews ou gates intermediários já aprovados.
+    active_fix_return: dict | None = None  # {fix_node: node_id, review_node: node_id}
     exploration_log: list[str] = field(default_factory=list)  # requests feitos em modo exploração
     # Snapshot compacto por episódio nomeado; histórico detalhado vive no trace.
     llm_episodes: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -281,6 +285,7 @@ class StateManager:
                 pending_approval=raw.get("pending_approval"),
                 last_approval_message=raw.get("last_approval_message"),
                 pending_fix=raw.get("pending_fix"),
+                active_fix_return=raw.get("active_fix_return"),
                 exploration_log=raw.get("exploration_log", []),
                 llm_episodes=raw.get("llm_episodes", {}),
                 llm_sessions=raw.get("llm_sessions", {}),
@@ -403,6 +408,7 @@ class StateManager:
             "pending_approval": self._state.pending_approval,
             "last_approval_message": self._state.last_approval_message,
             "pending_fix": self._state.pending_fix,
+            "active_fix_return": self._state.active_fix_return,
             "exploration_log": self._state.exploration_log,
             "llm_episodes": self._state.llm_episodes,
             "llm_sessions": self._state.llm_sessions,

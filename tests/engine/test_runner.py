@@ -2556,6 +2556,97 @@ nodes:
         assert state.pending_fix is None
         assert "Finding reproduzível" in state.last_approval_message
 
+    def test_directed_fix_can_return_only_to_rejecting_review(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: focal_validation
+version: "1.0.0"
+title: Focal validation
+nodes:
+  - id: foundation
+    type: build
+    title: Foundation
+    executor: codex
+    next: combined.review
+  - id: combined.review
+    type: review
+    title: Combined review
+    executor: codex
+    next: fix
+  - id: fix
+    type: build
+    title: Shared fix
+    executor: codex
+    next: combined.review
+  - id: integrated.verify
+    type: gate
+    title: Integrated verify
+    executor: python
+    next: physical.review
+  - id: physical.review
+    type: review
+    title: Physical review
+    executor: codex
+    on_fail:
+      human_gate: Corrigir somente a divergência física.
+      goto: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.completed_nodes = [
+            "foundation",
+            "combined.review",
+            "fix",
+            "integrated.verify",
+        ]
+        state.current_node = "physical.review"
+        state.node_status = "ready"
+        runner.state_mgr.save()
+
+        runner._handle_on_fail(
+            runner.graph.get_node("physical.review"),
+            "VIS-001 reproduzível",
+        )
+
+        pending = runner.state_mgr.load()
+        assert pending.pending_fix["origin"] == "physical.review"
+        assert runner.apply_fix("Corrigir VIS-001", audit_origin=True)
+
+        fixing = runner.state_mgr.load()
+        assert fixing.current_node == "fix"
+        assert fixing.active_fix_return == {
+            "fix_node": "fix",
+            "review_node": "physical.review",
+        }
+        assert fixing.completed_nodes == [
+            "foundation",
+            "combined.review",
+            "integrated.verify",
+        ]
+
+        runner._advance_state("fix", "combined.review")
+
+        resumed = runner.state_mgr.load()
+        assert resumed.current_node == "physical.review"
+        assert resumed.active_fix_return is None
+        assert "integrated.verify" in resumed.completed_nodes
+        assert "fix" in resumed.completed_nodes
+
     def test_llm_error_with_passing_validators_advances_node(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"

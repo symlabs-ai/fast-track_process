@@ -117,7 +117,13 @@ def _append_capture_context(prompt: str, root: Path, capture_path: str | None) -
 def execute_fix(args: Any, runner: Any) -> None:
     """Apply one directed correction to the already selected cycle."""
     instruction = args.instruction
-    if runner.apply_fix(instruction):
+    audit_origin = bool(getattr(args, "audit_origin", False))
+    applied = (
+        runner.apply_fix(instruction, audit_origin=True)
+        if audit_origin
+        else runner.apply_fix(instruction)
+    )
+    if applied:
         runner.run(mode="mvp" if getattr(args, "auto", False) else "step")
         return
 

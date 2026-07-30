@@ -274,9 +274,15 @@ ft reject "motivo acionável" --cycle <id>
 ft reject "motivo" --no-retry --cycle <id>
 ft retry --cycle <id>
 ft fix "instrução" --cycle <id>
+ft fix "instrução" --audit-origin --cycle <id>
 ft explore "pedido livre" --cycle <id>
 ft abort --cycle <id>
 ft cancel "motivo" --cycle <id>
+
+Use `--audit-origin` quando um review terminal encontrar uma divergência
+focal. A engine preserva os nodes e gates já aprovados, executa o node de fix
+indicado por `on_fail.goto` e retorna diretamente ao review que originou o
+finding. Sem a flag, continua valendo a rota estática declarada pelo processo.
 
 # Encerramento
 ft process-candidates --cycle <id>

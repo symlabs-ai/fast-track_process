@@ -3479,7 +3479,11 @@ class StepRunner:
             return
 
         state = self.state_mgr.state
-        state.pending_fix = {"goto": goto, "feedback": feedback}
+        state.pending_fix = {
+            "goto": goto,
+            "feedback": feedback,
+            "origin": node.id,
+        }
         state.node_status = "pending_fix"
         state.blocked_reason = None
         self.state_mgr.save()
@@ -3495,6 +3499,20 @@ class StepRunner:
 
     def _advance_state(self, completed_node: str, next_node: str | None, gate_result: str = "PASS") -> None:
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
+        state = self.state_mgr.state
+        directed_return = state.active_fix_return
+        if (
+            isinstance(directed_return, dict)
+            and directed_return.get("fix_node") == completed_node
+        ):
+            review_node = directed_return.get("review_node")
+            if review_node in self.graph.nodes:
+                next_node = review_node
+                print(ui.info(
+                    f"↪ Fix focal concluído; auditando novamente somente {review_node}"
+                ))
+            state.active_fix_return = None
+
         completed_sprint = self.graph.sprint_of(completed_node)
         next_sprint = self.graph.sprint_of(next_node) if next_node else None
         if self.state_mgr.state.node_status == "blocked":
@@ -3504,7 +3522,6 @@ class StepRunner:
         # reconstrua exatamente o mesmo prompt, sem vazá-la para o próximo node.
         self.state_mgr.state.last_approval_message = None
         self.state_mgr.advance(completed_node, next_node, gate_result)
-        state = self.state_mgr.state
         state.current_sprint = next_sprint
         state.sprint_status = (
             "completed"
@@ -7355,7 +7372,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
 
 
 
-    def apply_fix(self, instruction: str) -> bool:
+    def apply_fix(self, instruction: str, *, audit_origin: bool = False) -> bool:
         """
         Executa o on_fail.goto: volta ao node alvo, injeta instrução, limpa pending_fix.
         Retorna True se havia pending_fix, False se não.
@@ -7378,11 +7395,33 @@ próprias sob o namespace permitido acima. Encerre DONE.
             print(f"  Erro: node '{goto}' não encontrado na ordem do grafo.")
             return False
 
-        # Volta: remove goto e tudo posterior de completed_nodes
-        state.completed_nodes = [
-            n for n in state.completed_nodes
-            if n in ordered and ordered.index(n) < target_idx
-        ]
+        origin = pending.get("origin") or state.current_node
+        if audit_origin:
+            if not origin or origin not in self.graph.nodes:
+                print(f"  Erro: review de origem '{origin}' inválido.")
+                return False
+            # Preserva tudo que já passou. Somente o fix (que pode ter sido
+            # executado numa iteração anterior) e o review rejeitado precisam
+            # ser renovados.
+            state.completed_nodes = [
+                n for n in state.completed_nodes
+                if n not in {goto, origin}
+            ]
+            for node_id in (goto, origin):
+                state.gate_log.pop(node_id, None)
+                self._clear_validator_snapshots(node_id)
+            state.active_fix_return = {
+                "fix_node": goto,
+                "review_node": origin,
+            }
+        else:
+            # Compatibilidade: o processo controla a rota posterior ao fix e
+            # todos os nodes a partir do alvo são reabertos.
+            state.completed_nodes = [
+                n for n in state.completed_nodes
+                if n in ordered and ordered.index(n) < target_idx
+            ]
+            state.active_fix_return = None
         state.current_node = goto
         state.node_status = "running"
         state.blocked_reason = None
@@ -7401,6 +7440,10 @@ próprias sob o namespace permitido acima. Encerre DONE.
             f"directed_fix:{goto}",
         )
         print(ui.info(f"↩ Voltando para {goto} com instrução injetada"))
+        if audit_origin:
+            print(ui.info(
+                f"Após o fix, somente o review de origem {origin} será reexecutado"
+            ))
         return True
 
     def reject(self, reason: str, retry: bool = True):

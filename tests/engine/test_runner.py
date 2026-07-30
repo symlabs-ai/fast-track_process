@@ -2647,6 +2647,98 @@ nodes:
         assert "integrated.verify" in resumed.completed_nodes
         assert "fix" in resumed.completed_nodes
 
+    def test_human_rejection_can_fix_and_return_to_evidence_review(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: terminal_validation
+version: "1.0.0"
+title: Terminal validation
+nodes:
+  - id: foundation
+    type: build
+    title: Foundation
+    executor: codex
+    next: fix
+  - id: fix
+    type: build
+    title: Shared fix
+    executor: codex
+    next: broad.review
+  - id: broad.review
+    type: review
+    title: Broad review
+    executor: codex
+    next: integrated.verify
+  - id: integrated.verify
+    type: gate
+    title: Integrated verify
+    executor: python
+    next: physical.review
+  - id: physical.review
+    type: review
+    title: Physical review
+    executor: codex
+    next: visual.gate
+  - id: visual.gate
+    type: human_gate
+    title: Visual gate
+    executor: python
+    reject_next: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.completed_nodes = [
+            "foundation",
+            "fix",
+            "broad.review",
+            "integrated.verify",
+            "physical.review",
+        ]
+        state.current_node = "visual.gate"
+        state.node_status = "awaiting_approval"
+        state.pending_approval = "visual.gate"
+        runner.state_mgr.save()
+
+        assert runner.reject_with_origin_audit(
+            "S12 ainda diverge do mockup"
+        )
+
+        fixing = runner.state_mgr.load()
+        assert fixing.current_node == "fix"
+        assert fixing.pending_approval is None
+        assert fixing.active_fix_return == {
+            "fix_node": "fix",
+            "review_node": "physical.review",
+        }
+        assert fixing.completed_nodes == [
+            "foundation",
+            "broad.review",
+            "integrated.verify",
+        ]
+        assert "S12 ainda diverge" in fixing.last_approval_message
+
+        runner._advance_state("fix", "broad.review")
+
+        resumed = runner.state_mgr.load()
+        assert resumed.current_node == "physical.review"
+        assert resumed.active_fix_return is None
+        assert "integrated.verify" in resumed.completed_nodes
+
     def test_llm_error_with_passing_validators_advances_node(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"

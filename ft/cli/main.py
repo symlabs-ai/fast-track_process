@@ -2257,6 +2257,13 @@ def cmd_reject(args):
     runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
+    if getattr(args, "audit_origin", False):
+        if args.no_retry:
+            print("ERRO: --audit-origin não pode ser combinado com --no-retry.")
+            return
+        if runner.reject_with_origin_audit(args.reason):
+            runner.run(mode="mvp" if getattr(args, "auto", False) else "step")
+        return
     retry = not args.no_retry
     runner.reject(args.reason, retry=retry)
     correction_policy = runner.graph.meta.get("correction_policy", {})
@@ -5202,6 +5209,19 @@ def main():
     add_llm_engine_flags(rj)
     rj.add_argument("reason", help="Motivo da rejeicao")
     rj.add_argument("--no-retry", action="store_true", help="Nao reenviar ao LLM apos rejeicao")
+    rj.add_argument(
+        "--audit-origin",
+        action="store_true",
+        help=(
+            "Executar reject_next e repetir somente o review que gerou a "
+            "evidência rejeitada"
+        ),
+    )
+    rj.add_argument(
+        "--auto",
+        action="store_true",
+        help="Continuar até o próximo gate após a correção focal",
+    )
     rj.add_argument("--cycle", help="Ciclo específico a rejeitar (ex: cycle-12-f01-busca)")
 
     # graph

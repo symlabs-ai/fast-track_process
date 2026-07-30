@@ -7446,6 +7446,66 @@ próprias sob o namespace permitido acima. Encerre DONE.
             ))
         return True
 
+    def reject_with_origin_audit(self, reason: str) -> bool:
+        """Rejeita um human gate e volta ao review que produziu sua evidência.
+
+        O ``reject_next`` continua definindo qual node corrige o finding, mas
+        nodes e gates já aprovados permanecem concluídos. Depois do fix, a rota
+        temporária retorna ao review predecessor em vez de obedecer ao ``next``
+        estático do node compartilhado de correção.
+        """
+        state = self.state_mgr.load()
+        self._persist_llm_engine(state)
+        self._sync_process_meta(state)
+        if not state.pending_approval:
+            print("Nenhuma rejeicao pendente.")
+            return False
+
+        gate_id = state.pending_approval
+        gate = self.graph.get_node(gate_id)
+        fix_id = gate.reject_next
+        if not fix_id or fix_id not in self.graph.nodes:
+            print(ui.fail(
+                f"Gate {gate_id} não declara reject_next válido para correção focal."
+            ))
+            return False
+
+        review_id: str | None = None
+        for candidate_id in reversed(state.completed_nodes):
+            candidate = self.graph.nodes.get(candidate_id)
+            if candidate is None or candidate.type != "review":
+                continue
+            targets = [candidate.next]
+            targets.extend((candidate.branches or {}).values())
+            if gate_id in targets:
+                review_id = candidate_id
+                break
+        if not review_id:
+            print(ui.fail(
+                f"Não foi possível identificar o review que antecede {gate_id}."
+            ))
+            return False
+
+        self._finish_human_wait(gate_id, "rejected")
+        print(f"  REJEITADO: {gate_id} — {reason}")
+        if gate.env_teardown:
+            self._run_env_teardown(gate)
+
+        state.pending_approval = None
+        state.current_node = review_id
+        state.node_status = "pending_fix"
+        state.blocked_reason = None
+        state.pending_fix = {
+            "goto": fix_id,
+            "feedback": (
+                f"REJEITADO PELO STAKEHOLDER no gate {gate_id}:\n{reason}"
+            ),
+            "origin": review_id,
+        }
+        state.gate_log[gate_id] = "REJECTED"
+        self.state_mgr.save()
+        return self.apply_fix(reason, audit_origin=True)
+
     def reject(self, reason: str, retry: bool = True):
         """
         Stakeholder rejeita artefato pendente.

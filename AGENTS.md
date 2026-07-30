@@ -260,6 +260,7 @@ motivo objetivo porque o texto vira contexto do retry.
 | review em `pending_fix`, mas a causa externa mudou | `ft retry --cycle <id>` repete somente o review e descarta o encaminhamento ao fix |
 | correção dirigida | `ft fix "o que corrigir" --cycle <id>` |
 | correção focal sem reabrir gates aprovados | `ft fix "o que corrigir" --audit-origin --cycle <id>` executa o fix e repete somente o review que encontrou o defeito |
+| stakeholder rejeitou evidência em human gate | `ft reject "motivo" --audit-origin --auto --cycle <id>` executa `reject_next` e renova somente o review que gerou a evidência |
 | descartar sem merge | `ft abort --cycle <id>` |
 | cancelar com justificativa | `ft cancel "motivo" --cycle <id>` |
 

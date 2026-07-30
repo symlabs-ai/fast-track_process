@@ -225,6 +225,41 @@ def validate_runnable_policy(
             f"template incompatível em {process_file}: esperado "
             f"template={template_name}, recebido {declared!r}"
         )
+    role = policy.get("project_role")
+    if role is not None and role not in {"builder", "maintenance", "neutral"}:
+        raise TemplateCatalogError(
+            f"template '{template_name}' declara project_role inválido: {role!r}"
+        )
+    allowed = policy.get("allowed_project_phases")
+    if (role is None) != (allowed is None):
+        raise TemplateCatalogError(
+            f"template '{template_name}' deve declarar project_role e "
+            "allowed_project_phases em conjunto"
+        )
+    if allowed is not None and (
+        not isinstance(allowed, list)
+        or not allowed
+        or not all(
+            isinstance(item, str)
+            and item in {"building", "maintenance", "archived"}
+            for item in allowed
+        )
+        or len(set(allowed)) != len(allowed)
+    ):
+        raise TemplateCatalogError(
+            f"template '{template_name}' declara allowed_project_phases inválido"
+        )
+    if role in {"builder", "maintenance", "neutral"} and allowed is not None:
+        expected = {
+            "builder": {"building"},
+            "maintenance": {"maintenance"},
+            "neutral": {"building", "maintenance"},
+        }[role]
+        if set(allowed) != expected:
+            raise TemplateCatalogError(
+                f"template '{template_name}' declara fases incompatíveis com "
+                f"project_role={role}"
+            )
     return policy
 
 
@@ -485,3 +520,45 @@ def validate_local_template(
             "ou uma compatibilidade V2 migrada"
         )
     return process_file.resolve()
+
+
+def preview_template_policy(
+    project_root: str | Path,
+    name: str,
+    *,
+    catalog_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read lifecycle/execution policy without materializing the template.
+
+    ``ft run`` uses this before any repository write so a lifecycle rejection
+    cannot leave a newly copied process bundle behind.
+    """
+    root = Path(project_root).resolve()
+    selected = validate_template_name(name)
+    record = project_template_record(root, selected)
+    if record is not None:
+        process_file = validate_local_template(root, selected, record)
+        payload = _load_process_payload(process_file)
+        if record.get("entrypoint") == "run":
+            return validate_runnable_policy(
+                payload,
+                template_name=selected,
+                process_file=process_file,
+            )
+        return validate_migrated_v2_run_policy(
+            payload,
+            record,
+            template_name=selected,
+            process_file=process_file,
+        )
+
+    local = paths.project_named_process_file(root, selected)
+    if local.is_file() and not local.is_symlink():
+        reject_bundle_symlinks(local.parent)
+        payload = _load_process_payload(local)
+        return validate_runnable_policy(
+            payload,
+            template_name=selected,
+            process_file=local,
+        )
+    return TemplateCatalog(catalog_root).require(selected).policy

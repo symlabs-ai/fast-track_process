@@ -16,6 +16,7 @@ from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import EngineState
 from ft.project.bootstrap import bootstrap_project
+from ft.project.lifecycle import close_project_contract
 from ft.templates.input_policy import InputPolicyError
 
 
@@ -90,6 +91,28 @@ def _bootstrap_run_project(project: Path) -> None:
     )
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"],
+        cwd=project,
+        check=True,
+    )
+    docs = project / "docs"
+    docs.mkdir()
+    (docs / "PRD.md").write_text("# PRD\n\nProduto entregue.\n", encoding="utf-8")
+    (docs / "PROJECT_BACKLOG.md").write_text(
+        "| ID | Prioridade | Status | Evidência |\n"
+        "| --- | --- | --- | --- |\n"
+        "| PB-001 | P0 | done | tests/report.md |\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "docs"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "deliver test project"],
+        cwd=project,
+        check=True,
+    )
+    close_project_contract(project)
+    subprocess.run(["git", "add", ".ft"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "close test project"],
         cwd=project,
         check=True,
     )

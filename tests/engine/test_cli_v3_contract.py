@@ -13,6 +13,7 @@ import yaml
 from ft.cli import main as cli_main
 from ft.engine import paths
 from ft.engine.runner import StepRunner
+from ft.project.lifecycle import close_project_contract
 
 
 def _invoke_cli(monkeypatch: pytest.MonkeyPatch, *arguments: object) -> None:
@@ -40,6 +41,7 @@ def _tracked_workspace_snapshot(root: Path) -> dict[str, bytes]:
         relative: (root / relative).read_bytes()
         for relative in (
             ".ft/manifest.yml",
+            ".ft/project.yml",
             ".ft/.gitignore",
             ".ft/process/.gitkeep",
             ".ft/cycles/.gitkeep",
@@ -152,6 +154,143 @@ def test_init_adopt_bootstraps_legacy_directory_without_git(
     assert "commite-os antes" in output
 
 
+def test_project_lifecycle_commands_block_then_close_and_reopen(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _invoke_cli(monkeypatch, "init", "product")
+    capsys.readouterr()
+    project = tmp_path / "product"
+    _git(project, "config", "user.name", "FT Contract Tests")
+    _git(project, "config", "user.email", "ft-tests@example.invalid")
+
+    with pytest.raises(SystemExit) as initial_status:
+        _invoke_cli(monkeypatch, "project-status", project)
+    assert initial_status.value.code == 2
+    assert "BLOCKED" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as blocked_close:
+        _invoke_cli(monkeypatch, "project-close", project)
+    assert blocked_close.value.code == 2
+    blocked_output = capsys.readouterr().out
+    assert "permanece em building" in blocked_output
+    assert (
+        yaml.safe_load(
+            (project / ".ft/project-readiness.yml").read_text(encoding="utf-8")
+        )["status"]
+        == "BLOCKED"
+    )
+    blocked_head = _git(project, "rev-parse", "HEAD")
+    with pytest.raises(SystemExit) as repeated_close:
+        _invoke_cli(monkeypatch, "project-close", project)
+    assert repeated_close.value.code == 2
+    capsys.readouterr()
+    assert _git(project, "rev-parse", "HEAD") == blocked_head
+
+    docs = project / "docs"
+    docs.mkdir()
+    (docs / "PRD.md").write_text("# PRD\n\nProduto completo.\n", encoding="utf-8")
+    (docs / "PROJECT_BACKLOG.md").write_text(
+        "| ID | Prioridade | Status | Evidência |\n"
+        "| --- | --- | --- | --- |\n"
+        "| PB-001 | P0 | done | tests/report.md |\n",
+        encoding="utf-8",
+    )
+    _git(project, "add", "docs")
+    _git(project, "commit", "-m", "deliver product")
+
+    with pytest.raises(SystemExit) as ready_close:
+        _invoke_cli(monkeypatch, "project-close", project)
+    assert ready_close.value.code == 0
+    assert "fase alterada para maintenance" in capsys.readouterr().out
+    contract = yaml.safe_load(
+        (project / ".ft/project.yml").read_text(encoding="utf-8")
+    )
+    assert contract["lifecycle"]["phase"] == "maintenance"
+
+    with pytest.raises(SystemExit) as reopened:
+        _invoke_cli(
+            monkeypatch,
+            "project-reopen",
+            project,
+            "--reason",
+            "Novo marco de produto",
+            "--target",
+            "v2",
+        )
+    assert reopened.value.code == 0
+    assert "Projeto reaberto" in capsys.readouterr().out
+    contract = yaml.safe_load(
+        (project / ".ft/project.yml").read_text(encoding="utf-8")
+    )
+    assert contract["objective"]["target"] == "v2"
+    assert contract["lifecycle"]["phase"] == "building"
+
+
+def test_project_status_from_worktree_uses_owner_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _invoke_cli(monkeypatch, "init", "product")
+    capsys.readouterr()
+    project = tmp_path / "product"
+    linked = tmp_path / "linked-cycle"
+    _git(project, "config", "user.name", "FT Contract Tests")
+    _git(project, "config", "user.email", "ft-tests@example.invalid")
+    _git(project, "worktree", "add", "-q", "-b", "cycle-inspection", str(linked))
+
+    contract_path = project / ".ft/project.yml"
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    contract["objective"]["target"] = "owner-checkout"
+    contract_path.write_text(
+        yaml.safe_dump(contract, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    _git(project, "add", ".ft/project.yml")
+    _git(project, "commit", "-m", "update owner objective")
+    owner_revision = _git(project, "rev-parse", "HEAD")
+
+    with pytest.raises(SystemExit) as status:
+        _invoke_cli(monkeypatch, "project-status", linked, "--json")
+
+    assert status.value.code == 2
+    payload = yaml.safe_load(capsys.readouterr().out)
+    assert payload["target"] == "owner-checkout"
+    assert payload["evaluated_revision"] == owner_revision
+
+
+def test_maintenance_template_is_rejected_before_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _invoke_cli(monkeypatch, "init", "product")
+    capsys.readouterr()
+    project = tmp_path / "product"
+
+    with pytest.raises(SystemExit) as refused:
+        _invoke_cli(
+            monkeypatch,
+            "run",
+            project,
+            "--template",
+            "feature-fast",
+            "--request",
+            "Completar algo que ficou pendente",
+        )
+
+    assert refused.value.code == 2
+    output = capsys.readouterr().out
+    assert "projeto está em building" in output
+    assert not (project / ".ft/process/feature-fast").exists()
+    assert not paths.worktrees_home(project).exists()
+
+
 def test_run_rejects_repository_without_ft_initialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -230,6 +369,20 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     project = tmp_path / "product"
     _git(project, "config", "user.name", "FT Contract Tests")
     _git(project, "config", "user.email", "ft-tests@example.invalid")
+    docs = project / "docs"
+    docs.mkdir()
+    (docs / "PRD.md").write_text("# PRD\n\nProduto entregue.\n", encoding="utf-8")
+    (docs / "PROJECT_BACKLOG.md").write_text(
+        "| ID | Prioridade | Status | Evidência |\n"
+        "| --- | --- | --- | --- |\n"
+        "| PB-001 | P0 | done | tests/report.md |\n",
+        encoding="utf-8",
+    )
+    _git(project, "add", "docs")
+    _git(project, "commit", "-m", "deliver test project")
+    close_project_contract(project)
+    _git(project, "add", ".ft")
+    _git(project, "commit", "-m", "close test project")
 
     started: list[tuple[Path, str]] = []
 
@@ -282,6 +435,12 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     assert tweak_state["template_id"] == "tweak"
     assert feature_state["process_path"] == ".ft/process/feature/process.yml"
     assert tweak_state["process_path"] == ".ft/process/tweak/process.yml"
+    for state in (feature_state, tweak_state):
+        assert state["project_id"] == "product"
+        assert state["project_phase"] == "maintenance"
+        assert state["project_target"] == "mvp"
+        assert state["project_definition_of_done_digest"].startswith("sha256:")
+        assert re.fullmatch(r"[0-9a-f]{40}", state["project_delivered_revision"])
     assert _git(project, "status", "--porcelain") == ""
 
     runtime_home = paths.worktrees_home(project)
@@ -293,8 +452,8 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     multi_status = capsys.readouterr().out
     assert "Ciclo: cycle-01-feature" in multi_status
     assert "Ciclo: cycle-02-tweak" in multi_status
-    assert "feature v1.3.0" in multi_status
-    assert "tweak v1.0.1" in multi_status
+    assert "feature v1.4.0" in multi_status
+    assert "tweak v1.1.0" in multi_status
 
     selected = cli_main._select_cycle_for_command(project, "cycle-02-tweak")
     assert selected.name == "cycle-02-tweak"

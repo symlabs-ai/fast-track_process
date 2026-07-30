@@ -267,7 +267,7 @@ def test_global_template_declares_structured_process_governance():
         item for item in data["nodes"] if item["id"] == "ft.handoff.05.process_evolve"
     )
 
-    assert data["version"] == "1.2.0"
+    assert data["version"] == "1.3.0"
     assert "docs/process-improvements.yml" in data["artifact_policy"]["cycle"]
     assert "docs/process-improvements.yml" in node["outputs"]
     assert "docs/process-improvements.yml" in node["write_scope"]

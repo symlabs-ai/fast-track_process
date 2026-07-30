@@ -99,14 +99,18 @@ def _status_entries(root: Path) -> tuple[str, ...]:
 
 
 def _common_scaffold(root: Path) -> tuple[str, ...]:
+    from ft.project.lifecycle import ensure_project_contract
+
     scaffold = (
         paths.project_manifest(root),
+        paths.project_contract(root),
         paths.project_ft_dir(root) / ".gitignore",
         paths.project_process_dir(root) / ".gitkeep",
         paths.project_cycles_dir(root) / ".gitkeep",
     )
     before = {path for path in scaffold if path.is_file()}
     ensure_project_layout(root)
+    ensure_project_contract(root)
     process_keep = paths.project_process_dir(root) / ".gitkeep"
     process_keep.touch(exist_ok=True)
     return tuple(

@@ -32,6 +32,16 @@ def project_manifest(project_root: str | Path) -> Path:
     return project_ft_dir(project_root) / "manifest.yml"
 
 
+def project_contract(project_root: str | Path) -> Path:
+    """Versioned project objective, lifecycle and Definition of Done."""
+    return project_ft_dir(project_root) / "project.yml"
+
+
+def project_readiness(project_root: str | Path) -> Path:
+    """Versioned deterministic receipt for the latest project evaluation."""
+    return project_ft_dir(project_root) / "project-readiness.yml"
+
+
 def project_process_dir(project_root: str | Path) -> Path:
     return project_ft_dir(project_root) / "process"
 

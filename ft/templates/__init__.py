@@ -12,6 +12,7 @@ from ft.templates.catalog import (
     TemplateCatalogError,
     TemplateDescriptor,
     TemplateNotFoundError,
+    preview_template_policy,
     template_kind,
 )
 from ft.templates.input_policy import (
@@ -35,6 +36,7 @@ __all__ = [
     "TemplateDescriptor",
     "TemplateMaterializer",
     "TemplateNotFoundError",
+    "preview_template_policy",
     "load_input_policy",
     "resolve_template",
     "template_kind",

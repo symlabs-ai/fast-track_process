@@ -534,6 +534,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "demand_coverage": val.demand_coverage,
     "prd_coverage": val.prd_coverage,
     "project_backlog_valid": val.project_backlog_valid,
+    "project_contract_valid": val.project_contract_valid,
     "task_list_references_backlog": val.task_list_references_backlog,
     "backlog_pending_decisions": val.backlog_pending_decisions,
     "backlog_referenced_decisions": val.backlog_referenced_decisions,
@@ -3674,6 +3675,7 @@ class StepRunner:
     def init_state(self):
         """Inicializa estado a partir do grafo."""
         self._reset_validator_snapshots()
+        pinned_state = self.state_mgr.load()
         first = self.graph.first_node()
         total = len([n for n in self.graph.nodes.values() if n.type != "end"])
         cycle_id = "cycle-01"
@@ -3739,6 +3741,13 @@ class StepRunner:
             template_id=str(template_id) if template_id else None,
             base_commit=base_commit,
             worktree_branch=worktree_branch,
+            project_id=pinned_state.project_id,
+            project_phase=pinned_state.project_phase,
+            project_target=pinned_state.project_target,
+            project_definition_of_done_digest=(
+                pinned_state.project_definition_of_done_digest
+            ),
+            project_delivered_revision=pinned_state.project_delivered_revision,
         )
         self.state_mgr.state.current_sprint = first.sprint
         self.state_mgr.state.sprint_status = "active" if first.sprint else None

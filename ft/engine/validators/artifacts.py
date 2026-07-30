@@ -14,6 +14,8 @@ import subprocess
 import unicodedata
 from pathlib import Path
 
+import yaml
+
 
 def _normalize(text: str) -> str:
     """Remove diacritics for accent-insensitive matching."""
@@ -995,6 +997,41 @@ def project_backlog_valid(
     if bad_status:
         return False, f"project_backlog_valid FAIL: status invalido em {', '.join(bad_status[:8])}"
     return True, f"project_backlog_valid: {len(rows)} item(ns) validos em {path}"
+
+
+def project_contract_valid(
+    path: str = ".ft/project.yml",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate the versioned project objective and global Definition of Done."""
+    from ft.project.lifecycle import (
+        ProjectContractError,
+        read_project_contract,
+        validate_project_contract,
+    )
+
+    root = Path(project_root).resolve()
+    full = root / path
+    if not full.is_file() or full.is_symlink():
+        return False, f"project_contract_valid FAIL: {path} nao encontrado ou inseguro"
+    try:
+        if Path(path).as_posix() == ".ft/project.yml":
+            contract = read_project_contract(root)
+        else:
+            payload = yaml.safe_load(full.read_text(encoding="utf-8")) or {}
+            contract = validate_project_contract(payload, path=full)
+    except (OSError, UnicodeError, yaml.YAMLError, ProjectContractError) as exc:
+        return False, f"project_contract_valid FAIL: {exc}"
+    if contract is None:
+        return False, f"project_contract_valid FAIL: {path} ausente"
+    if contract["lifecycle"]["phase"] != "building":
+        return False, (
+            "project_contract_valid FAIL: processo construtor exige phase=building"
+        )
+    return True, (
+        "project_contract_valid: objetivo e DoD globais válidos "
+        f"para {contract['project_id']}"
+    )
 
 
 def task_list_references_backlog(

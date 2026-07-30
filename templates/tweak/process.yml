@@ -4,7 +4,7 @@
 # precisam de minutos, não de uma rodada de discovery/review/reconcile.
 
 id: tweak
-version: "1.0.1"
+version: "1.1.0"
 title: "Tweak — Mudança Pequena e Direta"
 
 execution_policy:
@@ -16,6 +16,9 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/tweak/process.yml
   merge_command: ft close --merge full
+  project_role: maintenance
+  allowed_project_phases:
+    - maintenance
 
 input_policy:
   required: true

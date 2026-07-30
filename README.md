@@ -53,8 +53,8 @@ ft run . --template mvp-builder --auto
 `ft init` não seleciona nem copia template de **processo** e não semeia `docs/`
 ou `src/`. A opção `--template` existe apenas para encadear um template de
 inicialização (`kind: init`) depois da base comum. O comando prepara `.ft/`, o
-manifesto, ignores e o repositório Git. Repeti-lo em um workspace saudável é
-idempotente.
+manifesto, o contrato conservador `.ft/project.yml`, ignores e o repositório
+Git. Repeti-lo em um workspace saudável é idempotente.
 
 ```bash
 ft init --check   # diagnóstico somente leitura
@@ -99,6 +99,11 @@ Cada template define a política de entrada. `--request` recebe uma demanda
 curta; `--input` recebe um arquivo. Combinações ausentes ou incompatíveis falham
 antes de criar worktree ou estado.
 
+Templates construtores (`mvp-builder` e `mvp-builder-fast`) rodam enquanto o
+projeto está em `building`. `feature`, `feature-fast`, `bug`, `bug-fast` e
+`tweak` são manutenção e só rodam depois de um `ft project-close` READY.
+`ft close` encerra um ciclo; não declara o projeto entregue.
+
 ## Ciclos em paralelo
 
 Cada `ft run` aloca atomicamente seu próprio id, branch, worktree e estado. Não
@@ -141,6 +146,9 @@ ft retry --cycle <id>
 ft abort --cycle <id>
 ft close --cycle <id>
 ft runs
+ft project-status
+ft project-close
+ft project-reopen --reason "novo marco" --objective "Entregar ..." --target v2
 
 ft llm-capabilities --json
 ft llm-defaults --agent codex --model gpt-5.6-sol --effort max --json
@@ -149,6 +157,12 @@ ft llm-defaults --agent codex --model gpt-5.6-sol --effort max --json
 Quando há exatamente um ciclo aplicável, comandos de acompanhamento podem
 inferi-lo. Com dois ou mais, `--cycle` é obrigatório e o erro lista as opções; o
 engine nunca escolhe pela data de criação.
+
+O DoD global versionado em `.ft/project.yml` exige `done`/`accepted` com
+evidência para o escopo selecionado e pode declarar gates JSON/YAML adicionais.
+Itens `blocked`/`deferred` continuam pendentes mesmo quando possuem decisão.
+Somente `ft project-close`, com checkout limpo e nenhum ciclo aberto, registra
+`.ft/project-readiness.yml` READY e muda a fase para `maintenance`.
 
 `--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
 `--bypass-human-gates` delega essas decisões ao LLM.
@@ -176,13 +190,13 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 | Template | Uso |
 |---|---|
 | `base` | Processo mínimo para composição local |
-| `feature` | Evolução incremental de uma capacidade existente |
-| `feature-fast` | Feature com sessões persistentes e correção focal seguida de auditoria somente do delta |
-| `bug` | Correção focal com regressão RED→GREEN |
-| `bug-fast` | Bug em duas chamadas LLM: RED→GREEN, review independente, fix focal e reconciliação Python |
-| `tweak` | Mudança pequena e de baixo risco |
-| `mvp-builder` | Processo completo recomendado para um MVP |
-| `mvp-builder-fast` | Variante opt-in com plano interno, sessões por sprint e macro-nodes seguros |
+| `feature` | Evolução incremental de manutenção após entrega |
+| `feature-fast` | Feature de manutenção com sessões persistentes e auditoria do delta |
+| `bug` | Correção focal em projeto entregue, com regressão RED→GREEN |
+| `bug-fast` | Bug de manutenção em duas chamadas LLM e fix focal |
+| `tweak` | Mudança pequena em projeto entregue |
+| `mvp-builder` | Construtor completo durante a fase `building` |
+| `mvp-builder-fast` | Construtor rápido com plano interno, sessões e macro-nodes |
 | `fast-track-v2` | Processo histórico V2 |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `fastfy` | Adoção de repositório legado na base canônica Fast Track |

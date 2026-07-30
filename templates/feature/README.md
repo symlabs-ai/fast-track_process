@@ -3,6 +3,10 @@
 Processo incremental para implementar exatamente uma nova capacidade, evolução
 ou melhoria em um produto FT já existente.
 
+Este é um processo de manutenção: o engine exige `.ft/project.yml` em
+`maintenance` e receipt READY íntegro. Se o produto ainda estiver em
+`building`, conclua os ciclos do construtor e rode `ft project-close`.
+
 ## Uso
 
 ```bash

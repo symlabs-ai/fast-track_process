@@ -6,6 +6,28 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### Lifecycle determinístico do projeto
+
+- `.ft/project.yml` passou a registrar objetivo, alvo, fase, owner construtor e
+  Definition of Done global acima dos ciclos. `ft init` cria um contrato
+  conservador em `building`; `ft init --fix` repara projetos antigos sem
+  inferir que já foram entregues.
+- `ft project-status` avalia backlog, evidências, gates JSON/YAML, ciclos ainda
+  abertos e limpeza Git. `blocked`, `deferred` ou apenas “decidido” não contam:
+  o escopo selecionado precisa estar `done`/`accepted`.
+- `ft project-close` grava `.ft/project-readiness.yml` e só promove o projeto
+  para `maintenance` com DoD integralmente verde. `ft project-reopen` invalida
+  o receipt anterior e abre explicitamente um novo objetivo.
+- `ft close` agora comunica que concluiu apenas o ciclo. O histórico fixa a
+  fase, o alvo e o digest do DoD presentes no início de cada execução.
+- `mvp-builder` e `mvp-builder-fast` são owners construtores em `building`;
+  `feature`, `feature-fast`, `bug`, `bug-fast` e `tweak` são recusados antes de
+  um fechamento READY íntegro. A recusa acontece antes de materializar template
+  ou alocar worktree.
+- Os builders reconciliam o contrato dentro das chamadas de planejamento já
+  existentes, e o gate de arquitetura também aprova o DoD global. O caminho
+  rápido não ganhou uma invocação LLM adicional.
+
 ### Supervisão global por produtividade
 
 - Timeouts declarados por nodes e aliases legados de executor passaram a ser

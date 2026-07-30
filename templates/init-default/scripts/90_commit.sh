@@ -6,6 +6,7 @@ set -euo pipefail
 
 known_paths=(
   .ft/manifest.yml
+  .ft/project.yml
   .ft/.gitignore
   .ft/process/.gitkeep
   .ft/cycles/.gitkeep

@@ -3,6 +3,9 @@
 Processo focal de `ft run --template bug` para corrigir um defeito reproduzível
 com teste de regressão RED→GREEN.
 
+Só roda em projeto fechado como READY e em fase `maintenance`. Durante
+`building`, o defeito deve ser tratado pelo processo construtor owner.
+
 ```bash
 ft run . --template bug \
   --request "Terminal duplica o comando ao ecoar input" --codex

@@ -253,7 +253,7 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature"
-    assert graph.meta["version"] == "1.3.0"
+    assert graph.meta["version"] == "1.4.0"
     assert graph.meta["execution_policy"] == {
         "entrypoint": "run",
         "template": "feature",
@@ -263,6 +263,8 @@ def test_feature_process_is_valid_and_uses_local_runtime_paths():
         "requires_worktree": True,
         "local_process_path": ".ft/process/feature/process.yml",
         "merge_command": "ft close --merge full",
+        "project_role": "maintenance",
+        "allowed_project_phases": ["maintenance"],
     }
     assert graph.meta["correction_policy"] == {
         "follow_graph_after_retry": True,

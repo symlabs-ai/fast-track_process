@@ -5,7 +5,7 @@
 # `.ft/process/feature/` e executa somente a cópia local versionada.
 
 id: feature
-version: "1.3.0"
+version: "1.4.0"
 title: "Feature — Evolução Incremental"
 
 execution_policy:
@@ -17,6 +17,9 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/feature/process.yml
   merge_command: ft close --merge full
+  project_role: maintenance
+  allowed_project_phases:
+    - maintenance
 
 input_policy:
   required: true

@@ -141,6 +141,11 @@ class EngineState:
     template_id: str | None = None
     base_commit: str | None = None
     worktree_branch: str | None = None
+    project_id: str | None = None
+    project_phase: str | None = None
+    project_target: str | None = None
+    project_definition_of_done_digest: str | None = None
+    project_delivered_revision: str | None = None
     version: str = "0.1.0"
     llm_engine: str = "claude"
     llm_model: str | None = None
@@ -235,6 +240,13 @@ class StateManager:
                 template_id=raw.get("template_id"),
                 base_commit=raw.get("base_commit"),
                 worktree_branch=raw.get("worktree_branch"),
+                project_id=raw.get("project_id"),
+                project_phase=raw.get("project_phase"),
+                project_target=raw.get("project_target"),
+                project_definition_of_done_digest=raw.get(
+                    "project_definition_of_done_digest"
+                ),
+                project_delivered_revision=raw.get("project_delivered_revision"),
                 version=raw.get("version", "0.1.0"),
                 llm_engine=raw.get("llm_engine", "claude"),
                 llm_model=raw.get("llm_model"),
@@ -348,6 +360,13 @@ class StateManager:
             "template_id": self._state.template_id,
             "base_commit": self._state.base_commit,
             "worktree_branch": self._state.worktree_branch,
+            "project_id": self._state.project_id,
+            "project_phase": self._state.project_phase,
+            "project_target": self._state.project_target,
+            "project_definition_of_done_digest": (
+                self._state.project_definition_of_done_digest
+            ),
+            "project_delivered_revision": self._state.project_delivered_revision,
             "version": self._state.version,
             "llm_engine": self._state.llm_engine,
             "llm_model": self._state.llm_model,
@@ -411,6 +430,11 @@ class StateManager:
         template_id: str | None = None,
         base_commit: str | None = None,
         worktree_branch: str | None = None,
+        project_id: str | None = None,
+        project_phase: str | None = None,
+        project_target: str | None = None,
+        project_definition_of_done_digest: str | None = None,
+        project_delivered_revision: str | None = None,
         llm_model: str | None = None,
         llm_effort: str | None = None,
         llm_defaults_digest: str | None = None,
@@ -424,6 +448,11 @@ class StateManager:
             template_id=template_id,
             base_commit=base_commit,
             worktree_branch=worktree_branch,
+            project_id=project_id,
+            project_phase=project_phase,
+            project_target=project_target,
+            project_definition_of_done_digest=project_definition_of_done_digest,
+            project_delivered_revision=project_delivered_revision,
             version=graph_meta.get("version", "0.1.0"),
             llm_engine=llm_engine,
             llm_model=llm_model,

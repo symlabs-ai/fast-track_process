@@ -98,6 +98,7 @@ DEFAULT_CYCLE_ARTIFACTS = (
 SYSTEM_CYCLE_ARTIFACTS = (".build_ok",)
 
 DEFAULT_CANONICAL_ARTIFACTS = (
+    ".ft/project.yml",
     "docs/PRD.md",
     "docs/TECH_STACK.md",
     # Alias somente para preservar projetos/forks anteriores à canonização.
@@ -1624,6 +1625,29 @@ def archive_cycle_artifacts(
             "base_commit": getattr(state, "base_commit", None) if state is not None else None,
             "worktree_branch": (
                 getattr(state, "worktree_branch", None) if state is not None else None
+            ),
+        },
+        "project": {
+            "id": getattr(state, "project_id", None) if state is not None else None,
+            "phase": (
+                getattr(state, "project_phase", None)
+                if state is not None
+                else None
+            ),
+            "target": (
+                getattr(state, "project_target", None)
+                if state is not None
+                else None
+            ),
+            "definition_of_done_digest": (
+                getattr(state, "project_definition_of_done_digest", None)
+                if state is not None
+                else None
+            ),
+            "delivered_revision": (
+                getattr(state, "project_delivered_revision", None)
+                if state is not None
+                else None
             ),
         },
         "llm": llm_record,

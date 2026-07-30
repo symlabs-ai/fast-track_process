@@ -221,6 +221,11 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
         template_id="feature",
         base_commit="deadbeef",
         worktree_branch="cycle-07",
+        project_id="product",
+        project_phase="maintenance",
+        project_target="mvp",
+        project_definition_of_done_digest="sha256:project-dod",
+        project_delivered_revision="a" * 40,
         version="1.0.0",
         llm_engine="claude",
         llm_model="claude-fable-5",
@@ -272,6 +277,13 @@ def test_archive_moves_cycle_outputs_and_preserves_product_docs(tmp_path):
     assert record["git"] == {
         "base_commit": "deadbeef",
         "worktree_branch": "cycle-07",
+    }
+    assert record["project"] == {
+        "id": "product",
+        "phase": "maintenance",
+        "target": "mvp",
+        "definition_of_done_digest": "sha256:project-dod",
+        "delivered_revision": "a" * 40,
     }
 
 

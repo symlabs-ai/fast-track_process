@@ -2853,6 +2853,7 @@ def _cmd_close_locked_body(args, merge_lock):
             merge_strategy = None  # Forçar prompt
 
     work = Path(runner.project_root)
+    owner_root = canonical_project_root(work)
     if not getattr(args, "force", False):
         backlog_file = work / "docs" / "PROJECT_BACKLOG.md"
         backlog_policy = close_policy.get("backlog", {})
@@ -3000,6 +3001,24 @@ def _cmd_close_locked_body(args, merge_lock):
         print(_ui.dim("Worktree preservado (--keep-worktree)"))
 
     print(_ui.success("Ciclo encerrado."))
+    try:
+        from ft.project.lifecycle import evaluate_project_readiness
+
+        readiness = evaluate_project_readiness(owner_root)
+        if readiness.phase == "building":
+            print(
+                _ui.warn(
+                    f"Projeto ainda não encerrado: {readiness.status} "
+                    f"({len(readiness.blockers)} bloqueio(s))."
+                )
+            )
+            print("    Consulte: ft project-status")
+            if readiness.ready:
+                print("    Após a validação pós-close: ft project-close")
+        elif readiness.phase == "maintenance":
+            print(_ui.success("Projeto entregue e em fase de manutenção."))
+    except Exception as exc:
+        print(_ui.warn(f"Prontidão do projeto não pôde ser avaliada: {exc}"))
     print(_ui.warn("Verificação pós-close antes de entregar ao stakeholder:"))
     print("    1. Reinstale dependências (npm install / poetry install) — o ciclo pode ter adicionado novas")
     print("    2. Limpe caches de build antigos (ex.: .next/) e reinicie os servidores do checkout promovido")
@@ -3014,6 +3033,122 @@ def cmd_close(args):
     owner = canonical_project_root(find_project_root())
     with close_merge_lock(owner) as merge_lock:
         _cmd_close_locked_body(args, merge_lock)
+
+
+def _project_command_root(args) -> Path:
+    requested = getattr(args, "project", None) or "."
+    requested_root = Path(requested).expanduser().resolve()
+    _guard_engine_repo(requested_root)
+    if not paths.project_manifest(requested_root).is_file():
+        raise ValueError(
+            f"repositório Fast Track não inicializado em {requested_root}; "
+            "execute ft init"
+        )
+    root = canonical_project_root(requested_root)
+    _guard_engine_repo(root)
+    return root
+
+
+def _print_project_readiness(readiness, *, as_json: bool = False) -> None:
+    if as_json:
+        print(json.dumps(readiness.as_dict(), ensure_ascii=False, sort_keys=True))
+        return
+    from ft.engine import ui as _ui
+
+    marker = _ui.success if readiness.ready else _ui.fail
+    print(marker(f"Projeto: {readiness.project_id}"))
+    print(f"  Fase: {readiness.phase}")
+    print(f"  Alvo: {readiness.target}")
+    print(f"  Estado: {readiness.status}")
+    print(f"  Revisão: {readiness.evaluated_revision or '—'}")
+    print(f"  Bloqueios: {len(readiness.blockers)}")
+    for blocker in readiness.blockers:
+        references = (
+            f" [{', '.join(blocker.references)}]"
+            if blocker.references
+            else ""
+        )
+        print(f"    - {blocker.code}: {blocker.message}{references}")
+
+
+def cmd_project_status(args) -> int:
+    """Evaluate the versioned project DoD without mutating the repository."""
+    from ft.project.lifecycle import evaluate_project_readiness
+
+    readiness = evaluate_project_readiness(_project_command_root(args))
+    _print_project_readiness(
+        readiness,
+        as_json=bool(getattr(args, "json", False)),
+    )
+    return 0 if readiness.ready else 2
+
+
+def cmd_project_close(args) -> int:
+    """Persist the project DoD receipt and enter maintenance only on READY."""
+    from ft.engine.git_ops import auto_commit
+    from ft.project.lifecycle import (
+        close_project_contract,
+        evaluate_project_readiness,
+    )
+    from ft.runs import project_prep_lock
+
+    root = _project_command_root(args)
+    with project_prep_lock(root) as preparation:
+        readiness = close_project_contract(root)
+        commit_paths = [".ft/project-readiness.yml"]
+        transitioned = readiness.ready and readiness.phase == "building"
+        if transitioned:
+            commit_paths.insert(0, ".ft/project.yml")
+        with preparation.suspend():
+            committed, detail = auto_commit(
+                "chore(ft): registrar prontidão do projeto",
+                str(root),
+                paths=commit_paths,
+            )
+        if not committed:
+            raise RuntimeError(detail)
+    displayed = evaluate_project_readiness(root)
+    _print_project_readiness(
+        displayed,
+        as_json=bool(getattr(args, "json", False)),
+    )
+    if not getattr(args, "json", False):
+        print(f"  {detail}")
+        if transitioned:
+            print("  Projeto entregue; fase alterada para maintenance.")
+        elif not displayed.ready:
+            print("  Projeto permanece em building; manutenção continua bloqueada.")
+    return 0 if displayed.ready else 2
+
+
+def cmd_project_reopen(args) -> int:
+    """Explicitly reopen a delivered project for a new construction goal."""
+    from ft.engine.git_ops import auto_commit
+    from ft.project.lifecycle import reopen_project_contract
+    from ft.runs import project_prep_lock
+
+    root = _project_command_root(args)
+    with project_prep_lock(root) as preparation:
+        reopen_project_contract(
+            root,
+            reason=str(args.reason),
+            objective=getattr(args, "objective", None),
+            target=getattr(args, "target", None),
+        )
+        with preparation.suspend():
+            committed, detail = auto_commit(
+                "chore(ft): reabrir objetivo do projeto",
+                str(root),
+                paths=[".ft/project.yml", ".ft/project-readiness.yml"],
+            )
+        if not committed:
+            raise RuntimeError(detail)
+    if getattr(args, "json", False):
+        print(json.dumps({"status": "BUILDING", "detail": detail}))
+    else:
+        print("Projeto reaberto em building.")
+        print(f"  {detail}")
+    return 0
 
 
 def cmd_graph(args):
@@ -4283,6 +4418,7 @@ def _prepare_run_runtime(
     process_relative: Path | None,
     explicit_cycle_name: str | None,
     inherited_engine: str | None = None,
+    project_context: dict[str, object] | None = None,
 ) -> _PreparedRunRuntime:
     """Create one immutable Git worktree without blocking other active runs."""
     from ft.runs import RunCoordinator
@@ -4303,6 +4439,7 @@ def _prepare_run_runtime(
         process_path=process_path_at_root,
         process_digest=process_digest(process_path_at_root),
         requested_cycle=explicit_cycle_name,
+        initial_state=project_context,
     )
     print(f"  RunMode: isolated → {prepared.worktree}")
     return _PreparedRunRuntime(
@@ -4343,11 +4480,31 @@ def cmd_run(args):
         stage_knowledge,
         verify_hooks_from_process_meta,
     )
+    from ft.project.lifecycle import (
+        ProjectLifecycleError,
+        assert_template_allowed,
+        project_run_context,
+    )
     from ft.runs import RunCoordinator, project_prep_lock
+    from ft.templates import preview_template_policy
 
     coordinator = RunCoordinator(project_root)
+    template_name = str(args.template)
+    execution_policy = preview_template_policy(project_root, template_name)
+    contract = None
     with project_prep_lock(project_root) as preparation:
         coordinator.preflight()
+        try:
+            contract = assert_template_allowed(
+                project_root,
+                template_name=template_name,
+                execution_policy=execution_policy,
+            )
+        except ProjectLifecycleError as exc:
+            from ft.engine import ui as _ui
+
+            print(_ui.fail(str(exc)))
+            raise SystemExit(2) from exc
         process_path_at_root, process_relative = _select_run_process(
             args,
             source_project_root,
@@ -4404,6 +4561,7 @@ def cmd_run(args):
         process_path_at_root=process_path_at_root,
         process_relative=process_relative,
         explicit_cycle_name=explicit_cycle_name,
+        project_context=project_run_context(contract),
     )
     project_root = prepared.project_root
     state_path = prepared.state_path
@@ -4622,6 +4780,63 @@ def main():
     ru2.add_argument("--done", action="store_true",
                      help="Incluir também os ciclos concluídos (default: só ativos)")
     ru2.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
+
+    project_status = sub.add_parser(
+        "project-status",
+        help="Avaliar deterministicamente o DoD e a fase do projeto",
+    )
+    project_status.add_argument(
+        "project",
+        nargs="?",
+        default=".",
+        help="Diretório do projeto",
+    )
+    project_status.add_argument(
+        "--json",
+        action="store_true",
+        help="Emitir o receipt calculado em JSON",
+    )
+
+    project_close = sub.add_parser(
+        "project-close",
+        help="Fechar o projeto somente com DoD READY e entrar em manutenção",
+    )
+    project_close.add_argument(
+        "project",
+        nargs="?",
+        default=".",
+        help="Diretório do projeto",
+    )
+    project_close.add_argument(
+        "--json",
+        action="store_true",
+        help="Emitir o receipt em JSON",
+    )
+
+    project_reopen = sub.add_parser(
+        "project-reopen",
+        help="Reabrir explicitamente um projeto entregue para nova construção",
+    )
+    project_reopen.add_argument(
+        "project",
+        nargs="?",
+        default=".",
+        help="Diretório do projeto",
+    )
+    project_reopen.add_argument(
+        "--reason",
+        required=True,
+        help="Motivo auditável da reabertura",
+    )
+    project_reopen.add_argument(
+        "--objective",
+        help="Novo objetivo textual; preserva o anterior quando omitido",
+    )
+    project_reopen.add_argument(
+        "--target",
+        help="Novo alvo; preserva o anterior quando omitido",
+    )
+    project_reopen.add_argument("--json", action="store_true")
 
     llm_capabilities = sub.add_parser(
         "llm-capabilities",
@@ -4912,7 +5127,16 @@ def main():
     # Guard global: o ft opera sempre num repo de projeto, nunca no template/engine.
     # run/runs recebem o path do projeto como argumento e validam no próprio cmd_;
     # todos os demais comandos resolvem o projeto a partir do CWD.
-    if args.command not in (None, "init", "run", "runs", "migrate-layout"):
+    if args.command not in (
+        None,
+        "init",
+        "run",
+        "runs",
+        "migrate-layout",
+        "project-status",
+        "project-close",
+        "project-reopen",
+    ):
         _guard_engine_repo(find_project_root())
 
     try:
@@ -4963,6 +5187,12 @@ def main():
             cmd_run(args)
         elif args.command == "runs":
             cmd_runs(args)
+        elif args.command == "project-status":
+            sys.exit(cmd_project_status(args))
+        elif args.command == "project-close":
+            sys.exit(cmd_project_close(args))
+        elif args.command == "project-reopen":
+            sys.exit(cmd_project_reopen(args))
         elif args.command == "llm-capabilities":
             cmd_llm_capabilities(args)
         elif args.command == "llm-defaults":

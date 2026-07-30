@@ -11,7 +11,7 @@
 #        ou tests/ na raiz.
 
 id: mvp_builder
-version: "1.2.0"
+version: "1.3.0"
 title: "MVP Builder — MVP Completo"
 
 execution_policy:
@@ -23,6 +23,9 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/mvp-builder/process.yml
   merge_command: ft close --merge full
+  project_role: builder
+  allowed_project_phases:
+    - building
 
 input_policy:
   required: false
@@ -31,6 +34,7 @@ input_policy:
 
 artifact_policy:
   canonical:
+    - .ft/project.yml
     - docs/PRD.md
     - docs/TECH_STACK.md
     - docs/ui_criteria.md
@@ -268,6 +272,7 @@ nodes:
     executor: claude
     outputs:
       - docs/PROJECT_BACKLOG.md
+      - .ft/project.yml
     prompt: |
       Crie docs/PROJECT_BACKLOG.md como artefato canônico do produto.
 
@@ -303,11 +308,25 @@ nodes:
       ## Regras de Consumo pelos Ciclos
       - docs/task_list.md deve referenciar IDs PB-* selecionados para o ciclo.
       - Handoff deve atualizar Status, Evidência e Decisão/Notas.
+
+      No mesmo turn, reconcilie .ft/project.yml como contrato global do projeto:
+      - preserve schema_version, project_id e lifecycle.owner_template;
+      - objective.statement deve resumir o resultado maior, source deve apontar
+        para docs/PRD.md e target deve nomear o marco de entrega;
+      - mantenha lifecycle.phase=building e delivered_revision=null;
+      - o backlog do DoD deve selecionar todo P0/P1, aceitar somente
+        done/accepted e exigir evidência;
+      - required_gates deve listar cada decisão de aceite/release exigida pelo PRD
+        que possua evidência JSON/YAML verificável (path, field e equals);
+      - mantenha require_clean_checkout e require_no_active_cycles como true.
+      Nunca marque o projeto como maintenance; somente `ft project-close` o faz.
     validators:
       - file_exists: docs/PROJECT_BACKLOG.md
       - project_backlog_valid:
           path: docs/PROJECT_BACKLOG.md
           min_items: 1
+      - project_contract_valid:
+          path: .ft/project.yml
     next: ft.start.features.route
 
   - id: ft.plan.00.features_catalog
@@ -318,6 +337,7 @@ nodes:
     executor: claude
     outputs:
       - docs/FEATURES.md
+      - .ft/project.yml
     prompt: |
       Crie ou reconcilie docs/FEATURES.md como catálogo canônico das capacidades
       efetivamente implementadas e validadas do produto.
@@ -354,6 +374,14 @@ nodes:
 
       | ID | Status | Backlog | Título | Descrição | Entregue em | Evidência | Última evolução | Notas |
       |---|---|---|---|---|---|---|---|---|
+
+      Como este caminho recebeu um backlog já existente, reconcilie também
+      .ft/project.yml com o PRD e o backlog. Preserve schema_version, project_id e
+      lifecycle.owner_template; mantenha phase=building e delivered_revision=null.
+      O DoD deve cobrir todo P0/P1, aceitar somente done/accepted, exigir evidência,
+      checkout limpo e ausência de ciclos abertos. Declare em required_gates cada
+      aceite/release obrigatório que tenha evidência JSON/YAML verificável.
+      Somente `ft project-close` pode mudar a fase para maintenance.
     validators:
       - file_exists: docs/FEATURES.md
       - features_catalog_valid:
@@ -362,17 +390,31 @@ nodes:
       - implemented_backlog_covered_by_features:
           features_path: docs/FEATURES.md
           backlog_path: docs/PROJECT_BACKLOG.md
+      - project_contract_valid:
+          path: .ft/project.yml
     next: ft.plan.01.task_list
 
   - id: ft.plan.01.task_list
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Criar Task List"
-    description: "Selecionar itens abertos de docs/PROJECT_BACKLOG.md para este ciclo e quebrá-los em tasks técnicas ordenadas. A task list é por ciclo, não backlog global. Cada grupo deve referenciar IDs PB-* do backlog, status inicial, evidência esperada e critérios de aceite. Não decompor o PRD inteiro se o backlog já prioriza o escopo do ciclo."
+    description: "Selecionar itens abertos de docs/PROJECT_BACKLOG.md para este ciclo e quebrá-los em tasks técnicas ordenadas. A task list é por ciclo, não backlog global. Cada grupo deve referenciar IDs PB-* do backlog, status inicial, evidência esperada e critérios de aceite. Não decompor o PRD inteiro se o backlog já prioriza o escopo do ciclo. Reconciliar no mesmo turn o contrato global .ft/project.yml com PRD/backlog, preservando o owner e mantendo phase=building."
     sprint: sprint-02-planning
     executor: claude
     outputs:
       - docs/task_list.md
+      - .ft/project.yml
+    prompt: |
+      Gere docs/task_list.md com 20-120 linhas, selecionando itens abertos do
+      PROJECT_BACKLOG e decompondo-os em tasks ordenadas de frontend, backend e
+      testes. Cada grupo deve referenciar PB-*, critérios de aceite e evidência.
+
+      Reconcile também .ft/project.yml: preserve schema_version, project_id e
+      lifecycle.owner_template; objective deve representar o resultado maior do
+      PRD; mantenha phase=building e delivered_revision=null. O DoD deve cobrir
+      todo P0/P1, aceitar somente done/accepted, exigir evidência, checkout limpo
+      e nenhum ciclo aberto. Inclua required_gates para decisões de aceite/release
+      explicitamente exigidas e verificáveis em JSON/YAML. Nunca promova a fase.
     validators:
       - file_exists: docs/task_list.md
       - document_quality:
@@ -386,32 +428,48 @@ nodes:
           task_path: docs/task_list.md
           backlog_path: docs/PROJECT_BACKLOG.md
           min_refs: 1
+      - project_contract_valid:
+          path: .ft/project.yml
     next: ft.plan.02.tech_stack
 
   - id: ft.plan.02.tech_stack
     type: document
     title: "Definir Tech Stack"
-    description: "Documentar a stack técnica completa: framework, banco de dados, bibliotecas, scripts de inicialização e estrutura de diretórios. Incluir decisões de arquitetura com justificativa."
+    description: "Documentar a stack técnica completa e reconciliar o contrato global do projeto. Incluir decisões de arquitetura com justificativa; preservar o owner de .ft/project.yml e manter o projeto em building."
     sprint: sprint-02-planning
     executor: claude
     outputs:
       - docs/TECH_STACK.md
+      - .ft/project.yml
+    prompt: |
+      Documente docs/TECH_STACK.md com Framework, Banco de Dados, bibliotecas,
+      scripts, Estrutura de Diretórios e justificativas.
+
+      Revise .ft/project.yml contra PRD e PROJECT_BACKLOG. Preserve schema_version,
+      project_id e lifecycle.owner_template; mantenha phase=building e
+      delivered_revision=null. O DoD global deve selecionar todo P0/P1, aceitar
+      somente done/accepted, exigir evidência, checkout limpo e nenhum ciclo
+      aberto. Required_gates deve conter os aceites/releases obrigatórios com
+      evidência JSON/YAML verificável. Nunca marque maintenance.
     validators:
       - file_exists: docs/TECH_STACK.md
       - has_sections:
           - Framework
           - Banco de Dados
           - Estrutura de Diretórios
+      - project_contract_valid:
+          path: .ft/project.yml
     next: ft.plan.02b.tech_gate
 
   - id: ft.plan.02b.tech_gate
     type: human_gate
-    title: "Revisão do Tech Stack"
-    description: "Leia docs/TECH_STACK.md e confirme se as escolhas técnicas estão alinhadas com os requisitos do PRD. Rejeite com justificativa se alguma escolha for inadequada."
+    title: "Revisão da Arquitetura e DoD do Projeto"
+    description: "Leia docs/TECH_STACK.md e .ft/project.yml. Confirme as escolhas técnicas e, sobretudo, se objetivo, marco alvo, P0/P1 e gates estruturados representam tudo que precisa estar verde para o projeto ser realmente entregue. Blocked/deferred não podem contar como entrega. Rejeite com justificativa se o DoD permitir falso positivo ou exigir algo indevido."
     sprint: sprint-02-planning
     executor: python
     outputs:
       - docs/TECH_STACK.md
+      - .ft/project.yml
     reject_next: ft.plan.02.tech_stack
     next: ft.plan.03.api_contract
 
@@ -473,6 +531,8 @@ nodes:
           max_lines_count: 120
       - relative_dates_only:
           path: docs/test_data.md
+      - project_contract_valid:
+          path: .ft/project.yml
     next: ft.plan.gate
 
   - id: ft.plan.gate
@@ -1357,5 +1417,9 @@ nodes:
 
   - id: ft.end
     type: end
-    title: "MVP Entregue"
-    description: "Ciclo concluído. Use ft close para escolher o tipo de merge (full, docs only, selective) e encerrar o worktree."
+    title: "Ciclo de Construção Concluído"
+    description: >-
+      O ciclo terminou, mas isso não declara o projeto entregue. Execute
+      `ft close`, faça a validação pós-close no checkout promovido e consulte
+      `ft project-status`. Somente `ft project-close` com DoD global READY
+      altera o projeto para maintenance.

@@ -196,6 +196,39 @@ def check_project(project_root: str | Path) -> ProjectCheckResult:
         elif not file_path.is_file():
             issues.append(ProjectIssue(code, "arquivo estrutural ausente", path=file_path, repairable=True))
 
+    contract_path = paths.project_contract(root)
+    if contract_path.is_symlink():
+        issues.append(
+            ProjectIssue(
+                "project_contract.symlink",
+                "contrato de projeto não pode ser link simbólico",
+                path=contract_path,
+            )
+        )
+    elif not contract_path.is_file():
+        issues.append(
+            ProjectIssue(
+                "project_contract.missing",
+                "contrato de objetivo e DoD do projeto ausente",
+                severity="warning",
+                path=contract_path,
+                repairable=True,
+            )
+        )
+    else:
+        try:
+            from ft.project.lifecycle import read_project_contract
+
+            read_project_contract(root)
+        except ValueError as exc:
+            issues.append(
+                ProjectIssue(
+                    "project_contract.invalid",
+                    str(exc),
+                    path=contract_path,
+                )
+            )
+
     manifest_path = paths.project_manifest(root)
     unsafe_manifest = paths.project_ft_dir(root).is_symlink() or manifest_path.is_symlink()
     if unsafe_manifest:
@@ -373,6 +406,7 @@ def repair_project(project_root: str | Path) -> ProjectRepairResult:
         "git.head_missing",
         "git.status_failed",
         "manifest.symlink",
+        "project_contract.invalid",
     }
     if any(
         issue.code in blockers
@@ -470,6 +504,11 @@ def repair_project(project_root: str | Path) -> ProjectRepairResult:
                 actions.append(f"arquivo criado: {file_path.relative_to(root)}")
         if _copy_agents_playbook(root):
             actions.append("AGENTS.md restaurado")
+        if not paths.project_contract(root).exists():
+            from ft.project.lifecycle import ensure_project_contract
+
+            ensure_project_contract(root)
+            actions.append("contrato de projeto criado: .ft/project.yml")
 
     if actions:
         backup_dir = backup_dir or _repair_backup_dir(root)

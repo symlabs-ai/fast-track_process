@@ -16,6 +16,7 @@ determinísticas. O LLM não escolhe processo, ciclo ou próxima transição.
 O contrato V3 separa:
 
 - **workspace**: base comum criada por `ft init`, sem processo associado;
+- **projeto**: objetivo, fase e Definition of Done duráveis acima dos ciclos;
 - **template**: bundle global materializado copy-once em um fork local;
 - **ciclo**: execução imutavelmente ligada a um template local e a uma worktree;
 - **runtime**: estado, locks e logs sob `$FT_HOME`, fora do Git do produto.
@@ -45,7 +46,7 @@ cd meu-projeto
 O argumento de diretório é opcional (`.` por padrão). O comando:
 
 1. garante um repositório Git com HEAD;
-2. cria `.ft/manifest.yml`, `.ft/.gitignore` e o playbook comum;
+2. cria `.ft/manifest.yml`, `.ft/project.yml`, `.ft/.gitignore` e o playbook;
 3. não escolhe nem materializa template;
 4. não cria `docs/`, `src/`, worktree ou estado de ciclo.
 
@@ -115,6 +116,30 @@ processes: {}
 
 Não há seletor de processo principal. O mapa `processes` é catálogo, não fila nem
 ordem de preferência.
+
+### Lifecycle e Definition of Done do projeto
+
+`.ft/project.yml` é o contrato versionado acima dos ciclos. Ele começa em
+`building` e declara objetivo, marco alvo, seleção do backlog, status aceitos,
+exigência de evidência e gates adicionais sobre campos de JSON/YAML.
+`blocked`, `deferred`, `planned` e “decidido” não são entrega; o contrato aceita
+somente `done`/`accepted`.
+
+```bash
+ft project-status
+ft project-close
+ft project-reopen --reason "novo marco" --objective "Entregar ..." --target v2
+```
+
+`ft project-status` é read-only. `ft project-close` registra
+`.ft/project-readiness.yml` e só entra em `maintenance` quando o DoD está verde,
+o checkout está limpo e nenhum ciclo permanece aberto. `ft close` continua
+encerrando somente o ciclo. `project-reopen` invalida o receipt anterior e abre
+explicitamente um novo objetivo construtor.
+
+`mvp-builder`/`mvp-builder-fast` têm papel `builder` e rodam em `building`.
+`feature`, `feature-fast`, `bug`, `bug-fast` e `tweak` têm papel `maintenance`:
+são recusados antes de um fechamento READY íntegro.
 
 ## Abrir um ciclo
 
@@ -256,6 +281,8 @@ ft cancel "motivo" --cycle <id>
 # Encerramento
 ft process-candidates --cycle <id>
 ft close --cycle <id>
+ft project-status
+ft project-close
 ```
 
 `--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
@@ -515,6 +542,7 @@ para qualquer projeto do mesmo tipo trocando apenas as fontes de conhecimento.
 | `min_user_stories` | `min_user_stories: 3` | Mínimo de histórias `### US-` |
 | `demand_coverage` | mapa de paths | Cobertura determinística da demanda |
 | `project_backlog_valid` | path do backlog | IDs, prioridade e status válidos |
+| `project_contract_valid` | `.ft/project.yml` | Schema, objetivo, fase e DoD válidos |
 | `task_list_references_backlog` | paths | Task list referencia backlog |
 | `backlog_pending_decisions` | path | P0/P1 sem decisão são recusados |
 | `backlog_referenced_decisions` | paths/campo | Valida PBs selecionados pelo ciclo |
@@ -637,7 +665,7 @@ O sprint report é gerado ao cruzar boundaries. Quando documentos já existem em
 
 ### `mvp-builder`
 
-Processo completo de MVP. Materialize e execute com:
+Processo construtor completo para projeto em `building`. Materialize e execute:
 
 ```bash
 ft run . --template mvp-builder --auto
@@ -683,9 +711,14 @@ gates/validators Python permanecem autoritativos. Uma sessão expirada é
 substituída uma vez por uma conversa reidratada com plano, estado e artefatos.
 Processos sem `session_policy` continuam stateless.
 
+Os macro-nodes de planejamento também reconciliam `.ft/project.yml`, sem criar
+uma chamada LLM extra. O human gate de arquitetura aprova o objetivo e o DoD
+global. O fim do grafo significa “ciclo construtor concluído”; a entrega do
+projeto continua dependendo de `ft project-close`.
+
 ### `feature`
 
-Implementa uma capacidade em produto existente, com elucidação de escopo,
+Implementa uma capacidade em projeto já entregue (`maintenance`), com elucidação,
 aprovação, implementação, validação, evidência, review e aceite:
 
 ```bash
@@ -712,7 +745,8 @@ novas de changelog começam com `#FEAT`.
 
 ### `feature-fast`
 
-Mantém os contratos, human gates, receipts e reconciliação segura do `feature`,
+Mantém os contratos, human gates, receipts e reconciliação segura do `feature`
+em projeto já entregue,
 com sessões persistentes e um caminho focal para correções de review:
 
 ```bash
@@ -740,7 +774,7 @@ um ensaio físico só é repetido quando uma dependência física realmente mudo
 
 ### `bug`
 
-Correção focal para defeito reproduzível. Exige diagnóstico, teste RED,
+Correção focal de manutenção para defeito reproduzível. Exige diagnóstico, teste RED,
 correção mínima, o mesmo teste GREEN, build/test e aceite:
 
 ```bash
@@ -753,7 +787,7 @@ changelog começam com `#BUG`.
 
 ### `bug-fast`
 
-Mantém a reprodução RED→GREEN e a suíte completa do `bug`, mas troca a chamada
+Mantém em `maintenance` a reprodução RED→GREEN e a suíte completa do `bug`, mas troca a chamada
 documental final por reconciliação Python e acrescenta uma review independente:
 
 ```bash
@@ -815,6 +849,11 @@ mergeados.
 Depois do merge, reinstale dependências alteradas, limpe caches antigos,
 reinicie serviços no checkout promovido, confira as rotas principais e exerça a
 capacidade entregue antes de demonstrá-la.
+
+Para ciclos construtores, atualize e commite backlog/gates após essa verificação,
+rode `ft project-status` e só então `ft project-close`. Um receipt BLOCKED mantém
+o projeto em `building` e exige outro ciclo do mesmo construtor; não migre o
+trabalho pendente para templates de manutenção.
 
 ## Migração V2 → V3
 

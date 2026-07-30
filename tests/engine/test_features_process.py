@@ -14,7 +14,7 @@ def test_mvp_builder_maintains_features_before_planning_and_after_delivery():
     )
     by_id = {node["id"]: node for node in data["nodes"]}
 
-    assert data["version"] == "1.2.0"
+    assert data["version"] == "1.3.0"
     assert "docs/FEATURES.md" in data["artifact_policy"]["canonical"]
     assert by_id["ft.start.backlog.route"]["branches"]["true"] == "ft.start.features.route"
     assert by_id["ft.plan.00.project_backlog"]["next"] == "ft.start.features.route"

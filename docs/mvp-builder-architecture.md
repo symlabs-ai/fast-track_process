@@ -2,13 +2,14 @@
 
 ## Objetivo
 
-O Fast Track separa cinco ciclos de vida:
+O Fast Track separa seis ciclos de vida:
 
 1. código e testes do produto;
 2. fontes de verdade mantidas pelo usuário;
-3. processos locais versionados;
-4. histórico durável de cada ciclo;
-5. runtime e locks descartáveis fora do repositório.
+3. objetivo, fase e Definition of Done global do projeto;
+4. processos locais versionados;
+5. histórico durável de cada ciclo;
+6. runtime e locks descartáveis fora do repositório.
 
 No contrato V3, o workspace comum não pertence a nenhum template. `ft init`
 estabelece os invariantes do repositório; somente `ft run --template T`
@@ -29,6 +30,8 @@ produto/
 │   └── FEATURES.md
 ├── .ft/
 │   ├── manifest.yml
+│   ├── project.yml                     # objetivo, fase e DoD global
+│   ├── project-readiness.yml           # último receipt de fechamento
 │   ├── .gitignore
 │   ├── process/
 │   │   ├── mvp-builder/
@@ -58,9 +61,9 @@ produto/
 └── src/                                # opcional; definido pelo produto
 ```
 
-`ft init` cria somente a base comum (`.ft/`, manifesto, ignore e playbook), não
-`docs/`, `src/` nem uma entrada em `processes`. Esses diretórios aparecem quando
-o usuário ou o template realmente precisa deles.
+`ft init` cria somente a base comum (`.ft/`, manifesto, contrato conservador do
+projeto, ignore e playbook), não `docs/`, `src/` nem uma entrada em `processes`.
+Esses diretórios aparecem quando o usuário ou o template realmente precisa deles.
 
 `.ft/.gitignore` ignora apenas runtime acidental, caches, temporários, logs e
 PIDs. Processos e ciclos são versionados.
@@ -82,6 +85,18 @@ revisá-lo ou mantê-lo como fonte de verdade. Exemplos:
 `PROJECT_BACKLOG.md` registra mudanças desejadas. `FEATURES.md` projeta as
 capacidades efetivamente entregues: IDs `FEAT-*` permanecem estáveis, referenciam
 itens `PB-*` concluídos e conservam evolução, depreciação ou remoção.
+
+### `.ft/project.yml`: entrega do projeto
+
+O contrato do projeto fica acima dos ciclos. Ele declara o objetivo maior, o
+marco alvo e o DoD verificável: backlog selecionado, status aceitos, evidência,
+gates estruturados, limpeza do checkout e ausência de ciclos abertos.
+`blocked`/`deferred` com decisão podem encerrar um ciclo, mas nunca satisfazem o
+projeto. `.ft/project-readiness.yml` registra o último resultado BLOCKED ou READY.
+
+Templates possuem papel explícito: construtores rodam em `building`; manutenção
+roda somente em `maintenance` e exige receipt READY que corresponda ao digest do
+DoD e à revisão entregue.
 
 ### `.ft/process/<template>/`: forks locais
 
@@ -115,6 +130,7 @@ Cada `cycle.yml` registra, entre outros:
 - resumo dos gates;
 - índice de artefatos arquivados;
 - horário e resultado do fechamento.
+- snapshot da fase, alvo e digest do DoD global no início do ciclo.
 
 Estado, locks e logs brutos nunca entram nesse histórico.
 
@@ -207,6 +223,17 @@ ft close --cycle <id>
   -> arquiva outputs em .ft/cycles/<id>/
   -> faz o merge escolhido
   -> remove worktree/branch quando solicitado
+
+ft project-status
+  -> avalia o DoD global sem escrever
+
+ft project-close
+  -> exige backlog done/accepted com evidência, gates verdes, checkout limpo
+  -> exige nenhuma worktree de ciclo aberta
+  -> registra receipt READY e muda building para maintenance
+
+ft project-reopen --reason ...
+  -> invalida o receipt entregue e abre explicitamente novo objetivo building
 ```
 
 Não existe fallback de execução no checkout principal. Sem Git ou HEAD válido,
@@ -295,6 +322,7 @@ Ela:
 ## Invariantes
 
 - Todo workspace V3 é um repositório Git com HEAD.
+- Todo workspace novo possui `.ft/project.yml` conservador em `building`.
 - `ft init` nunca materializa template ou runtime.
 - Toda nova execução exige `--template`.
 - Todo processo executável vive em `.ft/process/<template>/process.yml`, está
@@ -305,4 +333,6 @@ Ela:
 - Preparação e close são atomicamente protegidos, mas runners não compartilham
   um lock de longa duração.
 - `ft close` não mergeia estado ou logs brutos.
+- `ft close` encerra um ciclo; somente `ft project-close` entrega o projeto.
+- Templates de manutenção exigem `maintenance` e receipt READY íntegro.
 - Histórico de ciclo permanece versionado depois da remoção da worktree.

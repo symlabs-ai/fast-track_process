@@ -5,6 +5,7 @@ Git operations — commit automatico apos green+review.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Any, Mapping
 
 
@@ -125,6 +126,8 @@ def auto_commit(
 _KNOWLEDGE_PATHS = (
     ".ft/process/",
     ".ft/manifest.yml",
+    ".ft/project.yml",
+    ".ft/project-readiness.yml",
     ".ft/.gitignore",
 )
 
@@ -157,8 +160,24 @@ def stage_knowledge(project_root: str = ".") -> tuple[bool, bool, str]:
     if not status.stdout.strip():
         return True, False, "commit_knowledge: catálogo de templates sem mudanças"
 
+    stage_paths: list[str] = []
+    for path in _KNOWLEDGE_PATHS:
+        if (Path(cwd) / path.rstrip("/")).exists():
+            stage_paths.append(path)
+            continue
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", path],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if tracked.returncode == 0:
+            stage_paths.append(path)
+    if not stage_paths:
+        return True, False, "commit_knowledge: catálogo de templates sem mudanças"
+
     staged = subprocess.run(
-        ["git", "add", "--", *_KNOWLEDGE_PATHS],
+        ["git", "add", "--", *stage_paths],
         cwd=cwd,
         capture_output=True,
         text=True,

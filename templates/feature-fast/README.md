@@ -1,5 +1,9 @@
 # Template `feature-fast`
 
+Processo de manutenção para projeto já entregue. O engine exige fase
+`maintenance` e `.ft/project-readiness.yml` READY; pendências do construtor não
+podem ser transferidas para este template.
+
 Processo incremental para implementar exatamente uma nova capacidade, evolução
 ou melhoria em um produto FT já existente, preservando conversas LLM por sprint.
 

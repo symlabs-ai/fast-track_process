@@ -5,7 +5,7 @@
 # `.ft/process/bug-fast/` e executa somente a cópia local versionada.
 
 id: bug_fast
-version: "1.1.2"
+version: "1.2.0"
 title: "Bug Fast — RED→GREEN, Review e Reconciliação Determinística"
 
 execution_policy:
@@ -17,6 +17,9 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/bug-fast/process.yml
   merge_command: ft close --merge full
+  project_role: maintenance
+  allowed_project_phases:
+    - maintenance
 
 session_policy:
   mode: sprint

@@ -75,6 +75,56 @@ def validate_process(graph: ProcessGraph, validator_registry: dict[str, Any] | N
 
 def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
     """Verifica schema: tipos, executors, campos obrigatórios."""
+    execution_policy = graph.meta.get("execution_policy")
+    if execution_policy is not None:
+        if not isinstance(execution_policy, dict):
+            report.add_error(None, "execution_policy deve ser um mapping")
+        else:
+            role = execution_policy.get("project_role")
+            if role is not None and role not in {
+                "builder",
+                "maintenance",
+                "neutral",
+            }:
+                report.add_error(
+                    None,
+                    "execution_policy.project_role deve ser builder, "
+                    "maintenance ou neutral",
+                )
+            phases = execution_policy.get("allowed_project_phases")
+            if (role is None) != (phases is None):
+                report.add_error(
+                    None,
+                    "execution_policy deve declarar project_role e "
+                    "allowed_project_phases em conjunto",
+                )
+            if phases is not None and (
+                not isinstance(phases, list)
+                or not phases
+                or any(
+                    phase not in {"building", "maintenance", "archived"}
+                    for phase in phases
+                )
+                or len(phases) != len(set(phases))
+            ):
+                report.add_error(
+                    None,
+                    "execution_policy.allowed_project_phases deve listar fases "
+                    "válidas sem duplicatas",
+                )
+            elif role in {"builder", "maintenance", "neutral"} and phases is not None:
+                expected = {
+                    "builder": {"building"},
+                    "maintenance": {"maintenance"},
+                    "neutral": {"building", "maintenance"},
+                }[role]
+                if set(phases) != expected:
+                    report.add_error(
+                        None,
+                        "execution_policy.allowed_project_phases é incompatível "
+                        f"com project_role={role}",
+                    )
+
     session_policy = graph.meta.get("session_policy")
     if session_policy is not None:
         if not isinstance(session_policy, dict):

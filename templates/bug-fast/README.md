@@ -3,6 +3,9 @@
 Processo focal de `ft run --template bug-fast` para corrigir um defeito
 reproduzível com sessão persistente, prova RED→GREEN e review independente.
 
+Só roda em projeto fechado como READY e em fase `maintenance`. Durante
+`building`, o defeito permanece no processo construtor owner.
+
 ```bash
 ft run . --template bug-fast \
   --request "Terminal duplica o comando ao ecoar input" \

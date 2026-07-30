@@ -4,6 +4,9 @@ Processo ultraleve de `ft run --template tweak` para alterações pequenas e
 locais: cor, espaçamento, texto, ícone ou comportamento simples sem mudança de
 contrato.
 
+É manutenção de produto entregue: exige `.ft/project.yml` em `maintenance` e
+receipt READY. Não serve para contornar pendências do processo construtor.
+
 ```bash
 ft run . --template tweak \
   --request "Mude a cor do botão Salvar para azul" --codex

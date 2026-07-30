@@ -4,7 +4,7 @@
 # deliberadamente curto e focal.
 
 id: bug
-version: "1.0.0"
+version: "1.1.0"
 title: "Bug — Diagnóstico, Regressão e Correção"
 
 execution_policy:
@@ -16,6 +16,9 @@ execution_policy:
   requires_worktree: true
   local_process_path: .ft/process/bug/process.yml
   merge_command: ft close --merge full
+  project_role: maintenance
+  allowed_project_phases:
+    - maintenance
 
 input_policy:
   required: true

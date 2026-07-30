@@ -17,14 +17,18 @@ nunca é um projeto FT. O guard global recusa comandos de projeto nesse repo.
 
 ## Modelo mental V3
 
-Há duas operações independentes:
+Há três níveis independentes:
 
 1. `ft init [dir]` prepara a base comum e saudável do repositório: Git com HEAD,
-   `.ft/`, manifesto V3, ignores e este playbook. Ele não escolhe nem copia
-   template de processo e não cria `docs/` ou `src/` de produto. Opcionalmente,
-   `--template` encadeia um template de inicialização (`kind: init`).
+   `.ft/`, manifesto V3, contrato conservador `.ft/project.yml`, ignores e este
+   playbook. Ele não escolhe nem copia template de processo e não cria `docs/`
+   ou `src/` de produto. Opcionalmente, `--template` encadeia um template de
+   inicialização (`kind: init`).
 2. `ft run <dir> --template <T>` seleciona, materializa e executa um template em
    um novo ciclo isolado. Não existe processo principal ou default.
+3. O projeto fica em `building` até `ft project-close` provar o Definition of
+   Done global e registrar um receipt READY. `ft close` encerra apenas um ciclo;
+   não declara o produto entregue.
 
 ```text
 ft init meu-projeto                      # base comum, sem processo
@@ -32,13 +36,21 @@ ft init meu-projeto                      # base comum, sem processo
 ft run . --template mvp-builder --auto   # ciclo A
 ft run . --template tweak --request ...  # ciclo B, pode coexistir com A
   → status/graph/approve/reject/fix       # selecionar ciclo se houver ambiguidade
-ft close --cycle <id>                     # merge e arquivamento serializados
+ft close --cycle <id>                     # merge e arquivamento do ciclo
+ft project-status                         # avaliar o DoD global
+ft project-close                          # building → maintenance, somente READY
 ```
 
 Cada ciclo roda em worktree externa em
 `$FT_HOME/worktrees/<projeto>/<cycle>/`. O checkout principal permanece limpo
 até o `ft close`. Ciclos são descartáveis e múltiplos ciclos podem estar ativos
 ao mesmo tempo, inclusive usando templates diferentes.
+
+O objetivo durável, o marco de entrega e o DoD ficam em `.ft/project.yml`.
+P0/P1 `blocked`, `deferred`, `planned` ou apenas “decidido” continuam pendentes:
+somente `done`/`accepted` com evidência satisfazem o fechamento. Gates adicionais
+apontam para campos verificáveis de arquivos JSON/YAML. O receipt versionado
+fica em `.ft/project-readiness.yml`.
 
 ## 0. Inicializar ou diagnosticar o repositório
 
@@ -82,6 +94,8 @@ ciclo, crie os documentos que o template escolhido exige e faça commit:
 - produto novo: em geral `docs/PRD.md` e `docs/TECH_STACK.md`;
 - produto existente: preserve `docs/PROJECT_BACKLOG.md` como mudanças desejadas e
   `docs/FEATURES.md` como catálogo do que já foi entregue;
+- antes da construção, revise `.ft/project.yml`: objetivo maior, alvo, escopo
+  P0/P1 e gates que precisam estar verdes para o projeto estar entregue;
 - demanda em arquivo: passe `--input demanda.md`;
 - demanda curta: passe `--request "descrição objetiva"`;
 - hipótese pronta, quando suportada: passe `--hipotese hipotese.md`.
@@ -117,13 +131,13 @@ Templates principais:
 | Template | Uso |
 |---|---|
 | `base` | Grafo mínimo para projetos que querem compor o próprio processo |
-| `feature` | Evolução incremental de uma capacidade em produto existente |
-| `feature-fast` | Feature com sessões persistentes e correção focal seguida de auditoria somente do delta |
-| `bug` | Correção focal com diagnóstico e regressão RED→GREEN |
-| `bug-fast` | Bug em duas chamadas LLM: RED→GREEN, review independente, fix focal e reconciliação Python |
-| `tweak` | Mudança pequena, focal e de baixo risco |
-| `mvp-builder` | Processo completo recomendado para construir um MVP |
-| `mvp-builder-fast` | Variante opt-in do MVP Builder com plano interno, sessões persistentes por sprint e macro-nodes |
+| `feature` | Evolução incremental após o projeto entrar em manutenção |
+| `feature-fast` | Feature de manutenção com sessões persistentes e auditoria do delta |
+| `bug` | Correção focal em projeto entregue, com regressão RED→GREEN |
+| `bug-fast` | Bug de manutenção em duas chamadas LLM e fix focal |
+| `tweak` | Mudança pequena e de baixo risco em projeto entregue |
+| `mvp-builder` | Processo construtor enquanto o projeto está em `building` |
+| `mvp-builder-fast` | Construtor rápido com plano interno, sessões persistentes e macro-nodes |
 | `fast-track-v2` | Processo histórico V2 |
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `fastfy` | Adoção de repositório legado na base canônica Fast Track |
@@ -141,6 +155,12 @@ recusados pelo run:
 Cada template declara sua política de entrada. `--request` e `--input` são
 formas genéricas; o engine recusa combinações ausentes ou incompatíveis antes de
 criar o ciclo.
+
+Também declara seu papel no projeto. `mvp-builder` e `mvp-builder-fast` aceitam
+somente `building`; o primeiro construtor usado passa a ser o owner do objetivo.
+`feature`, `feature-fast`, `bug`, `bug-fast` e `tweak` aceitam somente
+`maintenance`, com receipt READY íntegro. Isso impede usar manutenção para
+completar silenciosamente um projeto que o construtor deixou pendente.
 
 ### Concorrência entre ciclos
 
@@ -254,6 +274,30 @@ ft process-candidates PI-001 --cycle <id> --status promoted \
 Não marque `promoted` sem atualizar e testar a referência global. O ciclo altera
 apenas seu fork local.
 
+Encerrar o ciclo não encerra o projeto. Se o DoD global continuar bloqueado,
+rode outro ciclo do mesmo template construtor. Depois do último `ft close` e da
+verificação pós-close, atualize e commite backlog/evidências e então:
+
+```bash
+ft project-status
+ft project-close
+```
+
+`ft project-close` só muda `.ft/project.yml` de `building` para `maintenance`
+quando todos os itens selecionados estão `done`/`accepted` com evidência, todos
+os gates estruturados estão verdes, não há worktree de ciclo aberta e o checkout
+está limpo. Caso contrário, persiste um receipt BLOCKED e lista os impedimentos.
+
+Para iniciar deliberadamente um novo objetivo maior em produto já entregue:
+
+```bash
+ft project-reopen --reason "novo marco de produto" \
+  --objective "Entregar ..." --target "v2"
+```
+
+A reabertura volta a `building`, invalida o receipt anterior e libera um novo
+owner construtor. Não a use para feature/bug/tweak de manutenção.
+
 ### Verificação pós-close obrigatória
 
 O ciclo testa na worktree; caches e dependências do checkout promovido podem
@@ -322,6 +366,8 @@ confirmação final.
 No projeto:
 
 - catálogo local: `processes` em `.ft/manifest.yml`;
+- objetivo, fase e DoD global: `.ft/project.yml`;
+- último receipt determinístico: `.ft/project-readiness.yml`;
 - processos versionados: `.ft/process/<template>/process.yml`;
 - histórico versionado: `.ft/cycles/<cycle>/`;
 - runtime externo: `$FT_HOME/worktrees/<projeto>/<cycle>/state/`.

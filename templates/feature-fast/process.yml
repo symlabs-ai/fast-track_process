@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "1.3.0"
+version: "1.4.0"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -18,6 +18,9 @@ execution_policy:
   local_process_path: .ft/process/feature-fast/process.yml
   merge_command: ft close --merge full
   max_acceptance_criteria_per_cycle: 6
+  project_role: maintenance
+  allowed_project_phases:
+    - maintenance
 
 session_policy:
   mode: sprint

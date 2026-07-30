@@ -4554,7 +4554,15 @@ class StepRunner:
         # como implementação/revisão atual depois que o código mudou.
         # NÃO aplica se node tiver no_pre_seed: true — node deve sempre rodar (ex: plano de voo).
         code_like_types = {"build", "review", "test_red", "test_green", "refactor"}
-        if node.outputs and node.type not in code_like_types and not self._validator_snapshot_specs(node) and not getattr(node, "no_pre_seed", False):
+        if (
+            node.outputs
+            and (
+                node.type not in code_like_types
+                or getattr(node, "allow_pre_seed", False)
+            )
+            and not self._validator_snapshot_specs(node)
+            and not getattr(node, "no_pre_seed", False)
+        ):
             all_exist = all(
                 (Path(self.project_root) / o).exists() for o in node.outputs
             )

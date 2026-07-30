@@ -103,6 +103,7 @@ def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
         "false": "ft.start.route",
     }
     assert graph.get_node("ft.batch.03.foundation").type == "build"
+    assert graph.get_node("ft.batch.03.foundation").allow_pre_seed is True
     assert graph.get_node("ft.batch.04.execute").type == "batch"
     assert graph.get_node("ft.batch.04.execute").next == "ft.batch.05.review"
     assert graph.get_node("ft.batch.01.plan").no_pre_seed is False

@@ -44,6 +44,9 @@ class Node:
     llm_model: str | None = None
     # Desabilita o pre-seed check — node sempre roda mesmo se outputs já existem
     no_pre_seed: bool = False
+    # Permite, de forma explícita, reaproveitar checkpoint válido até em node
+    # de código. O default continua fail-closed para build/review/test.
+    allow_pre_seed: bool = False
     # Em nodes no_pre_seed reentrantes, preserva outputs existentes para que o
     # LLM refine drafts após perguntas/gates em vez de recriá-los do zero.
     preserve_outputs_on_reentry: bool = False
@@ -342,6 +345,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             episode_restart=node_raw.get("episode_restart"),
             review_route_path=node_raw.get("review_route_path"),
             no_pre_seed=node_raw.get("no_pre_seed", False),
+            allow_pre_seed=node_raw.get("allow_pre_seed", False),
             preserve_outputs_on_reentry=node_raw.get(
                 "preserve_outputs_on_reentry", False
             ),

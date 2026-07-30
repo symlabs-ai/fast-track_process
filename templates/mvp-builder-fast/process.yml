@@ -224,6 +224,7 @@ nodes:
     description: "Implementar em um único checkpoint apenas a base compartilhada declarada no plano, antes de abrir qualquer lane."
     sprint: sprint-00-batch
     executor: codex
+    allow_pre_seed: true
     preserve_outputs_on_reentry: true
     max_turns: 100
     outputs:

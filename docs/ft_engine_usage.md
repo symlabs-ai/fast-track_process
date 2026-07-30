@@ -742,6 +742,9 @@ histórico e `ft close` continuam únicos.
 Enquanto o projeto estiver em `building`, um novo feedback de validação usa
 novamente o construtor owner com `--parallel`. Se o hash da demanda e o plano
 existente coincidirem, o planner é pre-seeded e não consome outra chamada LLM.
+Uma foundation já compilada só é reutilizada quando o node opta explicitamente
+por `allow_pre_seed: true` e todos os outputs e validators continuam verdes;
+builds comuns permanecem não reutilizáveis por default.
 Essa execução é continuação terminal do mesmo produto:
 `validação → correção focal → regressão integrada → aceite`.
 

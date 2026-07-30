@@ -1,6 +1,7 @@
 """Regressões para contexto e progresso limitados à rota selecionada."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -225,3 +226,50 @@ def test_route_choices_round_trip_in_state(tmp_path: Path) -> None:
     reloaded = StateManager(manager.path).load()
 
     assert reloaded.route_choices == {"route": "validation.plan"}
+
+
+def test_build_checkpoint_requires_explicit_allow_pre_seed(tmp_path: Path) -> None:
+    process = tmp_path / "checkpoint.yml"
+    process.write_text(
+        """\
+id: checkpoint
+version: "1.0.0"
+title: Checkpoint
+nodes:
+  - id: foundation
+    type: build
+    title: Foundation
+    executor: codex
+    allow_pre_seed: true
+    outputs: [foundation.ok]
+    validators:
+      - file_exists: foundation.ok
+    next: end
+  - id: end
+    type: end
+    title: Fim
+""",
+        encoding="utf-8",
+    )
+    root = tmp_path / "checkpoint-project"
+    root.mkdir()
+    (root / "foundation.ok").write_text("validado\n", encoding="utf-8")
+    runner = StepRunner(
+        process_path=process,
+        state_path=tmp_path / "checkpoint-state" / "engine_state.yml",
+        project_root=root,
+        llm_engine="codex",
+    )
+    runner.init_state()
+
+    with patch.object(
+        runner,
+        "_delegate_with_stream_retry",
+        side_effect=AssertionError("checkpoint válido não deve chamar LLM"),
+    ):
+        runner.run(mode="mvp")
+
+    state = runner.state_mgr.load()
+    assert state.node_status == "done"
+    assert state.metrics["llm_calls"] == 0
+    assert state.gate_log["foundation"] == "PASS"

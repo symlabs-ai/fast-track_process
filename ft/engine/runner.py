@@ -7973,10 +7973,17 @@ próprias sob o namespace permitido acima. Encerre DONE.
         tokens_all = usage_totals.get("total_all_tokens", 0)
         if tokens_all:
             tokens_output = usage_totals.get("output_tokens", 0)
+            tokens_without_cache = usage_totals.get(
+                "total_without_cache_read_tokens",
+                tokens_all,
+            )
+            cached_input = usage_totals.get("cached_input_tokens", 0)
             cache_read = usage_totals.get("cache_read_input_tokens", 0)
+            cached_total = cached_input + cache_read
             print(ui.info(
-                f"Tokens no ciclo: {tokens_all:,} "
-                f"(output {tokens_output:,} · cache read {cache_read:,})"
+                f"Tokens no ciclo: {tokens_all:,} brutos · "
+                f"{tokens_without_cache:,} sem cache "
+                f"(output {tokens_output:,} · cache {cached_total:,})"
             ))
         # Mostrar URL se node atual é human_gate
         current_node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None

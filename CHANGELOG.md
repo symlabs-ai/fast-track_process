@@ -23,6 +23,8 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
   toolchains/SDKs externos somente para build e testes.
 - Prompts de lanes recebem texto dos requisitos e contrato compacto da
   foundation, reduzindo releituras e turnos de descoberta.
+- `ft status` distingue tokens brutos, tokens sem cache, output e contexto
+  cacheado; cache do Codex não aparece mais incorretamente como zero.
 
 ## [v0.18.0] - 2026-07-30
 

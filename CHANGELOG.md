@@ -6,6 +6,8 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+## [v0.16.0] - 2026-07-30
+
 ### Resumo histórico em `ft runs --done`
 
 - A tabela de ciclos concluídos passou a exibir data de criação, duração

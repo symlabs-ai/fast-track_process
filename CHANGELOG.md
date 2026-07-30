@@ -6,6 +6,8 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+## [v0.16.1] - 2026-07-30
+
 ### CI com baseline explícita do Ruff
 
 - A seleção histórica `E4`, `E7`, `E9` e `F` passou a ser declarada no

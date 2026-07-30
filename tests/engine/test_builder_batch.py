@@ -263,6 +263,7 @@ def test_valid_plan_binds_exact_request_and_covers_all_11_requirements_once() ->
 
     assert plan.request_sha256 == _request_sha256()
     assert len(plan.requirements) == 11
+    assert plan.requirement_texts["R-005"] == REQUIREMENTS[4]["text"]
     coverage = Counter(
         requirement
         for lane in plan.lanes

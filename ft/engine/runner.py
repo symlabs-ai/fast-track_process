@@ -1806,14 +1806,23 @@ class StepRunner:
                             return
 
         fallback = self._deterministic_execution_plan(state)
-        # O mvp-builder-fast em modo batch possui um planner de produto
+        # A rota validation do mvp-builder-fast possui um planner de produto
         # explícito no grafo. Fazer aqui outra chamada LLM repetiria análise,
         # consumiria contexto e quebraria o contrato de "uma chamada para o
         # grande plano". Ainda persistimos o mapa determinístico consultivo
         # para os prompts subsequentes.
-        if state.parallel_enabled and isinstance(
-            self.graph.meta.get("batch_policy"),
-            dict,
+        selected_route = self._selected_route_node_ids(state)
+        selected_route_has_batch = any(
+            self.graph.get_node(node_id).type == "batch"
+            for node_id in selected_route
+        )
+        explicit_validation_batch = (
+            getattr(state, "run_route", "default") == "validation"
+            and isinstance(self.graph.meta.get("batch_policy"), dict)
+        )
+        if (
+            (selected_route_has_batch or explicit_validation_batch)
+            and isinstance(self.graph.meta.get("batch_policy"), dict)
         ):
             relative_path = "llm_execution_plan.yml"
             _atomic_write_state(
@@ -2328,6 +2337,7 @@ class StepRunner:
         return {
             "node_status": state.node_status,
             "blocked_reason": state.blocked_reason,
+            "run_route": str(getattr(state, "run_route", "default") or "default"),
             "parallel_enabled": "true" if state.parallel_enabled else "false",
             **state.gate_log,
             **{k: v for k, v in state.artifacts.items() if v},
@@ -3475,7 +3485,11 @@ class StepRunner:
         self.state_mgr.save()
 
         print(ui.fix_gate(gate_msg, feedback, goto))
-        if self._auto_approve and self._bypass_human_gates:
+        automatic = bool(on_fail.get("automatic", False))
+        if self._auto_approve and automatic:
+            print(ui.info("Correção focal automática autorizada pelo processo"))
+            self.apply_fix("Corrigir somente os findings reproduzíveis do review")
+        elif self._auto_approve and self._bypass_human_gates:
             print(ui.info("Bypass human gates: aplicando on_fail automaticamente"))
             self.apply_fix(gate_msg)
 
@@ -3795,6 +3809,7 @@ class StepRunner:
     def init_state(
         self,
         *,
+        run_route: str | None = None,
         parallel_enabled: bool | None = None,
         parallel_max_slots: int | None = None,
     ):
@@ -3802,6 +3817,21 @@ class StepRunner:
         self._reset_validator_snapshots()
         pinned_state = self.state_mgr.load()
         first = self.graph.first_node()
+        normalized_route = "default"
+        if run_route is not None:
+            normalized_route = str(run_route).strip()
+            supported_routes = (
+                set(first.branches or {})
+                if first.type == "decision" and first.condition == "run_route"
+                else set()
+            )
+            supported_routes.discard("_default")
+            if not normalized_route or normalized_route not in supported_routes:
+                available = ", ".join(sorted(supported_routes)) or "nenhuma"
+                raise ValueError(
+                    f"Rota {run_route!r} não suportada por este template; "
+                    f"rotas disponíveis: {available}"
+                )
         total = len([n for n in self.graph.nodes.values() if n.type != "end"])
         cycle_id = "cycle-01"
         state_path = self.state_mgr.path.resolve()
@@ -3876,6 +3906,7 @@ class StepRunner:
         )
         self.state_mgr.state.current_sprint = first.sprint
         self.state_mgr.state.sprint_status = "active" if first.sprint else None
+        self.state_mgr.state.run_route = normalized_route
         if parallel_enabled is not None:
             self.state_mgr.state.parallel_enabled = parallel_enabled
         if parallel_max_slots is not None:
@@ -5240,10 +5271,25 @@ class StepRunner:
                         deny_read_paths=gate_deny_paths,
                     )
                 try:
+                    gate_fix_scope = list(node.write_scope or [])
+                    if not gate_fix_scope:
+                        # Templates V3 mantêm o produto em project/. Os paths
+                        # restantes preservam compatibilidade com processos
+                        # antigos que ainda usam layout flat.
+                        gate_fix_scope = [
+                            "project/",
+                            "src/",
+                            "tests/",
+                            "docs/",
+                            "main.py",
+                            "app.py",
+                            "server.py",
+                            "frontend/",
+                        ]
                     gate_fix_kwargs: dict = dict(
                         task=fix_prompt,
                         project_root=self._work_dir,
-                        allowed_paths=self._delegate_allowed_paths(["src/", "tests/", "docs/", "main.py", "app.py", "server.py", "frontend/"]),
+                        allowed_paths=self._delegate_allowed_paths(gate_fix_scope),
                         llm_engine=gate_fix_selection.engine,
                         llm_model=gate_fix_selection.model,
                         llm_effort=gate_fix_selection.effort,
@@ -6530,7 +6576,8 @@ class StepRunner:
 
         def lane_prompt(lane: Any, wave_index: int) -> str:
             requirements = "\n".join(
-                f"- {requirement_id}"
+                f"- {requirement_id}: "
+                f"{plan.requirement_texts.get(requirement_id, requirement_id)}"
                 for requirement_id in lane.requirements
             )
             criteria = "\n".join(
@@ -6545,6 +6592,15 @@ class StepRunner:
                     "docs/mvp-batch-foundation.md",
                 )
             )
+            foundation_context = ""
+            foundation_path = work_root / foundation_report
+            try:
+                foundation_context = foundation_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )[:8_000]
+            except OSError:
+                foundation_context = "(relatório indisponível; inspecione somente se necessário)"
             return f"""Você implementa uma lane isolada do mvp-builder-fast.
 
 LANE: {lane.id} — {lane.title}
@@ -6565,12 +6621,20 @@ OWNERSHIP EXCLUSIVO (únicos prefixes editáveis):
 
 DEPENDÊNCIAS JÁ INTEGRADAS: {dependencies}
 
-Leia docs/demanda.md, docs/mvp-batch-plan.yml e {foundation_report}, além do
-código necessário. Implemente somente
-esta lane e seus testes focais. Não altere .ft, documentos canônicos, arquivos
-da foundation/fan-in nem paths de outra lane. Não execute a regressão completa;
-ela roda uma única vez após o fan-in. Registre evidências próprias sob o
-namespace permitido acima. Confira o diff e os testes focais. Encerre DONE.
+CONTRATO DA FOUNDATION (já injetado; não releia o relatório):
+{foundation_context}
+
+O objetivo, os requisitos, os critérios e o contrato necessários já estão neste
+prompt. Inspecione somente os arquivos pertencentes aos prefixes da lane e as
+referências de código indispensáveis. Não releia docs/demanda.md,
+docs/mvp-batch-plan.yml ou {foundation_report}. Agrupe inspeções em um comando,
+faça o delta, rode os testes focais em um comando e confira o diff; evite ciclos
+de descoberta repetidos.
+
+Implemente somente esta lane e seus testes focais. Não altere .ft, documentos
+canônicos, arquivos da foundation/fan-in nem paths de outra lane. Não execute a
+regressão completa; ela roda uma única vez após o fan-in. Registre evidências
+próprias sob o namespace permitido acima. Encerre DONE.
 """
 
         def prepare_lane(lane: Any, wave_index: int) -> dict[str, Any]:

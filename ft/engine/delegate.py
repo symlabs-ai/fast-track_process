@@ -2379,6 +2379,9 @@ REGRAS:
   mesmo projeto), exceto paths absolutos explicitamente listados abaixo. Se algum
   documento citar um caminho absoluto fora do diretorio de trabalho, IGNORE o caminho
   e use o equivalente relativo local.
+- Para executar build e testes, voce PODE ler toolchains, SDKs, caches e dependencias
+  de sistema referenciados pelo ambiente ou pelo projeto (por exemplo Android SDK e
+  cache do Gradle). Isso nao autoriza escrever nesses locais nem ler outros checkouts.
 - Escreva APENAS nos paths permitidos: {paths_str}
 - Use o CONTEXTO EXISTENTE do prompt como fonte primaria. Evite reler arquivos
   markdown grandes que ja apareceram no prompt; se precisar de um detalhe,

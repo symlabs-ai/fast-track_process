@@ -90,11 +90,37 @@ def resolve_bypass_human_gates(args) -> bool:
     return bool(getattr(args, "bypass_human_gates", False))
 
 
+def validate_run_route(process_payload: dict, requested_route: str | None) -> None:
+    """Recusa ``--route`` incompatível antes de alocar worktree/ciclo."""
+    if requested_route is None:
+        return
+    route = str(requested_route).strip()
+    raw_nodes = process_payload.get("nodes")
+    first = raw_nodes[0] if isinstance(raw_nodes, list) and raw_nodes else {}
+    branches = first.get("branches") if isinstance(first, dict) else {}
+    supported = (
+        sorted(str(key) for key in branches if key != "_default")
+        if (
+            isinstance(first, dict)
+            and first.get("type") == "decision"
+            and first.get("condition") == "run_route"
+            and isinstance(branches, dict)
+        )
+        else []
+    )
+    if not route or route not in supported:
+        available = ", ".join(supported) or "nenhuma"
+        raise ValueError(
+            f"Rota {requested_route!r} não suportada por este template; "
+            f"rotas disponíveis: {available}"
+        )
+
+
 def apply_parallel_flags(runner, args) -> None:
     """Persiste no estado do run a escolha de paralelismo intra-processo.
 
-    --parallel habilita o fan-out estático de ``parallel_group`` e, quando o
-    template declara ``batch_policy``, a rota dinâmica natural→foundation→lanes.
+    --parallel habilita o fan-out estático de ``parallel_group`` e as lanes de
+    um batch já selecionado. Escolha de rota é independente (``--route``).
     --no-parallel desabilita num run já iniciado; --max-parallel ajusta o teto
     de worktrees simultâneos. Persistido em ft_state.yml, então ft continue,
     ft approve --auto e ft retry honram a escolha sem re-passar flags.
@@ -3646,7 +3672,12 @@ def cmd_retry(args):
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     state = runner.state_mgr.load()
-    if state.node_status != "blocked":
+    retrying_pending_review = (
+        state.node_status == "pending_fix"
+        and isinstance(state.pending_fix, dict)
+        and bool(state.current_node)
+    )
+    if state.node_status != "blocked" and not retrying_pending_review:
         from ft.engine.state import lock_owner_is_alive
 
         orphaned_delegation = (
@@ -3661,6 +3692,12 @@ def cmd_retry(args):
             return
 
     node_id = state.current_node
+    if retrying_pending_review:
+        print(_ui.warn(
+            "Descartando o encaminhamento de correção pendente e repetindo "
+            "somente o review atual"
+        ))
+        state.pending_fix = None
     print(_ui.info(f"Retentando node: {node_id}"))
     mode = "mvp" if getattr(args, "auto", False) else "step"
 
@@ -4771,6 +4808,10 @@ def cmd_run(args):
         ) or {}
         if not isinstance(process_payload, dict):
             raise ValueError(f"template inválido: {process_path_at_root}")
+        validate_run_route(
+            process_payload,
+            getattr(args, "run_route", None),
+        )
         ok, staged, detail = stage_knowledge(str(project_root))
         if not ok:
             raise RuntimeError(detail)
@@ -4926,20 +4967,20 @@ def cmd_run(args):
 
     # Initialize the pinned state and run.  Other project cycles are independent
     # and remain free to progress in their own worktrees.
-    if (
-        bool(getattr(args, "parallel", False))
-        or bool(getattr(args, "no_parallel", False))
-        or getattr(args, "max_parallel", None) is not None
-    ):
+    try:
         runner.init_state(
+            run_route=getattr(args, "run_route", None),
             parallel_enabled=(
                 bool(getattr(args, "parallel", False))
                 and not bool(getattr(args, "no_parallel", False))
             ),
             parallel_max_slots=getattr(args, "max_parallel", None),
         )
-    else:
-        runner.init_state()
+    except ValueError as exc:
+        from ft.engine import ui as _route_ui
+
+        print(_route_ui.fail(str(exc)))
+        raise SystemExit(2) from exc
     apply_parallel_flags(runner, args)
     # Persistir os flags do run para que ft continue os herde por padrão.
     _run_state_mgr = getattr(runner, "state_mgr", None)
@@ -5383,6 +5424,13 @@ def main():
                          "Falha se o diretório já existir.")
     ru.add_argument("--template", "-t", required=True, metavar="TEMPLATE",
                     help="Template local ou global a executar")
+    ru.add_argument(
+        "--route",
+        dest="run_route",
+        metavar="NAME",
+        help="Selecionar uma rota semântica declarada pelo template "
+             "(ex.: validation); independente de --parallel",
+    )
     ru.add_argument("--auto", action="store_true",
                     help="Avançar em modo autônomo até MVP (PARA em human_gates; "
                          "para pular use --bypass-human-gates)")

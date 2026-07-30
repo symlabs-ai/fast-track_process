@@ -96,14 +96,17 @@ def _runner(tmp_path: Path) -> StepRunner:
 def test_state_parallel_fields_roundtrip(tmp_path: Path) -> None:
     mgr = StateManager(tmp_path / "engine_state.yml")
     state = mgr.load()
+    assert state.run_route == "default"
     assert state.parallel_enabled is False
     assert state.parallel_max_slots == 2
 
     state.parallel_enabled = True
     state.parallel_max_slots = 4
+    state.run_route = "validation"
     mgr.save()
 
     reloaded = StateManager(tmp_path / "engine_state.yml").load()
+    assert reloaded.run_route == "validation"
     assert reloaded.parallel_enabled is True
     assert reloaded.parallel_max_slots == 4
 

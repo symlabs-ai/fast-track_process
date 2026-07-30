@@ -11,7 +11,7 @@
 #        backend/ ou tests/ na raiz.
 
 id: mvp_builder_fast
-version: "1.3.0"
+version: "1.4.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -103,27 +103,29 @@ artifact_policy:
     - docs/mvp-batch-foundation.md
     - docs/mvp-batch-report.md
     - docs/mvp-batch-review.md
+    - docs/mvp-batch-fix-report.md
+    - docs/mvp-batch-fix-review.md
     - docs/mvp-validation-summary.md
 
 nodes:
 
   # ================================================================
-  # Validação terminal paralela — opt-in por --parallel
+  # Validação terminal focal — opt-in por --route validation
   #
   # Esta rota também é a continuação curta do builder: feedback de validação
   # nunca retorna a MDD, planning ou delivery integral.
   # ================================================================
 
-  - id: ft.start.batch_mode
+  - id: ft.start.route_mode
     type: decision
-    title: "Selecionar Validação Paralela do Builder"
-    description: "Com --parallel, executa o incremento e termina em validação, correção focal e aceite; sem a flag preserva o processo de construção integral."
+    title: "Selecionar Rota do Builder"
+    description: "A rota validation continua um produto em construção na etapa terminal; --parallel controla somente o fan-out das lanes."
     sprint: sprint-00-batch
     executor: python
-    condition: parallel_enabled
+    condition: run_route
     branches:
-      "true": ft.batch.01.plan
-      "false": ft.start.route
+      "validation": ft.batch.01.plan
+      "_default": ft.start.route
 
   - id: ft.batch.01.plan
     type: document
@@ -288,6 +290,7 @@ nodes:
     on_fail:
       human_gate: "O review combinado encontrou defeitos focais no batch."
       goto: ft.batch.06.fix
+      automatic: true
     next: ft.batch.07.verify
 
   - id: ft.batch.06.fix
@@ -300,18 +303,53 @@ nodes:
     max_turns: 80
     outputs:
       - project/
+      - docs/mvp-batch-fix-report.md
     write_scope:
       - project
+      - docs/mvp-batch-fix-report.md
     prompt: |
       Leia docs/mvp-batch-review.md e, quando esta etapa vier do aceite,
       considere também o feedback mais recente do stakeholder. Corrija SOMENTE
       os achados REJECTED.
       Rode testes focais dos arquivos corrigidos; não repita a suíte completa,
       não reabra requisitos aprovados e não reescreva documentos canônicos.
-      Encerre com um resumo path→fix→teste e DONE.
+      Registre docs/mvp-batch-fix-report.md com
+      finding→causa→path→fix→teste→resultado e encerre DONE.
     validators:
+      - file_exists: docs/mvp-batch-fix-report.md
       - command_succeeds: "git diff --check"
-    next: ft.batch.05.review
+    next: ft.batch.06b.fix_review
+
+  - id: ft.batch.06b.fix_review
+    type: review
+    title: "Auditar Somente o Fix do Batch"
+    description: "Comprovar apenas que os findings rejeitados foram corrigidos, sem reabrir requirements já aprovados."
+    sprint: sprint-00-batch
+    executor: codex
+    no_pre_seed: true
+    max_turns: 30
+    outputs:
+      - docs/mvp-batch-fix-review.md
+    write_scope:
+      - docs/mvp-batch-fix-review.md
+    prompt: |
+      Audite SOMENTE o delta registrado em docs/mvp-batch-fix-report.md contra
+      os findings REJECTED do último docs/mvp-batch-review.md. Inspecione apenas
+      os paths e testes citados nesses findings. Não reabra requirements,
+      critérios ou arquivos anteriormente aprovados e não rode a regressão
+      completa.
+
+      Escreva docs/mvp-batch-fix-review.md com finding→path→teste→evidência e
+      uma linha explícita VERDICT: APPROVED ou VERDICT: REJECTED. Rejeite apenas
+      defeito reproduzível ainda presente. Não altere código.
+    validators:
+      - file_exists: docs/mvp-batch-fix-review.md
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "A auditoria focal ainda encontrou defeito no fix."
+      goto: ft.batch.06.fix
+      automatic: true
+    next: ft.batch.07.verify
 
   - id: ft.batch.07.verify
     type: gate

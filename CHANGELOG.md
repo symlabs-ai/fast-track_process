@@ -6,6 +6,24 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+## [v0.19.0] - 2026-07-30
+
+### Rota terminal e paralelismo deixam de ser acoplados
+
+- `--route validation` passa a selecionar explicitamente a continuação curta do
+  `mvp-builder-fast`; `--parallel` volta a significar exclusivamente fan-out.
+  Assim, um builder novo pode usar paralelismo sem ser desviado para validação.
+- Correções rejeitadas seguem para um `fix_review` separado, que audita somente
+  findings, paths e testes do delta. Requisitos já aprovados não são reabertos.
+- Reviews podem declarar `on_fail.automatic: true` para autorizar o loop focal
+  em `--auto` sem transformar uma constatação técnica em human gate.
+- `ft retry` em um review `pending_fix` repete o próprio review e descarta o
+  encaminhamento ao fix, útil quando uma precondição externa volta a existir.
+- Auto-fix de gates V3 recebe `project/` por padrão, e executores podem ler
+  toolchains/SDKs externos somente para build e testes.
+- Prompts de lanes recebem texto dos requisitos e contrato compacto da
+  foundation, reduzindo releituras e turnos de descoberta.
+
 ## [v0.18.0] - 2026-07-30
 
 ### Validação terminal sem reiniciar o builder
@@ -16,7 +34,7 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 - Decisions persistem a branch executada, impedindo que condições mutáveis como
   `file_exists` troquem retroativamente a rota. Planos legados do grafo inteiro
   são regenerados automaticamente.
-- A rota `mvp-builder-fast --parallel` termina em review/fix focal, uma única
+- A rota terminal do `mvp-builder-fast` termina em review/fix focal, uma única
   regressão integrada, aceite real e reconciliação curta do delta. Rejeições
   não retornam a MDD, planejamento global, delivery ou handoff completo.
 - Plano e foundation válidos, ligados ao mesmo hash da demanda, podem ser

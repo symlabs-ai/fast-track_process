@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from ft.engine.runner import StepRunner
@@ -26,10 +27,10 @@ nodes:
     type: decision
     title: Selecionar rota
     executor: python
-    condition: parallel_enabled
+    condition: run_route
     branches:
-      "true": validation.plan
-      "false": discovery.restart
+      "validation": validation.plan
+      "_default": discovery.restart
   - id: validation.plan
     type: document
     title: Planejar delta
@@ -90,14 +91,11 @@ def _runner(tmp_path: Path) -> StepRunner:
         project_root=root,
         llm_engine="codex",
     )
-    runner.init_state()
-    state = runner.state_mgr.load()
-    state.parallel_enabled = True
-    runner.state_mgr.save()
+    runner.init_state(run_route="validation", parallel_enabled=True)
     return runner
 
 
-def test_init_banner_and_metrics_use_parallel_route(
+def test_init_banner_and_metrics_use_explicit_route(
     tmp_path: Path,
     capsys,
 ) -> None:
@@ -112,20 +110,71 @@ def test_init_banner_and_metrics_use_parallel_route(
         llm_engine="codex",
     )
 
-    runner.init_state(parallel_enabled=True, parallel_max_slots=4)
+    runner.init_state(
+        run_route="validation",
+        parallel_enabled=True,
+        parallel_max_slots=4,
+    )
 
     state = runner.state_mgr.load()
     assert state.metrics["steps_total"] == 6
+    assert state.run_route == "validation"
     assert state.parallel_enabled is True
     assert state.parallel_max_slots == 4
     assert "Total: 6 steps" in capsys.readouterr().out
+
+
+def test_parallel_does_not_select_validation_route(tmp_path: Path) -> None:
+    root = tmp_path / "default-project"
+    root.mkdir()
+    process = tmp_path / "default-process.yml"
+    process.write_text(PROCESS, encoding="utf-8")
+    runner = StepRunner(
+        process_path=process,
+        state_path=tmp_path / "default-state" / "engine_state.yml",
+        project_root=root,
+        llm_engine="codex",
+    )
+
+    runner.init_state(parallel_enabled=True, parallel_max_slots=4)
+
+    state = runner.state_mgr.load()
+    assert state.run_route == "default"
+    assert state.parallel_enabled is True
+    assert runner._selected_route_node_ids(state) == [
+        "route",
+        "discovery.restart",
+        "delivery.full",
+        "end",
+    ]
+    assert state.metrics["steps_total"] == 3
+
+
+def test_unknown_explicit_route_is_rejected_before_state_init(tmp_path: Path) -> None:
+    root = tmp_path / "invalid-project"
+    root.mkdir()
+    process = tmp_path / "invalid-process.yml"
+    process.write_text(PROCESS, encoding="utf-8")
+    state_path = tmp_path / "invalid-state" / "engine_state.yml"
+    runner = StepRunner(
+        process_path=process,
+        state_path=state_path,
+        project_root=root,
+        llm_engine="codex",
+    )
+
+    with pytest.raises(ValueError, match="rotas disponíveis: validation"):
+        runner.init_state(run_route="unknown")
+
+    assert not state_path.exists()
 
 
 def test_plan_and_progress_include_only_selected_route(tmp_path: Path) -> None:
     runner = _runner(tmp_path)
     state = runner.state_mgr.load()
 
-    assert runner._refresh_progress_metrics(state)
+    # init_state já projetou a rota e persistiu as métricas corretas.
+    assert not runner._refresh_progress_metrics(state)
     plan = runner._deterministic_execution_plan(state)
 
     assert plan["selected_route"] == [

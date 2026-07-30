@@ -96,18 +96,22 @@ def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
     graph = load_graph(FAST_PROCESS)
     route = graph.first_node()
 
-    assert route.id == "ft.start.batch_mode"
-    assert route.condition == "parallel_enabled"
+    assert route.id == "ft.start.route_mode"
+    assert route.condition == "run_route"
     assert route.branches == {
-        "true": "ft.batch.01.plan",
-        "false": "ft.start.route",
+        "validation": "ft.batch.01.plan",
+        "_default": "ft.start.route",
     }
     assert graph.get_node("ft.batch.03.foundation").type == "build"
     assert graph.get_node("ft.batch.03.foundation").allow_pre_seed is True
     assert graph.get_node("ft.batch.04.execute").type == "batch"
     assert graph.get_node("ft.batch.04.execute").next == "ft.batch.05.review"
+    assert graph.get_node("ft.batch.05.review").on_fail["automatic"] is True
     assert graph.get_node("ft.batch.01.plan").no_pre_seed is False
     assert graph.get_node("ft.batch.01.plan").next == "ft.batch.03.foundation"
+    assert graph.get_node("ft.batch.06.fix").next == "ft.batch.06b.fix_review"
+    assert graph.get_node("ft.batch.06b.fix_review").next == "ft.batch.07.verify"
+    assert graph.get_node("ft.batch.06b.fix_review").on_fail["automatic"] is True
     assert graph.get_node("ft.batch.07.verify").next == "ft.batch.08.acceptance"
     assert graph.get_node("ft.batch.08.acceptance").reject_next == "ft.batch.06.fix"
     assert graph.get_node("ft.batch.09.reconcile").next == "ft.end"

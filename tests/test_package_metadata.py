@@ -11,7 +11,7 @@ from ft.cli.main import main
 
 
 def test_package_version_has_single_runtime_source():
-    assert __version__ == "0.18.0"
+    assert __version__ == "0.19.0"
 
     root = Path(__file__).resolve().parents[1]
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))

@@ -684,6 +684,8 @@ executor sem transferir o controle do grafo para o LLM:
 
 ```bash
 ft run . --template mvp-builder-fast --auto --parallel --codex
+ft run . --template mvp-builder-fast --route validation \
+  --input feedback.md --auto --parallel --max-parallel 4 --codex
 ```
 
 O engine gera um plano consultivo em
@@ -715,9 +717,11 @@ gates/validators Python permanecem autoritativos. Uma sessão expirada é
 substituída uma vez por uma conversa reidratada com plano, estado e artefatos.
 Processos sem `session_policy` continuam stateless.
 
-Quando a execução usa `--parallel`, o `mvp-builder-fast` ativa também seu
-`batch_policy`. O usuário continua fornecendo somente `--request` ou `--input`
-em linguagem natural. Uma única chamada de planejamento produz
+`--parallel` controla somente concorrência. Para continuar um builder já em
+acabamento sem reabrir o processo integral, use `--route validation`; combine
+as duas opções quando houver deltas independentes. Nessa rota, o usuário
+continua fornecendo somente `--request` ou `--input` em linguagem natural. Uma
+única chamada de planejamento produz
 `docs/mvp-batch-plan.yml`; o YAML é um artefato interno, não uma entrada exigida
 do usuário. O engine então:
 
@@ -728,9 +732,10 @@ do usuário. O engine então:
 5. recusa qualquer diff fora do ownership declarado;
 6. integra as waves numa branch privada e só aplica ao branch do ciclo quando
    todas passam;
-7. faz review/fix focal e roda a regressão completa uma única vez após o fan-in;
-8. aguarda o aceite real; rejeição volta somente ao fix e à auditoria do delta;
-9. após o aceite, reconcilia apenas backlog, features, tarefas e DoD afetados e
+7. faz review inicial e, se necessário, corrige e audita somente o fix;
+8. roda a regressão completa uma única vez depois que o delta focal está verde;
+9. aguarda o aceite real; rejeição volta somente ao fix e à auditoria do delta;
+10. após o aceite, reconcilia apenas backlog, features, tarefas e DoD afetados e
    encerra o ciclo, sem reabrir discovery, planejamento global, delivery ou
    handoff completo.
 
@@ -740,17 +745,18 @@ e atividade de log. O batch não abre ciclos `feature-fast` filhos: lifecycle,
 histórico e `ft close` continuam únicos.
 
 Enquanto o projeto estiver em `building`, um novo feedback de validação usa
-novamente o construtor owner com `--parallel`. Se o hash da demanda e o plano
+novamente o construtor owner com `--route validation`. Se o hash da demanda e o plano
 existente coincidirem, o planner é pre-seeded e não consome outra chamada LLM.
 Uma foundation já compilada só é reutilizada quando o node opta explicitamente
 por `allow_pre_seed: true` e todos os outputs e validators continuam verdes;
 builds comuns permanecem não reutilizáveis por default.
 Essa execução é continuação terminal do mesmo produto:
-`validação → correção focal → regressão integrada → aceite`.
+`validação → correção focal → auditoria do fix → regressão integrada → aceite`.
 
 ```bash
 ft run . --template mvp-builder-fast \
   --input demanda.md \
+  --route validation \
   --parallel --max-parallel 4 \
   --auto --codex gpt-5.6-sol --effort high
 ```

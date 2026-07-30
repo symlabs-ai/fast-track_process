@@ -50,11 +50,13 @@ class FakeRunner:
         self.verbose = verbose
         self._bypass_human_gates = False
         self.inited = False
+        self.init_kwargs = {}
         self.run_mode = None
         self.instances.append(self)
 
-    def init_state(self):
+    def init_state(self, **kwargs):
         self.inited = True
+        self.init_kwargs = kwargs
 
     def run(self, mode="step"):
         self.run_mode = mode
@@ -70,6 +72,7 @@ def _args(project: Path, **overrides) -> Namespace:
         "bypass_human_gates": False,
         "cycle_name": None,
         "template": "base",
+        "run_route": None,
         "auto": True,
         "parallel": False,
         "max_parallel": None,
@@ -227,6 +230,33 @@ class TestRunInputs:
         worktrees = tmp_path / "ft-home" / "worktrees" / "project"
         if worktrees.exists():
             assert not list(worktrees.glob("cycle-*"))
+
+
+class TestRunRoute:
+    PROCESS = {
+        "nodes": [
+            {
+                "id": "route",
+                "type": "decision",
+                "condition": "run_route",
+                "branches": {
+                    "validation": "validate",
+                    "_default": "build",
+                },
+            }
+        ]
+    }
+
+    def test_explicit_route_must_be_declared_by_first_decision(self):
+        cli_main.validate_run_route(self.PROCESS, "validation")
+        cli_main.validate_run_route({"nodes": []}, None)
+
+        with pytest.raises(ValueError, match="rotas disponíveis: validation"):
+            cli_main.validate_run_route(self.PROCESS, "unknown")
+
+        with pytest.raises(ValueError, match="rotas disponíveis: nenhuma"):
+            cli_main.validate_run_route({"nodes": []}, "validation")
+
 
 class TestExplore:
     def test_explore_request_and_finish_write_logs_under_llm_logs(self, tmp_path):
@@ -832,6 +862,54 @@ class TestCancel:
 
 
 class TestRetry:
+    def test_retry_can_repeat_review_instead_of_entering_pending_fix(self):
+        state = EngineState(
+            current_node="physical.review",
+            node_status="pending_fix",
+            pending_fix={
+                "goto": "product.fix",
+                "feedback": "precondição externa indisponível",
+            },
+        )
+
+        class StateMgr:
+            def load(self):
+                return state
+
+            def save(self):
+                self.saved = True
+
+        class Runner:
+            def __init__(self):
+                self.state_mgr = StateMgr()
+                self._auto_fix_counts = {"physical.review": 1}
+                self.run_mode = None
+                self._bypass_human_gates = None
+
+            def run(self, mode="step"):
+                self.run_mode = mode
+
+        runner = Runner()
+        args = Namespace(
+            process=None,
+            auto=True,
+            claude=None,
+            codex=None,
+            gemini=None,
+            opencode=None,
+            verbose=False,
+            bypass_human_gates=False,
+        )
+
+        with patch("ft.cli.main.get_runner", return_value=runner):
+            cli_main.cmd_retry(args)
+
+        assert state.current_node == "physical.review"
+        assert state.node_status == "ready"
+        assert state.pending_fix is None
+        assert runner._auto_fix_counts == {}
+        assert runner.run_mode == "mvp"
+
     def test_retry_recovers_orphaned_delegated_state(self):
         state = EngineState(
             current_node="ft.plan.03.api_contract",

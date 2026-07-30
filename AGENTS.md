@@ -177,16 +177,23 @@ preparação comum do projeto; depois disso os runners avançam em paralelo. O
 merge/arquivamento do `ft close` usa outro lock por projeto para impedir que dois
 closes alterem o checkout principal simultaneamente.
 
-`--parallel` em `ft run` continua sendo paralelismo dentro de um único ciclo.
-Nos processos comuns ele honra `parallel_group`. No `mvp-builder-fast`, que
-declara `batch_policy`, também ativa a rota dinâmica: a demanda em linguagem
-natural vira um plano interno, uma foundation sequencial e lanes isoladas. O
-engine calcula as waves, valida o diff real e faz um único fan-in/close. O plano
-e o progresso incluem somente a branch escolhida. Ao final, a rota é
-`validação → correção focal → regressão integrada → aceite`; uma rejeição não
-retorna a MDD, planning, delivery ou handoff completo. Um plano existente com o
-mesmo hash é reutilizado sem nova chamada LLM. Isso é diferente de iniciar
-vários ciclos independentes.
+`--parallel` em `ft run` continua sendo apenas paralelismo dentro de um único
+ciclo; ele não escolhe uma rota. Nos processos comuns ele honra
+`parallel_group`. No `mvp-builder-fast`, selecione a continuação terminal com
+`--route validation`; combine `--parallel` quando a demanda em linguagem natural
+dever virar foundation sequencial e lanes isoladas:
+
+```bash
+ft run . --template mvp-builder-fast --route validation \
+  --input feedback.md --parallel --max-parallel 4 --auto
+```
+
+O engine calcula as waves, valida o diff real e faz um único fan-in/close. O
+plano e o progresso incluem somente a branch escolhida. Ao final, a rota é
+`validação → correção focal → auditoria somente do fix → regressão integrada →
+aceite`; uma rejeição não retorna a MDD, planning, delivery ou handoff completo.
+Um plano existente com o mesmo hash é reutilizado sem nova chamada LLM. Isso é
+diferente de iniciar vários ciclos independentes.
 
 ### Modos de avanço
 
@@ -250,6 +257,7 @@ motivo objetivo porque o texto vira contexto do retry.
 | Situação | Ação |
 |---|---|
 | node bloqueado, repetir igual | `ft retry --cycle <id>` |
+| review em `pending_fix`, mas a causa externa mudou | `ft retry --cycle <id>` repete somente o review e descarta o encaminhamento ao fix |
 | correção dirigida | `ft fix "o que corrigir" --cycle <id>` |
 | descartar sem merge | `ft abort --cycle <id>` |
 | cancelar com justificativa | `ft cancel "motivo" --cycle <id>` |

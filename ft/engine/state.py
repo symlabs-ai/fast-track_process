@@ -179,6 +179,10 @@ class EngineState:
     llm_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Metadados do plano interno; o payload completo vive ao lado do state.
     llm_execution_plan: dict[str, Any] | None = None
+    # Rota semântica escolhida no início do ciclo. Ela é independente do
+    # paralelismo: ``--route validation --parallel`` escolhe o que executar e,
+    # separadamente, quantas lanes podem avançar ao mesmo tempo.
+    run_route: str = "default"
     parallel_enabled: bool = False  # ft run/continue --parallel: honrar parallel_group dos nodes
     parallel_max_slots: int = 2  # worktrees simultâneos no fan-out de um parallel_group
     # Flags do run original, persistidos para que ft continue os herde por
@@ -281,6 +285,7 @@ class StateManager:
                 llm_episodes=raw.get("llm_episodes", {}),
                 llm_sessions=raw.get("llm_sessions", {}),
                 llm_execution_plan=raw.get("llm_execution_plan"),
+                run_route=str(raw.get("run_route", "default") or "default"),
                 parallel_enabled=bool(raw.get("parallel_enabled", False)),
                 parallel_max_slots=int(raw.get("parallel_max_slots", 2) or 2),
                 run_bypass_human_gates=bool(raw.get("run_bypass_human_gates", False)),
@@ -402,6 +407,7 @@ class StateManager:
             "llm_episodes": self._state.llm_episodes,
             "llm_sessions": self._state.llm_sessions,
             "llm_execution_plan": self._state.llm_execution_plan,
+            "run_route": self._state.run_route,
             "parallel_enabled": self._state.parallel_enabled,
             "parallel_max_slots": self._state.parallel_max_slots,
             "run_bypass_human_gates": self._state.run_bypass_human_gates,

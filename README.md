@@ -80,6 +80,7 @@ o mesmo entrypoint:
 ```bash
 ft run . --template mvp-builder --auto
 ft run . --template mvp-builder-fast --auto --parallel
+ft run . --template mvp-builder-fast --route validation --input feedback.md --auto --parallel
 ft run . --template feature --request "Adicionar busca por telefone" --codex
 ft run . --template feature-fast --request "Adicionar busca por telefone" --codex
 ft run . --template feature --input demanda.md --claude
@@ -118,11 +119,12 @@ ft run . --template tweak --request "Reduzir padding do cabeçalho" --auto
 Os runners avançam em paralelo mesmo usando templates diferentes. Um lock curto
 protege a preparação compartilhada; um lock de close serializa merges no checkout
 principal. `--parallel` em `ft run` é outra coisa: paralelismo dentro de um
-único ciclo. Ele honra `parallel_group` e, no `mvp-builder-fast`, pode decompor
-uma demanda natural em foundation sequencial e lanes dinâmicas isoladas. Nessa
-rota, contexto e progresso consideram apenas a branch selecionada; o fechamento
-é `validação → correção focal → regressão integrada → aceite`, sem reiniciar o
-builder quando o stakeholder pede ajustes.
+único ciclo. Ele nunca escolhe a rota do processo. No `mvp-builder-fast`,
+`--route validation` seleciona a continuação terminal e `--parallel` permite
+decompor a demanda natural em foundation sequencial e lanes dinâmicas isoladas.
+Contexto e progresso consideram apenas essa branch; o fechamento é
+`validação → correção → auditoria somente do fix → regressão integrada → aceite`,
+sem reiniciar o builder quando o stakeholder pede ajustes.
 
 As worktrees ficam em:
 

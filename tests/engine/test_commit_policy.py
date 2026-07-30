@@ -321,7 +321,7 @@ class _FakeRunner:
     def __init__(self, *args, **kwargs):
         self._bypass_human_gates = False
 
-    def init_state(self) -> None:
+    def init_state(self, **kwargs) -> None:
         return None
 
     def run(self, mode: str = "step") -> None:
@@ -338,6 +338,7 @@ def _run_args(project: Path) -> Namespace:
         bypass_human_gates=False,
         cycle_name=None,
         template="policy",
+        run_route=None,
         auto=True,
         parallel=False,
         no_parallel=False,

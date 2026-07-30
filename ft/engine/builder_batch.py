@@ -61,6 +61,7 @@ class BatchPlan:
     schema_version: int
     request_sha256: str
     requirements: tuple[str, ...]
+    requirement_texts: Mapping[str, str]
     foundation: Mapping[str, Any]
     lanes: tuple[BatchLane, ...]
     waves: tuple[tuple[str, ...], ...]
@@ -321,7 +322,7 @@ def _requirement_items(
     field: str,
     *,
     maximum: int,
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], Mapping[str, str]]:
     """Accept compact IDs or the v1 human-readable ``{id, text}`` form."""
 
     raw = _list(
@@ -331,17 +332,19 @@ def _requirement_items(
         maximum=maximum,
     )
     normalized: list[str] = []
+    texts: dict[str, str] = {}
     representation: str | None = None
     for index, item in enumerate(raw):
         item_field = f"{field}[{index}]"
         if isinstance(item, str):
             current_representation = "id"
             requirement_id = _identifier(item, item_field)
+            requirement_text = requirement_id
         elif isinstance(item, Mapping):
             current_representation = "mapping"
             _strict_fields(item, frozenset({"id", "text"}), item_field)
             requirement_id = _identifier(item["id"], f"{item_field}.id")
-            _text(item["text"], f"{item_field}.text")
+            requirement_text = _text(item["text"], f"{item_field}.text")
         else:
             raise _fail(
                 f"{item_field} deve ser um ID ou mapping com id/text"
@@ -350,7 +353,8 @@ def _requirement_items(
             raise _fail(f"{field} mistura representações de requirements")
         representation = current_representation
         normalized.append(requirement_id)
-    return _unique(normalized, field)
+        texts[requirement_id] = requirement_text
+    return _unique(normalized, field), texts
 
 
 def _area_items(
@@ -422,7 +426,7 @@ def validate_batch_plan(
         "max_requirements",
         256,
     )
-    requirements = _requirement_items(
+    requirements, requirement_texts = _requirement_items(
         root["requirements"],
         "requirements",
         maximum=max_requirements,
@@ -585,6 +589,7 @@ def validate_batch_plan(
         schema_version=1,
         request_sha256=request_sha256,
         requirements=requirements,
+        requirement_texts=requirement_texts,
         foundation=foundation,
         lanes=tuple(lanes),
         waves=tuple(tuple(wave) for wave in computed_waves),

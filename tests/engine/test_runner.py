@@ -2505,6 +2505,57 @@ nodes:
         assert state.pending_fix is None
         assert "Resultado: REJECTED" in state.last_approval_message
 
+    def test_process_can_authorize_automatic_focal_on_fail(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: automatic_fix
+version: "1.0.0"
+title: Automatic fix
+nodes:
+  - id: review
+    type: review
+    title: Review
+    executor: codex
+    on_fail:
+      human_gate: Corrigir finding focal.
+      goto: fix
+      automatic: true
+    next: end
+  - id: fix
+    type: build
+    title: Fix
+    executor: codex
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        runner._auto_approve = True
+        runner._bypass_human_gates = False
+
+        runner._handle_on_fail(
+            runner.graph.get_node("review"),
+            "Finding reproduzível",
+        )
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "fix"
+        assert state.node_status == "running"
+        assert state.pending_fix is None
+        assert "Finding reproduzível" in state.last_approval_message
+
     def test_llm_error_with_passing_validators_advances_node(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
@@ -3351,6 +3402,63 @@ class TestRunGate:
         assert state.blocked_reason is None
         assert state.current_node == "step.03.implementacao"
         assert state.gate_log["gate.01.discovery"] == "PASS"
+
+    def test_gate_autofix_defaults_to_project_scope(self, tmp_path):
+        project_root = tmp_path / "project-root"
+        (project_root / "project").mkdir(parents=True)
+        process_path = tmp_path / "gate-process.yml"
+        process_path.write_text(
+            """
+id: gate_scope
+version: "1.0.0"
+title: Gate scope
+nodes:
+  - id: verify
+    type: gate
+    title: Verify
+    executor: python
+    validators:
+      - file_exists: project/fixed.txt
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=tmp_path / "gate-state.yml",
+            project_root=project_root,
+            llm_engine="codex",
+        )
+        runner.init_state()
+        runner._auto_approve = True
+        runner._max_gate_retries = 1
+
+        def apply_fix(**kwargs):
+            assert "project/" in kwargs["allowed_paths"]
+            (project_root / "project" / "fixed.txt").write_text(
+                "fixed\n",
+                encoding="utf-8",
+            )
+            return DelegateResult(
+                success=True,
+                output="DONE",
+                files_created=["project/fixed.txt"],
+                files_modified=[],
+            )
+
+        with patch.object(
+            runner,
+            "_delegate_with_stream_retry",
+            side_effect=apply_fix,
+        ):
+            runner._run_gate(runner.graph.get_node("verify"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "end"
+        assert state.gate_log["verify"] == "PASS"
 
 
 # ---------------------------------------------------------------------------

@@ -99,9 +99,11 @@ roda somente em `maintenance` e exige receipt READY que corresponda ao digest do
 DoD e à revisão entregue.
 
 O construtor continua owner também durante o acabamento. No
-`mvp-builder-fast --parallel`, feedback terminal percorre somente
-`plano reutilizável → foundation → lanes → auditoria/fix focal → regressão
-integrada → aceite → reconciliação do delta`. Rejeição de validação nunca
+`mvp-builder-fast --route validation --parallel`, feedback terminal percorre
+somente `plano reutilizável → foundation → lanes → auditoria → fix → auditoria
+somente do fix → regressão integrada → aceite → reconciliação do delta`.
+`--route` escolhe o trabalho; `--parallel` escolhe apenas a concorrência.
+Rejeição de validação nunca
 reinicia MDD, planejamento global, delivery ou handoff. O plano interno e as
 métricas são projeções da branch efetivamente escolhida, não do catálogo inteiro
 de nodes.

@@ -940,6 +940,93 @@ metrics:
     assert "runtime" not in output
 
 
+def test_runs_done_shows_duration_tokens_totals_and_legacy_fallback(
+    tmp_path, monkeypatch, capsys
+):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+
+    reported = project / ".ft" / "cycles" / "cycle-01"
+    reported.mkdir(parents=True)
+    (reported / "cycle.yml").write_text(
+        """schema_version: 1
+id: cycle-01
+status: done
+progress:
+  completed: 3
+  total: 3
+""",
+    )
+    (reported / "run-report.json").write_text(
+        json.dumps(
+            {
+                "wall": {
+                    "started_at": "2026-07-28T10:00:00",
+                    "duration_ms": 7_384_000,
+                },
+                "llm": {
+                    "input_tokens": 1_000,
+                    "cache_write_tokens": 400,
+                    "cache_read_tokens": 300,
+                    "output_tokens": 200,
+                },
+            }
+        ),
+    )
+    (reported / ".serve_url").write_text("http://127.0.0.1:8787")
+
+    legacy = project / ".ft" / "cycles" / "cycle-02"
+    legacy.mkdir(parents=True)
+    (legacy / "cycle.yml").write_text(
+        """schema_version: 1
+id: cycle-02
+status: done
+progress:
+  completed: 3
+  total: 3
+""",
+    )
+    (legacy / "cycle-log.md").write_text(
+        """| timestamp | node |
+| 2026-07-30 10:00:00 | `INIT` |
+| 2026-07-30 11:30:05 | `end` |
+""",
+    )
+    (legacy / "run-report.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "input_tokens": 2_000,
+                    "cache_write_tokens": None,
+                    "cache_read_tokens": None,
+                    "output_tokens": 100,
+                }
+            }
+        ),
+    )
+
+    cmd_runs(SimpleNamespace(project=str(project), done=True))
+
+    output = capsys.readouterr().out
+    assert "CRIADO EM" in output
+    assert "DURAÇÃO" in output
+    assert "TOKENS" in output
+    assert "URL" not in output
+    assert "http://127.0.0.1:8787" not in output
+    assert "2h 03min 04s" in output
+    assert "1h 30min 05s" in output
+    assert "2026-07-28" in output
+    assert "2026-07-30" in output
+    assert "1,900" in output
+    assert "2,100" in output
+    output_lines = [line for line in output.splitlines() if line.strip()]
+    assert "TOTAL" in output_lines[-1]
+    assert "2 dias" in output_lines[-1]
+    assert "3h 33min 09s" in output_lines[-1]
+    assert "4,000" in output_lines[-1]
+
+
 def test_runs_table_columns_stay_aligned_with_long_names_and_ansi(
     tmp_path, monkeypatch, capsys
 ):
@@ -1000,11 +1087,17 @@ progress:
 
     cmd_runs(SimpleNamespace(project=str(project)))
     default_out = capsys.readouterr().out
+    assert "CRIADO EM" not in default_out
+    assert "DURAÇÃO" not in default_out
+    assert "TOKENS" not in default_out
+    assert "URL" not in default_out
+    assert "TOTAL" not in default_out
     assert "cycle-02" in default_out  # blocked continua visível
     assert "cycle-01" not in default_out  # done escondido por padrão
 
     cmd_runs(SimpleNamespace(project=str(project), done=True))
     done_out = capsys.readouterr().out
+    assert "DURAÇÃO" in done_out
     assert "cycle-01" in done_out
     assert "cycle-02" in done_out
 

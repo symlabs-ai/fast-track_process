@@ -6,6 +6,17 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### Resumo histórico em `ft runs --done`
+
+- A tabela de ciclos concluídos passou a exibir data de criação, duração
+  wall-clock e tokens brutos consumidos, preservando `—` quando um histórico
+  antigo não contém telemetria suficiente.
+- O rodapé totaliza duração e tokens conhecidos e mostra a diferença, em dias,
+  entre a primeira e a última criação. A coluna `URL`, pouco útil no histórico,
+  foi removida também da listagem ativa.
+- Relatórios modernos usam `run-report.json`; ciclos antigos reaproveitam os
+  timestamps do `cycle-log.md` sem inventar consumo de tokens ausente.
+
 ### Lifecycle determinístico do projeto
 
 - `.ft/project.yml` passou a registrar objetivo, alvo, fase, owner construtor e

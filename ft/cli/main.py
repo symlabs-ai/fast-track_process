@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date, datetime
 import json
 import os
 from pathlib import Path
@@ -1407,30 +1408,172 @@ def _fmt_duration(seconds: float | int | None) -> str:
 
 
 def _run_log_path_for(root: Path) -> Path | None:
-    candidates = sorted(root.glob("*_log.md"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
+    candidates = list(root.glob("*_log.md"))
+    archived_log = root / "cycle-log.md"
+    if archived_log.is_file():
+        candidates.append(archived_log)
+    candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0)
     return candidates[-1] if candidates else None
 
 
-def _run_log_duration_seconds(root: Path) -> int | None:
-    """Duração aproximada do ciclo pelo primeiro e último timestamp do run log."""
-    from datetime import datetime as _dt
+def _run_log_timestamps(root: Path) -> list[datetime]:
+    """Timestamps locais registrados na tabela do run log."""
     import re as _re
 
     log_path = _run_log_path_for(root)
     if not log_path or not log_path.exists():
-        return None
-    timestamps: list[_dt] = []
+        return []
+    timestamps: list[datetime] = []
     for line in log_path.read_text(encoding="utf-8", errors="ignore").splitlines():
         match = _re.match(r"\|\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|", line)
         if not match:
             continue
         try:
-            timestamps.append(_dt.strptime(match.group(1), "%Y-%m-%d %H:%M:%S"))
+            timestamps.append(
+                datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+            )
         except ValueError:
             continue
+    return timestamps
+
+
+def _run_log_duration_seconds(
+    root: Path,
+    timestamps: list[datetime] | None = None,
+) -> int | None:
+    """Duração aproximada do ciclo pelo primeiro e último timestamp do run log."""
+    timestamps = _run_log_timestamps(root) if timestamps is None else timestamps
     if len(timestamps) < 2:
         return None
     return int((timestamps[-1] - timestamps[0]).total_seconds())
+
+
+def _cycle_run_report(root: Path) -> dict:
+    """Carrega o relatório pequeno e durável do ciclo, quando disponível."""
+    report_path = root / "run-report.json"
+    if not report_path.is_file():
+        return {}
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return report if isinstance(report, dict) else {}
+
+
+def _cycle_duration_seconds(
+    root: Path,
+    report: dict | None = None,
+    log_timestamps: list[datetime] | None = None,
+) -> float | int | None:
+    """Duração wall-clock persistida do ciclo, com fallback para históricos."""
+    report = _cycle_run_report(root) if report is None else report
+    wall = report.get("wall", {}) if isinstance(report, dict) else {}
+    duration_ms = wall.get("duration_ms") if isinstance(wall, dict) else None
+    if (
+        isinstance(duration_ms, (int, float))
+        and not isinstance(duration_ms, bool)
+        and duration_ms >= 0
+    ):
+        return duration_ms / 1000
+    return _run_log_duration_seconds(root, log_timestamps)
+
+
+def _cycle_created_date(
+    root: Path,
+    report: dict | None = None,
+    log_timestamps: list[datetime] | None = None,
+) -> date | None:
+    """Data local do primeiro evento conhecido do ciclo."""
+    timestamps = (
+        _run_log_timestamps(root)
+        if log_timestamps is None
+        else log_timestamps
+    )
+    if timestamps:
+        return timestamps[0].date()
+
+    report = _cycle_run_report(root) if report is None else report
+    wall = report.get("wall") if isinstance(report, dict) else None
+    raw = wall.get("started_at") if isinstance(wall, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    return parsed.date()
+
+
+def _token_count(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _usage_summary_tokens(summary: object) -> int | None:
+    if not isinstance(summary, dict):
+        return None
+    totals = summary.get("totals")
+    if not isinstance(totals, dict):
+        return None
+    total = _token_count(totals.get("total_all_tokens"))
+    events = _token_count(totals.get("events"))
+    if total is not None and (total > 0 or (events is not None and events > 0)):
+        return total
+    return None
+
+
+def _cycle_tokens(
+    root: Path,
+    state_data: dict,
+    *,
+    archived: bool,
+    report: dict | None = None,
+) -> int | None:
+    """Total bruto de tokens do ciclo, compatível com total_all_tokens."""
+    report = _cycle_run_report(root) if report is None else report
+    llm = report.get("llm") if isinstance(report, dict) else None
+    if isinstance(llm, dict):
+        direct_total = _token_count(llm.get("total_all_tokens"))
+        if direct_total is not None:
+            return direct_total
+        components = [
+            _token_count(llm.get(key))
+            for key in (
+                "input_tokens",
+                "cache_write_tokens",
+                "cache_read_tokens",
+                "output_tokens",
+            )
+        ]
+        present = [value for value in components if value is not None]
+        if present:
+            return sum(present)
+        if _token_count(llm.get("calls")) == 0:
+            return 0
+
+    metrics = state_data.get("metrics")
+    zero_llm_calls = False
+    if isinstance(metrics, dict):
+        persisted = _usage_summary_tokens(metrics.get("llm_usage"))
+        if persisted is not None:
+            return persisted
+        legacy_total = _token_count(metrics.get("tokens_used"))
+        if legacy_total is not None and legacy_total > 0:
+            return legacy_total
+        zero_llm_calls = _token_count(metrics.get("llm_calls")) == 0
+
+    if archived:
+        return 0 if zero_llm_calls else None
+    live_summary = summarize_llm_usage(
+        root / "state" / "llm_logs",
+        default_engine=state_data.get("llm_engine"),
+        default_model=state_data.get("llm_model"),
+    )
+    live_total = _usage_summary_tokens(live_summary)
+    return live_total if live_total is not None else (0 if zero_llm_calls else None)
 
 
 def _file_exists_mark(root: Path, relative_path: str) -> str:
@@ -1855,14 +1998,14 @@ def cmd_runs(args):
 
     import yaml as _yaml
 
+    show_done_details = bool(getattr(args, "done", False))
+    total_duration_seconds = 0.0
+    measured_durations = 0
+    total_tokens = 0
+    measured_token_counts = 0
+    creation_dates: list[date] = []
     rows = []
     for cycle, archived in sorted(cycles.values(), key=lambda item: _cycle_num(item[0])):
-        # Serve URL — buscar .serve_url na raiz do ciclo
-        serve_url = "—"
-        serve_file = cycle / ".serve_url"
-        if serve_file.exists():
-            serve_url = serve_file.read_text().strip()
-
         state_data = {}
         state_path = cycle / ("cycle.yml" if archived else "state/engine_state.yml")
         if state_path.exists():
@@ -1883,14 +2026,9 @@ def cmd_runs(args):
         current_node = state_data.get("current_node") or ""
         node_status = state_data.get("status" if archived else "node_status", "")
 
-        # Timestamp da última entrada no log de atividade
-        ts = "—"
-        log = cycle / "cycle-log.md" if archived else next(cycle.glob("*_log.md"), None)
-        if log and log.is_file():
-            lines = [line for line in log.read_text().splitlines() if line.startswith("| 2")]
-            if lines:
-                last = lines[-1].split("|")
-                ts = last[1].strip()[11:16] if len(last) > 1 else "—"
+        # Timestamp da última entrada no log de atividade.
+        log_timestamps = _run_log_timestamps(cycle)
+        ts = log_timestamps[-1].strftime("%H:%M") if log_timestamps else "—"
 
         # Node a exibir
         if not current_node:
@@ -1912,12 +2050,58 @@ def cmd_runs(args):
 
         source = "archive" if archived else "runtime"
         steps_label = f"{steps_done}/{steps_total}".replace("unknown", "?")
+        created = ""
+        duration = ""
+        tokens = ""
+        if show_done_details:
+            report = _cycle_run_report(cycle)
+            created_date = _cycle_created_date(cycle, report, log_timestamps)
+            created = created_date.isoformat() if created_date is not None else "—"
+            if created_date is not None:
+                creation_dates.append(created_date)
+            if archived or node_status in ("done", "completed"):
+                duration_seconds = _cycle_duration_seconds(
+                    cycle,
+                    report,
+                    log_timestamps,
+                )
+                duration = (
+                    _fmt_duration(duration_seconds)
+                    if duration_seconds is not None
+                    else "—"
+                )
+                if duration_seconds is not None:
+                    total_duration_seconds += duration_seconds
+                    measured_durations += 1
+            else:
+                duration = "em curso"
+            cycle_tokens = _cycle_tokens(
+                cycle,
+                state_data,
+                archived=archived,
+                report=report,
+            )
+            tokens = f"{cycle_tokens:,}" if cycle_tokens is not None else "—"
+            if cycle_tokens is not None:
+                total_tokens += cycle_tokens
+                measured_token_counts += 1
         # Só o histórico arquivado sai do default: um ciclo done ainda no
         # runtime tem worktree aberto e precisa de ft close — continua visível.
         finished = archived and node_status in ("done", "completed")
         if finished and not getattr(args, "done", False):
             continue
-        rows.append((cycle.name, steps_label, ts, status_str, serve_url, source))
+        rows.append(
+            (
+                cycle.name,
+                created,
+                steps_label,
+                duration,
+                tokens,
+                ts,
+                status_str,
+                source,
+            )
+        )
 
     # Tabela com larguras dinâmicas; o STATUS carrega cores ANSI, então o
     # padding usa a largura visível (códigos de escape não contam coluna).
@@ -1935,24 +2119,76 @@ def cmd_runs(args):
         return
 
     w_name = _col("CICLO", (r[0] for r in rows))
-    w_steps = _col("STEPS", (r[1] for r in rows))
-    w_ts = _col("ÚLT.", (r[2] for r in rows))
-    w_status = _col("STATUS", (r[3] for r in rows), _visible_len)
-    w_source = _col("FONTE", (r[5] for r in rows))
+    if creation_dates:
+        creation_days = (max(creation_dates) - min(creation_dates)).days
+        creation_span = f"{creation_days} {'dia' if creation_days == 1 else 'dias'}"
+    else:
+        creation_span = "—"
+    creation_values = [r[1] for r in rows]
+    if show_done_details:
+        creation_values.append(creation_span)
+    w_created = _col("CRIADO EM", creation_values) if show_done_details else 0
+    w_steps = _col("STEPS", (r[2] for r in rows))
+    total_duration = (
+        _fmt_duration(total_duration_seconds) if measured_durations else "—"
+    )
+    duration_values = [r[3] for r in rows]
+    if show_done_details:
+        duration_values.append(total_duration)
+    w_duration = _col("DURAÇÃO", duration_values) if show_done_details else 0
+    total_tokens_label = f"{total_tokens:,}" if measured_token_counts else "—"
+    token_values = [r[4] for r in rows]
+    if show_done_details:
+        token_values.append(total_tokens_label)
+    w_tokens = _col("TOKENS", token_values) if show_done_details else 0
+    w_ts = _col("ÚLT.", (r[5] for r in rows))
+    w_status = _col("STATUS", (r[6] for r in rows), _visible_len)
+    w_source = _col("FONTE", (r[7] for r in rows))
+    created_header = f"  {'CRIADO EM':>{w_created}}" if show_done_details else ""
+    created_rule = f"  {'─' * w_created}" if show_done_details else ""
+    duration_header = (
+        f"  {'DURAÇÃO':>{w_duration}}" if show_done_details else ""
+    )
+    duration_rule = f"  {'─' * w_duration}" if show_done_details else ""
+    tokens_header = f"  {'TOKENS':>{w_tokens}}" if show_done_details else ""
+    tokens_rule = f"  {'─' * w_tokens}" if show_done_details else ""
 
     print()
     print(
-        f"  {'CICLO':<{w_name}}  {'STEPS':>{w_steps}}  {'ÚLT.':>{w_ts}}  "
-        f"{'STATUS':<{w_status}}  {'FONTE':<{w_source}}  URL"
+        f"  {'CICLO':<{w_name}}{created_header}  "
+        f"{'STEPS':>{w_steps}}{duration_header}"
+        f"{tokens_header}  "
+        f"{'ÚLT.':>{w_ts}}  "
+        f"{'STATUS':<{w_status}}  FONTE"
     )
     print(
-        f"  {'─' * w_name}  {'─' * w_steps}  {'─' * w_ts}  "
-        f"{'─' * w_status}  {'─' * w_source}  {'─' * 3}"
+        f"  {'─' * w_name}{created_rule}  "
+        f"{'─' * w_steps}{duration_rule}{tokens_rule}  "
+        f"{'─' * w_ts}  "
+        f"{'─' * w_status}  {'─' * w_source}"
     )
-    for name, steps, ts, node_str, url, source in rows:
+    for name, created, steps, duration, tokens, ts, node_str, source in rows:
+        created_cell = f"  {created:>{w_created}}" if show_done_details else ""
+        duration_cell = (
+            f"  {duration:>{w_duration}}" if show_done_details else ""
+        )
+        tokens_cell = f"  {tokens:>{w_tokens}}" if show_done_details else ""
         print(
-            f"  {name:<{w_name}}  {steps:>{w_steps}}  {ts:>{w_ts}}  "
-            f"{_pad_visible(node_str, w_status)}  {source:<{w_source}}  {url}"
+            f"  {name:<{w_name}}{created_cell}  "
+            f"{steps:>{w_steps}}{duration_cell}"
+            f"{tokens_cell}  "
+            f"{ts:>{w_ts}}  "
+            f"{_pad_visible(node_str, w_status)}  {source}"
+        )
+    if show_done_details:
+        print(
+            f"  {'─' * w_name}  {'─' * w_created}  {'─' * w_steps}  "
+            f"{'─' * w_duration}  {'─' * w_tokens}"
+        )
+        print(
+            f"  {'TOTAL':<{w_name}}  {creation_span:>{w_created}}  "
+            f"{'':>{w_steps}}  "
+            f"{total_duration:>{w_duration}}  {total_tokens_label:>{w_tokens}}"
         )
     print()
 

@@ -1153,7 +1153,10 @@ class TestFix:
         assert runner.state_mgr.artifacts == {"api_contract": "docs/api_contract.md"}
         assert state.current_node == "ft.plan.04.ui_criteria"
 
-    def test_fix_reexecutes_node_only_when_validation_still_fails(self, tmp_path):
+    def test_fix_stays_blocked_without_redelegation_when_validation_fails(
+        self,
+        tmp_path,
+    ):
         runner, state = self._blocked_runner(tmp_path)
         args = Namespace(
             instruction="corrigir contrato",
@@ -1176,7 +1179,6 @@ class TestFix:
             cli_main.cmd_fix(args)
 
         assert runner.advanced == []
-        assert runner.run_mode == "step"
-        assert state.node_status == "running"
-        assert state.blocked_reason is None
-        assert state.last_approval_message == "corrigir contrato"
+        assert runner.run_mode is None
+        assert state.node_status == "blocked"
+        assert "ainda falha" in state.blocked_reason

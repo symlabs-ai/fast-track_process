@@ -49,6 +49,13 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 - O orçamento de paths separa código/teste primário de receipts e resultados
   derivados, mantendo teto total e limite agregado de linhas sem bloquear a
   reconciliação obrigatória de fingerprints.
+- `full_review` após um fix renova a suíte e o receipt antes da review ampla;
+  uma rejeição posterior substitui a âncora focal antiga em vez de bloquear
+  por artefato de processo obsoleto. Produtos internos sem target `url` não
+  tentam subir servidor no aceite.
+- `ft fix` valida e avança diretamente nodes `ready` ou `blocked` quando a
+  correção passa; se ainda falhar, mantém o node bloqueado sem uma segunda
+  delegação LLM implícita.
 
 ### `feature-fast` 1.3: fatias, impacto e reviews atuais
 

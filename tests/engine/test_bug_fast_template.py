@@ -357,6 +357,10 @@ def test_bug_fast_catalog_graph_and_sessions() -> None:
     assert graph.get_node("bug.fix_review_decision").branches["approved"] == (
         "bug.fix_full_validate"
     )
+    assert graph.get_node("bug.fix_review_decision").branches["full_review"] == (
+        "bug.fix_full_review_validate"
+    )
+    assert graph.get_node("bug.fix_full_review_validate").next == "bug.review"
     assert graph.get_node("bug.fix_full_validate").next == "bug.acceptance"
     assert {
         "bug_fast.fix",
@@ -495,6 +499,45 @@ def test_bug_fast_rejected_review_anchors_and_audits_only_fix(
     )
 
 
+def test_bug_fast_refreshes_fix_anchor_after_a_new_full_review(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    _implement(root, "    return left + right + 0\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "initial bug correction")
+    _rejected_review(root)
+    assert _run(root, "review").returncode == 0
+    assert _run(root, "prepare-fix").returncode == 0
+    first = yaml.safe_load(
+        (root / "docs/bug-fix-baseline.yml").read_text(encoding="utf-8")
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "first rejected review")
+    new_base = _git(root, "rev-parse", "HEAD")
+
+    review = yaml.safe_load(
+        (root / "docs/bug-review.yml").read_text(encoding="utf-8")
+    )
+    review["summary"] = "Review completa renovada após expansão focal."
+    _write(
+        root,
+        "docs/bug-review.yml",
+        yaml.safe_dump(review, sort_keys=False),
+    )
+    assert _run(root, "review").returncode == 0
+
+    refreshed = _run(root, "prepare-fix")
+
+    assert refreshed.returncode == 0, refreshed.stderr
+    assert "REFRESHED" in refreshed.stdout
+    second = yaml.safe_load(
+        (root / "docs/bug-fix-baseline.yml").read_text(encoding="utf-8")
+    )
+    assert second["base_commit"] == new_base
+    assert second["source_review_sha256"] != first["source_review_sha256"]
+
+
 def test_bug_fast_tracks_shared_src_changes_with_project_product(
     tmp_path: Path,
 ) -> None:
@@ -553,6 +596,31 @@ def test_bug_fast_counts_reconciled_receipts_as_derived_artifacts(
     assert implemented.returncode == 0, implemented.stderr
     assert "10 arquivo(s)" in implemented.stdout
     assert "2 primário(s) e 8 derivado(s)" in implemented.stdout
+
+
+def test_bug_fast_internal_acceptance_does_not_require_make_url(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    _write(
+        root,
+        "project/Makefile",
+        "build:\n\t@true\n\n"
+        "test:\n\t@true\n\n"
+        "run:\n\t@true\n",
+    )
+
+    result = subprocess.run(
+        ["bash", str(root / ".ft/process/bug-fast/scripts/serve.sh")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "produto interno sem target url" in result.stdout
+    assert not (root / ".serve_url").exists()
 
 
 def test_bug_fast_scope_route_blocks_with_feature_fast_instruction(

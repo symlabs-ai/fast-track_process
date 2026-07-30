@@ -8,6 +8,7 @@ bug.preflight
       approved ───────────────→ bug.acceptance
       fix → bug.fix_prepare → bug.fix → bug.fix_review → decisão
                 aprovado → bug.fix_full_validate ───────→ bug.acceptance
+                path novo → bug.fix_full_review_validate → bug.review
       scope ──────────────────→ bug.scope_block (migrar para feature-fast)
   → bug.acceptance         (humano)
   → bug.reconcile          (Python, sem LLM)
@@ -21,3 +22,5 @@ quando o fix toca path fora do conjunto inicialmente revisado. Rejeição no
 aceite volta à correção RED→GREEN e torna obrigatória uma nova review.
 Loops de fix executam somente o GREEN e a auditoria focal; build+test completo
 é renovado uma vez, depois que o fix for aprovado e antes do aceite.
+Quando um path novo exige review completa, a renovação ocorre antes dessa
+review; uma rejeição posterior substitui a âncora focal obsoleta.

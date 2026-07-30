@@ -216,11 +216,10 @@ def execute_fix(args: Any, runner: Any) -> None:
 
     print(ui.success("Correção aplicada"))
     state = runner.state_mgr.load()
-    if state.node_status != "blocked":
+    if state.node_status not in {"blocked", "ready"}:
         print(ui.info("Para continuar o processo: ft continue --auto"))
         return
 
-    mode = "mvp" if getattr(args, "auto", False) else "step"
     node_id = state.current_node
     node = (
         runner.graph.get_node(node_id)
@@ -264,12 +263,20 @@ def execute_fix(args: Any, runner: Any) -> None:
             if getattr(args, "auto", False):
                 runner.run(mode="mvp")
             return
-        print(ui.warn("Correção aplicada, mas validators ainda falham — reexecutando node."))
+        feedback = validation.feedback or "validação falhou"
+        failed_state = runner.state_mgr.load()
+        failed_state.node_status = "blocked"
+        failed_state.blocked_reason = (
+            "Correção dirigida não passou nos validators do node: "
+            f"{feedback}"
+        )
+        runner.state_mgr.save()
+        print(
+            ui.warn(
+                "Correção aplicada, mas validators ainda falham; "
+                "o node permaneceu bloqueado sem nova delegação LLM."
+            )
+        )
+        return
 
-    state = runner.state_mgr.load()
-    state.node_status = "running"
-    state.blocked_reason = None
-    state.last_approval_message = instruction
-    runner.state_mgr.save()
-    print(ui.info("Estado desbloqueado — continuando..."))
-    runner.run(mode=mode)
+    print(ui.warn("Correção aplicada, mas o node atual não pôde ser resolvido."))

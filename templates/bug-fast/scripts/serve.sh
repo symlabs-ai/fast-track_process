@@ -70,6 +70,13 @@ case "${1:-start}" in
     ;;
 esac
 
+if ! make -s --no-print-directory -C "$PRODUCT_ROOT" -n url \
+  >/dev/null 2>&1; then
+  rm -f .serve.pid .serve_url .serve.log
+  printf 'serve: produto interno sem target url; nada para iniciar\n'
+  exit 0
+fi
+
 owned_server_is_ready() {
   test -s .serve.pid && test -s .serve_url || return 1
   local pid url cwd

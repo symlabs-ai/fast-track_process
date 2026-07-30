@@ -9,7 +9,7 @@ from ft.engine.delegate import DelegateResult
 from ft.engine.graph import load_graph
 from ft.engine.llm_defaults import LLMSelection
 from ft.engine.process_validator import validate_process
-from ft.engine.runner import StepRunner
+from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import EngineState, StateManager
 
 
@@ -297,6 +297,72 @@ def test_direct_fix_reuses_session_policy_and_injects_plan(tmp_path: Path) -> No
     assert kwargs["llm_session_resume"] is False
     assert "PLANO INTERNO DO CICLO" in kwargs["task"]
     assert "corrigir rápido" in kwargs["task"]
+
+
+def test_direct_fix_on_ready_node_validates_and_advances_without_redelegation(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path)
+    state = runner.state_mgr.state
+    state.node_status = "ready"
+    runner.state_mgr.save()
+
+    with (
+        patch(
+            "ft.engine.delegate.delegate_to_llm",
+            return_value=DelegateResult(True, "DONE", [], []),
+        ) as delegated,
+        patch(
+            "ft.engine.runner.run_validators",
+            return_value=ValidationResult(True, False, None),
+        ) as validated,
+        patch.object(runner, "_maybe_auto_commit") as committed,
+        patch.object(runner, "_record_node_summary"),
+        patch.object(runner, "run") as rerun,
+    ):
+        execute_fix(
+            SimpleNamespace(instruction="corrija", auto=False),
+            runner,
+        )
+
+    assert delegated.call_count == 1
+    assert validated.call_count == 1
+    committed.assert_called_once()
+    rerun.assert_not_called()
+    final_state = runner.state_mgr.load()
+    assert final_state.current_node == "end"
+    assert "build" in final_state.completed_nodes
+
+
+def test_direct_fix_validation_failure_stays_blocked_without_redelegation(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path)
+    state = runner.state_mgr.state
+    state.node_status = "blocked"
+    state.blocked_reason = "falha anterior"
+    runner.state_mgr.save()
+
+    with (
+        patch(
+            "ft.engine.delegate.delegate_to_llm",
+            return_value=DelegateResult(True, "DONE", [], []),
+        ),
+        patch(
+            "ft.engine.runner.run_validators",
+            return_value=ValidationResult(False, False, "ainda vermelho"),
+        ),
+        patch.object(runner, "run") as rerun,
+    ):
+        execute_fix(
+            SimpleNamespace(instruction="corrija", auto=False),
+            runner,
+        )
+
+    rerun.assert_not_called()
+    final_state = runner.state_mgr.load()
+    assert final_state.node_status == "blocked"
+    assert "ainda vermelho" in str(final_state.blocked_reason)
 
 
 def test_session_policy_schema_rejects_unsupported_provider(tmp_path: Path) -> None:

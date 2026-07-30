@@ -28,9 +28,10 @@ a sessão do builder para um fix focal e audita somente o delta. A suíte comple
 e o receipt são renovados uma única vez depois da aprovação focal, antes do
 aceite; tentativas intermediárias executam apenas GREEN e auditoria. O restante
 do julgamento permanece fechado. Se o delta
-escapar dos paths originais, passa por review completa; se exigir contrato,
-capacidade, auth/security, migration, dados, dependência, infraestrutura ou
-mudança transversal, o ciclo bloqueia e orienta:
+escapar dos paths originais, renova a validação completa antes de passar pela
+review ampla; uma nova rejeição renova também a âncora focal. Se exigir
+contrato, capacidade, auth/security, migration, dados, dependência,
+infraestrutura ou mudança transversal, o ciclo bloqueia e orienta:
 
 O orçamento focal limita separadamente arquivos primários e artefatos derivados
 (`receipts`, `artifacts`, `generated`, package/result). O limite agregado de

@@ -1348,7 +1348,11 @@ def validate_review(root: Path) -> dict[str, Any]:
     return payload
 
 
-def _fix_baseline(root: Path) -> dict[str, Any]:
+def _fix_baseline(
+    root: Path,
+    *,
+    require_current_review: bool = True,
+) -> dict[str, Any]:
     payload = _load_yaml(root, FIX_BASELINE_PATH)
     if (
         payload.get("schema_version") != SCHEMA_VERSION
@@ -1364,7 +1368,10 @@ def _fix_baseline(root: Path) -> dict[str, Any]:
     if payload.get("source_review") != REVIEW_PATH.as_posix():
         raise BugValidationError(f"{FIX_BASELINE_PATH}: source_review inválido")
     source_sha = _sha256_path(root / REVIEW_PATH)
-    if payload.get("source_review_sha256") != source_sha:
+    if (
+        require_current_review
+        and payload.get("source_review_sha256") != source_sha
+    ):
         raise BugValidationError(f"{FIX_BASELINE_PATH}: review fonte mudou")
     findings = payload.get("findings")
     initial_paths = payload.get("initial_product_paths")
@@ -1387,10 +1394,13 @@ def command_prepare_fix(root: Path) -> None:
         or str(review.get("review_route") or "").lower() != "fix"
     ):
         raise BugValidationError("prepare-fix exige review REJECTED com rota fix")
+    refreshed = False
     if (root / FIX_BASELINE_PATH).is_file():
-        _fix_baseline(root)
-        print("bug fix baseline REUSED")
-        return
+        previous = _fix_baseline(root, require_current_review=False)
+        if previous.get("source_review_sha256") == _sha256_path(root / REVIEW_PATH):
+            print("bug fix baseline REUSED")
+            return
+        refreshed = True
 
     baseline = _baseline(root)
     head = _head(root)
@@ -1422,7 +1432,8 @@ def command_prepare_fix(root: Path) -> None:
         },
     }
     _write_yaml(root, FIX_BASELINE_PATH, payload)
-    print(f"bug fix baseline PASS: {FIX_BASELINE_PATH}")
+    action = "REFRESHED" if refreshed else "PASS"
+    print(f"bug fix baseline {action}: {FIX_BASELINE_PATH}")
 
 
 def _fix_changed_product_paths(root: Path, anchor: dict[str, Any]) -> list[str]:

@@ -5,7 +5,7 @@
 # `.ft/process/bug-fast/` e executa somente a cópia local versionada.
 
 id: bug_fast
-version: "1.1.1"
+version: "1.1.2"
 title: "Bug Fast — RED→GREEN, Review e Reconciliação Determinística"
 
 execution_policy:
@@ -420,12 +420,41 @@ nodes:
     branches:
       approved: bug.fix_full_validate
       fix: bug.fix
-      full_review: bug.review
+      full_review: bug.fix_full_review_validate
       scope: bug.scope_block
       _default: bug.fix_review
     episode_restart:
       fix: bug_fix
       scope: bug_fix
+
+  - id: bug.fix_full_review_validate
+    type: gate
+    title: "Renovar Evidência para Review Completa"
+    description: >-
+      Quando o fix cria um path fora da âncora focal, executa build+test uma vez
+      sobre o delta estabilizado e renova o receipt antes de retornar à review
+      completa. A review nunca recebe um receipt obsoleto.
+    sprint: bug-01-fix
+    executor: python
+    validation_mode: fail_fast
+    outputs:
+      - docs/bug-validation.json
+    validators:
+      - command_succeeds:
+          command: >-
+            python .ft/process/bug-fast/scripts/validate_bug.py fix-implementation
+            && python .ft/process/bug-fast/scripts/validate_bug.py full
+          resume_command: >-
+            python .ft/process/bug-fast/scripts/validate_bug.py fix-implementation
+            && python .ft/process/bug-fast/scripts/validate_bug.py implementation
+            && python .ft/process/bug-fast/scripts/validate_bug.py verify
+          timeout: 420
+    on_fail:
+      human_gate: >-
+        A validação para review completa falhou; corrija somente a regressão
+        observada e preserve os achados ancorados.
+      goto: bug.fix
+    next: bug.review
 
   - id: bug.fix_full_validate
     type: gate

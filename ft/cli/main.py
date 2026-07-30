@@ -124,6 +124,7 @@ def apply_parallel_flags(runner, args) -> None:
         state.parallel_enabled = False
     if max_parallel is not None:
         state.parallel_max_slots = max(1, int(max_parallel))
+    runner._refresh_progress_metrics(state)
     runner.state_mgr.save()
 
 
@@ -1122,7 +1123,13 @@ def cmd_continue(args):
         return
     # Inicializar estado só se nunca rodou
     if state.current_node is None:
-        runner.init_state()
+        runner.init_state(
+            parallel_enabled=(
+                bool(getattr(args, "parallel", False))
+                and not bool(getattr(args, "no_parallel", False))
+            ),
+            parallel_max_slots=getattr(args, "max_parallel", None),
+        )
     apply_parallel_flags(runner, args)
 
     mode = resolve_run_mode(args)
@@ -4919,7 +4926,20 @@ def cmd_run(args):
 
     # Initialize the pinned state and run.  Other project cycles are independent
     # and remain free to progress in their own worktrees.
-    runner.init_state()
+    if (
+        bool(getattr(args, "parallel", False))
+        or bool(getattr(args, "no_parallel", False))
+        or getattr(args, "max_parallel", None) is not None
+    ):
+        runner.init_state(
+            parallel_enabled=(
+                bool(getattr(args, "parallel", False))
+                and not bool(getattr(args, "no_parallel", False))
+            ),
+            parallel_max_slots=getattr(args, "max_parallel", None),
+        )
+    else:
+        runner.init_state()
     apply_parallel_flags(runner, args)
     # Persistir os flags do run para que ft continue os herde por padrão.
     _run_state_mgr = getattr(runner, "state_mgr", None)

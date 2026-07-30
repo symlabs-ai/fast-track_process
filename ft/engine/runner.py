@@ -3792,7 +3792,12 @@ class StepRunner:
         self._active_node_trace_id = None
         self._active_node_attempt_id = None
 
-    def init_state(self):
+    def init_state(
+        self,
+        *,
+        parallel_enabled: bool | None = None,
+        parallel_max_slots: int | None = None,
+    ):
         """Inicializa estado a partir do grafo."""
         self._reset_validator_snapshots()
         pinned_state = self.state_mgr.load()
@@ -3871,10 +3876,32 @@ class StepRunner:
         )
         self.state_mgr.state.current_sprint = first.sprint
         self.state_mgr.state.sprint_status = "active" if first.sprint else None
+        if parallel_enabled is not None:
+            self.state_mgr.state.parallel_enabled = parallel_enabled
+        if parallel_max_slots is not None:
+            self.state_mgr.state.parallel_max_slots = max(
+                1,
+                int(parallel_max_slots),
+            )
+        elif parallel_enabled:
+            batch_policy = self.graph.meta.get("batch_policy")
+            batch_default = (
+                batch_policy.get("default_max_parallel")
+                if isinstance(batch_policy, dict)
+                else None
+            )
+            if (
+                isinstance(batch_default, int)
+                and not isinstance(batch_default, bool)
+                and batch_default > 0
+            ):
+                self.state_mgr.state.parallel_max_slots = batch_default
+        self._refresh_progress_metrics(self.state_mgr.state)
+        route_total = self.state_mgr.state.metrics["steps_total"]
         self.state_mgr.save()
         self._ensure_run_trace()
         print(ui.init_banner(
-            self.graph.meta.get("title", "?"), first.id, first.title, total,
+            self.graph.meta.get("title", "?"), first.id, first.title, route_total,
             process_file=self.process_path,
         ))
         self._init_log()
@@ -3882,7 +3909,10 @@ class StepRunner:
             "INIT",
             "Inicialização do processo",
             "PASS",
-            f"process={self.graph.meta.get('id', '?')} nodes={total} first={first.id}",
+            (
+                f"process={self.graph.meta.get('id', '?')} "
+                f"route_nodes={route_total} catalog_nodes={total} first={first.id}"
+            ),
         )
         self._fire_hooks("on_init")
 
@@ -4578,6 +4608,10 @@ class StepRunner:
                     )
                     for output_path in node.outputs:
                         self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+                    # Inputs copiados e checkpoints externos válidos precisam
+                    # virar um baseline Git antes de um fan-out por worktree.
+                    # Sem isso, o batch bloqueia apesar de zero trabalho LLM.
+                    self._maybe_auto_commit(node)
                     if node.requires_approval and not self._auto_approve:
                         print(ui.awaiting_approval(auto=self._auto_approve))
                         self.state_mgr.set_pending_approval(node.id)

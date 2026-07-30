@@ -1,6 +1,7 @@
 """Regressões para contexto e progresso limitados à rota selecionada."""
 
 from pathlib import Path
+import subprocess
 from unittest.mock import patch
 
 import yaml
@@ -94,6 +95,30 @@ def _runner(tmp_path: Path) -> StepRunner:
     state.parallel_enabled = True
     runner.state_mgr.save()
     return runner
+
+
+def test_init_banner_and_metrics_use_parallel_route(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    root = tmp_path / "banner-project"
+    root.mkdir()
+    process = tmp_path / "banner-process.yml"
+    process.write_text(PROCESS, encoding="utf-8")
+    runner = StepRunner(
+        process_path=process,
+        state_path=tmp_path / "banner-state" / "engine_state.yml",
+        project_root=root,
+        llm_engine="codex",
+    )
+
+    runner.init_state(parallel_enabled=True, parallel_max_slots=4)
+
+    state = runner.state_mgr.load()
+    assert state.metrics["steps_total"] == 6
+    assert state.parallel_enabled is True
+    assert state.parallel_max_slots == 4
+    assert "Total: 6 steps" in capsys.readouterr().out
 
 
 def test_plan_and_progress_include_only_selected_route(tmp_path: Path) -> None:
@@ -254,6 +279,26 @@ nodes:
     root = tmp_path / "checkpoint-project"
     root.mkdir()
     (root / "foundation.ok").write_text("validado\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "checkpoint@example.test"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Checkpoint Test"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "foundation.ok"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    # Simula o input copiado pelo `ft run` depois que a worktree nasceu.
+    (root / "request.md").write_text("delta autorizado\n", encoding="utf-8")
     runner = StepRunner(
         process_path=process,
         state_path=tmp_path / "checkpoint-state" / "engine_state.yml",
@@ -262,10 +307,16 @@ nodes:
     )
     runner.init_state()
 
-    with patch.object(
-        runner,
-        "_delegate_with_stream_retry",
-        side_effect=AssertionError("checkpoint válido não deve chamar LLM"),
+    with (
+        patch.object(
+            runner,
+            "_delegate_with_stream_retry",
+            side_effect=AssertionError("checkpoint válido não deve chamar LLM"),
+        ),
+        patch(
+            "ft.engine.runner.commit_knowledge",
+            return_value=(True, "commit final desativado no teste"),
+        ),
     ):
         runner.run(mode="mvp")
 
@@ -273,3 +324,17 @@ nodes:
     assert state.node_status == "done"
     assert state.metrics["llm_calls"] == 0
     assert state.gate_log["foundation"] == "PASS"
+    assert subprocess.run(
+        ["git", "status", "--porcelain", "--", "request.md", "foundation.ok"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == ""
+    assert "Foundation [foundation]" in subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout

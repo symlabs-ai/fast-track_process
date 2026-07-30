@@ -1603,8 +1603,10 @@ nodes:
 
         state = runner.state_mgr.load()
         assert state.node_status == "done"
-        assert state.metrics["steps_completed"] == 4
-        assert state.metrics["steps_total"] == 4
+        # A branch não escolhida continua auditável como SKIPPED, mas não
+        # infla o progresso da rota realmente executada.
+        assert state.metrics["steps_completed"] == 2
+        assert state.metrics["steps_total"] == 2
         assert state.gate_log["skipped.one"] == "SKIPPED"
         assert state.gate_log["skipped.two"] == "SKIPPED"
 
@@ -1704,7 +1706,9 @@ nodes:
 
         state = runner.state_mgr.load()
         assert state.node_status == "done"
-        assert state.metrics["steps_completed"] == 3
+        # O fix permanece no denominador por ser um loop focal possível,
+        # mas aprovação não o transforma artificialmente em trabalho feito.
+        assert state.metrics["steps_completed"] == 2
         assert state.metrics["steps_total"] == 3
         assert state.gate_log["fix"] == "SKIPPED"
 

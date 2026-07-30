@@ -687,8 +687,12 @@ ft run . --template mvp-builder-fast --auto --parallel --codex
 ```
 
 O engine gera um plano consultivo em
-`state/llm_execution_plan.yml` usando a demanda e os documentos iniciais,
-mantém uma conversa por sprint e cria lanes isoladas para review e fan-out.
+`state/llm_execution_plan.yml` usando a demanda e os documentos iniciais. O
+plano contém somente a rota escolhida e seus loops focais; branches não
+selecionadas não entram no prompt nem no denominador do progresso. Decisões já
+executadas são persistidas, e planos legados que representavam o grafo inteiro
+são regenerados automaticamente. O runner mantém uma conversa por sprint e cria
+lanes isoladas para review e fan-out.
 Claude usa `--session-id`/`--resume`; Codex captura o `thread_id` e usa
 `codex exec resume`. Human gates encerram o processo do CLI, mas o identificador
 fica no state para a retomada posterior. No `ft close`, o plano é preservado em
@@ -724,12 +728,22 @@ do usuário. O engine então:
 5. recusa qualquer diff fora do ownership declarado;
 6. integra as waves numa branch privada e só aplica ao branch do ciclo quando
    todas passam;
-7. faz review/fix focal e roda a regressão completa uma única vez após o fan-in.
+7. faz review/fix focal e roda a regressão completa uma única vez após o fan-in;
+8. aguarda o aceite real; rejeição volta somente ao fix e à auditoria do delta;
+9. após o aceite, reconcilia apenas backlog, features, tarefas e DoD afetados e
+   encerra o ciclo, sem reabrir discovery, planejamento global, delivery ou
+   handoff completo.
 
 Falhas preservam branch, worktree, sessão e ledger em
 `state/mvp-builder-batch.yml`. `ft status` mostra wave, lane, tentativas, paths
 e atividade de log. O batch não abre ciclos `feature-fast` filhos: lifecycle,
 histórico e `ft close` continuam únicos.
+
+Enquanto o projeto estiver em `building`, um novo feedback de validação usa
+novamente o construtor owner com `--parallel`. Se o hash da demanda e o plano
+existente coincidirem, o planner é pre-seeded e não consome outra chamada LLM.
+Essa execução é continuação terminal do mesmo produto:
+`validação → correção focal → regressão integrada → aceite`.
 
 ```bash
 ft run . --template mvp-builder-fast \

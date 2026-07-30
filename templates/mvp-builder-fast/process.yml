@@ -11,7 +11,7 @@
 #        backend/ ou tests/ na raiz.
 
 id: mvp_builder_fast
-version: "1.2.0"
+version: "1.3.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -103,17 +103,21 @@ artifact_policy:
     - docs/mvp-batch-foundation.md
     - docs/mvp-batch-report.md
     - docs/mvp-batch-review.md
+    - docs/mvp-validation-summary.md
 
 nodes:
 
   # ================================================================
-  # Batch dinâmico — opt-in por --parallel, um único ciclo/close
+  # Validação terminal paralela — opt-in por --parallel
+  #
+  # Esta rota também é a continuação curta do builder: feedback de validação
+  # nunca retorna a MDD, planning ou delivery integral.
   # ================================================================
 
   - id: ft.start.batch_mode
     type: decision
-    title: "Selecionar execução batch do Builder"
-    description: "Com --parallel, transforma a demanda natural em foundation e lanes internas; sem a flag preserva integralmente o processo tradicional."
+    title: "Selecionar Validação Paralela do Builder"
+    description: "Com --parallel, executa o incremento e termina em validação, correção focal e aceite; sem a flag preserva o processo de construção integral."
     sprint: sprint-00-batch
     executor: python
     condition: parallel_enabled
@@ -123,11 +127,11 @@ nodes:
 
   - id: ft.batch.01.plan
     type: document
-    title: "Planejar MVP e Lanes em uma Chamada"
-    description: "Ler a demanda natural, reconciliar as fontes canônicas e gerar um plano executável com foundation e ownership disjunto por lane."
+    title: "Reutilizar ou Planejar o Delta em uma Chamada"
+    description: "Validar um plano já compatível com a demanda ou gerar uma única vez foundation e lanes com ownership disjunto."
     sprint: sprint-00-batch
     executor: codex
-    no_pre_seed: true
+    preserve_outputs_on_reentry: true
     max_turns: 80
     outputs:
       - docs/mvp-batch-plan.yml
@@ -212,18 +216,6 @@ nodes:
       - file_exists: docs/task_list.md
       - project_contract_valid:
           path: .ft/project.yml
-    next: ft.batch.02.plan_gate
-
-  - id: ft.batch.02.plan_gate
-    type: human_gate
-    title: "Aprovar Plano Paralelo do MVP"
-    description: "Revise docs/mvp-batch-plan.md: cobertura, foundation, PBs, dependências e ownership. A aprovação libera worktrees paralelos, sem criar ciclos filhos."
-    sprint: sprint-00-batch
-    executor: python
-    outputs:
-      - docs/mvp-batch-plan.yml
-      - docs/mvp-batch-plan.md
-    reject_next: ft.batch.01.plan
     next: ft.batch.03.foundation
 
   - id: ft.batch.03.foundation
@@ -232,7 +224,7 @@ nodes:
     description: "Implementar em um único checkpoint apenas a base compartilhada declarada no plano, antes de abrir qualquer lane."
     sprint: sprint-00-batch
     executor: codex
-    no_pre_seed: true
+    preserve_outputs_on_reentry: true
     max_turns: 100
     outputs:
       - project/
@@ -249,6 +241,11 @@ nodes:
       docs/mvp-batch-foundation.md. Deixe o checkout compilável e encerre DONE.
     validators:
       - file_exists: docs/mvp-batch-foundation.md
+      - command_succeeds: >-
+          python3 -c "import yaml;
+          p=yaml.safe_load(open('docs/mvp-batch-plan.yml', encoding='utf-8'));
+          text=open('docs/mvp-batch-foundation.md', encoding='utf-8').read();
+          assert p['request_sha256'] in text"
       - command_succeeds: "git diff --check"
     next: ft.batch.04.execute
 
@@ -305,7 +302,9 @@ nodes:
     write_scope:
       - project
     prompt: |
-      Leia docs/mvp-batch-review.md e corrija SOMENTE os achados REJECTED.
+      Leia docs/mvp-batch-review.md e, quando esta etapa vier do aceite,
+      considere também o feedback mais recente do stakeholder. Corrija SOMENTE
+      os achados REJECTED.
       Rode testes focais dos arquivos corrigidos; não repita a suíte completa,
       não reabra requisitos aprovados e não reescreva documentos canônicos.
       Encerre com um resumo path→fix→teste e DONE.
@@ -323,7 +322,68 @@ nodes:
     validators:
       - command_succeeds: "make -C project verify"
       - command_succeeds: "git diff --check"
-    next: ft.delivery.01.entrypoint
+    next: ft.batch.08.acceptance
+
+  - id: ft.batch.08.acceptance
+    type: human_gate
+    title: "Aceitar o Produto Validado"
+    description: "Exercite o produto no ambiente real de validação. Aprove somente se funcionalidade e estética estiverem corretas; ao rejeitar, descreva defeitos reproduzíveis e o fluxo volta apenas à correção focal."
+    sprint: sprint-00-batch
+    executor: python
+    outputs:
+      - docs/stakeholder-feedback.md
+    reject_next: ft.batch.06.fix
+    next: ft.batch.09.reconcile
+
+  - id: ft.batch.09.reconcile
+    type: retro
+    title: "Reconciliar Somente o Delta Aceito"
+    description: "Atualizar os catálogos canônicos afetados pelo batch e registrar uma síntese curta, sem retro completa, reescrita de PRD ou evolução do processo."
+    sprint: sprint-00-batch
+    executor: codex
+    no_pre_seed: true
+    max_turns: 40
+    outputs:
+      - docs/mvp-validation-summary.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/task_list.md
+      - .ft/project.yml
+    write_scope:
+      - docs/mvp-validation-summary.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/task_list.md
+      - .ft/project.yml
+    prompt: |
+      O stakeholder aceitou o incremento. Reconcilie SOMENTE o delta descrito
+      em docs/mvp-batch-plan.yml usando os relatórios de foundation, fan-in,
+      review, regressão e aceite. Preserve IDs e histórico.
+
+      Marque como done/accepted apenas os PBs do plano que possuem evidência
+      real. Atualize FEATURES somente para capacidades efetivamente aceitas e
+      task_list somente para tarefas deste delta. Preserve o objetivo e o DoD
+      global em .ft/project.yml; o lifecycle permanece building até
+      `ft project-close`.
+
+      Escreva docs/mvp-validation-summary.md com requisitos, PBs, evidências,
+      resultado da regressão e decisão do stakeholder. Não reescreva PRD,
+      TECH_STACK, critérios de UI, handoff, plano de voo, análise crítica,
+      retro geral ou o processo. Responda DONE.
+    validators:
+      - file_exists: docs/mvp-validation-summary.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - task_list_references_backlog:
+          task_path: docs/task_list.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - project_contract_valid:
+          path: .ft/project.yml
+      - command_succeeds: "git diff --check"
+    next: ft.end
 
   # ================================================================
   # HyperMode — rota para pular MDD quando PRD já existe

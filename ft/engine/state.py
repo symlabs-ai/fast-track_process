@@ -161,6 +161,11 @@ class EngineState:
     current_sprint: str | None = None
     sprint_status: str | None = None
     gate_log: dict[str, str] = field(default_factory=dict)
+    # Branch escolhida por cada decision já executada. A escolha precisa ser
+    # persistida porque condições como file_exists podem mudar depois que a
+    # branch cria o próprio arquivo; recalculá-la faria métricas e contexto
+    # "saltarem" para uma rota que o ciclo nunca percorreu.
+    route_choices: dict[str, str] = field(default_factory=dict)
     artifacts: dict[str, str | None] = field(default_factory=dict)
     blocked_reason: str | None = None
     pending_approval: str | None = None  # node_id aguardando approve/reject
@@ -262,6 +267,11 @@ class StateManager:
                 current_sprint=raw.get("current_sprint"),
                 sprint_status=raw.get("sprint_status"),
                 gate_log=raw.get("gate_log", {}),
+                route_choices=(
+                    dict(raw.get("route_choices", {}))
+                    if isinstance(raw.get("route_choices", {}), dict)
+                    else {}
+                ),
                 artifacts=raw.get("artifacts", {}),
                 blocked_reason=raw.get("blocked_reason"),
                 pending_approval=raw.get("pending_approval"),
@@ -382,6 +392,7 @@ class StateManager:
             "current_sprint": self._state.current_sprint,
             "sprint_status": self._state.sprint_status,
             "gate_log": self._state.gate_log,
+            "route_choices": self._state.route_choices,
             "artifacts": self._state.artifacts,
             "blocked_reason": self._state.blocked_reason,
             "pending_approval": self._state.pending_approval,

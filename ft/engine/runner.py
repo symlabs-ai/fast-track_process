@@ -1744,7 +1744,10 @@ class StepRunner:
 
     def _deterministic_execution_plan(self, state: Any) -> dict[str, Any]:
         grouped: dict[str, list[dict[str, Any]]] = {}
+        selected_route = set(self._selected_route_node_ids(state))
         for node in self.graph.nodes.values():
+            if node.id not in selected_route:
+                continue
             if node.type == "end":
                 continue
             sprint = node.sprint or "cycle"
@@ -1760,6 +1763,11 @@ class StepRunner:
             "cycle": state.current_cycle,
             "objective": state.cycle_objective,
             "authority": "advisory; process graph and Python gates remain authoritative",
+            "selected_route": [
+                node_id
+                for node_id in self.graph.nodes
+                if node_id in selected_route
+            ],
             "sprints": [
                 {"id": sprint, "nodes": nodes}
                 for sprint, nodes in grouped.items()
@@ -1772,6 +1780,7 @@ class StepRunner:
         policy = self._session_policy()
         if not policy or policy.get("initial_plan") != "internal":
             return
+        expected_route = self._selected_route_node_ids(state)
         metadata = state.llm_execution_plan
         if isinstance(metadata, dict):
             existing = metadata.get("path")
@@ -1784,7 +1793,17 @@ class StepRunner:
                     pass
                 else:
                     if candidate.is_file():
-                        return
+                        try:
+                            existing_plan = yaml.safe_load(
+                                candidate.read_text(encoding="utf-8")
+                            )
+                        except (OSError, UnicodeError, yaml.YAMLError):
+                            existing_plan = None
+                        if (
+                            isinstance(existing_plan, dict)
+                            and existing_plan.get("selected_route") == expected_route
+                        ):
+                            return
 
         fallback = self._deterministic_execution_plan(state)
         # O mvp-builder-fast em modo batch possui um planner de produto
@@ -1813,6 +1832,7 @@ class StepRunner:
         plan = fallback
         source = "deterministic"
         if self._session_enabled_for(selection.engine):
+            selected_route = set(self._selected_route_node_ids(state))
             compact_graph = [
                 {
                     "id": node.id,
@@ -1824,6 +1844,7 @@ class StepRunner:
                     "branches": node.branches,
                 }
                 for node in self.graph.nodes.values()
+                if node.id in selected_route
             ]
             docs_root = Path(self._work_dir) / "docs"
             doc_paths = (
@@ -1955,6 +1976,7 @@ class StepRunner:
                     plan["cycle"] = fallback["cycle"]
                     plan["objective"] = fallback["objective"]
                     plan["authority"] = fallback["authority"]
+                    plan["selected_route"] = fallback["selected_route"]
                     source = "llm"
 
         relative_path = "llm_execution_plan.yml"
@@ -2311,6 +2333,57 @@ class StepRunner:
             **{k: v for k, v in state.artifacts.items() if v},
         }
 
+    def _selected_route_node_ids(self, state: Any) -> list[str]:
+        """Projeta somente a rota efetiva e seus loops focais de correção.
+
+        Decisions seguem a branch já persistida ou a condição determinística
+        atual. Branches não escolhidas nunca entram no plano LLM nem no
+        denominador de progresso. ``reject_next`` e ``on_fail.goto`` entram
+        porque pertencem ao mesmo episódio de validação e podem reconvergir no
+        happy path sem reabrir outras rotas do processo.
+        """
+        first = self.graph.first_node().id
+        route_choices = getattr(state, "route_choices", {})
+        if not isinstance(route_choices, dict):
+            route_choices = {}
+        selected: set[str] = set()
+        pending = [first]
+
+        while pending:
+            node_id = pending.pop()
+            if not node_id or node_id in selected:
+                continue
+            node = self.graph.nodes.get(node_id)
+            if node is None:
+                continue
+            selected.add(node_id)
+
+            targets: list[str] = []
+            if node.type == "decision":
+                chosen = route_choices.get(node.id)
+                if chosen not in self.graph.nodes:
+                    chosen = self._decision_next_for_state(node, state)
+                if chosen:
+                    targets.append(chosen)
+            else:
+                if node.next:
+                    targets.append(node.next)
+                if node.reject_next:
+                    targets.append(node.reject_next)
+                on_fail_target = (node.on_fail or {}).get("goto")
+                if on_fail_target:
+                    targets.append(on_fail_target)
+
+            # A pilha é LIFO; ordem reversa mantém o caminho principal como
+            # primeira expansão sem depender da ordem lexical dos IDs.
+            pending.extend(reversed(list(dict.fromkeys(targets))))
+
+        return [
+            node_id
+            for node_id in self.graph.nodes
+            if node_id in selected
+        ]
+
     def _predecessor_ids(self, node_id: str) -> list[str]:
         """Retorna todos os predecessores imediatos de um node."""
         predecessors: list[str] = []
@@ -2324,12 +2397,21 @@ class StepRunner:
         return predecessors
 
     def _refresh_progress_metrics(self, state: Any) -> bool:
-        """Recalcula métricas de progresso a partir do grafo atual."""
-        total_steps = sum(1 for node in self.graph.nodes.values() if node.type != "end")
+        """Recalcula progresso da rota escolhida, não do catálogo inteiro."""
+        selected_route = set(self._selected_route_node_ids(state))
+        total_steps = sum(
+            1
+            for node_id in selected_route
+            if self.graph.get_node(node_id).type != "end"
+        )
         completed_steps = sum(
             1
             for node_id in state.completed_nodes
-            if node_id in self.graph.nodes and self.graph.get_node(node_id).type != "end"
+            if (
+                node_id in selected_route
+                and self.graph.get_node(node_id).type != "end"
+                and state.gate_log.get(node_id) != "SKIPPED"
+            )
         )
 
         changed = False
@@ -2342,6 +2424,14 @@ class StepRunner:
         return changed
 
     def _decision_next_for_state(self, node: Node, state: Any) -> str | None:
+        route_choices = getattr(state, "route_choices", {})
+        persisted = (
+            route_choices.get(node.id)
+            if isinstance(route_choices, dict)
+            else None
+        )
+        if persisted in self.graph.nodes:
+            return persisted
         decision_state = self._decision_state_dict(state)
         if node.condition and node.condition.startswith("file_exists:"):
             check_path = node.condition.split(":", 1)[1]
@@ -3944,6 +4034,8 @@ class StepRunner:
         if state.current_node is None:
             print("Processo nao inicializado. Rode: ft init")
             return
+        if self._refresh_progress_metrics(state):
+            self.state_mgr.save()
         self._ensure_internal_execution_plan(state)
 
         self._auto_approve = (mode == "mvp")
@@ -3999,7 +4091,7 @@ class StepRunner:
                 self._generate_sprint_report(start_sprint, state)
                 break
 
-            step_num = len(state.completed_nodes) + 1
+            step_num = int(state.metrics.get("steps_completed", 0) or 0) + 1
             step_total = state.metrics.get("steps_total", "?")
             print(ui.step_card(
                 step_num, step_total, node.title,
@@ -5406,6 +5498,8 @@ class StepRunner:
             ordered = [candidate.id for candidate in self.graph.nodes.values()]
             current_index = ordered.index(node.id)
             target_index = ordered.index(next_id)
+            state.route_choices[node.id] = next_id
+            self.state_mgr.save()
             if target_index <= current_index:
                 # A branch semântica volta a uma etapa já concluída. Um simples
                 # advance manteria implement/review marcados como concluídos e

@@ -181,8 +181,12 @@ closes alterem o checkout principal simultaneamente.
 Nos processos comuns ele honra `parallel_group`. No `mvp-builder-fast`, que
 declara `batch_policy`, também ativa a rota dinâmica: a demanda em linguagem
 natural vira um plano interno, uma foundation sequencial e lanes isoladas. O
-engine calcula as waves, valida o diff real e faz um único fan-in/close. Isso é
-diferente de iniciar vários ciclos independentes.
+engine calcula as waves, valida o diff real e faz um único fan-in/close. O plano
+e o progresso incluem somente a branch escolhida. Ao final, a rota é
+`validação → correção focal → regressão integrada → aceite`; uma rejeição não
+retorna a MDD, planning, delivery ou handoff completo. Um plano existente com o
+mesmo hash é reutilizado sem nova chamada LLM. Isso é diferente de iniciar
+vários ciclos independentes.
 
 ### Modos de avanço
 

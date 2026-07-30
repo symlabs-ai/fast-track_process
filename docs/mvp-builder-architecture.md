@@ -98,6 +98,14 @@ Templates possuem papel explícito: construtores rodam em `building`; manutenç�
 roda somente em `maintenance` e exige receipt READY que corresponda ao digest do
 DoD e à revisão entregue.
 
+O construtor continua owner também durante o acabamento. No
+`mvp-builder-fast --parallel`, feedback terminal percorre somente
+`plano reutilizável → foundation → lanes → auditoria/fix focal → regressão
+integrada → aceite → reconciliação do delta`. Rejeição de validação nunca
+reinicia MDD, planejamento global, delivery ou handoff. O plano interno e as
+métricas são projeções da branch efetivamente escolhida, não do catálogo inteiro
+de nodes.
+
 ### `.ft/process/<template>/`: forks locais
 
 Cada bundle é uma cópia versionada do catálogo global e passa a pertencer ao

@@ -6,6 +6,22 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+## [v0.18.0] - 2026-07-30
+
+### Validação terminal sem reiniciar o builder
+
+- O plano interno e o progresso agora projetam somente a branch escolhida e
+  seus loops focais. Nodes de branches não selecionadas permanecem auditáveis
+  como `SKIPPED`, mas não inflam o contexto nem a contagem de trabalho feito.
+- Decisions persistem a branch executada, impedindo que condições mutáveis como
+  `file_exists` troquem retroativamente a rota. Planos legados do grafo inteiro
+  são regenerados automaticamente.
+- A rota `mvp-builder-fast --parallel` termina em review/fix focal, uma única
+  regressão integrada, aceite real e reconciliação curta do delta. Rejeições
+  não retornam a MDD, planejamento global, delivery ou handoff completo.
+- Plano e foundation válidos, ligados ao mesmo hash da demanda, podem ser
+  reutilizados por pre-seed sem outra chamada LLM.
+
 ## [v0.17.0] - 2026-07-30
 
 ### `mvp-builder-fast`: batch dinâmico dentro de um único ciclo

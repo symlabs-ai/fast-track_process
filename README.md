@@ -119,7 +119,10 @@ Os runners avançam em paralelo mesmo usando templates diferentes. Um lock curto
 protege a preparação compartilhada; um lock de close serializa merges no checkout
 principal. `--parallel` em `ft run` é outra coisa: paralelismo dentro de um
 único ciclo. Ele honra `parallel_group` e, no `mvp-builder-fast`, pode decompor
-uma demanda natural em foundation sequencial e lanes dinâmicas isoladas.
+uma demanda natural em foundation sequencial e lanes dinâmicas isoladas. Nessa
+rota, contexto e progresso consideram apenas a branch selecionada; o fechamento
+é `validação → correção focal → regressão integrada → aceite`, sem reiniciar o
+builder quando o stakeholder pede ajustes.
 
 As worktrees ficam em:
 

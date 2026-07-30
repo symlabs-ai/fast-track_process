@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import os
 import re
 import subprocess
@@ -60,7 +62,12 @@ from ft.engine.trace import (
 )
 from ft.engine import ui
 from ft.providers.opencode_policy import opencode_deny_edit_tools_enabled
-from ft.engine.parallel import ParallelRunner
+from ft.engine.parallel import (
+    ParallelRunner,
+    create_worktree,
+    merge_branch,
+    remove_worktree,
+)
 from ft.engine.stakeholder import (
     DEFAULT_HYPER_MODE_FULL_MAX_LINES,
     scan_existing_docs, hyper_mode_prompt,
@@ -524,6 +531,7 @@ class ValidationResult:
 # Mapeamento de validadores disponiveis
 VALIDATOR_REGISTRY: dict[str, Any] = {
     "file_exists": val.file_exists,
+    "builder_batch_plan_valid": val.builder_batch_plan_valid,
     "min_lines": val.min_lines,
     "has_sections": val.has_sections,
     "document_quality": val.document_quality,
@@ -1779,6 +1787,27 @@ class StepRunner:
                         return
 
         fallback = self._deterministic_execution_plan(state)
+        # O mvp-builder-fast em modo batch possui um planner de produto
+        # explícito no grafo. Fazer aqui outra chamada LLM repetiria análise,
+        # consumiria contexto e quebraria o contrato de "uma chamada para o
+        # grande plano". Ainda persistimos o mapa determinístico consultivo
+        # para os prompts subsequentes.
+        if state.parallel_enabled and isinstance(
+            self.graph.meta.get("batch_policy"),
+            dict,
+        ):
+            relative_path = "llm_execution_plan.yml"
+            _atomic_write_state(
+                self.state_mgr.path.parent / relative_path,
+                fallback,
+            )
+            state.llm_execution_plan = {
+                "path": relative_path,
+                "source": "deterministic-batch",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self.state_mgr.save()
+            return
         current = self.graph.nodes.get(state.current_node)
         selection = self._capture_delegation_llm_selection(state, node=current)
         plan = fallback
@@ -2277,6 +2306,7 @@ class StepRunner:
         return {
             "node_status": state.node_status,
             "blocked_reason": state.blocked_reason,
+            "parallel_enabled": "true" if state.parallel_enabled else "false",
             **state.gate_log,
             **{k: v for k, v in state.artifacts.items() if v},
         }
@@ -4079,6 +4109,33 @@ class StepRunner:
                                    f"→ {state.current_node}", sprint=node_sprint)
                 continue
 
+            # Batch dinâmico do builder — foundation já foi consolidado no
+            # branch pai; as lanes rodam em worktrees e fazem fan-in atômico.
+            if node.type == "batch":
+                self._run_builder_batch(node)
+                state = self.state_mgr.load()
+                if state.node_status == "blocked":
+                    self._log_activity(
+                        node_id,
+                        node.title,
+                        "batch",
+                        "BLOCKED",
+                        state.blocked_reason or "batch bloqueado",
+                        sprint=node_sprint,
+                    )
+                    break
+                self._log_activity(
+                    node_id,
+                    node.title,
+                    "batch",
+                    "PASS",
+                    f"concluído → {state.current_node or 'fim'}",
+                    sprint=node_sprint,
+                )
+                if mode == "step":
+                    break
+                continue
+
             # Parallel group — fan-out/fan-in (opt-in via ft run/continue --parallel)
             if node.parallel_group and self.state_mgr.state.parallel_enabled:
                 group_nodes = self.graph.get_parallel_group(node.parallel_group)
@@ -5293,7 +5350,7 @@ class StepRunner:
 
     def _maybe_auto_commit(self, node: Node):
         """Auto-commit apos PASS em nodes de build/test_green/refactor."""
-        commit_types = ("build", "test_green", "refactor", "test_red")
+        commit_types = ("build", "batch", "test_green", "refactor", "test_red")
         if node.type not in commit_types:
             return
 
@@ -5302,6 +5359,7 @@ class StepRunner:
             "test_green": "green",
             "refactor": "refactor",
             "build": "feat",
+            "batch": "feat",
         }
         label = phase_labels.get(node.type, "chore")
         message = f"{label}: {node.title} [{node.id}]"
@@ -6120,6 +6178,683 @@ class StepRunner:
         next_id = self.graph.resolve_next(node.id)
         self._advance_state(node.id, next_id, "SKIPPED")
         print(ui.info(f"Exploração pulada → {next_id}"))
+
+    def _run_builder_batch(self, node: Node) -> None:
+        """Executa lanes dinâmicas do mvp-builder-fast no mesmo ciclo.
+
+        O plano é produzido por um node LLM anterior, mas toda decisão de
+        scheduling e integração é do engine: topologia, limite de slots,
+        ownership por diff real, ordem de merge, ledger e fast-forward final.
+        O branch do ciclo pai só muda depois que todas as waves estiverem
+        integradas numa worktree privada.
+        """
+        from ft.engine.builder_batch import (
+            BatchPlanError,
+            changed_paths,
+            compute_waves,
+            load_batch_plan,
+            load_runtime,
+            paths_outside_ownership,
+            save_runtime,
+        )
+
+        policy = self.graph.meta.get("batch_policy")
+        if not isinstance(policy, dict):
+            self.state_mgr.block("batch_policy ausente ou inválida")
+            return
+
+        work_root = Path(self._work_dir).resolve()
+        plan_path = work_root / str(
+            policy.get("plan_path", "docs/mvp-batch-plan.yml")
+        )
+        request_path = work_root / str(
+            policy.get("request_path", "docs/demanda.md")
+        )
+        report_path = work_root / str(
+            policy.get("report_path", "docs/mvp-batch-report.md")
+        )
+        runtime_path = self.state_mgr.path.parent / "mvp-builder-batch.yml"
+
+        def git(
+            args: list[str],
+            *,
+            cwd: str | Path = work_root,
+            check: bool = False,
+        ) -> subprocess.CompletedProcess[str]:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+            if check and result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise RuntimeError(f"git {' '.join(args)} falhou: {detail[:500]}")
+            return result
+
+        def meaningful_status(raw: str) -> list[str]:
+            """Remove somente artefatos transitórios conhecidos do engine."""
+            meaningful: list[str] = []
+            for line in raw.splitlines():
+                path = line[3:].strip() if len(line) > 3 else line.strip()
+                if " -> " in path:
+                    path = path.rsplit(" -> ", 1)[-1]
+                name = Path(path).name
+                if name.endswith("_log.md"):
+                    continue
+                if name in {
+                    ".serve_url",
+                    ".serve.pid",
+                    ".serve_backend.pid",
+                    ".serve_frontend.pid",
+                }:
+                    continue
+                if path == "state" or path.startswith(
+                    ("state/", "runs/", ".ft/runtime/", ".ft/cache/", ".ft/tmp/")
+                ):
+                    continue
+                meaningful.append(line)
+            return meaningful
+
+        try:
+            plan = load_batch_plan(plan_path, request_path, policy)
+        except (BatchPlanError, OSError, yaml.YAMLError) as exc:
+            self.state_mgr.block(f"Plano batch inválido: {exc}")
+            return
+
+        max_slots = max(
+            1,
+            min(
+                int(self.state_mgr.state.parallel_max_slots or 1),
+                int(policy.get("max_lanes", len(plan.lanes)) or len(plan.lanes)),
+            ),
+        )
+        try:
+            waves = compute_waves(plan.lanes, max_parallel=max_slots)
+        except BatchPlanError as exc:
+            self.state_mgr.block(f"Scheduling batch inválido: {exc}")
+            return
+
+        plan_digest = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+        request_digest = hashlib.sha256(request_path.read_bytes()).hexdigest()
+        cycle_id = self.state_mgr.state.current_cycle or "cycle"
+        runtime_root = self.state_mgr.path.parent / "batch_worktrees"
+        lane_by_id = {lane.id: lane for lane in plan.lanes}
+        batch_selection = self._capture_delegation_llm_selection(
+            self.state_mgr.state,
+            node=node,
+        )
+
+        try:
+            runtime = load_runtime(runtime_path) if runtime_path.exists() else {}
+        except BatchPlanError as exc:
+            self.state_mgr.block(f"Ledger batch inválido: {exc}")
+            return
+
+        if runtime:
+            if runtime.get("plan_sha256") != plan_digest:
+                self.state_mgr.block(
+                    "Plano batch mudou após o início; restauração recusada "
+                    "(plan_sha256 divergente)"
+                )
+                return
+            if runtime.get("request_sha256") != request_digest:
+                self.state_mgr.block(
+                    "Demanda batch mudou após o início; restauração recusada "
+                    "(request_sha256 divergente)"
+                )
+                return
+            recorded_waves = runtime.get("waves")
+            if recorded_waves != waves:
+                self.state_mgr.block(
+                    "Scheduling batch divergiu do ledger; restauração recusada"
+                )
+                return
+        else:
+            clean = git(["status", "--porcelain"], check=True)
+            if meaningful_status(clean.stdout):
+                self.state_mgr.block(
+                    "Batch exige checkpoint foundation limpo; há mudanças "
+                    "não commitadas no branch pai"
+                )
+                return
+            parent_branch = git(
+                ["rev-parse", "--abbrev-ref", "HEAD"], check=True
+            ).stdout.strip()
+            if not parent_branch or parent_branch == "HEAD":
+                self.state_mgr.block("Batch exige branch Git ativa no ciclo pai")
+                return
+            parent_base_sha = git(["rev-parse", "HEAD"], check=True).stdout.strip()
+            try:
+                integration_branch, integration_worktree = create_worktree(
+                    "integration",
+                    str(work_root),
+                    parent_branch,
+                    cycle_id=f"{cycle_id}-builder-batch",
+                    worktrees_root=runtime_root,
+                )
+            except RuntimeError as exc:
+                self.state_mgr.block(
+                    f"Não foi possível criar a integração privada: {exc}"
+                )
+                return
+            runtime = {
+                "schema_version": 1,
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "plan_sha256": plan_digest,
+                "request_sha256": request_digest,
+                "parent_branch": parent_branch,
+                "parent_base_sha": parent_base_sha,
+                "max_parallel": max_slots,
+                "waves": waves,
+                "current_wave": 0,
+                "integration": {
+                    "branch": integration_branch,
+                    "worktree": integration_worktree,
+                },
+                "lanes": {
+                    lane.id: {
+                        "status": "planned",
+                        "attempts": 0,
+                    }
+                    for lane in plan.lanes
+                },
+            }
+            save_runtime(runtime_path, runtime)
+
+        integration = runtime.get("integration") or {}
+        integration_branch = str(integration.get("branch") or "")
+        integration_worktree = Path(str(integration.get("worktree") or ""))
+        if runtime.get("status") not in {"integrated", "done"}:
+            if (
+                not integration_branch
+                or not integration_worktree.is_dir()
+                or git(
+                    [
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        f"refs/heads/{integration_branch}",
+                    ],
+                    cwd=work_root,
+                ).returncode
+                != 0
+            ):
+                self.state_mgr.block(
+                    "Worktree/branch de integração do batch não está disponível; "
+                    "artefatos foram preservados para diagnóstico"
+                )
+                return
+
+        def persist() -> None:
+            runtime["updated_at"] = datetime.now(timezone.utc).isoformat()
+            save_runtime(runtime_path, runtime)
+
+        def lane_prompt(lane: Any, wave_index: int) -> str:
+            requirements = "\n".join(
+                f"- {requirement_id}"
+                for requirement_id in lane.requirements
+            )
+            criteria = "\n".join(
+                f"- {criterion}" for criterion in lane.acceptance_criteria
+            )
+            areas = "\n".join(f"- {area}" for area in lane.areas)
+            dependencies = ", ".join(lane.depends_on) or "nenhuma"
+            backlog = ", ".join(lane.backlog_items) or "não declarado"
+            foundation_report = str(
+                policy.get(
+                    "foundation_report_path",
+                    "docs/mvp-batch-foundation.md",
+                )
+            )
+            return f"""Você implementa uma lane isolada do mvp-builder-fast.
+
+LANE: {lane.id} — {lane.title}
+WAVE: {wave_index + 1}
+OBJETIVO:
+{lane.goal}
+
+BACKLOG: {backlog}
+REQUIREMENTS:
+{requirements}
+
+CRITÉRIOS DE ACEITAÇÃO:
+{criteria}
+
+OWNERSHIP EXCLUSIVO (únicos prefixes editáveis):
+{areas}
+- {policy.get('evidence_root', 'docs/batches/mvp-builder-fast')}/{lane.id}/
+
+DEPENDÊNCIAS JÁ INTEGRADAS: {dependencies}
+
+Leia docs/demanda.md, docs/mvp-batch-plan.yml e {foundation_report}, além do
+código necessário. Implemente somente
+esta lane e seus testes focais. Não altere .ft, documentos canônicos, arquivos
+da foundation/fan-in nem paths de outra lane. Não execute a regressão completa;
+ela roda uma única vez após o fan-in. Registre evidências próprias sob o
+namespace permitido acima. Confira o diff e os testes focais. Encerre DONE.
+"""
+
+        def prepare_lane(lane: Any, wave_index: int) -> dict[str, Any]:
+            lane_state = runtime["lanes"][lane.id]
+            existing_path = Path(str(lane_state.get("worktree") or ""))
+            existing_branch = str(lane_state.get("branch") or "")
+            if existing_path.is_dir() and existing_branch:
+                branch = existing_branch
+                lane_worktree = str(existing_path)
+                base_sha = str(lane_state.get("base_sha") or "")
+                if not base_sha:
+                    raise RuntimeError(
+                        f"{lane.id}: ledger sem base_sha para worktree existente"
+                    )
+            else:
+                base_sha = git(
+                    ["rev-parse", "HEAD"],
+                    cwd=integration_worktree,
+                    check=True,
+                ).stdout.strip()
+                branch, lane_worktree = create_worktree(
+                    lane.id,
+                    str(integration_worktree),
+                    integration_branch,
+                    cycle_id=f"{cycle_id}-builder-batch",
+                    worktrees_root=runtime_root,
+                )
+                lane_state.update(
+                    {
+                        "branch": branch,
+                        "worktree": lane_worktree,
+                        "base_sha": base_sha,
+                    }
+                )
+            lane_state["status"] = "running"
+            lane_state["wave"] = wave_index
+            lane_state["attempts"] = int(lane_state.get("attempts", 0)) + 1
+            lane_state["started_at"] = datetime.now(timezone.utc).isoformat()
+            log_path = self._build_llm_log_path(
+                f"{node.id}.{lane.id}",
+                "lane",
+                engine=batch_selection.engine,
+            )
+            lane_state["log_path"] = str(log_path)
+            return {
+                "lane": lane,
+                "worktree": lane_worktree,
+                "branch": branch,
+                "base_sha": base_sha,
+                "log_path": str(log_path),
+            }
+
+        def delegate_lane(task: dict[str, Any]) -> dict[str, Any]:
+            lane = task["lane"]
+            selection = batch_selection
+            log_path = Path(task["log_path"])
+            kwargs: dict[str, Any] = {
+                "task": lane_prompt(lane, int(runtime.get("current_wave", 0))),
+                "project_root": task["worktree"],
+                "allowed_paths": [
+                    *lane.areas,
+                    f"{policy.get('evidence_root', 'docs/batches/mvp-builder-fast')}/{lane.id}",
+                ],
+                "llm_engine": selection.engine,
+                "llm_model": selection.model,
+                "llm_effort": selection.effort,
+                "log_path": str(log_path),
+                "stream_prefix": f"[{lane.id}] ",
+                "llm_timeout_seconds": node.llm_timeout_seconds,
+            }
+            if node.max_turns is not None:
+                kwargs["max_turns"] = node.max_turns
+            self._attach_llm_session(
+                kwargs,
+                node=node,
+                selection=selection,
+                lane=f"batch:{lane.id}",
+            )
+            result = self._delegate_with_stream_retry(**kwargs)
+            return {
+                **task,
+                "result": result,
+                "log_path": str(log_path),
+            }
+
+        if runtime.get("status") not in {"integrated", "done"}:
+            print(ui.info(
+                f"Batch: {len(plan.lanes)} lanes · {len(waves)} waves · "
+                f"máximo {max_slots} simultâneas"
+            ))
+            for wave_index, wave_ids in enumerate(waves):
+                if all(
+                    runtime["lanes"][lane_id].get("status") == "merged"
+                    for lane_id in wave_ids
+                ):
+                    continue
+                runtime["current_wave"] = wave_index
+                runtime["status"] = "running"
+                self.state_mgr.state.node_status = "delegated"
+                self.state_mgr.save()
+                print(ui.highlight(
+                    f"Wave {wave_index + 1}/{len(waves)}: "
+                    + ", ".join(wave_ids)
+                ))
+
+                tasks: list[dict[str, Any]] = []
+                try:
+                    for lane_id in wave_ids:
+                        lane_state = runtime["lanes"][lane_id]
+                        if lane_state.get("status") in {"ready_to_merge", "merged"}:
+                            continue
+                        tasks.append(prepare_lane(lane_by_id[lane_id], wave_index))
+                except (RuntimeError, OSError) as exc:
+                    persist()
+                    self.state_mgr.block(f"Setup de lane falhou: {exc}")
+                    return
+
+                persist()
+                if tasks:
+                    state = self.state_mgr.state
+                    state.metrics["llm_calls"] = (
+                        state.metrics.get("llm_calls", 0) + len(tasks)
+                    )
+                    self.state_mgr.save()
+
+                    completed_results: list[dict[str, Any]] = []
+                    with ThreadPoolExecutor(
+                        max_workers=min(max_slots, len(tasks)),
+                        thread_name_prefix="ft-builder-batch",
+                    ) as executor:
+                        futures = {
+                            executor.submit(delegate_lane, task): task["lane"].id
+                            for task in tasks
+                        }
+                        for future in as_completed(futures):
+                            lane_id = futures[future]
+                            try:
+                                completed_results.append(future.result())
+                            except BaseException as exc:
+                                completed_results.append(
+                                    {
+                                        "lane": lane_by_id[lane_id],
+                                        "result": None,
+                                        "exception": exc,
+                                    }
+                                )
+
+                    for lane_result in completed_results:
+                        lane = lane_result["lane"]
+                        lane_state = runtime["lanes"][lane.id]
+                        lane_state["finished_at"] = datetime.now(
+                            timezone.utc
+                        ).isoformat()
+                        lane_state["log_path"] = lane_result.get("log_path")
+                        result = lane_result.get("result")
+                        if result is None or not result.success:
+                            error = lane_result.get("exception")
+                            detail = (
+                                str(error)
+                                if error is not None
+                                else str(getattr(result, "output", "falha LLM"))
+                            )
+                            lane_state["status"] = "failed"
+                            lane_state["last_error"] = detail[:2000]
+                            continue
+
+                        lane_worktree = str(lane_state["worktree"])
+                        try:
+                            actual_paths = changed_paths(
+                                lane_worktree,
+                                str(lane_state["base_sha"]),
+                            )
+                        except BatchPlanError as exc:
+                            lane_state["status"] = "failed"
+                            lane_state["last_error"] = str(exc)
+                            continue
+                        outside = paths_outside_ownership(
+                            actual_paths,
+                            lane.areas,
+                            str(
+                                policy.get(
+                                    "evidence_root",
+                                    "docs/batches/mvp-builder-fast",
+                                )
+                            ),
+                            lane.id,
+                        )
+                        if not actual_paths:
+                            lane_state["status"] = "failed"
+                            lane_state["last_error"] = (
+                                "lane não produziu diff verificável"
+                            )
+                            continue
+                        if outside:
+                            lane_state["status"] = "failed"
+                            lane_state["last_error"] = (
+                                "ownership violado: " + ", ".join(outside)
+                            )
+                            continue
+                        diff_check = git(
+                            ["diff", "--check"],
+                            cwd=lane_worktree,
+                        )
+                        if diff_check.returncode != 0:
+                            lane_state["status"] = "failed"
+                            lane_state["last_error"] = (
+                                diff_check.stderr.strip()
+                                or diff_check.stdout.strip()
+                            )[:2000]
+                            continue
+                        try:
+                            git(["add", "-A"], cwd=lane_worktree, check=True)
+                            staged = git(
+                                ["diff", "--cached", "--quiet"],
+                                cwd=lane_worktree,
+                            )
+                            if staged.returncode == 1:
+                                git(
+                                    [
+                                        "commit",
+                                        "-m",
+                                        f"feat(batch): {lane.id} {lane.title}",
+                                    ],
+                                    cwd=lane_worktree,
+                                    check=True,
+                                )
+                            elif staged.returncode != 0:
+                                raise RuntimeError(
+                                    f"{lane.id}: não foi possível inspecionar stage"
+                                )
+                            tip_sha = git(
+                                ["rev-parse", "HEAD"],
+                                cwd=lane_worktree,
+                                check=True,
+                            ).stdout.strip()
+                        except RuntimeError as exc:
+                            lane_state["status"] = "failed"
+                            lane_state["last_error"] = str(exc)
+                            continue
+                        lane_state["status"] = "ready_to_merge"
+                        lane_state["tip_sha"] = tip_sha
+                        lane_state["changed_paths"] = actual_paths
+                        lane_state["last_error"] = None
+                    persist()
+
+                failed = [
+                    lane_id
+                    for lane_id in wave_ids
+                    if runtime["lanes"][lane_id].get("status") == "failed"
+                ]
+                if failed:
+                    runtime["status"] = "blocked"
+                    persist()
+                    details = "; ".join(
+                        f"{lane_id}: "
+                        f"{runtime['lanes'][lane_id].get('last_error', 'falha')}"
+                        for lane_id in failed
+                    )
+                    self.state_mgr.block(
+                        "Batch bloqueado; worktrees preservados. " + details[:3000]
+                    )
+                    return
+
+                for lane_id in wave_ids:
+                    lane_state = runtime["lanes"][lane_id]
+                    if lane_state.get("status") == "merged":
+                        continue
+                    branch = str(lane_state.get("branch") or "")
+                    ok, detail = merge_branch(branch, str(integration_worktree))
+                    if not ok:
+                        runtime["status"] = "blocked"
+                        lane_state["status"] = "merge_failed"
+                        lane_state["last_error"] = detail
+                        persist()
+                        self.state_mgr.block(
+                            f"Fan-in de {lane_id} falhou; integração privada e "
+                            f"worktrees preservados: {detail}"
+                        )
+                        return
+                    lane_state["status"] = "merged"
+                    lane_state["merged_at"] = datetime.now(
+                        timezone.utc
+                    ).isoformat()
+                    lane_state["integration_sha"] = git(
+                        ["rev-parse", "HEAD"],
+                        cwd=integration_worktree,
+                        check=True,
+                    ).stdout.strip()
+                    cleaned, cleanup_detail = remove_worktree(
+                        str(lane_state["worktree"]),
+                        branch,
+                        str(integration_worktree),
+                    )
+                    lane_state["cleanup"] = cleanup_detail
+                    lane_state["worktree_cleaned"] = cleaned
+                    persist()
+
+                combined_check = git(
+                    ["diff", "--check", str(runtime["parent_base_sha"]), "HEAD"],
+                    cwd=integration_worktree,
+                )
+                if combined_check.returncode != 0:
+                    runtime["status"] = "blocked"
+                    persist()
+                    self.state_mgr.block(
+                        "Validação combinada da wave falhou: "
+                        + (
+                            combined_check.stderr.strip()
+                            or combined_check.stdout.strip()
+                        )[:2000]
+                    )
+                    return
+
+            parent_head = git(["rev-parse", "HEAD"], check=True).stdout.strip()
+            integration_head = git(
+                ["rev-parse", "HEAD"],
+                cwd=integration_worktree,
+                check=True,
+            ).stdout.strip()
+            parent_status = meaningful_status(
+                git(["status", "--porcelain"], check=True).stdout
+            )
+            already_fast_forwarded = parent_head == integration_head
+            if not already_fast_forwarded and (
+                parent_head != runtime.get("parent_base_sha") or parent_status
+            ):
+                runtime["status"] = "blocked"
+                persist()
+                self.state_mgr.block(
+                    "Branch pai mudou durante o batch; fast-forward atômico recusado"
+                )
+                return
+            if not already_fast_forwarded:
+                ff = git(["merge", "--ff-only", integration_branch])
+                if ff.returncode != 0:
+                    runtime["status"] = "blocked"
+                    runtime["last_error"] = (
+                        ff.stderr.strip() or ff.stdout.strip()
+                    )[:2000]
+                    persist()
+                    self.state_mgr.block(
+                        "Fast-forward final do batch falhou; integração privada "
+                        "preservada"
+                    )
+                    return
+            runtime["integrated_sha"] = git(
+                ["rev-parse", "HEAD"], check=True
+            ).stdout.strip()
+            runtime["status"] = "integrated"
+            runtime["integrated_at"] = datetime.now(timezone.utc).isoformat()
+            persist()
+            cleaned, cleanup_detail = remove_worktree(
+                str(integration_worktree),
+                integration_branch,
+                str(work_root),
+            )
+            runtime["integration_cleanup"] = cleanup_detail
+            runtime["integration_worktree_cleaned"] = cleaned
+            persist()
+
+        lines = [
+            "# Relatório do Batch MVP Builder Fast",
+            "",
+            f"- Ciclo: `{cycle_id}`",
+            f"- Plano SHA-256: `{plan_digest}`",
+            f"- Demanda SHA-256: `{request_digest}`",
+            f"- Paralelismo máximo: {runtime.get('max_parallel', max_slots)}",
+            f"- Waves: {len(waves)}",
+            f"- Revisão integrada: `{runtime.get('integrated_sha', '')}`",
+            "",
+            "## Execução",
+            "",
+            "| Wave | Lane | Status | Tentativas | Paths alterados |",
+            "|---:|---|---|---:|---:|",
+        ]
+        wave_lookup = {
+            lane_id: index + 1
+            for index, wave in enumerate(waves)
+            for lane_id in wave
+        }
+        for lane in plan.lanes:
+            lane_state = runtime["lanes"][lane.id]
+            lines.append(
+                f"| {wave_lookup[lane.id]} | {lane.id} — {lane.title} | "
+                f"{lane_state.get('status')} | {lane_state.get('attempts', 0)} | "
+                f"{len(lane_state.get('changed_paths') or [])} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Integridade",
+                "",
+                "- Scheduling calculado deterministicamente pelo engine.",
+                "- Cada lane executou em worktree e sessão próprias.",
+                "- O diff real foi validado contra o ownership declarado.",
+                "- O branch pai recebeu um único fast-forward após todas as waves.",
+                "- A regressão completa pertence ao gate posterior, não às lanes.",
+                "",
+            ]
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+
+        validation = self._run_validators(node)
+        self._print_validation(validation)
+        if not validation.passed:
+            self.state_mgr.block(
+                "Validação pós-batch falhou: "
+                + str(validation.feedback or "falha desconhecida")
+            )
+            return
+        for output_path in node.outputs:
+            self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+        self._maybe_auto_commit(node)
+        runtime["status"] = "done"
+        runtime["completed_at"] = datetime.now(timezone.utc).isoformat()
+        persist()
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id)
+        print(ui.step_pass(next_id, "BATCH PASS"))
 
     def _run_parallel_group(self, nodes: list[Node]):
         """Fan-out: delega nodes independentes em paralelo via worktrees."""
@@ -6981,6 +7716,54 @@ class StepRunner:
         if activity_label:
             progress_line += f" · última atividade {activity_label}"
         print(ui.highlight(progress_line))
+
+        batch_runtime_path = self.state_mgr.path.parent / "mvp-builder-batch.yml"
+        if batch_runtime_path.is_file():
+            try:
+                batch_runtime = yaml.safe_load(
+                    batch_runtime_path.read_text(encoding="utf-8")
+                ) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                batch_runtime = {}
+            if isinstance(batch_runtime, dict) and batch_runtime.get("lanes"):
+                waves = batch_runtime.get("waves") or []
+                current_wave = int(batch_runtime.get("current_wave", 0) or 0)
+                print(ui.info(
+                    "Batch interno: "
+                    f"{batch_runtime.get('status', 'unknown')} · "
+                    f"wave {min(current_wave + 1, len(waves))}/{len(waves)} · "
+                    f"até {batch_runtime.get('max_parallel', 1)} lanes"
+                ))
+                lane_rows = batch_runtime.get("lanes")
+                if isinstance(lane_rows, dict):
+                    for lane_id, lane_state in lane_rows.items():
+                        if not isinstance(lane_state, dict):
+                            continue
+                        lane_status = str(lane_state.get("status", "planned"))
+                        suffix = ""
+                        log_path = lane_state.get("log_path")
+                        if isinstance(log_path, str) and log_path:
+                            candidate = Path(log_path)
+                            if candidate.is_file():
+                                age = max(
+                                    0,
+                                    int(time.time() - candidate.stat().st_mtime),
+                                )
+                                suffix = f" · log atualizado há {age}s"
+                                lane_progress = _llm_progress_snapshot(candidate)
+                                if lane_progress.current:
+                                    suffix += (
+                                        " · agora: "
+                                        + lane_progress.current[:120]
+                                    )
+                        changed_count = len(lane_state.get("changed_paths") or [])
+                        if changed_count:
+                            suffix += f" · {changed_count} paths"
+                        print(ui.dim(
+                            f"  {lane_id}: {lane_status}"
+                            f" · tentativa {lane_state.get('attempts', 0)}"
+                            f"{suffix}"
+                        ))
         usage_summary = summarize_llm_usage(
             self._llm_log_dir(),
             default_engine=state.llm_engine,

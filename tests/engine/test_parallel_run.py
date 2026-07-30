@@ -146,6 +146,20 @@ def test_apply_parallel_flags_noop_without_flags(tmp_path: Path) -> None:
     assert runner.state_mgr.path.read_text(encoding="utf-8") == before
 
 
+def test_apply_parallel_uses_template_batch_default(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    runner.graph.meta["batch_policy"] = {"default_max_parallel": 4}
+
+    apply_parallel_flags(
+        runner,
+        SimpleNamespace(parallel=True, no_parallel=False, max_parallel=None),
+    )
+
+    state = runner.state_mgr.load()
+    assert state.parallel_enabled is True
+    assert state.parallel_max_slots == 4
+
+
 # ---------------------------------------------------------------------------
 # Runner — gating do fan-out
 # ---------------------------------------------------------------------------

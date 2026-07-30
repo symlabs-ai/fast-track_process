@@ -6,6 +6,27 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+## [v0.17.0] - 2026-07-30
+
+### `mvp-builder-fast`: batch dinâmico dentro de um único ciclo
+
+- `--parallel` ativa, quando o template declara `batch_policy`, uma rota que
+  transforma `--request`/`--input` em linguagem natural num plano interno com
+  hash, requirements, foundation, lanes, ownership e dependências.
+- O engine — nunca o LLM — valida cobertura e paths, calcula waves
+  topológicas, limita os workers por `--max-parallel` e verifica o diff real de
+  cada lane contra seu ownership.
+- Foundation e fan-in permanecem sequenciais; as lanes usam worktrees, logs e
+  sessões próprias. A integração ocorre primeiro numa branch privada e só
+  avança o branch do ciclo depois que toda a wave passa.
+- O ledger atômico permite retomar somente lanes falhas, preservando worktrees
+  produtivas e pulando lanes já concluídas. Drift do plano ou da demanda falha
+  fechado.
+- `ft status` passou a mostrar wave, lane, tentativas, paths e atividade. A
+  regressão completa fica depois do review/fix focal e roda uma única vez.
+- O modo batch suprime o plano LLM consultivo redundante do início do run: há
+  uma única chamada de planejamento do produto e um único ciclo/`ft close`.
+
 ## [v0.16.1] - 2026-07-30
 
 ### CI com baseline explícita do Ruff

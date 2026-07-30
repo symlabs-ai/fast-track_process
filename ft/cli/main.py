@@ -93,9 +93,10 @@ def resolve_bypass_human_gates(args) -> bool:
 def apply_parallel_flags(runner, args) -> None:
     """Persiste no estado do run a escolha de paralelismo intra-processo.
 
-    --parallel habilita o fan-out de nodes com parallel_group no YAML;
-    --no-parallel desabilita num run já iniciado; --max-parallel ajusta os
-    worktrees simultâneos. Persistido em ft_state.yml, então ft continue,
+    --parallel habilita o fan-out estático de ``parallel_group`` e, quando o
+    template declara ``batch_policy``, a rota dinâmica natural→foundation→lanes.
+    --no-parallel desabilita num run já iniciado; --max-parallel ajusta o teto
+    de worktrees simultâneos. Persistido em ft_state.yml, então ft continue,
     ft approve --auto e ft retry honram a escolha sem re-passar flags.
     """
     parallel = bool(getattr(args, "parallel", False))
@@ -106,6 +107,19 @@ def apply_parallel_flags(runner, args) -> None:
     state = runner.state_mgr.load()
     if parallel:
         state.parallel_enabled = True
+        if max_parallel is None:
+            batch_policy = runner.graph.meta.get("batch_policy")
+            batch_default = (
+                batch_policy.get("default_max_parallel")
+                if isinstance(batch_policy, dict)
+                else None
+            )
+            if (
+                isinstance(batch_default, int)
+                and not isinstance(batch_default, bool)
+                and batch_default > 0
+            ):
+                state.parallel_max_slots = batch_default
     if no_parallel:
         state.parallel_enabled = False
     if max_parallel is not None:
@@ -4987,11 +5001,11 @@ def main():
                       help="Não herdar --bypass-human-gates do run original")
     cont.add_argument("--cycle", help="Ciclo específico a retomar (ex: cycle-07)")
     cont.add_argument("--parallel", action="store_true",
-                      help="Honrar parallel_group do processo (persiste no estado do run)")
+                      help="Habilitar lanes/fan-out intra-processo (persiste no run)")
     cont.add_argument("--no-parallel", action="store_true", dest="no_parallel",
                       help="Desabilitar paralelismo intra-processo num run já iniciado")
     cont.add_argument("--max-parallel", dest="max_parallel", type=int, metavar="N",
-                      help="Máximo de worktrees simultâneos por parallel_group (default: 2)")
+                      help="Teto de worktrees simultâneos no processo (default: 2)")
 
     # status
     st = sub.add_parser("status", help="Estado atual")
@@ -5353,10 +5367,10 @@ def main():
                     help="Avançar em modo autônomo até MVP (PARA em human_gates; "
                          "para pular use --bypass-human-gates)")
     ru.add_argument("--parallel", action="store_true",
-                    help="Honrar parallel_group do processo: nodes independentes "
-                         "rodam em worktrees paralelos (fan-out/fan-in com merge)")
+                    help="Habilitar batch/lanes ou parallel_group do processo "
+                         "(worktrees isolados com fan-out/fan-in)")
     ru.add_argument("--max-parallel", dest="max_parallel", type=int, metavar="N",
-                    help="Máximo de worktrees simultâneos por parallel_group (default: 2)")
+                    help="Teto de worktrees simultâneos no processo (default: 2)")
 
     args = parser.parse_args()
 

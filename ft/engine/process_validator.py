@@ -17,7 +17,7 @@ from ft.engine.context_profiles import HYPER_MODE_FIELDS, KNOWN_CONTEXT_PROFILES
 VALID_NODE_TYPES = frozenset({
     "discovery", "document", "build", "test_red", "test_green",
     "refactor", "review", "retro", "gate", "decision", "sync", "end",
-    "human_gate", "exploration",
+    "human_gate", "exploration", "batch",
 })
 
 # Nomes PÓS-normalização do graph loader (claude→llm_claude etc.) — o validator
@@ -204,6 +204,53 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
                 report.add_error(
                     None,
                     "parallel_policy.rate_limit_respawns deve ser inteiro não negativo",
+                )
+
+    batch_policy = graph.meta.get("batch_policy")
+    if batch_policy is not None:
+        if not isinstance(batch_policy, dict):
+            report.add_error(None, "batch_policy deve ser um mapping")
+        else:
+            required_paths = (
+                "plan_path",
+                "request_path",
+                "report_path",
+                "foundation_report_path",
+            )
+            for field_name in required_paths:
+                value = batch_policy.get(field_name)
+                if not isinstance(value, str) or not value.strip():
+                    report.add_error(
+                        None,
+                        f"batch_policy.{field_name} deve ser um path não vazio",
+                    )
+            for field_name in (
+                "min_lanes",
+                "max_lanes",
+                "default_max_parallel",
+                "max_acceptance_criteria_per_lane",
+            ):
+                value = batch_policy.get(field_name)
+                if (
+                    value is not None
+                    and (
+                        isinstance(value, bool)
+                        or not isinstance(value, int)
+                        or value <= 0
+                    )
+                ):
+                    report.add_error(
+                        None,
+                        f"batch_policy.{field_name} deve ser inteiro positivo",
+                    )
+            protected = batch_policy.get("protected_paths", [])
+            if not isinstance(protected, list) or any(
+                not isinstance(path, str) or not path.strip()
+                for path in protected
+            ):
+                report.add_error(
+                    None,
+                    "batch_policy.protected_paths deve ser uma lista de paths",
                 )
 
     commit_policy = graph.meta.get("commit_policy")
@@ -454,6 +501,15 @@ def _check_semantics(graph: ProcessGraph, report: ValidationReport) -> None:
         if node.type == "build" and not node.outputs:
             report.add_warning(node.id, "build sem outputs definidos")
 
+        if node.type == "batch":
+            if node.executor != "python":
+                report.add_error(node.id, "batch exige executor python")
+            if not isinstance(graph.meta.get("batch_policy"), dict):
+                report.add_error(
+                    node.id,
+                    "batch exige batch_policy no topo do processo",
+                )
+
         # Decision devem ter branches
         if node.type == "decision" and not node.branches:
             report.add_warning(node.id, "decision sem branches")
@@ -481,7 +537,14 @@ def _check_parallel_groups(graph: ProcessGraph, report: ValidationReport) -> Non
         if node.parallel_group:
             groups.setdefault(str(node.parallel_group), []).append(node)
 
-    control_types = {"gate", "human_gate", "decision", "end", "exploration"}
+    control_types = {
+        "gate",
+        "human_gate",
+        "decision",
+        "end",
+        "exploration",
+        "batch",
+    }
     for group_name, members in groups.items():
         if len(members) < 2:
             report.add_warning(

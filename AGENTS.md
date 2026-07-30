@@ -177,9 +177,12 @@ preparação comum do projeto; depois disso os runners avançam em paralelo. O
 merge/arquivamento do `ft close` usa outro lock por projeto para impedir que dois
 closes alterem o checkout principal simultaneamente.
 
-`--parallel` em `ft run` continua significando fan-out de nodes declarados como
-paralelizáveis dentro de um único processo. Isso é diferente de iniciar vários
-ciclos independentes.
+`--parallel` em `ft run` continua sendo paralelismo dentro de um único ciclo.
+Nos processos comuns ele honra `parallel_group`. No `mvp-builder-fast`, que
+declara `batch_policy`, também ativa a rota dinâmica: a demanda em linguagem
+natural vira um plano interno, uma foundation sequencial e lanes isoladas. O
+engine calcula as waves, valida o diff real e faz um único fan-in/close. Isso é
+diferente de iniciar vários ciclos independentes.
 
 ### Modos de avanço
 

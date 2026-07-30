@@ -11,7 +11,7 @@
 #        backend/ ou tests/ na raiz.
 
 id: mvp_builder_fast
-version: "1.1.0"
+version: "1.2.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -35,6 +35,31 @@ session_policy:
   initial_plan: internal
   parallel_strategy: fork
   recovery: rehydrate
+
+# Opt-in com `ft run --parallel`. O usuário continua descrevendo a demanda em
+# linguagem natural; um único planner produz este plano interno e o engine
+# calcula waves, isola worktrees e valida o diff real de cada lane.
+batch_policy:
+  schema_version: 1
+  plan_path: docs/mvp-batch-plan.yml
+  request_path: docs/demanda.md
+  report_path: docs/mvp-batch-report.md
+  foundation_report_path: docs/mvp-batch-foundation.md
+  evidence_root: docs/batches/mvp-builder-fast
+  min_lanes: 2
+  max_lanes: 8
+  default_max_parallel: 2
+  max_acceptance_criteria_per_lane: 6
+  protected_paths:
+    - .ft/
+    - docs/PRD.md
+    - docs/TECH_STACK.md
+    - docs/PROJECT_BACKLOG.md
+    - docs/FEATURES.md
+    - docs/task_list.md
+    - docs/api_contract.md
+    - docs/ui_criteria.md
+    - docs/test_data.md
 
 input_policy:
   required: false
@@ -73,8 +98,232 @@ artifact_policy:
     - docs/process-improvements.md
     - docs/process-improvements.yml
     - docs/exploration-report.md
+    - docs/mvp-batch-plan.yml
+    - docs/mvp-batch-plan.md
+    - docs/mvp-batch-foundation.md
+    - docs/mvp-batch-report.md
+    - docs/mvp-batch-review.md
 
 nodes:
+
+  # ================================================================
+  # Batch dinâmico — opt-in por --parallel, um único ciclo/close
+  # ================================================================
+
+  - id: ft.start.batch_mode
+    type: decision
+    title: "Selecionar execução batch do Builder"
+    description: "Com --parallel, transforma a demanda natural em foundation e lanes internas; sem a flag preserva integralmente o processo tradicional."
+    sprint: sprint-00-batch
+    executor: python
+    condition: parallel_enabled
+    branches:
+      "true": ft.batch.01.plan
+      "false": ft.start.route
+
+  - id: ft.batch.01.plan
+    type: document
+    title: "Planejar MVP e Lanes em uma Chamada"
+    description: "Ler a demanda natural, reconciliar as fontes canônicas e gerar um plano executável com foundation e ownership disjunto por lane."
+    sprint: sprint-00-batch
+    executor: codex
+    no_pre_seed: true
+    max_turns: 80
+    outputs:
+      - docs/mvp-batch-plan.yml
+      - docs/mvp-batch-plan.md
+      - docs/PRD.md
+      - docs/TECH_STACK.md
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/task_list.md
+      - docs/api_contract.md
+      - docs/ui_criteria.md
+      - docs/test_data.md
+      - .ft/project.yml
+    write_scope:
+      - docs
+      - .ft/project.yml
+    prompt: |
+      Esta é a ÚNICA chamada de planejamento do batch. Leia docs/demanda.md e
+      todo conhecimento já existente no repositório. Preserve decisões válidas e
+      reconcilie, sem apagar histórico, PRD, TECH_STACK, PROJECT_BACKLOG,
+      FEATURES, task_list, api_contract, ui_criteria, test_data e .ft/project.yml.
+      Se um documento ainda não existir, crie-o com conteúdo suficiente para a
+      construção. O lifecycle do projeto permanece building.
+
+      Escreva docs/mvp-batch-plan.yml estritamente neste schema:
+        schema_version: 1
+        request_sha256: <sha256 hexadecimal exato dos bytes de docs/demanda.md>
+        requirements:
+          - id: R-001
+            text: <unidade verificável da demanda>
+        foundation:
+          goal: <trabalho compartilhado e necessariamente sequencial>
+          acceptance_criteria: [<critério verificável>]
+          areas: [<paths relativos que somente a foundation/fan-in pode tocar>]
+        lanes:
+          - id: L-01
+            title: <nome curto>
+            goal: <resultado focal>
+            backlog_items: [PB-001]
+            requirements: [R-001]
+            acceptance_criteria: [<máximo 6>]
+            areas: [<paths relativos e específicos, disjuntos das outras lanes>]
+            depends_on: []
+
+      Regras mandatórias:
+      - não escreva `waves`; o engine calcula a topologia;
+      - cubra cada requirement em ao menos uma lane e não invente requirements;
+      - use entre 2 e 8 lanes; dependências só quando reais;
+      - reserve/valide PBs no backlog e associe cada lane a ao menos um PB;
+      - paths devem ser relativos, seguros e não podem incluir .ft nem os
+        documentos canônicos protegidos pelo batch_policy;
+      - a foundation contém somente extrações, contratos, scaffold e baselines
+        realmente compartilhados; funcionalidades ficam nas lanes;
+      - não inclua comandos shell no YAML.
+
+      Gere também docs/mvp-batch-plan.md como projeção legível: requisitos,
+      foundation, lanes, dependências, ownership e critérios. Ao final, confira
+      o SHA-256 e o YAML com parser antes de responder DONE.
+    validators:
+      - builder_batch_plan_valid:
+          path: docs/mvp-batch-plan.yml
+          request_path: docs/demanda.md
+          policy:
+            min_lanes: 2
+            max_lanes: 8
+            max_acceptance_criteria_per_lane: 6
+            protected_paths:
+              - .ft/
+              - docs/PRD.md
+              - docs/TECH_STACK.md
+              - docs/PROJECT_BACKLOG.md
+              - docs/FEATURES.md
+              - docs/task_list.md
+              - docs/api_contract.md
+              - docs/ui_criteria.md
+              - docs/test_data.md
+            evidence_root: docs/batches/mvp-builder-fast
+      - file_exists: docs/mvp-batch-plan.md
+      - file_exists: docs/PRD.md
+      - file_exists: docs/TECH_STACK.md
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - file_exists: docs/task_list.md
+      - project_contract_valid:
+          path: .ft/project.yml
+    next: ft.batch.02.plan_gate
+
+  - id: ft.batch.02.plan_gate
+    type: human_gate
+    title: "Aprovar Plano Paralelo do MVP"
+    description: "Revise docs/mvp-batch-plan.md: cobertura, foundation, PBs, dependências e ownership. A aprovação libera worktrees paralelos, sem criar ciclos filhos."
+    sprint: sprint-00-batch
+    executor: python
+    outputs:
+      - docs/mvp-batch-plan.yml
+      - docs/mvp-batch-plan.md
+    reject_next: ft.batch.01.plan
+    next: ft.batch.03.foundation
+
+  - id: ft.batch.03.foundation
+    type: build
+    title: "Consolidar Foundation Sequencial"
+    description: "Implementar em um único checkpoint apenas a base compartilhada declarada no plano, antes de abrir qualquer lane."
+    sprint: sprint-00-batch
+    executor: codex
+    no_pre_seed: true
+    max_turns: 100
+    outputs:
+      - project/
+      - docs/mvp-batch-foundation.md
+    write_scope:
+      - project
+      - docs/mvp-batch-foundation.md
+    prompt: |
+      Leia docs/mvp-batch-plan.yml e implemente SOMENTE `foundation`: scaffold,
+      extrações, contratos, interfaces, modelos compartilhados e baseline que as
+      lanes precisam consumir. Não implemente funcionalidades pertencentes a uma
+      lane e não altere documentos canônicos. Faça verificações focais da base,
+      registre comandos/resultados e o contrato congelado em
+      docs/mvp-batch-foundation.md. Deixe o checkout compilável e encerre DONE.
+    validators:
+      - file_exists: docs/mvp-batch-foundation.md
+      - command_succeeds: "git diff --check"
+    next: ft.batch.04.execute
+
+  - id: ft.batch.04.execute
+    type: batch
+    title: "Executar Lanes Isoladas e Integrar"
+    description: "O engine calcula waves, limita concorrência, reutiliza sessões por lane, valida ownership pelo diff real e integra atomicamente."
+    sprint: sprint-00-batch
+    executor: python
+    outputs:
+      - docs/mvp-batch-report.md
+    validators:
+      - file_exists: docs/mvp-batch-report.md
+      - command_succeeds: "git diff --check"
+    next: ft.batch.05.review
+
+  - id: ft.batch.05.review
+    type: review
+    title: "Revisar Incremento Combinado do Batch"
+    description: "Auditoria independente sobre o fan-in completo, cobrindo todos os requirements e critérios sem repetir a regressão total."
+    sprint: sprint-00-batch
+    executor: codex
+    no_pre_seed: true
+    max_turns: 80
+    outputs:
+      - docs/mvp-batch-review.md
+    write_scope:
+      - docs/mvp-batch-review.md
+    prompt: |
+      Revise de forma independente o incremento integrado contra
+      docs/mvp-batch-plan.yml, docs/demanda.md e o diff do checkpoint anterior.
+      Execute apenas auditorias e testes focais necessários para comprovar cada
+      requirement e critério. Não altere código. Escreva
+      docs/mvp-batch-review.md com matriz requirement→evidência e veredito
+      explícito APPROVED ou REJECTED. REJECTED deve listar somente defeitos
+      acionáveis, com path/teste/evidência.
+    validators:
+      - file_exists: docs/mvp-batch-review.md
+    on_fail:
+      human_gate: "O review combinado encontrou defeitos focais no batch."
+      goto: ft.batch.06.fix
+    next: ft.batch.07.verify
+
+  - id: ft.batch.06.fix
+    type: build
+    title: "Corrigir Apenas Achados do Batch"
+    description: "Loop focal: corrigir somente os achados acionáveis do review e seus testes diretamente relacionados."
+    sprint: sprint-00-batch
+    executor: codex
+    no_pre_seed: true
+    max_turns: 80
+    outputs:
+      - project/
+    write_scope:
+      - project
+    prompt: |
+      Leia docs/mvp-batch-review.md e corrija SOMENTE os achados REJECTED.
+      Rode testes focais dos arquivos corrigidos; não repita a suíte completa,
+      não reabra requisitos aprovados e não reescreva documentos canônicos.
+      Encerre com um resumo path→fix→teste e DONE.
+    validators:
+      - command_succeeds: "git diff --check"
+    next: ft.batch.05.review
+
+  - id: ft.batch.07.verify
+    type: gate
+    title: "Verificação Completa Única do Batch"
+    description: "Executar a regressão integral uma única vez depois do fan-in e do review focal."
+    sprint: sprint-00-batch
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds: "make -C project verify"
+      - command_succeeds: "git diff --check"
+    next: ft.delivery.01.entrypoint
 
   # ================================================================
   # HyperMode — rota para pular MDD quando PRD já existe

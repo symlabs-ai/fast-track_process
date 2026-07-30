@@ -117,8 +117,9 @@ ft run . --template tweak --request "Reduzir padding do cabeçalho" --auto
 
 Os runners avançam em paralelo mesmo usando templates diferentes. Um lock curto
 protege a preparação compartilhada; um lock de close serializa merges no checkout
-principal. `--parallel` em `ft run` é outra coisa: fan-out de nodes de um único
-processo quando o YAML declara um `parallel_group`.
+principal. `--parallel` em `ft run` é outra coisa: paralelismo dentro de um
+único ciclo. Ele honra `parallel_group` e, no `mvp-builder-fast`, pode decompor
+uma demanda natural em foundation sequencial e lanes dinâmicas isoladas.
 
 As worktrees ficam em:
 

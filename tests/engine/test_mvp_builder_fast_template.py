@@ -87,8 +87,27 @@ def test_fast_path_reduces_llm_turns_and_preserves_human_gates() -> None:
 
     assert fast_turns <= 25
     assert fast_turns <= baseline_turns * 0.75
-    assert sum(node.type == "human_gate" for node in fast.nodes.values()) == 7
+    # O oitavo gate aprova o plano natural→lanes antes de abrir worktrees.
+    assert sum(node.type == "human_gate" for node in fast.nodes.values()) == 8
     assert sum(node.type == "human_gate" for node in baseline.nodes.values()) == 7
+
+
+def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
+    graph = load_graph(FAST_PROCESS)
+    route = graph.first_node()
+
+    assert route.id == "ft.start.batch_mode"
+    assert route.condition == "parallel_enabled"
+    assert route.branches == {
+        "true": "ft.batch.01.plan",
+        "false": "ft.start.route",
+    }
+    assert graph.get_node("ft.batch.03.foundation").type == "build"
+    assert graph.get_node("ft.batch.04.execute").type == "batch"
+    assert graph.get_node("ft.batch.04.execute").next == "ft.batch.05.review"
+    assert graph.get_node("ft.batch.07.verify").next == "ft.delivery.01.entrypoint"
+    assert graph.meta["batch_policy"]["min_lanes"] == 2
+    assert graph.meta["batch_policy"]["default_max_parallel"] == 2
 
 
 def test_macro_nodes_keep_deterministic_checkpoints() -> None:

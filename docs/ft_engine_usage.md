@@ -711,6 +711,33 @@ gates/validators Python permanecem autoritativos. Uma sessão expirada é
 substituída uma vez por uma conversa reidratada com plano, estado e artefatos.
 Processos sem `session_policy` continuam stateless.
 
+Quando a execução usa `--parallel`, o `mvp-builder-fast` ativa também seu
+`batch_policy`. O usuário continua fornecendo somente `--request` ou `--input`
+em linguagem natural. Uma única chamada de planejamento produz
+`docs/mvp-batch-plan.yml`; o YAML é um artefato interno, não uma entrada exigida
+do usuário. O engine então:
+
+1. valida o hash exato da demanda, cobertura, PBs, paths e dependências;
+2. executa a foundation sequencial e cria um checkpoint;
+3. calcula waves topológicas, limitado por `--max-parallel`;
+4. roda cada lane em worktree e sessão próprias;
+5. recusa qualquer diff fora do ownership declarado;
+6. integra as waves numa branch privada e só aplica ao branch do ciclo quando
+   todas passam;
+7. faz review/fix focal e roda a regressão completa uma única vez após o fan-in.
+
+Falhas preservam branch, worktree, sessão e ledger em
+`state/mvp-builder-batch.yml`. `ft status` mostra wave, lane, tentativas, paths
+e atividade de log. O batch não abre ciclos `feature-fast` filhos: lifecycle,
+histórico e `ft close` continuam únicos.
+
+```bash
+ft run . --template mvp-builder-fast \
+  --input demanda.md \
+  --parallel --max-parallel 4 \
+  --auto --codex gpt-5.6-sol --effort high
+```
+
 Os macro-nodes de planejamento também reconciliam `.ft/project.yml`, sem criar
 uma chamada LLM extra. O human gate de arquitetura aprova o objetivo e o DoD
 global. O fim do grafo significa “ciclo construtor concluído”; a entrega do

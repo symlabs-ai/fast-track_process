@@ -84,6 +84,32 @@ def file_exists(path: str, project_root: str = ".") -> tuple[bool, str]:
     return False, f"file_exists FAIL: {path} nao encontrado"
 
 
+def builder_batch_plan_valid(
+    path: str,
+    request_path: str,
+    policy: dict | None = None,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Valida o plano natural→estruturado antes de abrir qualquer lane."""
+    from ft.engine.builder_batch import BatchPlanError, load_batch_plan
+
+    root = Path(project_root)
+    try:
+        plan = load_batch_plan(
+            root / path,
+            root / request_path,
+            policy or {},
+        )
+    except (BatchPlanError, OSError, UnicodeError) as exc:
+        return False, f"builder_batch_plan_valid FAIL: {exc}"
+    return (
+        True,
+        "builder_batch_plan_valid: "
+        f"{len(plan.lanes)} lanes, {len(plan.waves)} waves, "
+        f"{len(plan.requirements)} requirements",
+    )
+
+
 def min_lines(path: str, n: int, project_root: str = ".") -> tuple[bool, str]:
     """Verifica se arquivo tem pelo menos N linhas."""
     full = Path(project_root) / path

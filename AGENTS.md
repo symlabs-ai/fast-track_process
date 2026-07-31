@@ -278,6 +278,9 @@ linear `next → fix_review` e volta ao mesmo human gate. Em forks históricos s
 essa declaração, o review de origem é reutilizado com o prompt amplo suspenso:
 a delegação audita somente o finding e seu veredito focal, sem refazer o fluxo
 completo. Se não existir nenhuma rota segura de revisão, o fix é recusado.
+Hashes citados no pedido identificam a baseline; o review deve auditar e
+registrar o artefato corrente produzido pelo fix, salvo quando a igualdade de
+hash tiver sido declarada explicitamente como requisito.
 
 ## 6. Encerrar o ciclo
 

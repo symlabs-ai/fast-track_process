@@ -297,6 +297,9 @@ apenas a existência de código ou testes. Um node de correção pode declarar
 até esse review e retorna ao mesmo gate. Sem a declaração, ciclos históricos
 reutilizam o review de origem em modo focal, com o prompt amplo suspenso. A
 engine recusa um fix avulso quando não consegue garantir uma dessas rotas.
+Identidades de artefato citadas no finding são tratadas como baseline: o review
+registra e valida o candidato corrente do fix, a menos que igualdade de hash
+tenha sido definida explicitamente como requisito.
 
 # Encerramento
 ft process-candidates --cycle <id>

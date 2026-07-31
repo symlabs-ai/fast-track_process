@@ -1981,6 +1981,8 @@ nodes:
         def focal_review(**kwargs):
             assert "Audite apenas o logo 40% maior na S02." in kwargs["task"]
             assert "Reexecutar todo o produto" not in kwargs["task"]
+            assert "baseline anterior à correção" in kwargs["task"]
+            assert "artefato corrente produzido pelo fix" in kwargs["task"]
             return DelegateResult(
                 success=True,
                 output=(

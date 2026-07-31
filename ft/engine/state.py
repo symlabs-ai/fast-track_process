@@ -511,6 +511,7 @@ class StateManager:
         s.node_status = "ready" if next_node else "done"
         s.blocked_reason = None
         s.pending_approval = None
+        s.pending_fix = None
         s.metrics["steps_completed"] = len(s.completed_nodes)
         self.save()
 
@@ -528,6 +529,7 @@ class StateManager:
         s.node_status = "ready" if next_node else "done"
         s.blocked_reason = None
         s.pending_approval = None
+        s.pending_fix = None
         s.metrics["steps_completed"] = len(s.completed_nodes)
         self.save()
 
@@ -552,6 +554,7 @@ class StateManager:
         s = self.state
         s.node_status = "awaiting_approval"
         s.pending_approval = node_id
+        s.pending_fix = None
         self.save()
 
     def record_artifact(self, name: str, path: str):

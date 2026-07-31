@@ -141,18 +141,24 @@ class TestStateManager:
         assert state.blocked_reason == "test failure reason"
 
     def test_set_pending_approval(self, initialized_state):
+        initialized_state.state.pending_fix = {"goto": "node.fix"}
+        initialized_state.save()
         initialized_state.set_pending_approval("node.01")
         state = initialized_state.load()
         assert state.node_status == "awaiting_approval"
         assert state.pending_approval == "node.01"
+        assert state.pending_fix is None
 
     def test_advance_clears_blocked_reason(self, initialized_state):
         initialized_state.block("reason")
         initialized_state.unblock()
+        initialized_state.state.pending_fix = {"goto": "node.fix"}
+        initialized_state.save()
         initialized_state.advance("node.01", "node.02")
         state = initialized_state.load()
         assert state.blocked_reason is None
         assert state.pending_approval is None
+        assert state.pending_fix is None
 
     def test_record_artifact(self, initialized_state):
         initialized_state.record_artifact("prd", "project/docs/PRD.md")

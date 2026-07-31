@@ -3479,11 +3479,19 @@ class StepRunner:
             return
 
         state = self.state_mgr.state
-        state.pending_fix = {
+        pending_fix = {
             "goto": goto,
             "feedback": feedback,
             "origin": node.id,
         }
+        active_return = state.active_fix_return
+        if (
+            isinstance(active_return, dict)
+            and active_return.get("review_node") == node.id
+            and active_return.get("gate_node") in self.graph.nodes
+        ):
+            pending_fix["return_gate"] = active_return["gate_node"]
+        state.pending_fix = pending_fix
         state.node_status = "pending_fix"
         state.blocked_reason = None
         self.state_mgr.save()
@@ -3511,7 +3519,19 @@ class StepRunner:
                 print(ui.info(
                     f"↪ Fix focal concluído; auditando novamente somente {review_node}"
                 ))
+            if not directed_return.get("gate_node"):
+                state.active_fix_return = None
+        elif (
+            isinstance(directed_return, dict)
+            and directed_return.get("review_node") == completed_node
+            and directed_return.get("gate_node") in self.graph.nodes
+        ):
+            gate_node = directed_return["gate_node"]
+            next_node = gate_node
             state.active_fix_return = None
+            print(ui.info(
+                f"↪ Auditoria focal aprovada; retornando ao human gate {gate_node}"
+            ))
 
         completed_sprint = self.graph.sprint_of(completed_node)
         next_sprint = self.graph.sprint_of(next_node) if next_node else None
@@ -7372,9 +7392,35 @@ próprias sob o namespace permitido acima. Encerre DONE.
 
 
 
-    def apply_fix(self, instruction: str, *, audit_origin: bool = False) -> bool:
+    def _invalidate_focal_evidence(
+        self,
+        state,
+        node_ids: tuple[str, ...],
+    ) -> None:
+        """Invalida somente receipts associados aos nodes reabertos.
+
+        Os arquivos permanecem preservados para auditoria. A engine remove
+        apenas referências de estado e snapshots que não podem comprovar uma
+        nova revisão depois de o código ter mudado.
         """
-        Executa o on_fail.goto: volta ao node alvo, injeta instrução, limpa pending_fix.
+        output_paths: set[str] = set()
+        for node_id in node_ids:
+            state.gate_log.pop(node_id, None)
+            self._clear_validator_snapshots(node_id)
+            node = self.graph.nodes.get(node_id)
+            if node is not None:
+                output_paths.update(str(path) for path in node.outputs)
+        for artifact_name, artifact_path in list(state.artifacts.items()):
+            if artifact_path in output_paths:
+                state.artifacts.pop(artifact_name, None)
+
+    def apply_fix(self, instruction: str, *, audit_origin: bool = True) -> bool:
+        """
+        Executa o on_fail.goto e, por padrão, exige nova auditoria da origem.
+
+        O comportamento focal é deliberadamente o default global: uma
+        correção não pode conservar o receipt que a reprovou, mas também não
+        deve reabrir nodes intermediários já aprovados.
         Retorna True se havia pending_fix, False se não.
         """
         state = self.state_mgr.load()
@@ -7407,13 +7453,14 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 n for n in state.completed_nodes
                 if n not in {goto, origin}
             ]
-            for node_id in (goto, origin):
-                state.gate_log.pop(node_id, None)
-                self._clear_validator_snapshots(node_id)
+            self._invalidate_focal_evidence(state, (goto, origin))
             state.active_fix_return = {
                 "fix_node": goto,
                 "review_node": origin,
             }
+            return_gate = pending.get("return_gate")
+            if return_gate in self.graph.nodes:
+                state.active_fix_return["gate_node"] = return_gate
         else:
             # Compatibilidade: o processo controla a rota posterior ao fix e
             # todos os nodes a partir do alvo são reabertos.
@@ -7451,8 +7498,8 @@ próprias sob o namespace permitido acima. Encerre DONE.
 
         O ``reject_next`` continua definindo qual node corrige o finding, mas
         nodes e gates já aprovados permanecem concluídos. Depois do fix, a rota
-        temporária retorna ao review predecessor em vez de obedecer ao ``next``
-        estático do node compartilhado de correção.
+        temporária retorna ao review predecessor e então ao mesmo human gate,
+        sem obedecer às rotas intermediárias já aprovadas.
         """
         state = self.state_mgr.load()
         self._persist_llm_engine(state)
@@ -7501,10 +7548,11 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 f"REJEITADO PELO STAKEHOLDER no gate {gate_id}:\n{reason}"
             ),
             "origin": review_id,
+            "return_gate": gate_id,
         }
         state.gate_log[gate_id] = "REJECTED"
         self.state_mgr.save()
-        return self.apply_fix(reason, audit_origin=True)
+        return self.apply_fix(reason)
 
     def reject(self, reason: str, retry: bool = True):
         """

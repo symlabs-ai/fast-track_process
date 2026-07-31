@@ -117,12 +117,20 @@ def _append_capture_context(prompt: str, root: Path, capture_path: str | None) -
 def execute_fix(args: Any, runner: Any) -> None:
     """Apply one directed correction to the already selected cycle."""
     instruction = args.instruction
-    audit_origin = bool(getattr(args, "audit_origin", False))
-    applied = (
-        runner.apply_fix(instruction, audit_origin=True)
-        if audit_origin
-        else runner.apply_fix(instruction)
-    )
+    state = runner.state_mgr.load()
+    if state.pending_approval:
+        gate = runner.graph.get_node(state.pending_approval)
+        if not gate.reject_next:
+            print(
+                "ERRO: o human gate atual não declara reject_next; "
+                "a engine recusou aplicar um fix sem rota de revisão."
+            )
+            return
+        applied = runner.reject_with_origin_audit(instruction)
+    else:
+        # Auditoria da origem é obrigatória. ``--audit-origin`` continua
+        # aceito apenas por compatibilidade com scripts existentes.
+        applied = runner.apply_fix(instruction, audit_origin=True)
     if applied:
         runner.run(mode="mvp" if getattr(args, "auto", False) else "step")
         return

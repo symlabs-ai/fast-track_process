@@ -2625,7 +2625,7 @@ nodes:
 
         pending = runner.state_mgr.load()
         assert pending.pending_fix["origin"] == "physical.review"
-        assert runner.apply_fix("Corrigir VIS-001", audit_origin=True)
+        assert runner.apply_fix("Corrigir VIS-001")
 
         fixing = runner.state_mgr.load()
         assert fixing.current_node == "fix"
@@ -2667,6 +2667,8 @@ nodes:
     type: build
     title: Shared fix
     executor: codex
+    outputs:
+      - project/fix.md
     next: broad.review
   - id: broad.review
     type: review
@@ -2682,6 +2684,11 @@ nodes:
     type: review
     title: Physical review
     executor: codex
+    outputs:
+      - docs/physical-review.md
+    on_fail:
+      human_gate: Corrigir somente a divergência física.
+      goto: fix
     next: visual.gate
   - id: visual.gate
     type: human_gate
@@ -2712,6 +2719,11 @@ nodes:
         state.current_node = "visual.gate"
         state.node_status = "awaiting_approval"
         state.pending_approval = "visual.gate"
+        state.artifacts = {
+            "fix": "project/fix.md",
+            "physical-review": "docs/physical-review.md",
+            "integrated": "docs/integrated-receipt.json",
+        }
         runner.state_mgr.save()
 
         assert runner.reject_with_origin_audit(
@@ -2724,20 +2736,61 @@ nodes:
         assert fixing.active_fix_return == {
             "fix_node": "fix",
             "review_node": "physical.review",
+            "gate_node": "visual.gate",
         }
         assert fixing.completed_nodes == [
             "foundation",
             "broad.review",
             "integrated.verify",
         ]
+        assert fixing.artifacts == {
+            "integrated": "docs/integrated-receipt.json",
+        }
         assert "S12 ainda diverge" in fixing.last_approval_message
 
         runner._advance_state("fix", "broad.review")
 
         resumed = runner.state_mgr.load()
         assert resumed.current_node == "physical.review"
-        assert resumed.active_fix_return is None
+        assert resumed.active_fix_return == {
+            "fix_node": "fix",
+            "review_node": "physical.review",
+            "gate_node": "visual.gate",
+        }
         assert "integrated.verify" in resumed.completed_nodes
+
+        runner._handle_on_fail(
+            runner.graph.get_node("physical.review"),
+            "A evidência do fix ainda diverge",
+        )
+        pending_again = runner.state_mgr.load()
+        assert pending_again.pending_fix["return_gate"] == "visual.gate"
+        assert runner.apply_fix("Corrigir somente a divergência remanescente")
+
+        fixing_again = runner.state_mgr.load()
+        assert fixing_again.current_node == "fix"
+        assert fixing_again.active_fix_return == {
+            "fix_node": "fix",
+            "review_node": "physical.review",
+            "gate_node": "visual.gate",
+        }
+
+        runner._advance_state("fix", "broad.review")
+        reviewed_again = runner.state_mgr.load()
+        assert reviewed_again.current_node == "physical.review"
+
+        runner._advance_state("physical.review", "visual.gate")
+
+        returned = runner.state_mgr.load()
+        assert returned.current_node == "visual.gate"
+        assert returned.active_fix_return is None
+        assert returned.completed_nodes == [
+            "foundation",
+            "broad.review",
+            "integrated.verify",
+            "fix",
+            "physical.review",
+        ]
 
     def test_llm_error_with_passing_validators_advances_node(self, tmp_path):
         project_root = tmp_path / "project"

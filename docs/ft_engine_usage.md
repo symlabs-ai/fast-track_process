@@ -271,23 +271,26 @@ ft runs
 # Gates e recuperação
 ft approve "nota opcional" --cycle <id>
 ft reject "motivo acionável" --cycle <id>
-ft reject "motivo acionável" --audit-origin --auto --cycle <id>
+ft reject "motivo acionável" --auto --cycle <id>
 ft reject "motivo" --no-retry --cycle <id>
 ft retry --cycle <id>
 ft fix "instrução" --cycle <id>
-ft fix "instrução" --audit-origin --cycle <id>
 ft explore "pedido livre" --cycle <id>
 ft abort --cycle <id>
 ft cancel "motivo" --cycle <id>
 
-Use `--audit-origin` quando um review terminal encontrar uma divergência
-focal. A engine preserva os nodes e gates já aprovados, executa o node de fix
-indicado por `on_fail.goto` e retorna diretamente ao review que originou o
-finding. Sem a flag, continua valendo a rota estática declarada pelo processo.
+Todo fix dirigido executa auditoria focal obrigatória. A engine preserva os
+nodes e gates já aprovados, invalida apenas os receipts do fix e do review que
+originou o finding, executa o node indicado por `on_fail.goto` e retorna
+diretamente àquele review.
 
-Em um human gate, a mesma flag usa o `reject_next` como node de correção e
-identifica o review predecessor que gerou a evidência. Com `--auto`, o ciclo
-executa o microfix e essa auditoria até parar novamente no gate humano.
+Em um human gate com `reject_next`, `ft fix` e `ft reject` usam esse node como
+correção e identificam o review predecessor que gerou a evidência. Depois da
+auditoria focal, retornam ao mesmo human gate sem reexecutar os nodes
+intermediários já aprovados. Com `--auto`, o ciclo executa
+`fix → review focal` e para novamente para a decisão humana. A flag histórica
+`--audit-origin` continua aceita por compatibilidade, mas não desativa nem
+altera essa política.
 
 # Encerramento
 ft process-candidates --cycle <id>

@@ -2257,14 +2257,20 @@ def cmd_reject(args):
     runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
     if not _ensure_runtime_selected(args, runner):
         return
-    if getattr(args, "audit_origin", False):
-        if args.no_retry:
-            print("ERRO: --audit-origin não pode ser combinado com --no-retry.")
-            return
-        if runner.reject_with_origin_audit(args.reason):
-            runner.run(mode="mvp" if getattr(args, "auto", False) else "step")
+    if getattr(args, "audit_origin", False) and args.no_retry:
+        print("ERRO: --audit-origin não pode ser combinado com --no-retry.")
         return
     retry = not args.no_retry
+    if retry:
+        state = runner.state_mgr.load()
+        if state.pending_approval:
+            gate = runner.graph.get_node(state.pending_approval)
+            if gate.reject_next:
+                if runner.reject_with_origin_audit(args.reason):
+                    runner.run(
+                        mode="mvp" if getattr(args, "auto", False) else "step"
+                    )
+                return
     runner.reject(args.reason, retry=retry)
     correction_policy = runner.graph.meta.get("correction_policy", {})
     follow_graph = (
@@ -5213,8 +5219,8 @@ def main():
         "--audit-origin",
         action="store_true",
         help=(
-            "Executar reject_next e repetir somente o review que gerou a "
-            "evidência rejeitada"
+            "Compatibilidade: a auditoria focal já é obrigatória por padrão "
+            "quando o gate declara reject_next"
         ),
     )
     rj.add_argument(
@@ -5319,8 +5325,8 @@ def main():
         "--audit-origin",
         action="store_true",
         help=(
-            "Após o fix, repetir somente o review que encontrou o defeito, "
-            "preservando gates já aprovados"
+            "Compatibilidade: todo fix já repete obrigatoriamente o review "
+            "que encontrou o defeito"
         ),
     )
     fx.add_argument("--cycle", help="Ciclo específico a corrigir")

@@ -147,9 +147,8 @@ ft status --cycle <id> --full
 ft graph --cycle <id>
 ft approve "nota opcional" --cycle <id>
 ft reject "motivo objetivo" --cycle <id>
-ft reject "motivo objetivo" --audit-origin --auto --cycle <id>
+ft reject "motivo objetivo" --auto --cycle <id>
 ft fix "instrução" --cycle <id>
-ft fix "instrução" --audit-origin --cycle <id>  # fix + somente review de origem
 ft retry --cycle <id>
 ft abort --cycle <id>
 ft close --cycle <id>
@@ -174,6 +173,12 @@ Somente `ft project-close`, com checkout limpo e nenhum ciclo aberto, registra
 
 `--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
 `--bypass-human-gates` delega essas decisões ao LLM.
+
+Todo `ft fix` dirigido renova obrigatoriamente o review que encontrou o defeito.
+Quando a correção nasce em human gate, `ft fix`/`ft reject` executam
+`fix → review focal` e retornam ao mesmo gate, sem reabrir etapas intermediárias
+já aprovadas. A flag antiga `--audit-origin` permanece aceita apenas para
+compatibilidade.
 
 O template `mvp-builder` classifica aprendizados de processo como `local`,
 `global_candidate` ou `rejected`. Antes do close, o mantenedor decide candidatos

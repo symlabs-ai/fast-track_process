@@ -171,10 +171,12 @@ class EngineState:
     pending_approval: str | None = None  # node_id aguardando approve/reject
     last_approval_message: str | None = None  # mensagem do ultimo ft approve (consumida pelo proximo LLM)
     pending_fix: dict | None = None  # {goto, feedback, origin} quando on_fail aguarda ft fix
-    # Rota temporária de uma correção dirigida. Quando ``ft fix
-    # --audit-origin`` é usado, o fix volta diretamente ao review que produziu
-    # o finding, sem reexecutar reviews ou gates intermediários já aprovados.
-    active_fix_return: dict | None = None  # {fix_node: node_id, review_node: node_id}
+    # Rota temporária de uma correção dirigida. O fix volta diretamente ao
+    # review que produziu o finding e, quando nasceu em human gate, retorna ao
+    # mesmo gate depois da auditoria focal. Nodes intermediários já aprovados
+    # não são reexecutados.
+    active_fix_return: dict | None = None
+    # {fix_node: node_id, review_node: node_id, gate_node?: node_id}
     exploration_log: list[str] = field(default_factory=list)  # requests feitos em modo exploração
     # Snapshot compacto por episódio nomeado; histórico detalhado vive no trace.
     llm_episodes: dict[str, dict[str, Any]] = field(default_factory=dict)

@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from ft.cli import main as cli_main
-from ft.cli.fix_command import single_fix_target_path, validate_fix_capture
+from ft.cli.fix_command import execute_fix, single_fix_target_path, validate_fix_capture
 from ft.engine.delegate import DelegateResult
 from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner, ValidationResult
@@ -1005,6 +1005,77 @@ class TestRetry:
 
 
 class TestFix:
+    def test_fix_at_human_gate_requires_focal_review_without_opt_in_flag(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: focal_gate_fix
+version: "1.0.0"
+title: Focal gate fix
+nodes:
+  - id: foundation
+    type: build
+    title: Foundation
+    executor: codex
+    next: fix
+  - id: fix
+    type: build
+    title: Fix
+    executor: codex
+    next: evidence.review
+  - id: evidence.review
+    type: review
+    title: Evidence review
+    executor: codex
+    next: visual.gate
+  - id: visual.gate
+    type: human_gate
+    title: Visual gate
+    executor: python
+    reject_next: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.completed_nodes = ["foundation", "fix", "evidence.review"]
+        state.current_node = "visual.gate"
+        state.node_status = "awaiting_approval"
+        state.pending_approval = "visual.gate"
+        runner.state_mgr.save()
+        args = Namespace(
+            instruction="Corrigir a divergência visual",
+            auto=False,
+        )
+
+        with patch.object(runner, "run") as run:
+            execute_fix(args, runner)
+
+        fixing = runner.state_mgr.load()
+        assert fixing.current_node == "fix"
+        assert fixing.completed_nodes == ["foundation"]
+        assert fixing.active_fix_return == {
+            "fix_node": "fix",
+            "review_node": "evidence.review",
+            "gate_node": "visual.gate",
+        }
+        run.assert_called_once_with(mode="step")
+
     def test_single_fix_target_path_detects_unique_project_file(self, tmp_path):
         target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"
         target.parent.mkdir(parents=True)
@@ -1046,7 +1117,7 @@ class TestFix:
                 self.project_root = tmp_path
                 self.graph = SimpleNamespace(nodes={})
 
-            def apply_fix(self, instruction):
+            def apply_fix(self, instruction, *, audit_origin=True):
                 return False
 
             def _resolve_llm_engine(self, loaded_state=None, node=None):
@@ -1183,7 +1254,7 @@ class TestFix:
                 self.advanced = []
                 self.validation_seen = None
 
-            def apply_fix(self, instruction):
+            def apply_fix(self, instruction, *, audit_origin=True):
                 return False
 
             def _resolve_llm_engine(self, loaded_state=None, node=None):

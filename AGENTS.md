@@ -258,14 +258,18 @@ motivo objetivo porque o texto vira contexto do retry.
 |---|---|
 | node bloqueado, repetir igual | `ft retry --cycle <id>` |
 | review em `pending_fix`, mas a causa externa mudou | `ft retry --cycle <id>` repete somente o review e descarta o encaminhamento ao fix |
-| correção dirigida | `ft fix "o que corrigir" --cycle <id>` |
-| correção focal sem reabrir gates aprovados | `ft fix "o que corrigir" --audit-origin --cycle <id>` executa o fix e repete somente o review que encontrou o defeito |
-| stakeholder rejeitou evidência em human gate | `ft reject "motivo" --audit-origin --auto --cycle <id>` executa `reject_next` e renova somente o review que gerou a evidência |
+| correção dirigida | `ft fix "o que corrigir" --cycle <id>` executa o fix e repete obrigatoriamente somente o review que encontrou o defeito |
+| stakeholder rejeitou evidência em human gate | `ft reject "motivo" --auto --cycle <id>` executa `reject_next`, renova o review focal e retorna ao mesmo gate |
 | descartar sem merge | `ft abort --cycle <id>` |
 | cancelar com justificativa | `ft cancel "motivo" --cycle <id>` |
 
 Leia `ft status --cycle <id>` antes de retentar. Smart retry detecta erros
 idênticos e bloqueia cedo.
+
+Revisão de fix não é opcional. A engine invalida apenas os receipts do fix e
+do review afetado, preserva os demais nodes aprovados e impede que o human gate
+reapareça antes da nova auditoria. A flag histórica `--audit-origin` ainda é
+aceita por compatibilidade, mas esse comportamento já é o padrão obrigatório.
 
 ## 6. Encerrar o ciclo
 

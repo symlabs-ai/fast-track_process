@@ -84,6 +84,59 @@ def file_exists(path: str, project_root: str = ".") -> tuple[bool, str]:
     return False, f"file_exists FAIL: {path} nao encontrado"
 
 
+def test_identity_ready(
+    path: str = "docs/test-identity.json",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate the sanitized receipt for a dedicated authenticated E2E user."""
+
+    full = Path(project_root) / path
+    try:
+        payload = yaml.safe_load(full.read_text(encoding="utf-8", errors="strict"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        return False, f"test_identity_ready FAIL: recibo ausente ou inválido ({exc})"
+    if not isinstance(payload, dict):
+        return False, "test_identity_ready FAIL: recibo deve ser JSON/YAML estruturado"
+
+    identity_ref = str(payload.get("identity_ref") or "").strip().casefold()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{2,127}", identity_ref):
+        return False, "test_identity_ready FAIL: identity_ref opaco inválido"
+    if str(payload.get("environment") or "").strip().casefold() not in {
+        "local_test",
+        "isolated_test",
+        "staging",
+    }:
+        return False, "test_identity_ready FAIL: ambiente de teste inválido"
+    if str(payload.get("seed_status") or "").strip().casefold() != "ready":
+        return False, "test_identity_ready FAIL: seed não está ready"
+    for field in ("seeded", "idempotent", "resettable", "journey_ready"):
+        if payload.get(field) is not True:
+            return False, f"test_identity_ready FAIL: {field} deve ser true"
+    if str(payload.get("credentials_source") or "").strip().casefold() not in {
+        "secret_store",
+        "protected_file",
+        "device_secure_store",
+    }:
+        return False, "test_identity_ready FAIL: origem de credenciais desprotegida"
+    if payload.get("secret_values_recorded") is not False:
+        return False, "test_identity_ready FAIL: recibo pode conter segredo"
+
+    forbidden_keys = {"email", "phone", "password", "access_token", "token", "secret"}
+
+    def contains_sensitive_key(value: object) -> bool:
+        if isinstance(value, dict):
+            if forbidden_keys & {str(key).casefold() for key in value}:
+                return True
+            return any(contains_sensitive_key(item) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_sensitive_key(item) for item in value)
+        return False
+
+    if contains_sensitive_key(payload):
+        return False, "test_identity_ready FAIL: recibo contém campo sensível"
+    return True, f"test_identity_ready: {identity_ref} ready em {payload['environment']}"
+
+
 def builder_batch_plan_valid(
     path: str,
     request_path: str,

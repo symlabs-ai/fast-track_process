@@ -59,6 +59,46 @@ _DATA_MARKERS = (
 _REAL_DATA_ORIGINS = {"real_system", "public_interface", "real_backend"}
 _PHYSICAL_LEVELS = {"physical_e2e", "device_e2e"}
 _VISUAL_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".mp4", ".xml"}
+_PERMISSION_CLAIM_GROUPS: dict[str, tuple[str, ...]] = {
+    "approximate_location": (
+        "localizacao aproximada",
+        "approximate location",
+        "access_coarse_location",
+    ),
+    "nearby_wifi": (
+        "dispositivos wifi proximos",
+        "dispositivos wi-fi proximos",
+        "nearby wifi",
+        "nearby wi-fi",
+        "nearby_wifi",
+    ),
+    "notifications": ("notificacoes", "notifications", "post_notifications"),
+    "background_location": (
+        "localizacao em segundo plano",
+        "background location",
+        "access_background_location",
+    ),
+    "camera": ("camera",),
+    "microphone": ("microfone", "microphone"),
+    "contacts": ("contatos", "contacts"),
+    "bluetooth": ("bluetooth",),
+    "photos_media": ("fotos e midia", "photos and media", "media"),
+    "storage": ("armazenamento", "storage"),
+}
+_COUNT_WORDS = {
+    "uma": 1,
+    "um": 1,
+    "duas": 2,
+    "dois": 2,
+    "tres": 3,
+    "quatro": 4,
+    "cinco": 5,
+    "seis": 6,
+    "sete": 7,
+    "oito": 8,
+    "nove": 9,
+    "dez": 10,
+}
 
 
 FOCAL_EVIDENCE_INSTRUCTIONS = """\
@@ -75,6 +115,16 @@ focal_evidence:
   evidence_level: physical_e2e | device_e2e | integration | unit
   data_origin: real_system | public_interface | real_backend | local_product
   mock_only: false
+  test_identity:
+    kind: dedicated_agent
+    identity_ref: referência opaca e estável do usuário do agente
+    environment: staging | isolated_test
+    seeded: true
+    idempotent: true
+    resettable: true
+    journey_ready: true
+    credentials_source: secret_store | protected_file | device_secure_store
+    evidence: path/repo-local/agent-test-identity.json
   journey:
     - etapa realmente executada
   visual_evidence:
@@ -105,7 +155,12 @@ arquivo; preserve também a saída sanitizada que mediu o artefato instalado.
 Nunca grave dado pessoal bruto: masque valores mantendo a comparabilidade.
 Token, senha ou credencial de sessão não podem aparecer em argumento de
 processo, log ou artefato de evidência; reutilize o estado autenticado seguro
-do dispositivo ou um mecanismo interno que não exteriorize o segredo.
+do dispositivo ou um mecanismo interno que não exteriorize o segredo. Toda
+jornada autenticada deve usar um usuário dedicado do agente, provisionado por
+seed idempotente e resetável antes do ensaio. O recibo sanitizado desse seed
+precisa provar que a identidade está pronta para percorrer o fluxo completo;
+conta pessoal do stakeholder e sessão deixada manualmente no aparelho não são
+pré-condições aceitáveis.
 """
 
 
@@ -209,6 +264,19 @@ def _requires_artifact_identity(finding_context: str) -> bool:
     )
 
 
+def _required_permission_count(finding_context: str) -> int | None:
+    context = _normalized(finding_context)
+    match = re.search(
+        r"(?<!\w)(\d+|uma|um|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez)"
+        r"\s+permis(?:sao|soes|sion|sions)(?!\w)",
+        context,
+    )
+    if not match:
+        return None
+    raw = match.group(1)
+    return int(raw) if raw.isdigit() else _COUNT_WORDS[raw]
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -221,6 +289,131 @@ def _list_of_strings(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _contains_sensitive_identity_key(value: object) -> bool:
+    forbidden = {"email", "phone", "password", "access_token", "token", "secret"}
+    if isinstance(value, dict):
+        if forbidden & {_normalized(key) for key in value}:
+            return True
+        return any(_contains_sensitive_identity_key(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_sensitive_identity_key(item) for item in value)
+    return False
+
+
+def _validate_test_identity(
+    record: dict[str, object],
+    root: Path,
+) -> FocalEvidenceValidation:
+    identity = record.get("test_identity")
+    if not isinstance(identity, dict):
+        return FocalEvidenceValidation(
+            False,
+            "jornada autenticada exige usuário dedicado do agente com seed comprovado",
+        )
+    if _normalized(identity.get("kind")) != "dedicated_agent":
+        return FocalEvidenceValidation(
+            False,
+            "test_identity deve declarar kind: dedicated_agent",
+        )
+
+    identity_ref = _normalized(identity.get("identity_ref"))
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{2,127}", identity_ref):
+        return FocalEvidenceValidation(
+            False,
+            "test_identity exige identity_ref opaco e estável",
+        )
+    if "@" in identity_ref or re.fullmatch(r"\+?[0-9]{10,15}", identity_ref):
+        return FocalEvidenceValidation(
+            False,
+            "test_identity não pode expor e-mail ou telefone em identity_ref",
+        )
+
+    environment = _normalized(identity.get("environment"))
+    if environment not in {"staging", "isolated_test", "local_test"}:
+        return FocalEvidenceValidation(
+            False,
+            "test_identity exige ambiente isolado de teste ou staging",
+        )
+    for field in ("seeded", "idempotent", "resettable", "journey_ready"):
+        if identity.get(field) is not True:
+            return FocalEvidenceValidation(
+                False,
+                f"test_identity deve declarar {field}: true",
+            )
+
+    credentials_source = _normalized(identity.get("credentials_source"))
+    if credentials_source not in {
+        "secret_store",
+        "protected_file",
+        "device_secure_store",
+    }:
+        return FocalEvidenceValidation(
+            False,
+            "credenciais do usuário do agente devem vir de armazenamento protegido",
+        )
+    receipt_path = _safe_existing_path(root, identity.get("evidence"))
+    if receipt_path is None:
+        return FocalEvidenceValidation(
+            False,
+            "test_identity exige recibo sanitizado repo-local do seed",
+        )
+    try:
+        receipt = yaml.safe_load(
+            receipt_path.read_text(encoding="utf-8", errors="strict")
+        )
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return FocalEvidenceValidation(
+            False,
+            "recibo do usuário dedicado do agente é inválido ou ilegível",
+        )
+    if not isinstance(receipt, dict):
+        return FocalEvidenceValidation(
+            False,
+            "recibo do usuário dedicado do agente deve ser JSON/YAML estruturado",
+        )
+    if _normalized(receipt.get("identity_ref")) != identity_ref:
+        return FocalEvidenceValidation(
+            False,
+            "identity_ref do recibo não coincide com a aprovação focal",
+        )
+    if _normalized(receipt.get("environment")) != environment:
+        return FocalEvidenceValidation(
+            False,
+            "ambiente do recibo do seed não coincide com a aprovação focal",
+        )
+    if _normalized(receipt.get("seed_status")) != "ready":
+        return FocalEvidenceValidation(
+            False,
+            "recibo do usuário do agente não está ready",
+        )
+    for field in ("seeded", "idempotent", "resettable", "journey_ready"):
+        if receipt.get(field) is not True:
+            return FocalEvidenceValidation(
+                False,
+                f"recibo do usuário do agente não comprova {field}: true",
+            )
+    if _normalized(receipt.get("credentials_source")) not in {
+        "secret_store",
+        "protected_file",
+        "device_secure_store",
+    }:
+        return FocalEvidenceValidation(
+            False,
+            "recibo do usuário do agente não comprova armazenamento protegido",
+        )
+    if receipt.get("secret_values_recorded") is not False:
+        return FocalEvidenceValidation(
+            False,
+            "recibo do usuário do agente deve declarar secret_values_recorded: false",
+        )
+    if _contains_sensitive_identity_key(receipt):
+        return FocalEvidenceValidation(
+            False,
+            "recibo do usuário do agente contém campo sensível",
+        )
+    return FocalEvidenceValidation(True)
 
 
 def validate_focal_approval(
@@ -346,6 +539,40 @@ def validate_focal_approval(
     ]
     anchor_claims: dict[str, set[int]] = {}
     for canonical, aliases in required_anchors.items():
+        if canonical == "permissões":
+            required_count = _required_permission_count(finding_context)
+            specific_groups: list[tuple[str, set[int]]] = []
+            for group, markers in _PERMISSION_CLAIM_GROUPS.items():
+                indexes = {
+                    index
+                    for index, requirement in enumerate(claim_requirements)
+                    if any(marker in requirement for marker in markers)
+                }
+                if indexes:
+                    specific_groups.append((group, indexes))
+            complete_set = any(
+                marker in _normalized(finding_context)
+                for marker in (
+                    "conjunto completo",
+                    "todas as permissoes",
+                    "all permissions",
+                    "complete permission set",
+                )
+            )
+            if required_count and required_count > 1:
+                if len(specific_groups) < required_count:
+                    return FocalEvidenceValidation(
+                        False,
+                        "matriz focal cobre apenas "
+                        f"{len(specific_groups)}/{required_count} permissões específicas",
+                    )
+                for group, indexes in specific_groups[:required_count]:
+                    anchor_claims[f"permissões/{group}"] = indexes
+                continue
+            if complete_set and len(specific_groups) >= 2:
+                for group, indexes in specific_groups:
+                    anchor_claims[f"permissões/{group}"] = indexes
+                continue
         matching_claims = {
             index
             for index, requirement in enumerate(claim_requirements)
@@ -436,5 +663,9 @@ def validate_focal_approval(
             False,
             "matriz focal não cobre tela(s): " + ", ".join(missing_screens),
         )
+
+    identity_validation = _validate_test_identity(record, root)
+    if not identity_validation.passed:
+        return identity_validation
 
     return FocalEvidenceValidation(True)

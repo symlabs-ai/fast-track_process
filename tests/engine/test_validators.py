@@ -23,6 +23,7 @@ from ft.engine.validators.artifacts import (
     relative_dates_only,
     sections_unchanged,
     task_list_references_backlog,
+    test_identity_ready as validate_test_identity_ready,
     ui_criteria_ids,
     ui_criteria_coverage,
 )
@@ -51,6 +52,59 @@ class TestFileExists:
         (d / "PRD.md").write_text("content")
         passed, _ = file_exists("docs/PRD.md", str(tmp_path))
         assert passed
+
+
+class TestIdentityReady:
+    def test_accepts_sanitized_ready_agent_identity(self, tmp_path):
+        receipt = tmp_path / "docs" / "test-identity.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(
+            '{"identity_ref":"agent_e2e_01","environment":"staging",'
+            '"seed_status":"ready","seeded":true,"idempotent":true,'
+            '"resettable":true,"journey_ready":true,'
+            '"credentials_source":"secret_store",'
+            '"secret_values_recorded":false}',
+            encoding="utf-8",
+        )
+
+        passed, detail = validate_test_identity_ready(project_root=str(tmp_path))
+
+        assert passed, detail
+
+    def test_rejects_receipt_with_sensitive_field(self, tmp_path):
+        receipt = tmp_path / "docs" / "test-identity.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(
+            '{"identity_ref":"agent_e2e_01","environment":"staging",'
+            '"seed_status":"ready","seeded":true,"idempotent":true,'
+            '"resettable":true,"journey_ready":true,'
+            '"credentials_source":"secret_store",'
+            '"secret_values_recorded":false,"password":"forbidden"}',
+            encoding="utf-8",
+        )
+
+        passed, detail = validate_test_identity_ready(project_root=str(tmp_path))
+
+        assert not passed
+        assert "sensível" in detail
+
+    def test_rejects_receipt_with_nested_sensitive_field(self, tmp_path):
+        receipt = tmp_path / "docs" / "test-identity.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(
+            '{"identity_ref":"agent_e2e_01","environment":"staging",'
+            '"seed_status":"ready","seeded":true,"idempotent":true,'
+            '"resettable":true,"journey_ready":true,'
+            '"credentials_source":"secret_store",'
+            '"secret_values_recorded":false,'
+            '"details":{"access_token":"forbidden"}}',
+            encoding="utf-8",
+        )
+
+        passed, detail = validate_test_identity_ready(project_root=str(tmp_path))
+
+        assert not passed
+        assert "sensível" in detail
 
 
 class TestMinLines:

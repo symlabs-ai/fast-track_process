@@ -535,6 +535,7 @@ class ValidationResult:
 # Mapeamento de validadores disponiveis
 VALIDATOR_REGISTRY: dict[str, Any] = {
     "file_exists": val.file_exists,
+    "test_identity_ready": val.test_identity_ready,
     "builder_batch_plan_valid": val.builder_batch_plan_valid,
     "min_lines": val.min_lines,
     "has_sections": val.has_sections,

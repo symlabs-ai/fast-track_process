@@ -313,6 +313,12 @@ sem exigir evidência fictícia de PASS.
 Credenciais, tokens e senhas não podem ser transportados em argumentos de
 processo nem persistidos nos logs/artefatos da prova; a sessão real deve ser
 reutilizada dentro do limite seguro do dispositivo.
+Jornadas autenticadas exigem uma identidade exclusiva do agente, provisionada
+por seed idempotente e resetável. O seed cria apenas a conta e o estado mínimo
+necessário, lê credenciais de armazenamento protegido e emite um recibo
+sanitizado repo-local com referência opaca e `ready`; não pode depender da conta
+ou de uma ação manual do stakeholder. A aprovação focal valida esse recibo no
+bloco `test_identity` antes de aceitar a prova física.
 Findings que identificam APK/hash exigem ainda um recibo de identidade: o
 SHA-256 calculado do candidato repo-local precisa ser igual ao declarado e ao
 medido no dispositivo, cuja saída sanitizada também deve existir no repo.

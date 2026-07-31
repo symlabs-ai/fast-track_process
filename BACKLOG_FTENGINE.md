@@ -202,3 +202,18 @@ métricas de tokens nem a descoberta de logs LLM.
 **Pendente:** incorporar a linha do tempo sanitizada ao relatório arquivado para
 que o futuro `ft analyse-cycle` consiga reconstruir duração por ação depois que
 o runtime externo do ciclo for removido.
+
+### 4. Revalidar receipt focal determinístico sem nova chamada LLM
+
+**Problema:** quando a saída de uma auditoria já contém um receipt completo e os
+artefatos continuam idênticos, uma correção no próprio validator ainda exige
+`ft retry`, refazendo uma chamada LLM longa apenas para emitir novamente a mesma
+matriz. Isso ocorreu ao reconhecer o conjunto completo de permissões da S44.
+
+**Solução:** adicionar uma revalidação local que reaplique os validators ao
+último output imutável quando hashes, finding, identidade de teste e evidências
+repo-locais forem os mesmos. Qualquer mudança nesses inputs deve recusar o replay
+e manter o retry normal; a operação nunca pode transformar um `REJECTED` do
+reviewer em `APPROVED`.
+
+**Status:** proposto. **Prioridade:** alta.

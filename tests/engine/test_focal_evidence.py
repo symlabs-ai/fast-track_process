@@ -18,6 +18,19 @@ def _review_with_verdict_at_end(block: str) -> str:
     return f"```yaml\n{block}\n```\n\nVERDICT: APPROVED\n"
 
 
+def _agent_identity_receipt(root: Path) -> None:
+    receipt = root / "docs" / "agent-test-identity.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(
+        '{"identity_ref":"agent_e2e_01","environment":"staging",'
+        '"seed_status":"ready","seeded":true,"idempotent":true,'
+        '"resettable":true,"journey_ready":true,'
+        '"credentials_source":"secret_store",'
+        '"secret_values_recorded":false}\n',
+        encoding="utf-8",
+    )
+
+
 def test_ui_data_approval_rejects_mock_only_component_evidence(tmp_path: Path) -> None:
     evidence = tmp_path / "docs" / "s44-component.png"
     evidence.parent.mkdir(parents=True)
@@ -116,6 +129,7 @@ def test_ui_data_approval_accepts_complete_real_physical_journey(tmp_path: Path)
     screenshot.parent.mkdir(parents=True)
     screenshot.write_bytes(b"physical screenshot")
     dump.write_text("<hierarchy />", encoding="utf-8")
+    _agent_identity_receipt(tmp_path)
 
     result = validate_focal_approval(
         review_output=_review(
@@ -125,6 +139,16 @@ def test_ui_data_approval_accepts_complete_real_physical_journey(tmp_path: Path)
   evidence_level: physical_e2e
   data_origin: real_system
   mock_only: false
+  test_identity:
+    kind: dedicated_agent
+    identity_ref: agent_e2e_01
+    environment: staging
+    seeded: true
+    idempotent: true
+    resettable: true
+    journey_ready: true
+    credentials_source: secret_store
+    evidence: docs/agent-test-identity.json
   journey:
     - load the authenticated account through the public FastAPI contract
     - navigate through the installed app to S44
@@ -147,6 +171,183 @@ def test_ui_data_approval_accepts_complete_real_physical_journey(tmp_path: Path)
     )
 
     assert result.passed, result.reason
+
+
+def test_authenticated_ui_data_approval_requires_seeded_agent_identity(
+    tmp_path: Path,
+) -> None:
+    screenshot = tmp_path / "docs" / "s44-device.png"
+    screenshot.parent.mkdir(parents=True)
+    screenshot.write_bytes(b"physical screenshot")
+
+    result = validate_focal_approval(
+        review_output=_review(
+            """focal_evidence:
+  coverage_complete: true
+  finding_kind: ui_data
+  evidence_level: physical_e2e
+  data_origin: real_system
+  mock_only: false
+  journey:
+    - authenticate a real account through the public API
+    - navigate through the installed app to S44
+    - compare phone and e-mail with the rendered values
+  visual_evidence: [docs/s44-device.png]
+  claims:
+    - requirement: telefone cadastrado aparece na S44
+      expected: telefone mascarado visível
+      observed: telefone mascarado visível
+      status: PASS
+      evidence: [docs/s44-device.png]
+    - requirement: e-mail retornado pelo FastAPI aparece na S44
+      expected: e-mail mascarado visível
+      observed: e-mail mascarado visível
+      status: PASS
+      evidence: [docs/s44-device.png]"""
+        ),
+        finding_context=UI_DATA_FINDING,
+        project_root=tmp_path,
+    )
+
+    assert not result.passed
+    assert "usuário dedicado do agente" in result.reason
+
+
+def test_authenticated_ui_data_approval_rejects_sensitive_seed_receipt(
+    tmp_path: Path,
+) -> None:
+    screenshot = tmp_path / "docs" / "s44-device.png"
+    screenshot.parent.mkdir(parents=True)
+    screenshot.write_bytes(b"physical screenshot")
+    receipt = tmp_path / "docs" / "agent-test-identity.json"
+    receipt.write_text(
+        '{"identity_ref":"agent_e2e_01","environment":"staging",'
+        '"seed_status":"ready","seeded":true,"idempotent":true,'
+        '"resettable":true,"journey_ready":true,'
+        '"credentials_source":"secret_store","secret_values_recorded":false,'
+        '"bootstrap":{"password":"forbidden"}}',
+        encoding="utf-8",
+    )
+
+    result = validate_focal_approval(
+        review_output=_review(
+            """focal_evidence:
+  coverage_complete: true
+  finding_kind: ui_data
+  evidence_level: physical_e2e
+  data_origin: real_system
+  mock_only: false
+  test_identity:
+    kind: dedicated_agent
+    identity_ref: agent_e2e_01
+    environment: staging
+    seeded: true
+    idempotent: true
+    resettable: true
+    journey_ready: true
+    credentials_source: secret_store
+    evidence: docs/agent-test-identity.json
+  journey: [seed agent account, authenticate through public API, render S44]
+  visual_evidence: [docs/s44-device.png]
+  claims:
+    - requirement: telefone cadastrado aparece na S44
+      expected: telefone mascarado visível
+      observed: telefone mascarado visível
+      status: PASS
+      evidence: [docs/s44-device.png]
+    - requirement: e-mail retornado pelo FastAPI aparece na S44
+      expected: e-mail mascarado visível
+      observed: e-mail mascarado visível
+      status: PASS
+      evidence: [docs/s44-device.png]"""
+        ),
+        finding_context=UI_DATA_FINDING,
+        project_root=tmp_path,
+    )
+
+    assert not result.passed
+    assert "campo sensível" in result.reason
+
+
+def test_permission_group_accepts_four_distinct_specific_claims(tmp_path: Path) -> None:
+    screenshot = tmp_path / "docs" / "s44-device.png"
+    permission_evidence = tmp_path / "docs" / "permissions.txt"
+    screenshot.parent.mkdir(parents=True)
+    screenshot.write_bytes(b"physical screenshot")
+    permission_evidence.write_text("four device permission states checked\n")
+    _agent_identity_receipt(tmp_path)
+
+    review_output = _review(
+        """focal_evidence:
+  coverage_complete: true
+  finding_kind: ui_data
+  evidence_level: physical_e2e
+  data_origin: real_backend
+  mock_only: false
+  test_identity:
+    kind: dedicated_agent
+    identity_ref: agent_e2e_01
+    environment: staging
+    seeded: true
+    idempotent: true
+    resettable: true
+    journey_ready: true
+    credentials_source: secret_store
+    evidence: docs/agent-test-identity.json
+  journey: [seed agent account, authenticate through public API, render S44]
+  visual_evidence: [docs/s44-device.png]
+  claims:
+    - requirement: telefone real em S44
+      expected: visível
+      observed: visível
+      status: PASS
+      evidence: [docs/s44-device.png]
+    - requirement: e-mail real em S44
+      expected: visível
+      observed: visível
+      status: PASS
+      evidence: [docs/s44-device.png]
+    - requirement: localização aproximada reflete o gateway Android
+      expected: estado correspondente
+      observed: estado correspondente
+      status: PASS
+      evidence: [docs/permissions.txt]
+    - requirement: dispositivos Wi-Fi próximos refletem o gateway Android
+      expected: estado correspondente
+      observed: estado correspondente
+      status: PASS
+      evidence: [docs/permissions.txt]
+    - requirement: notificações refletem o gateway Android
+      expected: estado correspondente
+      observed: estado correspondente
+      status: PASS
+      evidence: [docs/permissions.txt]
+    - requirement: localização em segundo plano reflete o gateway Android
+      expected: estado correspondente
+      observed: estado correspondente
+      status: PASS
+      evidence: [docs/permissions.txt]"""
+    )
+    result = validate_focal_approval(
+        review_output=review_output,
+        finding_context=(
+            "Na tela S44, telefone, e-mail e as quatro permissões devem refletir "
+            "os dados reais e o gateway Android."
+        ),
+        project_root=tmp_path,
+    )
+
+    assert result.passed, result.reason
+
+    complete_set_result = validate_focal_approval(
+        review_output=review_output,
+        finding_context=(
+            "Na tela S44, telefone, e-mail e o conjunto completo de permissões "
+            "devem refletir os dados reais e o gateway Android."
+        ),
+        project_root=tmp_path,
+    )
+    assert complete_set_result.passed, complete_set_result.reason
 
 
 def test_rejected_review_never_needs_approval_evidence(tmp_path: Path) -> None:
@@ -289,6 +490,7 @@ def test_apk_finding_accepts_matching_local_and_observed_hash(tmp_path: Path) ->
     screenshot.write_bytes(b"physical screenshot")
     current_hash = hashlib.sha256(apk.read_bytes()).hexdigest()
     hash_evidence.write_text(f"installed_sha256={current_hash}\n", encoding="utf-8")
+    _agent_identity_receipt(tmp_path)
 
     result = validate_focal_approval(
         review_output=_review(
@@ -298,6 +500,16 @@ def test_apk_finding_accepts_matching_local_and_observed_hash(tmp_path: Path) ->
   evidence_level: physical_e2e
   data_origin: real_system
   mock_only: false
+  test_identity:
+    kind: dedicated_agent
+    identity_ref: agent_e2e_01
+    environment: staging
+    seeded: true
+    idempotent: true
+    resettable: true
+    journey_ready: true
+    credentials_source: secret_store
+    evidence: docs/agent-test-identity.json
   journey: [load real account, install current APK, navigate to S44]
   visual_evidence: [docs/s44.png]
   artifact:

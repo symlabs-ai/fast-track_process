@@ -293,6 +293,13 @@ resulta em `EVIDENCE_FIDELITY_REJECTED` e retorna somente ao fix focal.
 Token, senha e credencial de sessão nunca podem ser passados em argumento de
 processo nem registrados em log/evidência; a prova deve reutilizar o estado
 autenticado seguro do dispositivo sem exteriorizar o segredo.
+Toda jornada autenticada deve começar com um usuário dedicado do agente. O
+projeto fornece um seed idempotente, isolado e resetável que cria somente essa
+identidade e o estado mínimo do percurso; credenciais vêm de secret store ou
+arquivo protegido, nunca do Git. O preflight produz recibo sanitizado com uma
+referência opaca, ambiente e estado `ready`, sem e-mail, telefone, token ou
+senha. Ausência desse usuário é falha do setup do teste — nunca motivo para usar
+conta pessoal do stakeholder, aceitar mock ou aprovar parcialmente o fluxo.
 Quando o finding citar APK ou hash, a aprovação também exige igualdade entre o
 SHA-256 do artefato local corrente, o hash declarado e o hash medido no
 dispositivo, com saída sanitizada preservada no repositório.

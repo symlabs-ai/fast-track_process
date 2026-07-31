@@ -290,7 +290,10 @@ nodes:
       deve ser provado pela jornada fonte pública→persistência→leitura→UI e por
       comparação campo a campo. Mock, fixture ou teste isolado de componente
       pode apoiar diagnóstico, mas nunca fechar esse requirement. Preserve
-      evidência física/visual quando houver UI executável.
+      evidência física/visual quando houver UI executável. Se a jornada for
+      autenticada, provisione antes um usuário exclusivo do agente por seed
+      idempotente e resetável, com credenciais protegidas, e preserve somente o
+      recibo sanitizado em docs/test-identity.json.
     validators:
       - file_exists: docs/mvp-batch-review.md
     on_fail:
@@ -353,7 +356,9 @@ nodes:
       tela executável; prova mock-only é insuficiente. Siga o contrato global
       `focal_evidence` injetado pela engine. Se houver APK/hash no finding,
       comprove que candidato local e artefato observado no dispositivo têm o
-      mesmo SHA-256. Não altere código.
+      mesmo SHA-256. Jornada autenticada deve usar o usuário exclusivo do agente
+      e citar o recibo sanitizado de seu seed; não dependa da conta ou de uma
+      ação manual do stakeholder. Não altere código.
     validators:
       - file_exists: docs/mvp-batch-fix-review.md
       - command_succeeds: "git diff --check"
@@ -1389,20 +1394,26 @@ nodes:
       - project/tests/e2e/
       - docs/screenshots/e2e/
       - docs/e2e-report.md
+      - docs/test-identity.json
     max_turns: 60
     prompt: |
       Entregue toda a etapa E2E no mesmo turn:
       1. Configure Playwright/pytest para o servidor local.
-      2. Implemente fluxos P0 reais de criação, listagem, edição e exclusão.
-      3. Execute a suíte e corrija falhas de produto ou teste dentro do escopo.
-      4. Capture screenshots de cada fluxo em docs/screenshots/e2e/.
-      5. Gere docs/e2e-report.md com resultado por cenário e paths das evidências.
+      2. Provisione um usuário exclusivo do agente por seed idempotente,
+         isolado e resetável. Leia credenciais de armazenamento protegido e
+         gere docs/test-identity.json sanitizado, sem PII ou segredo.
+      3. Implemente fluxos P0 reais de criação, listagem, edição e exclusão.
+      4. Execute a suíte e corrija falhas de produto ou teste dentro do escopo.
+      5. Capture screenshots de cada fluxo em docs/screenshots/e2e/.
+      6. Gere docs/e2e-report.md com resultado por cenário e paths das evidências.
       Não use placeholders nem declare cenário não executado como PASS.
     validators:
       - file_exists: project/tests/e2e/
       - file_exists: project/tests/e2e/test_navigation.py
       - command_succeeds: "python -c \"from pathlib import Path; text=Path('project/tests/e2e/test_navigation.py').read_text(encoding='utf-8', errors='ignore').lower(); assert 'placeholder' not in text and any(x in text for x in ['fill(', 'type(']) and any(x in text for x in ['create', 'criar', 'cadastrar', 'registrar']), 'e2e sem fluxo de criacao via ui'\""
       - file_exists: docs/e2e-report.md
+      - test_identity_ready:
+          path: docs/test-identity.json
       - command_succeeds: "cd project && python -m pytest tests/e2e -q"
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
       - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
@@ -1416,6 +1427,8 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/e2e-report.md
+      - test_identity_ready:
+          path: docs/test-identity.json
       - file_exists: docs/screenshots/e2e/
       - command_succeeds: "cd project && python -m pytest tests/e2e -q"
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""

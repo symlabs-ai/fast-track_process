@@ -52,6 +52,10 @@ class Node:
     preserve_outputs_on_reentry: bool = False
     # Nó de destino quando human_gate é rejeitado (override do predecessor padrão)
     reject_next: str | None = None
+    # Review focal autoritativo associado a este node de correção. Quando um
+    # human gate rejeita e volta para o node, a engine percorre somente a cadeia
+    # linear entre ``next`` e este review, então retorna ao mesmo gate.
+    fix_review: str | None = None
     # Em human_gate com --bypass-human-gates: em vez de pular o gate, delega ao
     # LLM responder/decidir com este prompt, com atribuição explícita na saída.
     bypass_prompt: str | None = None
@@ -193,6 +197,32 @@ class ProcessGraph:
                 raise ValueError(
                     f"Node '{node.id}' reject_next aponta para '{node.reject_next}' que nao existe"
                 )
+            if node.fix_review:
+                if node.fix_review not in ids:
+                    raise ValueError(
+                        f"Node '{node.id}' fix_review aponta para "
+                        f"'{node.fix_review}' que nao existe"
+                    )
+                fix_review = self.nodes[node.fix_review]
+                if fix_review.type != "review":
+                    raise ValueError(
+                        f"Node '{node.id}' fix_review aponta para "
+                        f"'{node.fix_review}', que nao e review"
+                    )
+                cursor = node.next
+                visited: set[str] = set()
+                while cursor and cursor not in visited and cursor != node.fix_review:
+                    visited.add(cursor)
+                    candidate = self.nodes[cursor]
+                    if candidate.type == "decision" or candidate.branches:
+                        cursor = None
+                        break
+                    cursor = candidate.next
+                if cursor != node.fix_review:
+                    raise ValueError(
+                        f"Node '{node.id}' fix_review '{node.fix_review}' "
+                        "nao e alcancavel por uma cadeia linear de next"
+                    )
             on_fail_target = (node.on_fail or {}).get("goto")
             if on_fail_target and on_fail_target not in ids:
                 raise ValueError(
@@ -351,6 +381,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             ),
             description=node_raw.get("description"),
             reject_next=node_raw.get("reject_next"),
+            fix_review=node_raw.get("fix_review"),
             bypass_prompt=node_raw.get("bypass_prompt"),
             bypass_reject_when=node_raw.get("bypass_reject_when"),
             on_fail=node_raw.get("on_fail"),

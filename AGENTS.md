@@ -270,6 +270,14 @@ Revisão de fix não é opcional. A engine invalida apenas os receipts do fix e
 do review afetado, preserva os demais nodes aprovados e impede que o human gate
 reapareça antes da nova auditoria. A flag histórica `--audit-origin` ainda é
 aceita por compatibilidade, mas esse comportamento já é o padrão obrigatório.
+O pedido de correção e o finding original são injetados no review focal; em
+mudança de UI, a revisão deve comprovar o resultado visual/físico solicitado,
+não apenas presença de código ou testes verdes.
+Quando o node de correção declara `fix_review`, a engine reabre somente a cadeia
+linear `next → fix_review` e volta ao mesmo human gate. Em forks históricos sem
+essa declaração, o review de origem é reutilizado com o prompt amplo suspenso:
+a delegação audita somente o finding e seu veredito focal, sem refazer o fluxo
+completo. Se não existir nenhuma rota segura de revisão, o fix é recusado.
 
 ## 6. Encerrar o ciclo
 

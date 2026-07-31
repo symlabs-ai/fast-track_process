@@ -290,7 +290,13 @@ auditoria focal, retornam ao mesmo human gate sem reexecutar os nodes
 intermediários já aprovados. Com `--auto`, o ciclo executa
 `fix → review focal` e para novamente para a decisão humana. A flag histórica
 `--audit-origin` continua aceita por compatibilidade, mas não desativa nem
-altera essa política.
+altera essa política. O review recebe obrigatoriamente o pedido de correção e o
+finding de origem; para UI, ele deve confirmar o resultado visual/físico, não
+apenas a existência de código ou testes. Um node de correção pode declarar
+`fix_review: <review-id>`; a engine executa somente sua cadeia linear de `next`
+até esse review e retorna ao mesmo gate. Sem a declaração, ciclos históricos
+reutilizam o review de origem em modo focal, com o prompt amplo suspenso. A
+engine recusa um fix avulso quando não consegue garantir uma dessas rotas.
 
 # Encerramento
 ft process-candidates --cycle <id>

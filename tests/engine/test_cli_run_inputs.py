@@ -1069,12 +1069,51 @@ nodes:
         fixing = runner.state_mgr.load()
         assert fixing.current_node == "fix"
         assert fixing.completed_nodes == ["foundation"]
-        assert fixing.active_fix_return == {
-            "fix_node": "fix",
-            "review_node": "evidence.review",
-            "gate_node": "visual.gate",
-        }
+        assert fixing.active_fix_return["fix_node"] == "fix"
+        assert fixing.active_fix_return["review_node"] == "evidence.review"
+        assert fixing.active_fix_return["gate_node"] == "visual.gate"
+        assert (
+            "Corrigir a divergência visual"
+            in fixing.active_fix_return["review_context"]
+        )
         run.assert_called_once_with(mode="step")
+
+    def test_human_gate_fix_never_falls_back_to_unreviewed_delegate(
+        self,
+        tmp_path,
+        capsys,
+    ):
+        gate = SimpleNamespace(reject_next="fix")
+        state = EngineState(
+            current_node="acceptance",
+            node_status="awaiting_approval",
+            pending_approval="acceptance",
+        )
+
+        class StateMgr:
+            path = tmp_path / "engine_state.yml"
+
+            def load(self):
+                return state
+
+        class Graph:
+            nodes = {"acceptance": gate}
+
+            def get_node(self, _node_id):
+                return gate
+
+        runner = SimpleNamespace(
+            state_mgr=StateMgr(),
+            graph=Graph(),
+            reject_with_origin_audit=lambda _instruction: False,
+        )
+        args = Namespace(instruction="Corrigir sem review", auto=False)
+
+        with patch("ft.engine.delegate.delegate_to_llm") as delegate:
+            execute_fix(args, runner)
+
+        delegate.assert_not_called()
+        assert "nenhum fix avulso foi executado" in capsys.readouterr().out
 
     def test_single_fix_target_path_detects_unique_project_file(self, tmp_path):
         target = tmp_path / "project" / "tests" / "e2e" / "test_navigation.py"

@@ -297,6 +297,7 @@ nodes:
     type: build
     title: "Corrigir Apenas Achados do Batch"
     description: "Loop focal: corrigir somente os achados acionáveis do review e seus testes diretamente relacionados."
+    fix_review: ft.batch.06b.fix_review
     sprint: sprint-00-batch
     executor: codex
     no_pre_seed: true

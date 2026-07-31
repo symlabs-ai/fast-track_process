@@ -176,7 +176,8 @@ class EngineState:
     # mesmo gate depois da auditoria focal. Nodes intermediários já aprovados
     # não são reexecutados.
     active_fix_return: dict | None = None
-    # {fix_node: node_id, review_node: node_id, gate_node?: node_id}
+    # {fix_node, audit_entry_node, review_node, evidence_origin, review_mode,
+    #  gate_node?, review_context}
     exploration_log: list[str] = field(default_factory=list)  # requests feitos em modo exploração
     # Snapshot compacto por episódio nomeado; histórico detalhado vive no trace.
     llm_episodes: dict[str, dict[str, Any]] = field(default_factory=dict)

@@ -110,6 +110,10 @@ def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
     assert graph.get_node("ft.batch.01.plan").no_pre_seed is False
     assert graph.get_node("ft.batch.01.plan").next == "ft.batch.03.foundation"
     assert graph.get_node("ft.batch.06.fix").next == "ft.batch.06b.fix_review"
+    assert (
+        graph.get_node("ft.batch.06.fix").fix_review
+        == "ft.batch.06b.fix_review"
+    )
     assert graph.get_node("ft.batch.06b.fix_review").next == "ft.batch.07.verify"
     assert graph.get_node("ft.batch.06b.fix_review").on_fail["automatic"] is True
     assert graph.get_node("ft.batch.07.verify").next == "ft.batch.08.acceptance"

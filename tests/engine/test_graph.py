@@ -26,6 +26,7 @@ def make_graph(nodes_data: list[dict]) -> ProcessGraph:
             branches=n.get("branches"),
             condition=n.get("condition"),
             reject_next=n.get("reject_next"),
+            fix_review=n.get("fix_review"),
         ))
     return ProcessGraph(nodes, {"id": "test", "title": "Test"})
 
@@ -143,6 +144,45 @@ class TestGraphValidation:
             make_graph([
                 {"id": "a", "type": "human_gate", "next": "b", "reject_next": "missing"},
                 {"id": "b", "type": "end"},
+            ])
+
+    def test_fix_review_must_be_a_reachable_review(self):
+        graph = make_graph([
+            {
+                "id": "fix",
+                "type": "build",
+                "next": "check",
+                "fix_review": "audit",
+            },
+            {"id": "check", "type": "gate", "next": "audit"},
+            {"id": "audit", "type": "review", "next": "done"},
+            {"id": "done", "type": "end"},
+        ])
+
+        assert graph.get_node("fix").fix_review == "audit"
+
+        with pytest.raises(ValueError, match="fix_review.*nao e review"):
+            make_graph([
+                {
+                    "id": "fix",
+                    "type": "build",
+                    "next": "check",
+                    "fix_review": "check",
+                },
+                {"id": "check", "type": "gate", "next": "done"},
+                {"id": "done", "type": "end"},
+            ])
+
+        with pytest.raises(ValueError, match="nao e alcancavel"):
+            make_graph([
+                {
+                    "id": "fix",
+                    "type": "build",
+                    "next": "done",
+                    "fix_review": "audit",
+                },
+                {"id": "audit", "type": "review", "next": "done"},
+                {"id": "done", "type": "end"},
             ])
 
     def test_no_end_node_raises(self):

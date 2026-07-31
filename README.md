@@ -178,7 +178,11 @@ Todo `ft fix` dirigido renova obrigatoriamente o review que encontrou o defeito.
 Quando a correção nasce em human gate, `ft fix`/`ft reject` executam
 `fix → review focal` e retornam ao mesmo gate, sem reabrir etapas intermediárias
 já aprovadas. A flag antiga `--audit-origin` permanece aceita apenas para
-compatibilidade.
+compatibilidade. O review focal sempre recebe o pedido e o finding que deve
+auditar; correções de UI exigem confirmação do resultado visual/físico. Nodes
+de correção podem declarar `fix_review`: nesse caso só a cadeia focal até esse
+review é reaberta. Em processos históricos, a engine suspende o prompt amplo do
+review de origem durante a auditoria do fix.
 
 O template `mvp-builder` classifica aprendizados de processo como `local`,
 `global_candidate` ou `rejected`. Antes do close, o mantenedor decide candidatos

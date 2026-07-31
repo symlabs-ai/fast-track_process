@@ -127,6 +127,12 @@ def execute_fix(args: Any, runner: Any) -> None:
             )
             return
         applied = runner.reject_with_origin_audit(instruction)
+        if not applied:
+            print(
+                "ERRO: a engine não encontrou uma auditoria segura para este "
+                "human gate; nenhum fix avulso foi executado."
+            )
+            return
     else:
         # Auditoria da origem é obrigatória. ``--audit-origin`` continua
         # aceito apenas por compatibilidade com scripts existentes.

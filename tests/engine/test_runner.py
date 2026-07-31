@@ -1915,6 +1915,95 @@ nodes:
         assert state.node_status != "blocked"
         assert state.gate_log["review"] == "STRUCTURED"
 
+    def test_runtime_focal_review_uses_live_verdict_not_stale_broad_report(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: focal_runtime_review
+title: Focal runtime review
+nodes:
+  - id: fix
+    type: build
+    title: Fix
+    next: broad.review
+  - id: broad.review
+    type: review
+    title: Reexecutar todo o produto
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    outputs: [docs/broad-review.md]
+    validators:
+      - file_exists: docs/broad-review.md
+    next: acceptance
+  - id: acceptance
+    type: human_gate
+    title: Acceptance
+    reject_next: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        (docs / "broad-review.md").write_text(
+            "VERDICT: REJECTED\nFinding antigo e amplo.\n",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.current_node = "broad.review"
+        state.node_status = "ready"
+        state.active_fix_return = {
+            "fix_node": "fix",
+            "audit_entry_node": "broad.review",
+            "review_node": "broad.review",
+            "evidence_origin": "broad.review",
+            "review_mode": "origin_fallback",
+            "gate_node": "acceptance",
+            "review_context": "Audite apenas o logo 40% maior na S02.",
+        }
+        runner.state_mgr.save()
+
+        def focal_review(**kwargs):
+            assert "Audite apenas o logo 40% maior na S02." in kwargs["task"]
+            assert "Reexecutar todo o produto" not in kwargs["task"]
+            return DelegateResult(
+                success=True,
+                output=(
+                    "VERDICT: APPROVED\n"
+                    "Logo medido no APK atual e confirmado no dispositivo."
+                ),
+                files_created=[],
+                files_modified=[],
+            )
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            side_effect=focal_review,
+        ):
+            runner._run_review(runner.graph.get_node("broad.review"))
+
+        reviewed = runner.state_mgr.load()
+        assert reviewed.current_node == "acceptance"
+        assert reviewed.active_fix_return is None
+        assert (docs / "broad-review.md").read_text(encoding="utf-8").startswith(
+            "VERDICT: REJECTED"
+        )
+
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"
@@ -2629,10 +2718,9 @@ nodes:
 
         fixing = runner.state_mgr.load()
         assert fixing.current_node == "fix"
-        assert fixing.active_fix_return == {
-            "fix_node": "fix",
-            "review_node": "physical.review",
-        }
+        assert fixing.active_fix_return["fix_node"] == "fix"
+        assert fixing.active_fix_return["review_node"] == "physical.review"
+        assert "Corrigir VIS-001" in fixing.active_fix_return["review_context"]
         assert fixing.completed_nodes == [
             "foundation",
             "combined.review",
@@ -2643,9 +2731,27 @@ nodes:
 
         resumed = runner.state_mgr.load()
         assert resumed.current_node == "physical.review"
-        assert resumed.active_fix_return is None
+        assert resumed.active_fix_return["review_mode"] == "origin_fallback"
+        assert (
+            resumed.active_fix_return["audit_entry_node"]
+            == "physical.review"
+        )
         assert "integrated.verify" in resumed.completed_nodes
         assert "fix" in resumed.completed_nodes
+
+        physical = runner.graph.get_node("physical.review")
+        prompt, _deny = runner._build_review_task_context(
+            physical,
+            runner._capture_delegation_llm_selection(
+                resumed,
+                node=physical,
+            ),
+        )
+        assert "Corrigir VIS-001" in prompt
+        assert "prompt amplo original deste review está suspenso" in prompt
+
+        runner._advance_state("physical.review", "end")
+        assert runner.state_mgr.load().active_fix_return is None
 
     def test_human_rejection_can_fix_and_return_to_evidence_review(self, tmp_path):
         project_root = tmp_path / "project"
@@ -2733,11 +2839,13 @@ nodes:
         fixing = runner.state_mgr.load()
         assert fixing.current_node == "fix"
         assert fixing.pending_approval is None
-        assert fixing.active_fix_return == {
-            "fix_node": "fix",
-            "review_node": "physical.review",
-            "gate_node": "visual.gate",
-        }
+        assert fixing.active_fix_return["fix_node"] == "fix"
+        assert fixing.active_fix_return["review_node"] == "physical.review"
+        assert fixing.active_fix_return["gate_node"] == "visual.gate"
+        assert (
+            "S12 ainda diverge do mockup"
+            in fixing.active_fix_return["review_context"]
+        )
         assert fixing.completed_nodes == [
             "foundation",
             "broad.review",
@@ -2752,11 +2860,11 @@ nodes:
 
         resumed = runner.state_mgr.load()
         assert resumed.current_node == "physical.review"
-        assert resumed.active_fix_return == {
-            "fix_node": "fix",
-            "review_node": "physical.review",
-            "gate_node": "visual.gate",
-        }
+        assert resumed.active_fix_return["fix_node"] == "fix"
+        assert resumed.active_fix_return["review_node"] == "physical.review"
+        assert resumed.active_fix_return["gate_node"] == "visual.gate"
+        assert "REVISÃO FOCAL OBRIGATÓRIA" in resumed.last_approval_message
+        assert "S12 ainda diverge do mockup" in resumed.last_approval_message
         assert "integrated.verify" in resumed.completed_nodes
 
         runner._handle_on_fail(
@@ -2769,15 +2877,21 @@ nodes:
 
         fixing_again = runner.state_mgr.load()
         assert fixing_again.current_node == "fix"
-        assert fixing_again.active_fix_return == {
-            "fix_node": "fix",
-            "review_node": "physical.review",
-            "gate_node": "visual.gate",
-        }
+        assert fixing_again.active_fix_return["fix_node"] == "fix"
+        assert fixing_again.active_fix_return["review_node"] == "physical.review"
+        assert fixing_again.active_fix_return["gate_node"] == "visual.gate"
+        assert (
+            "Corrigir somente a divergência remanescente"
+            in fixing_again.active_fix_return["review_context"]
+        )
 
         runner._advance_state("fix", "broad.review")
         reviewed_again = runner.state_mgr.load()
         assert reviewed_again.current_node == "physical.review"
+        assert (
+            "Corrigir somente a divergência remanescente"
+            in reviewed_again.last_approval_message
+        )
 
         runner._advance_state("physical.review", "visual.gate")
 
@@ -2791,6 +2905,114 @@ nodes:
             "fix",
             "physical.review",
         ]
+
+    def test_human_rejection_uses_declared_fix_review_without_broad_rewind(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: declared_focal_review
+version: "1.0.0"
+title: Declared focal review
+nodes:
+  - id: foundation
+    type: build
+    title: Foundation
+    next: fix
+  - id: fix
+    type: build
+    title: Focal fix
+    fix_review: fix.review
+    next: fix.check
+  - id: fix.check
+    type: gate
+    title: Focal check
+    next: fix.review
+  - id: fix.review
+    type: review
+    title: Review only the fix
+    on_fail:
+      human_gate: Fix ainda falha.
+      goto: fix
+    next: broad.review
+  - id: broad.review
+    type: review
+    title: Broad review
+    next: integrated.verify
+  - id: integrated.verify
+    type: gate
+    title: Integrated verify
+    next: evidence.review
+  - id: evidence.review
+    type: review
+    title: Evidence review
+    next: acceptance
+  - id: acceptance
+    type: human_gate
+    title: Acceptance
+    reject_next: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.completed_nodes = [
+            "foundation",
+            "fix",
+            "fix.check",
+            "fix.review",
+            "broad.review",
+            "integrated.verify",
+            "evidence.review",
+        ]
+        state.current_node = "acceptance"
+        state.node_status = "awaiting_approval"
+        state.pending_approval = "acceptance"
+        runner.state_mgr.save()
+
+        assert runner.reject_with_origin_audit("O logo ainda está pequeno")
+
+        fixing = runner.state_mgr.load()
+        assert fixing.current_node == "fix"
+        assert fixing.active_fix_return["audit_entry_node"] == "fix.check"
+        assert fixing.active_fix_return["review_node"] == "fix.review"
+        assert fixing.active_fix_return["evidence_origin"] == "evidence.review"
+        assert fixing.active_fix_return["review_mode"] == "declared"
+        assert fixing.completed_nodes == [
+            "foundation",
+            "broad.review",
+            "integrated.verify",
+            "evidence.review",
+        ]
+
+        runner._advance_state("fix", "fix.check")
+        assert runner.state_mgr.load().current_node == "fix.check"
+        runner._advance_state("fix.check", "fix.review")
+        reviewing = runner.state_mgr.load()
+        assert reviewing.current_node == "fix.review"
+        assert "O logo ainda está pequeno" in reviewing.last_approval_message
+
+        runner._advance_state("fix.review", "broad.review")
+        returned = runner.state_mgr.load()
+        assert returned.current_node == "acceptance"
+        assert returned.active_fix_return is None
+        assert "broad.review" in returned.completed_nodes
+        assert "integrated.verify" in returned.completed_nodes
+        assert "evidence.review" in returned.completed_nodes
 
     def test_llm_error_with_passing_validators_advances_node(self, tmp_path):
         project_root = tmp_path / "project"

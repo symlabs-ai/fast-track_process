@@ -5,7 +5,7 @@ resolve_next() → delegate() → validate() → advance()
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
@@ -3509,29 +3509,38 @@ class StepRunner:
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
         state = self.state_mgr.state
         directed_return = state.active_fix_return
+        focal_review_context: str | None = None
         if (
             isinstance(directed_return, dict)
             and directed_return.get("fix_node") == completed_node
         ):
             review_node = directed_return.get("review_node")
-            if review_node in self.graph.nodes:
-                next_node = review_node
+            audit_entry = directed_return.get("audit_entry_node") or review_node
+            if audit_entry in self.graph.nodes:
+                next_node = audit_entry
                 print(ui.info(
-                    f"↪ Fix focal concluído; auditando novamente somente {review_node}"
+                    "↪ Fix focal concluído; executando somente a auditoria "
+                    f"{audit_entry} → {review_node}"
                 ))
-            if not directed_return.get("gate_node"):
-                state.active_fix_return = None
         elif (
             isinstance(directed_return, dict)
             and directed_return.get("review_node") == completed_node
-            and directed_return.get("gate_node") in self.graph.nodes
         ):
-            gate_node = directed_return["gate_node"]
-            next_node = gate_node
+            gate_node = directed_return.get("gate_node")
+            if gate_node in self.graph.nodes:
+                next_node = gate_node
+                print(ui.info(
+                    f"↪ Auditoria focal aprovada; retornando ao human gate {gate_node}"
+                ))
             state.active_fix_return = None
-            print(ui.info(
-                f"↪ Auditoria focal aprovada; retornando ao human gate {gate_node}"
-            ))
+
+        if (
+            isinstance(directed_return, dict)
+            and directed_return.get("review_node") == next_node
+        ):
+            context = directed_return.get("review_context")
+            if isinstance(context, str) and context.strip():
+                focal_review_context = context
 
         completed_sprint = self.graph.sprint_of(completed_node)
         next_sprint = self.graph.sprint_of(next_node) if next_node else None
@@ -3542,6 +3551,8 @@ class StepRunner:
         # reconstrua exatamente o mesmo prompt, sem vazá-la para o próximo node.
         self.state_mgr.state.last_approval_message = None
         self.state_mgr.advance(completed_node, next_node, gate_result)
+        if focal_review_context is not None:
+            state.last_approval_message = focal_review_context
         state.current_sprint = next_sprint
         state.sprint_status = (
             "completed"
@@ -5716,13 +5727,69 @@ class StepRunner:
             encoding="utf-8",
         )
 
+    def _active_focal_review_context(
+        self,
+        node: Node,
+    ) -> tuple[str, str] | None:
+        directed = self.state_mgr.state.active_fix_return
+        if (
+            not isinstance(directed, dict)
+            or directed.get("review_node") != node.id
+        ):
+            return None
+        context = directed.get("review_context")
+        if not isinstance(context, str) or not context.strip():
+            return None
+        mode = directed.get("review_mode")
+        if mode not in {"declared", "origin_fallback"}:
+            fix_node = self.graph.nodes.get(str(directed.get("fix_node") or ""))
+            mode = (
+                "declared"
+                if fix_node is not None and fix_node.fix_review == node.id
+                else "origin_fallback"
+            )
+        return mode, context.strip()
+
     def _build_review_task_context(
         self,
         node: Node,
         selection: LLMSelection,
     ) -> tuple[str, list[str]]:
         """Build review prompt and read restrictions for one provider attempt."""
-        task_prompt = self._inject_execution_plan(build_task_prompt(node, {}))
+        focal_review = self._active_focal_review_context(node)
+        if focal_review and focal_review[0] == "origin_fallback":
+            focal_node = replace(
+                node,
+                description=(
+                    "Auditoria temporária somente do finding que retornou do "
+                    "human gate."
+                ),
+                outputs=[],
+                validators=[],
+                prompt=(
+                    f"{focal_review[1]}\n\n"
+                    "Audite SOMENTE o pedido e o finding acima no artefato "
+                    "corrente. O prompt amplo original deste review está "
+                    "suspenso nesta execução: não reabra outros requisitos, "
+                    "telas, fluxos, testes ou decisões já aprovados. Use apenas "
+                    "inspeções, sondas e testes diretamente relacionados ao "
+                    "delta. Não altere produto nem relatórios amplos.\n\n"
+                    "Para UI, confira o resultado renderizado no dispositivo "
+                    "ou evidência física exigida pelo finding. Encerre com uma "
+                    "linha exata `VERDICT: APPROVED` ou `VERDICT: REJECTED`, "
+                    "seguida de evidência curta e verificável."
+                ),
+            )
+            task_prompt = self._inject_execution_plan(
+                build_task_prompt(focal_node, {})
+            )
+            print(ui.info(
+                f"Review {node.id}: prompt amplo suspenso; auditoria somente do fix"
+            ))
+        else:
+            task_prompt = self._inject_execution_plan(build_task_prompt(node, {}))
+            if focal_review:
+                task_prompt = f"{focal_review[1]}\n\n{task_prompt}"
         deny_read_paths: list[str] = []
         if node.context_profile:
             task_prompt, deny_read_paths = self._compose_profile_context(
@@ -5905,6 +5972,10 @@ class StepRunner:
         """
         state = self.state_mgr.state
         structured_review = bool(node.review_route_path)
+        focal_review = self._active_focal_review_context(node)
+        runtime_focal_review = bool(
+            focal_review and focal_review[0] == "origin_fallback"
+        )
         allowed = self._resolve_allowed_paths(node)
         llm_selection = self._capture_delegation_llm_selection(state, node=node)
         effective_engine = llm_selection.engine
@@ -5929,6 +6000,7 @@ class StepRunner:
         requires_fresh_review = (
             node.id in mandatory_reviews
             or getattr(node, "no_pre_seed", False)
+            or runtime_focal_review
         )
         if early_check.passed and not requires_fresh_review:
             print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
@@ -5938,8 +6010,21 @@ class StepRunner:
             self._advance_state(node.id, next_id, "PASS")
             return
         if early_check.passed:
-            print(ui.warn("Expert Review: review deve rodar de novo (mandatory/no_pre_seed) — regenerando"))
-            if not getattr(node, "preserve_outputs_on_reentry", False):
+            if runtime_focal_review:
+                print(ui.warn(
+                    "Expert Review: auditoria focal obrigatória — preservando "
+                    "o relatório amplo como baseline"
+                ))
+            else:
+                print(ui.warn(
+                    "Expert Review: review deve rodar de novo "
+                    "(mandatory/no_pre_seed) — regenerando"
+                ))
+            if not runtime_focal_review and not getattr(
+                node,
+                "preserve_outputs_on_reentry",
+                False,
+            ):
                 self._remove_node_outputs_from_worktree(node.id)
         else:
             blocking_reason = (
@@ -6194,6 +6279,35 @@ class StepRunner:
 
         # Ler relatorio e verificar veredicto
         review_output = self._read_review_output(node)
+
+        if runtime_focal_review:
+            focal_output = result.output or ""
+            focal_verdict = _parse_review_verdict(focal_output)
+            if focal_verdict in _REVIEW_REJECT_VERDICTS:
+                reason = _extract_review_rejection_reason(
+                    focal_output,
+                    focal_verdict,
+                )
+                print(ui.fail("FOCAL REVIEW REJECTED"))
+                print(ui.dim(f"  Motivo: {reason[:300]}"))
+                if node.on_fail:
+                    self._handle_on_fail(node, reason or "fix focal rejeitado")
+                else:
+                    self.state_mgr.block(
+                        f"Focal Review {focal_verdict}:\n{reason[:500]}"
+                    )
+                return
+            if focal_verdict not in _REVIEW_APPROVE_VERDICTS:
+                self.state_mgr.block(
+                    "Auditoria focal não emitiu VERDICT: APPROVED ou "
+                    "VERDICT: REJECTED."
+                )
+                print(ui.fail("FOCAL REVIEW BLOCK: veredito explícito ausente"))
+                return
+            next_id = self.graph.resolve_next(node.id)
+            self._advance_state(node.id, next_id, focal_verdict)
+            print(f"  FOCAL REVIEW {focal_verdict} → proximo: {next_id}")
+            return
 
         if structured_review:
             next_id = self.graph.resolve_next(node.id)
@@ -7414,6 +7528,41 @@ próprias sob o namespace permitido acima. Encerre DONE.
             if artifact_path in output_paths:
                 state.artifacts.pop(artifact_name, None)
 
+    def _declared_fix_audit(
+        self,
+        fix_id: str,
+        origin_review: str,
+    ) -> tuple[str, str, tuple[str, ...], str]:
+        """Resolve a menor auditoria segura depois de um fix.
+
+        Um processo pode declarar ``fix_review`` no próprio node de correção.
+        A cadeia linear entre ``next`` e esse review é então a única reaberta.
+        Processos antigos continuam protegidos por uma auditoria focal executada
+        sobre o review de origem, mas com o prompt amplo suspenso em runtime.
+        """
+        fix_node = self.graph.get_node(fix_id)
+        review_id = fix_node.fix_review
+        if not review_id:
+            return origin_review, origin_review, (origin_review,), "origin_fallback"
+
+        entry_id = fix_node.next
+        if not entry_id:
+            # A integridade do grafo recusa este estado; mantenha o fallback
+            # fail-safe para ciclos históricos carregados antes da validação.
+            return origin_review, origin_review, (origin_review,), "origin_fallback"
+
+        audit_nodes: list[str] = []
+        cursor: str | None = entry_id
+        visited: set[str] = set()
+        while cursor and cursor not in visited:
+            visited.add(cursor)
+            audit_nodes.append(cursor)
+            if cursor == review_id:
+                return entry_id, review_id, tuple(audit_nodes), "declared"
+            cursor = self.graph.get_node(cursor).next
+
+        return origin_review, origin_review, (origin_review,), "origin_fallback"
+
     def apply_fix(self, instruction: str, *, audit_origin: bool = True) -> bool:
         """
         Executa o on_fail.goto e, por padrão, exige nova auditoria da origem.
@@ -7446,17 +7595,37 @@ próprias sob o namespace permitido acima. Encerre DONE.
             if not origin or origin not in self.graph.nodes:
                 print(f"  Erro: review de origem '{origin}' inválido.")
                 return False
+            audit_entry, review_node, audit_nodes, review_mode = (
+                self._declared_fix_audit(goto, origin)
+            )
             # Preserva tudo que já passou. Somente o fix (que pode ter sido
-            # executado numa iteração anterior) e o review rejeitado precisam
-            # ser renovados.
+            # executado numa iteração anterior) e a cadeia focal declarada
+            # precisam ser renovados. O review amplo original permanece como
+            # baseline quando há um review específico do fix.
+            reopened_order = (goto, *audit_nodes)
+            reopened = set(reopened_order)
             state.completed_nodes = [
                 n for n in state.completed_nodes
-                if n not in {goto, origin}
+                if n not in reopened
             ]
-            self._invalidate_focal_evidence(state, (goto, origin))
+            self._invalidate_focal_evidence(state, reopened_order)
             state.active_fix_return = {
                 "fix_node": goto,
-                "review_node": origin,
+                "audit_entry_node": audit_entry,
+                "review_node": review_node,
+                "evidence_origin": origin,
+                "review_mode": review_mode,
+                "review_context": (
+                    "REVISÃO FOCAL OBRIGATÓRIA DO FIX\n\n"
+                    f"Pedido de correção:\n{instruction}\n\n"
+                    "Finding que originou a correção:\n"
+                    f"{pending.get('feedback', '')}\n\n"
+                    "Confirme o resultado observável solicitado, inclusive "
+                    "evidência visual/física quando o finding for de UI. "
+                    "Não aprove apenas porque arquivos ou testes existem. "
+                    "Este escopo focal substitui qualquer instrução ampla de "
+                    "reexecutar o fluxo completo."
+                ),
             }
             return_gate = pending.get("return_gate")
             if return_gate in self.graph.nodes:
@@ -7489,7 +7658,8 @@ próprias sob o namespace permitido acima. Encerre DONE.
         print(ui.info(f"↩ Voltando para {goto} com instrução injetada"))
         if audit_origin:
             print(ui.info(
-                f"Após o fix, somente o review de origem {origin} será reexecutado"
+                "Após o fix, somente a auditoria focal "
+                f"{audit_entry} → {review_node} será executada"
             ))
         return True
 

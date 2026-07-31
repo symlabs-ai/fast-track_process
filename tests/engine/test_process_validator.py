@@ -34,6 +34,7 @@ def _make_graph(nodes_raw: list[dict], meta: dict | None = None) -> ProcessGraph
                 "preserve_outputs_on_reentry", False
             ),
             reject_next=n.get("reject_next"),
+            fix_review=n.get("fix_review"),
             on_fail=n.get("on_fail"),
             hyper_mode_docs=n.get("hyper_mode_docs"),
             hyper_mode_full_docs=n.get("hyper_mode_full_docs"),

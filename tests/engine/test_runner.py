@@ -1958,6 +1958,7 @@ nodes:
             "VERDICT: REJECTED\nFinding antigo e amplo.\n",
             encoding="utf-8",
         )
+        (docs / "logo-current.png").write_bytes(b"physical logo evidence")
         runner = StepRunner(
             process_path=process_path,
             state_path=state_dir / "engine_state.yml",
@@ -1987,7 +1988,23 @@ nodes:
                 success=True,
                 output=(
                     "VERDICT: APPROVED\n"
-                    "Logo medido no APK atual e confirmado no dispositivo."
+                    "Logo medido no APK atual e confirmado no dispositivo.\n\n"
+                    "```yaml\n"
+                    "focal_evidence:\n"
+                    "  coverage_complete: true\n"
+                    "  finding_kind: ui_visual\n"
+                    "  evidence_level: physical_e2e\n"
+                    "  data_origin: local_product\n"
+                    "  mock_only: false\n"
+                    "  journey: [instalar APK, abrir S02, medir logo]\n"
+                    "  visual_evidence: [docs/logo-current.png]\n"
+                    "  claims:\n"
+                    "    - requirement: logo 40% maior na S02\n"
+                    "      expected: logo ampliado\n"
+                    "      observed: logo medido no APK atual\n"
+                    "      status: PASS\n"
+                    "      evidence: [docs/logo-current.png]\n"
+                    "```"
                 ),
                 files_created=[],
                 files_modified=[],
@@ -2005,6 +2022,108 @@ nodes:
         assert (docs / "broad-review.md").read_text(encoding="utf-8").startswith(
             "VERDICT: REJECTED"
         )
+
+    def test_runtime_focal_review_refuses_mock_only_ui_data_approval(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: focal_ui_data_review
+title: Focal UI data review
+nodes:
+  - id: fix
+    type: build
+    title: Fix
+    next: physical.review
+  - id: physical.review
+    type: review
+    title: Physical review
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    outputs: [docs/physical-review.md]
+    validators:
+      - file_exists: docs/physical-review.md
+    on_fail:
+      human_gate: Evidência focal insuficiente.
+      goto: fix
+    next: acceptance
+  - id: acceptance
+    type: human_gate
+    title: Acceptance
+    reject_next: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        (docs / "physical-review.md").write_text(
+            "VERDICT: REJECTED\nBaseline anterior.\n",
+            encoding="utf-8",
+        )
+        (docs / "s44-mock.png").write_bytes(b"mocked screen")
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.current_node = "physical.review"
+        state.node_status = "ready"
+        state.active_fix_return = {
+            "fix_node": "fix",
+            "audit_entry_node": "physical.review",
+            "review_node": "physical.review",
+            "evidence_origin": "physical.review",
+            "review_mode": "origin_fallback",
+            "gate_node": "acceptance",
+            "review_context": (
+                "Na tela S44, o telefone cadastrado no FastAPI não aparece."
+            ),
+        }
+        runner.state_mgr.save()
+
+        def false_approval(**kwargs):
+            assert "CONTRATO GLOBAL DE FIDELIDADE" in kwargs["task"]
+            return DelegateResult(
+                success=True,
+                output=(
+                    "```yaml\n"
+                    "focal_evidence:\n"
+                    "  coverage_complete: true\n"
+                    "  finding_kind: ui_data\n"
+                    "  evidence_level: component\n"
+                    "  data_origin: fixture\n"
+                    "  mock_only: true\n"
+                    "  journey: [render S44 mockada]\n"
+                    "  visual_evidence: [docs/s44-mock.png]\n"
+                    "  claims:\n"
+                    "    - requirement: telefone aparece na S44\n"
+                    "      expected: telefone visível\n"
+                    "      observed: fixture visível\n"
+                    "      status: PASS\n"
+                    "      evidence: [docs/s44-mock.png]\n"
+                    "```\n\n"
+                    "VERDICT: APPROVED"
+                ),
+                files_created=[],
+                files_modified=[],
+            )
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=false_approval):
+            runner._run_review(runner.graph.get_node("physical.review"))
+
+        reviewed = runner.state_mgr.load()
+        assert reviewed.current_node == "physical.review"
+        assert reviewed.node_status == "pending_fix"
+        assert "EVIDENCE_FIDELITY_REJECTED" in reviewed.pending_fix["feedback"]
+        assert "mock" in reviewed.pending_fix["feedback"].casefold()
 
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
         project_root = tmp_path / "project"

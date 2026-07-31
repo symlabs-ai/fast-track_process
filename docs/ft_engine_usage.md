@@ -301,6 +301,22 @@ Identidades de artefato citadas no finding são tratadas como baseline: o review
 registra e valida o candidato corrente do fix, a menos que igualdade de hash
 tenha sido definida explicitamente como requisito.
 
+Toda aprovação de auditoria focal é fail-closed quanto à fidelidade da prova.
+A engine exige um recibo estruturado `focal_evidence` com cobertura completa,
+claims campo a campo e paths repo-locais existentes. Quando o finding envolve
+dado real renderizado em UI, somente uma jornada física ponta a ponta pela
+interface pública/fonte real pode aprovar: mock, fixture, preview ou teste
+isolado de componente não substituem persistência, leitura e observação na tela.
+Uma aprovação sem esse recibo ou que omita um campo citado no finding retorna
+ao fix como `EVIDENCE_FIDELITY_REJECTED`; uma rejeição honesta continua aceita
+sem exigir evidência fictícia de PASS.
+Credenciais, tokens e senhas não podem ser transportados em argumentos de
+processo nem persistidos nos logs/artefatos da prova; a sessão real deve ser
+reutilizada dentro do limite seguro do dispositivo.
+Findings que identificam APK/hash exigem ainda um recibo de identidade: o
+SHA-256 calculado do candidato repo-local precisa ser igual ao declarado e ao
+medido no dispositivo, cuja saída sanitizada também deve existir no repo.
+
 # Encerramento
 ft process-candidates --cycle <id>
 ft close --cycle <id>

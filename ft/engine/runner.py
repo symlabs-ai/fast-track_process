@@ -26,6 +26,10 @@ from ft.engine.api_context import enrich_api_contract_feedback
 from ft.engine.artifact_ops import remove_declared_outputs
 from ft.engine.graph import Node, load_graph
 from ft.engine.context_profiles import compose_context_profile
+from ft.engine.focal_evidence import (
+    FOCAL_EVIDENCE_INSTRUCTIONS,
+    validate_focal_approval,
+)
 from ft.engine.state import StateManager, _atomic_write_state
 from ft.engine.delegate import (
     DelegateResult,
@@ -5795,6 +5799,8 @@ class StepRunner:
             task_prompt = self._inject_execution_plan(build_task_prompt(node, {}))
             if focal_review:
                 task_prompt = f"{focal_review[1]}\n\n{task_prompt}"
+        if focal_review:
+            task_prompt = f"{task_prompt}\n\n{FOCAL_EVIDENCE_INSTRUCTIONS}"
         deny_read_paths: list[str] = []
         if node.context_profile:
             task_prompt, deny_read_paths = self._compose_profile_context(
@@ -6285,9 +6291,33 @@ class StepRunner:
         # Ler relatorio e verificar veredicto
         review_output = self._read_review_output(node)
 
+        focal_verdict: str | None = None
+        if focal_review:
+            focal_output = (
+                result.output or ""
+                if runtime_focal_review
+                else f"{review_output}\n\n{result.output or ''}"
+            )
+            focal_verdict = _parse_review_verdict(focal_output)
+            if focal_verdict in _REVIEW_APPROVE_VERDICTS:
+                fidelity = validate_focal_approval(
+                    review_output=focal_output,
+                    finding_context=focal_review[1],
+                    project_root=self._work_dir,
+                )
+                if not fidelity.passed:
+                    reason = f"EVIDENCE_FIDELITY_REJECTED: {fidelity.reason}"
+                    print(ui.fail("FOCAL REVIEW REJECTED — evidência insuficiente"))
+                    print(ui.dim(f"  Motivo: {reason[:300]}"))
+                    if node.on_fail:
+                        self._handle_on_fail(node, reason)
+                    else:
+                        self.state_mgr.block(reason)
+                    return
+
         if runtime_focal_review:
             focal_output = result.output or ""
-            focal_verdict = _parse_review_verdict(focal_output)
+            focal_verdict = focal_verdict or _parse_review_verdict(focal_output)
             if focal_verdict in _REVIEW_REJECT_VERDICTS:
                 reason = _extract_review_rejection_reason(
                     focal_output,

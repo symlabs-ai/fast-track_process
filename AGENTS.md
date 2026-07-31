@@ -282,6 +282,21 @@ Hashes citados no pedido identificam a baseline; o review deve auditar e
 registrar o artefato corrente produzido pelo fix, salvo quando a igualdade de
 hash tiver sido declarada explicitamente como requisito.
 
+Uma aprovação focal exige o recibo estruturado `focal_evidence` injetado pela
+engine. Ele deve decompor o finding em claims e ligar cada uma a evidência
+repo-local existente. Se o finding tratar de dados reais mostrados em UI, a
+prova obrigatória é a jornada interface pública/fonte real → persistência →
+leitura → tela física, com comparação campo a campo. Mock, fixture, preview ou
+teste isolado de componente pode apoiar diagnóstico, mas nunca aprovar esse
+tipo de finding. Omissão de campo citado ou evidência de fidelidade inferior
+resulta em `EVIDENCE_FIDELITY_REJECTED` e retorna somente ao fix focal.
+Token, senha e credencial de sessão nunca podem ser passados em argumento de
+processo nem registrados em log/evidência; a prova deve reutilizar o estado
+autenticado seguro do dispositivo sem exteriorizar o segredo.
+Quando o finding citar APK ou hash, a aprovação também exige igualdade entre o
+SHA-256 do artefato local corrente, o hash declarado e o hash medido no
+dispositivo, com saída sanitizada preservada no repositório.
+
 ## 6. Encerrar o ciclo
 
 ```bash

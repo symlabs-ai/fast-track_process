@@ -301,6 +301,15 @@ Identidades de artefato citadas no finding são tratadas como baseline: o review
 registra e valida o candidato corrente do fix, a menos que igualdade de hash
 tenha sido definida explicitamente como requisito.
 
+Relatório de review continua pertencendo ao review, não ao node de correção. Se
+o finding apontar apenas evidência ausente ou desatualizada e o produto corrente
+já estiver correto, o fix registra um handoff sem fabricar alteração de produto.
+O review focal seguinte reconcilia somente os seus outputs e as entradas
+afetadas do recibo composto, preservando evidência histórica e itens aprovados.
+Uma resposta focal APPROVED não avança quando o output canônico permaneceu
+inalterado ou ainda declara REJECTED; isso impede que o human gate seja aberto
+com o relatório anterior apesar de uma auditoria corrente positiva.
+
 Toda aprovação de auditoria focal é fail-closed quanto à fidelidade da prova.
 A engine exige um recibo estruturado `focal_evidence` com cobertura completa,
 claims campo a campo e paths repo-locais existentes. Quando o finding envolve

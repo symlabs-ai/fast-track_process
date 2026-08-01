@@ -282,6 +282,15 @@ Hashes citados no pedido identificam a baseline; o review deve auditar e
 registrar o artefato corrente produzido pelo fix, salvo quando a igualdade de
 hash tiver sido declarada explicitamente como requisito.
 
+O fix não assume ownership dos relatórios, receipts ou capturas do review de
+origem. Se o defeito for somente evidência ausente/desatualizada e o produto
+corrente já cumprir o requisito, o fix registra um handoff sem inventar mudança
+de código. Em seguida, o review focal atualiza somente seus próprios outputs e
+as partes afetadas do recibo composto, preservando todo o restante e qualquer
+evidência histórica. A engine recusa a aprovação se o review retornar APPROVED
+mas deixar o output canônico inalterado ou ainda marcado como REJECTED; assim o
+human gate nunca recebe um relatório velho depois de um fix aprovado.
+
 Uma aprovação focal exige o recibo estruturado `focal_evidence` injetado pela
 engine. Ele deve decompor o finding em claims e ligar cada uma a evidência
 repo-local existente. Se o finding tratar de dados reais mostrados em UI, a

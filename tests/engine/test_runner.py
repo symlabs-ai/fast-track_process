@@ -1915,7 +1915,7 @@ nodes:
         assert state.node_status != "blocked"
         assert state.gate_log["review"] == "STRUCTURED"
 
-    def test_runtime_focal_review_uses_live_verdict_not_stale_broad_report(
+    def test_runtime_focal_review_persists_live_verdict_in_canonical_report(
         self,
         tmp_path,
     ):
@@ -1984,30 +1984,34 @@ nodes:
             assert "Reexecutar todo o produto" not in kwargs["task"]
             assert "baseline anterior à correção" in kwargs["task"]
             assert "artefato corrente produzido pelo fix" in kwargs["task"]
+            assert "RECONCILIAÇÃO FOCAL DO RECIBO" in kwargs["task"]
+            assert "docs/broad-review.md" in kwargs["task"]
+            output = (
+                "VERDICT: APPROVED\n"
+                "Logo medido no APK atual e confirmado no dispositivo.\n\n"
+                "```yaml\n"
+                "focal_evidence:\n"
+                "  coverage_complete: true\n"
+                "  finding_kind: ui_visual\n"
+                "  evidence_level: physical_e2e\n"
+                "  data_origin: local_product\n"
+                "  mock_only: false\n"
+                "  journey: [instalar APK, abrir S02, medir logo]\n"
+                "  visual_evidence: [docs/logo-current.png]\n"
+                "  claims:\n"
+                "    - requirement: logo 40% maior na S02\n"
+                "      expected: logo ampliado\n"
+                "      observed: logo medido no APK atual\n"
+                "      status: PASS\n"
+                "      evidence: [docs/logo-current.png]\n"
+                "```"
+            )
+            (docs / "broad-review.md").write_text(output, encoding="utf-8")
             return DelegateResult(
                 success=True,
-                output=(
-                    "VERDICT: APPROVED\n"
-                    "Logo medido no APK atual e confirmado no dispositivo.\n\n"
-                    "```yaml\n"
-                    "focal_evidence:\n"
-                    "  coverage_complete: true\n"
-                    "  finding_kind: ui_visual\n"
-                    "  evidence_level: physical_e2e\n"
-                    "  data_origin: local_product\n"
-                    "  mock_only: false\n"
-                    "  journey: [instalar APK, abrir S02, medir logo]\n"
-                    "  visual_evidence: [docs/logo-current.png]\n"
-                    "  claims:\n"
-                    "    - requirement: logo 40% maior na S02\n"
-                    "      expected: logo ampliado\n"
-                    "      observed: logo medido no APK atual\n"
-                    "      status: PASS\n"
-                    "      evidence: [docs/logo-current.png]\n"
-                    "```"
-                ),
+                output=output,
                 files_created=[],
-                files_modified=[],
+                files_modified=["docs/broad-review.md"],
             )
 
         with patch(
@@ -2020,8 +2024,101 @@ nodes:
         assert reviewed.current_node == "acceptance"
         assert reviewed.active_fix_return is None
         assert (docs / "broad-review.md").read_text(encoding="utf-8").startswith(
-            "VERDICT: REJECTED"
+            "VERDICT: APPROVED"
         )
+
+    def test_runtime_focal_review_refuses_stale_canonical_report(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: focal_runtime_stale_receipt
+title: Focal runtime stale receipt
+nodes:
+  - id: fix
+    type: build
+    title: Fix
+    next: physical.review
+  - id: physical.review
+    type: review
+    title: Physical review
+    outputs: [docs/physical-review.md]
+    validators:
+      - file_exists: docs/physical-review.md
+    on_fail:
+      human_gate: Corrigir divergência focal.
+      goto: fix
+    next: acceptance
+  - id: acceptance
+    type: human_gate
+    title: Acceptance
+    reject_next: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        (docs / "physical-review.md").write_text(
+            "VERDICT: REJECTED\nRecibo anterior.\n",
+            encoding="utf-8",
+        )
+        (docs / "current.txt").write_text("prova corrente\n", encoding="utf-8")
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.current_node = "physical.review"
+        state.node_status = "ready"
+        state.active_fix_return = {
+            "fix_node": "fix",
+            "audit_entry_node": "physical.review",
+            "review_node": "physical.review",
+            "evidence_origin": "physical.review",
+            "review_mode": "origin_fallback",
+            "review_context": "Audite apenas o finding focal.",
+        }
+        runner.state_mgr.save()
+
+        output = (
+            "VERDICT: APPROVED\n"
+            "```yaml\n"
+            "focal_evidence:\n"
+            "  coverage_complete: true\n"
+            "  finding_kind: functional\n"
+            "  evidence_level: integration\n"
+            "  data_origin: local_product\n"
+            "  mock_only: false\n"
+            "  journey: [executar capacidade focal]\n"
+            "  claims:\n"
+            "    - requirement: finding focal\n"
+            "      expected: corrigido\n"
+            "      observed: corrigido no produto corrente\n"
+            "      status: PASS\n"
+            "      evidence: [docs/current.txt]\n"
+            "```"
+        )
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            return_value=DelegateResult(True, output, [], []),
+        ):
+            runner._run_review(runner.graph.get_node("physical.review"))
+
+        rejected = runner.state_mgr.load()
+        assert rejected.current_node == "physical.review"
+        assert rejected.node_status == "pending_fix"
+        assert "EVIDENCE_RECEIPT_STALE" in rejected.pending_fix["feedback"]
 
     def test_runtime_focal_review_refuses_mock_only_ui_data_approval(self, tmp_path):
         project_root = tmp_path / "project"
@@ -2842,6 +2939,8 @@ nodes:
         assert fixing.active_fix_return["fix_node"] == "fix"
         assert fixing.active_fix_return["review_node"] == "physical.review"
         assert "Corrigir VIS-001" in fixing.active_fix_return["review_context"]
+        assert "OWNERSHIP DA EVIDÊNCIA" in fixing.last_approval_message
+        assert "não invente uma alteração de código" in fixing.last_approval_message
         assert fixing.completed_nodes == [
             "foundation",
             "combined.review",

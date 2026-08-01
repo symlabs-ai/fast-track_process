@@ -5763,6 +5763,9 @@ class StepRunner:
         """Build review prompt and read restrictions for one provider attempt."""
         focal_review = self._active_focal_review_context(node)
         if focal_review and focal_review[0] == "origin_fallback":
+            focal_outputs = "\n".join(
+                f"- {output}" for output in node.outputs
+            ) or "- (nenhum output declarado; emita somente o veredito focal)"
             focal_node = replace(
                 node,
                 description=(
@@ -5778,7 +5781,19 @@ class StepRunner:
                     "suspenso nesta execução: não reabra outros requisitos, "
                     "telas, fluxos, testes ou decisões já aprovados. Use apenas "
                     "inspeções, sondas e testes diretamente relacionados ao "
-                    "delta. Não altere produto nem relatórios amplos.\n\n"
+                    "delta. Não altere o produto nesta etapa.\n\n"
+                    "RECONCILIAÇÃO FOCAL DO RECIBO\n"
+                    "Atualize somente os outputs declarados deste review que "
+                    "registram o finding e sua evidência corrente:\n"
+                    f"{focal_outputs}\n"
+                    "Se um output for um relatório composto, preserve todos "
+                    "os itens não afetados e reconcilie apenas o finding, sua "
+                    "proveniência e o veredito agregado necessário para manter "
+                    "o recibo internamente consistente. Não apague, mova nem "
+                    "sobrescreva evidências históricas; uma captura nova deve "
+                    "usar um path novo. O human gate seguinte deve encontrar "
+                    "nos outputs canônicos o resultado focal que você acabou "
+                    "de comprovar, e não um REJECTED antigo.\n\n"
                     "Hashes e IDs de build citados no pedido identificam a "
                     "baseline anterior à correção. Audite o artefato corrente "
                     "produzido pelo fix, registre sua identidade atual e não "
@@ -5987,6 +6002,9 @@ class StepRunner:
         focal_review = self._active_focal_review_context(node)
         runtime_focal_review = bool(
             focal_review and focal_review[0] == "origin_fallback"
+        )
+        runtime_focal_report_before = (
+            self._read_review_output(node) if runtime_focal_review else ""
         )
         allowed = self._resolve_allowed_paths(node)
         llm_selection = self._capture_delegation_llm_selection(state, node=node)
@@ -6339,6 +6357,40 @@ class StepRunner:
                     "VERDICT: REJECTED."
                 )
                 print(ui.fail("FOCAL REVIEW BLOCK: veredito explícito ausente"))
+                return
+            runtime_focal_report_after = self._read_review_output(node)
+            if (
+                runtime_focal_report_before
+                and runtime_focal_report_after == runtime_focal_report_before
+            ):
+                reason = (
+                    "EVIDENCE_RECEIPT_STALE: a auditoria focal aprovou o fix, "
+                    "mas não reconciliou o output canônico do review; o human "
+                    "gate receberia a evidência anterior."
+                )
+                print(ui.fail("FOCAL REVIEW REJECTED — recibo canônico desatualizado"))
+                print(ui.dim(f"  Motivo: {reason}"))
+                if node.on_fail:
+                    self._handle_on_fail(node, reason)
+                else:
+                    self.state_mgr.block(reason)
+                return
+            canonical_verdict = (
+                _parse_review_verdict(runtime_focal_report_after)
+                if runtime_focal_report_after
+                else None
+            )
+            if canonical_verdict in _REVIEW_REJECT_VERDICTS:
+                reason = (
+                    "EVIDENCE_RECEIPT_STALE: o output canônico do review ainda "
+                    f"declara {canonical_verdict} após a aprovação focal."
+                )
+                print(ui.fail("FOCAL REVIEW REJECTED — veredito canônico divergente"))
+                print(ui.dim(f"  Motivo: {reason}"))
+                if node.on_fail:
+                    self._handle_on_fail(node, reason)
+                else:
+                    self.state_mgr.block(reason)
                 return
             next_id = self.graph.resolve_next(node.id)
             self._advance_state(node.id, next_id, focal_verdict)
@@ -7680,7 +7732,15 @@ próprias sob o namespace permitido acima. Encerre DONE.
         state.pending_fix = None
         state.last_approval_message = (
             f"CORREÇÃO SOLICITADA — retornando de on_fail:\n{instruction}\n\n"
-            f"Feedback original:\n{pending.get('feedback', '')}"
+            f"Feedback original:\n{pending.get('feedback', '')}\n\n"
+            "OWNERSHIP DA EVIDÊNCIA:\n"
+            "O node de correção não deve editar recibos, relatórios ou "
+            "capturas que pertencem ao review de origem fora de seu "
+            "write_scope. Se o finding for somente evidência ausente ou "
+            "desatualizada e o produto corrente já satisfizer o requisito, "
+            "não invente uma alteração de código: registre no relatório do "
+            "fix um handoff sem mudança de produto e encerre. A auditoria "
+            "focal seguinte renovará apenas a evidência afetada."
         )
         state.metrics["steps_completed"] = len(state.completed_nodes)
         target = self.graph.get_node(goto)

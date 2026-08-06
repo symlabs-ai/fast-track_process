@@ -954,6 +954,109 @@ def document_quality(
     return True, f"document_quality: {effective_path} tem {len(nonblank)} linhas uteis"
 
 
+def expert_review_report_valid(
+    path: str,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Valida o contrato mínimo de um parecer produzido por expert de review.
+
+    O check não tenta substituir a auditoria técnica. Ele impede os falsos
+    positivos mais baratos: veredito ausente/ambíguo, APPROVED sem baseline,
+    evidência vazia e aprovação que ainda declara finding bloqueante.
+    """
+    full = Path(project_root) / path
+    if not full.is_file():
+        return False, f"expert_review_report_valid FAIL: {path} nao existe"
+
+    content = full.read_text(encoding="utf-8", errors="ignore")
+    verdicts = re.findall(
+        r"(?im)^\s*VERDICT\s*:\s*(APPROVED|REJECTED|BLOCKED)\s*$",
+        content,
+    )
+    if len(verdicts) != 1:
+        return False, (
+            "expert_review_report_valid FAIL: informe exatamente um "
+            "VERDICT: APPROVED|REJECTED|BLOCKED"
+        )
+    verdict = verdicts[0].upper()
+
+    required_sections = {
+        "baseline": "Baseline e escopo",
+        "findings": "Findings bloqueantes",
+        "evidence": "Evidências executadas",
+        "limitations": "Limitações e riscos residuais",
+    }
+    sections: dict[str, str] = {}
+    for key, heading in required_sections.items():
+        section = _extract_markdown_section(content, heading)
+        if section is None:
+            return False, (
+                f"expert_review_report_valid FAIL: secao {heading!r} ausente"
+            )
+        sections[key] = section.strip()
+
+    evidence_norm = _normalize(sections["evidence"])
+    placeholder_markers = [
+        "nenhuma evidencia",
+        "sem evidencia",
+        "a preencher",
+        "todo",
+        "n/a",
+    ]
+    if verdict != "BLOCKED":
+        placeholder_markers.append("nao verificado")
+    evidence_is_placeholder = any(
+        marker in evidence_norm
+        for marker in placeholder_markers
+    )
+    has_source = bool(
+        re.search(r"\b(fonte|path|arquivo|linha|comando|command|teste)\b", evidence_norm)
+    )
+    has_observation = bool(
+        re.search(r"\b(observado|resultado|exit|pass|fail|aprov|reprov)\w*\b", evidence_norm)
+    )
+    mentions_prd = "prd" in evidence_norm
+    if (
+        len(evidence_norm) < 60
+        or evidence_is_placeholder
+        or not has_source
+        or not has_observation
+        or not mentions_prd
+    ):
+        return False, (
+            "expert_review_report_valid FAIL: evidencias devem registrar fonte, "
+            "resultado observado e relacao com o PRD"
+        )
+
+    findings_norm = _normalize(sections["findings"])
+    limitations_norm = _normalize(sections["limitations"])
+    if verdict in {"APPROVED", "REJECTED"} and not re.search(
+        r"\b[0-9a-fA-F]{40,64}\b", sections["baseline"]
+    ):
+        return False, (
+            "expert_review_report_valid FAIL: parecer conclusivo exige o hash "
+            "completo da baseline"
+        )
+
+    if verdict == "APPROVED" and "nenhum finding bloqueante" not in findings_norm:
+        return False, (
+            "expert_review_report_valid FAIL: APPROVED exige declarar "
+            "'Nenhum finding bloqueante.'"
+        )
+    if verdict == "REJECTED" and not re.search(r"\bF-\d{3}\b", sections["findings"]):
+        return False, (
+            "expert_review_report_valid FAIL: REJECTED exige finding F-001, F-002, ..."
+        )
+    if verdict == "BLOCKED" and not re.search(
+        r"\b(ausent|indispon|nao verific|bloque)\w*\b", limitations_norm
+    ):
+        return False, (
+            "expert_review_report_valid FAIL: BLOCKED exige explicar a evidencia ausente"
+        )
+
+    return True, f"expert_review_report_valid: {path} verdict={verdict}"
+
+
 def api_contract_complete(
     path: str = "docs/api_contract.md",
     project_root: str = ".",

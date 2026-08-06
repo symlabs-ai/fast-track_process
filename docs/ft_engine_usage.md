@@ -588,6 +588,7 @@ nodes:
     type: document
     title: "Escrever PRD"
     executor: llm_coach
+    expert: marketing_analyst
     sprint: sprint-01
     outputs: [docs/PRD.md]
     validators:
@@ -608,6 +609,42 @@ nodes:
   - id: step.end
     type: end
     title: "Processo concluído"
+```
+
+### Experts
+
+Nodes LLM podem carregar um perfil especialista versionado junto do template.
+Crie `templates/<T>/experts/<id>.md` com frontmatter e corpo de prompt:
+
+```markdown
+---
+id: marketing_analyst
+name: Marketing Analyst
+description: Analisa público, posicionamento e mensagem com base em evidências.
+version: 2
+tags: [marketing, strategy]
+---
+Classifique afirmações como FATO, INFERÊNCIA ou HIPÓTESE. Fatos exigem fonte,
+data e confiança; lacunas relevantes viram experimentos mensuráveis.
+```
+
+No `process.yml`, use `expert: marketing_analyst`. O bundle inteiro é copiado
+para `.ft/process/<T>/`, portanto o expert fica pinado no fork local e nos
+worktrees dos ciclos. O perfil especializa o prompt, mas não altera executor,
+modelo, ferramentas, escopo de escrita ou validators. Definição ausente,
+frontmatter inválido, id diferente do nome do arquivo, symlink ou uso em node
+não-LLM são recusados antes da execução.
+
+Mudança comportamental no corpo exige bump de `version`. A delegação registra
+id, versão e SHA-256 no run log; o prompt recebe apenas identidade descritiva,
+instruções e, em reviews, a baseline exata do ciclo.
+
+Liste os perfis disponíveis no fork local (ou no catálogo global antes da
+primeira materialização) com:
+
+```bash
+ft experts --template <T>
+ft experts --template <T> --json
 ```
 
 ## Regras de design de processo

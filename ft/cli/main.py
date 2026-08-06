@@ -514,6 +514,54 @@ def cmd_validation_profiles(args) -> None:
         print(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).rstrip())
 
 
+def cmd_experts(args) -> None:
+    """List the expert profiles pinned to a local or global template bundle."""
+
+    from ft.engine.experts import list_process_experts
+
+    root = find_project_root()
+    selector = str(args.template)
+    process_path = resolve_project_process(root, selector)
+    origin = "local"
+    if process_path is None:
+        global_candidate = engine_root() / "templates" / selector / "process.yml"
+        if not global_candidate.is_file():
+            raise ValueError(
+                f"template local não materializado e global ausente: {selector}"
+            )
+        process_path = global_candidate
+        origin = "global"
+
+    experts = list_process_experts(process_path)
+    payload = {
+        "template": selector,
+        "origin": origin,
+        "experts": [
+            {
+                "id": expert.id,
+                "name": expert.name,
+                "description": expert.description,
+                "version": expert.version,
+                "tags": list(expert.tags),
+                "digest": expert.digest,
+            }
+            for expert in experts
+        ],
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
+    if not experts:
+        print(f"Nenhum expert no template {selector} ({origin}).")
+        return
+    print(f"Experts do template {selector} ({origin}):")
+    for expert in experts:
+        print(
+            f"  {expert.id} · {expert.name} · v{expert.version}\n"
+            f"    {expert.description}"
+        )
+
+
 def cmd_validation_matrix(args) -> None:
     """Resolve and optionally materialize one project's selected profiles."""
 
@@ -6143,6 +6191,23 @@ def main():
         help="Emitir o catálogo em JSON",
     )
 
+    experts = sub.add_parser(
+        "experts",
+        help="Listar os perfis especialistas de um template",
+    )
+    experts.add_argument(
+        "--template",
+        "-t",
+        required=True,
+        metavar="TEMPLATE",
+        help="Template local materializado ou entrada do catálogo global",
+    )
+    experts.add_argument(
+        "--json",
+        action="store_true",
+        help="Emitir o catálogo em JSON",
+    )
+
     validation_matrix = sub.add_parser(
         "validation-matrix",
         help="Resolver e materializar a matriz de validação do projeto",
@@ -6670,6 +6735,8 @@ def main():
             cmd_llm_defaults(args)
         elif args.command == "validation-profiles":
             cmd_validation_profiles(args)
+        elif args.command == "experts":
+            cmd_experts(args)
         elif args.command == "validation-matrix":
             cmd_validation_matrix(args)
         else:

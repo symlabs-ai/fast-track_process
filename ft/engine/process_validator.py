@@ -323,6 +323,13 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
             report.add_error(node.id, f"type '{node.type}' inválido (válidos: {', '.join(sorted(VALID_NODE_TYPES))})")
         if node.type != "end" and node.executor and node.executor not in VALID_EXECUTORS:
             report.add_error(node.id, f"executor '{node.executor}' não reconhecido (válidos: {', '.join(sorted(VALID_EXECUTORS))})")
+        if node.expert is not None:
+            if not isinstance(node.expert, str) or not node.expert.strip():
+                report.add_error(node.id, "expert deve ser um id não vazio")
+            if not node.executor.startswith("llm"):
+                report.add_error(node.id, "expert só pode ser usado por executor LLM")
+            if node.expert_definition is None:
+                report.add_error(node.id, "expert referenciado não foi resolvido")
         if not isinstance(node.preserve_outputs_on_reentry, bool):
             report.add_error(
                 node.id,

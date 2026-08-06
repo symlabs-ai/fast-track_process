@@ -57,6 +57,12 @@ nodes:
     script.chmod(0o755)
     (template / "environment.yml").write_text("env: {}\n", encoding="utf-8")
     (template / "README.md").write_text("bundle docs\n", encoding="utf-8")
+    (template / "experts").mkdir()
+    (template / "experts" / "code_reviewer.md").write_text(
+        "---\nid: code_reviewer\nname: Code Reviewer\n"
+        "description: Review specialist\nversion: 1\n---\nReview the diff.\n",
+        encoding="utf-8",
+    )
     (template / "docs").mkdir()
     (template / "docs" / "PRD.md").write_text("product seed\n", encoding="utf-8")
     (template / "src").mkdir()
@@ -92,6 +98,8 @@ def test_materialization_is_copy_once_and_excludes_product_seeds(tmp_path: Path)
     assert local == (root / ".ft/process/feature/process.yml").resolve()
     assert (local.parent / ".base/process.yml").is_file()
     assert (local.parent / ".base/scripts/run.sh").is_file()
+    assert (local.parent / "experts/code_reviewer.md").is_file()
+    assert (local.parent / ".base/experts/code_reviewer.md").is_file()
     assert not (local.parent / "docs").exists()
     assert not (local.parent / "src").exists()
     assert script.stat().st_mode & stat.S_IXUSR

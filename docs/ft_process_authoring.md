@@ -63,6 +63,9 @@ templates/meu-processo/
 ├── environment.yml      # opcional — modo de execução, retries, hooks
 ├── README.md            # recomendado — o contrato humano do processo
 ├── process-flow.md      # recomendado — o diagrama do fluxo
+├── experts/             # opcional — perfis especialistas referenciados por nodes LLM
+│   ├── code_reviewer.md
+│   └── marketing_analyst.md
 ├── scripts/             # validadores determinísticos próprios do processo
 │   ├── validate_<nome>.py
 │   ├── product.sh
@@ -329,6 +332,7 @@ impede que um revisor "conserte" o produto em vez de reportar.
 | Campo | Uso |
 |---|---|
 | `prompt` | instrução do node. Referencia paths, não duplica conteúdo |
+| `expert` | id de um perfil em `experts/<id>.md`; somente em executor LLM |
 | `max_turns` | teto de turnos. Sem ele, o default por tipo é aplicado (30 na maioria, 12 em `retro`) |
 | `llm_engine` / `llm_model` / `llm_effort` | override por node do provider global do run |
 | `llm_timeout_seconds` | janela de **inatividade** (não deadline) que dispara sonda |
@@ -344,6 +348,73 @@ os dois no mesmo node é erro de validação. Perfis são registrados no engine
 processo precisa de um perfil novo, ele é uma mudança de engine, não de YAML.
 
 Orçamento de episódio só é válido com `llm_episode` declarado.
+
+#### Experts — especialização reutilizável
+
+Um expert define **como o agente aborda um assunto**; o `prompt` do node define
+**o trabalho concreto daquele passo**. O arquivo fica no próprio bundle para
+que a materialização copy-once também pine sua versão:
+
+```markdown
+---
+id: code_reviewer
+name: Code Reviewer
+description: Revisa código com foco em correção, regressões e evidência.
+version: 2
+tags: [engineering, quality]
+---
+Comece pelos critérios de aceitação, pela baseline informada e pelo diff real.
+Não aprove sem evidência atual nem modifique o produto durante a revisão.
+```
+
+O contrato é fail-closed:
+
+- o nome deve ser `experts/<id>.md` e o `id` usa `snake_case` minúsculo;
+- `id`, `name`, `description` e `version` são obrigatórios;
+- o corpo Markdown após o frontmatter é o prompt especialista e não pode ser vazio;
+- `tags` é opcional e aceita uma lista de textos;
+- symlinks, expert ausente e uso por executor não-LLM invalidam o processo.
+
+Toda mudança comportamental no corpo do expert exige bump de `version`. O
+SHA-256 identifica os bytes exatos; a versão comunica intencionalmente a mudança
+para humanos e consumers do catálogo.
+
+Referencie o expert pelo id:
+
+```yaml
+- id: review.code
+  type: review
+  title: "Revisar implementação"
+  executor: codex
+  expert: code_reviewer
+  no_pre_seed: true
+  prompt: |
+    Revise a implementação corrente contra docs/PRD.md.
+    Grave o parecer em docs/code-review.md com os headings Veredito e Evidências.
+  outputs: [docs/code-review.md]
+  write_scope: [docs/code-review.md]
+  validators:
+    - file_exists: docs/code-review.md
+    - has_sections:
+        path: docs/code-review.md
+        sections: [Veredito, Evidências]
+  next: end
+```
+
+O expert não escolhe provider/modelo, não concede ferramentas e não expande
+paths de escrita. Em conflito, prevalecem a segurança da engine, o node, seus
+outputs e validadores. Na delegação, a engine registra id, versão e SHA-256 no
+run log. Esses metadados não ocupam o prompt do modelo; reviews recebem também
+o `base_commit` exato do ciclo em um bloco de contexto auditável.
+
+Um prompt especialista continua sendo orientação, não gate. Pareceres que
+decidem o fluxo devem combinar `no_pre_seed`, `write_scope` restrito,
+`has_sections`, `document_quality` e um validator semântico ou receipt
+estruturado. O catálogo base usa `expert_review_report_valid` para recusar
+veredito conclusivo sem baseline e evidência observada.
+
+Use `ft experts --template <T>` para inspecionar o catálogo efetivo e
+`--json` para obter id, descrição, versão, tags e digest de forma estruturada.
 
 ### 4.4 Reentrância e pre-seed
 
@@ -864,6 +935,7 @@ suíte cara que o produziu. Se ele falhar, o comando completo roda uma vez.
 | `min_lines` | `path, n` |
 | `has_sections` | `path, sections[]` |
 | `document_quality` | `path, min_lines_count, max_lines_count, forbidden[], required_terms[], min_required_terms` |
+| `expert_review_report_valid` | `path` — exige veredito único, baseline e evidência coerente no parecer |
 | `min_user_stories` | `path, n` (conta `### US-`) |
 | `relative_dates_only` | `path` |
 | `sections_unchanged` | `path, snapshot_path, sections[]` — congela seções críticas |

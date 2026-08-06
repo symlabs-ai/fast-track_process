@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from ft.engine.experts import Expert, resolve_process_expert
+
 
 @dataclass
 class Node:
@@ -32,6 +34,9 @@ class Node:
     sprint: str | None = None
     # Custom prompt for LLM
     prompt: str | None = None
+    # Perfil especialista versionado no bundle local do processo.
+    expert: str | None = None
+    expert_definition: Expert | None = field(default=None, repr=False)
     # Parallel group — nodes com mesmo grupo rodam em paralelo
     parallel_group: str | None = None
     # Override do limite de turns do LLM para nodes complexos
@@ -123,6 +128,14 @@ class ProcessGraph:
         ids = set(self.nodes.keys())
 
         for node in self.nodes.values():
+            if node.expert is not None and not node.executor.startswith("llm"):
+                raise ValueError(
+                    f"Node '{node.id}' usa expert mas não possui executor LLM"
+                )
+            if node.expert is not None and node.expert_definition is None:
+                raise ValueError(
+                    f"Node '{node.id}' referencia expert não resolvido: {node.expert}"
+                )
             if node.type == "end":
                 continue
             if node.validation_mode not in {"aggregate", "fail_fast"}:
@@ -331,6 +344,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
         raw = yaml.safe_load(f)
 
     nodes = []
+    expert_cache: dict[str, Expert] = {}
     for node_raw in raw.get("nodes", []):
         # Parse validators — podem ser dict simples ou nested
         validators = []
@@ -351,6 +365,15 @@ def load_graph(path: str | Path) -> ProcessGraph:
         raw_executor = node_raw.get("executor", "python")
         executor = _EXECUTOR_ALIASES.get(raw_executor, raw_executor)
 
+        expert_id = node_raw.get("expert")
+        expert_definition = None
+        if expert_id is not None:
+            cache_key = str(expert_id)
+            expert_definition = expert_cache.get(cache_key)
+            if expert_definition is None:
+                expert_definition = resolve_process_expert(path, expert_id)
+                expert_cache[expert_definition.id] = expert_definition
+
         nodes.append(Node(
             id=node_raw["id"],
             type=node_raw.get("type", "build"),
@@ -366,6 +389,8 @@ def load_graph(path: str | Path) -> ProcessGraph:
             condition=node_raw.get("condition"),
             sprint=node_raw.get("sprint"),
             prompt=node_raw.get("prompt"),
+            expert=expert_definition.id if expert_definition else None,
+            expert_definition=expert_definition,
             parallel_group=node_raw.get("parallel_group"),
             max_turns=node_raw.get("max_turns"),
             env_setup=node_raw.get("env_setup", []),

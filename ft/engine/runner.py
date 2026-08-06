@@ -25,6 +25,7 @@ from ft.engine import paths
 from ft.engine.api_context import enrich_api_contract_feedback
 from ft.engine.artifact_ops import remove_declared_outputs
 from ft.engine.graph import Node, load_graph
+from ft.engine.experts import compose_expert_task
 from ft.engine.context_profiles import compose_context_profile
 from ft.engine.decision_gates import build_decision_gate_context
 from ft.engine.focal_evidence import (
@@ -654,6 +655,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "min_lines": val.min_lines,
     "has_sections": val.has_sections,
     "document_quality": val.document_quality,
+    "expert_review_report_valid": val.expert_review_report_valid,
     "api_contract_complete": val.api_contract_complete,
     "library_contract_complete": val.library_contract_complete,
     "relative_dates_only": val.relative_dates_only,
@@ -1074,7 +1076,10 @@ def _description_block(node: Node) -> str:
     return f"\nDescricao especifica do node:\n{node.description}\n"
 
 
-def build_task_prompt(node: Node, state_dict: dict[str, Any]) -> str:
+def _build_task_prompt_without_expert(
+    node: Node,
+    state_dict: dict[str, Any],
+) -> str:
     """Constroi o prompt de construcao para o LLM baseado no node."""
     outputs_str = ", ".join(node.outputs) if node.outputs else "conforme necessario"
     outputs_contract = _format_outputs_contract(node.outputs)
@@ -1297,6 +1302,35 @@ Contrato de saida esperado:
 Validadores que precisam passar:
 {validators_contract}
 """
+
+
+def build_task_prompt(node: Node, state_dict: dict[str, Any]) -> str:
+    """Build the node task and apply its pinned expert profile, when present."""
+    task = _build_task_prompt_without_expert(node, state_dict)
+    if node.expert_definition is None:
+        return task
+    runtime_context = None
+    if node.type == "review":
+        base_commit = str(state_dict.get("base_commit") or "").strip()
+        if re.fullmatch(r"[0-9a-fA-F]{40,64}", base_commit):
+            runtime_context = (
+                "Baseline exata do ciclo: " + base_commit + "\n"
+                "Inspecione o delta com `git diff --name-status "
+                + base_commit
+                + " --` e `git diff "
+                + base_commit
+                + " --`. Inclua o hash completo no parecer."
+            )
+        else:
+            runtime_context = (
+                "Baseline exata do ciclo: INDISPONÍVEL. "
+                "Não invente um hash nem emita parecer conclusivo."
+            )
+    return compose_expert_task(
+        node.expert_definition,
+        task,
+        runtime_context=runtime_context,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4947,7 +4981,19 @@ class StepRunner:
             effective_engine,
             deny_read_paths=opencode_deny_read_paths,
         )
-        print(ui.info(f"Delegando ao LLM ({effective_engine})..."))
+        if node.expert_definition is not None:
+            pinned = node.expert_definition
+            self._log_event(
+                f"EXPERT:{node.id}",
+                "Expert pinado para delegação",
+                "PINNED",
+                (
+                    f"id={pinned.id} version={pinned.version} "
+                    f"digest={pinned.digest}"
+                ),
+            )
+        expert_label = f", expert: {node.expert}" if node.expert else ""
+        print(ui.info(f"Delegando ao LLM ({effective_engine}{expert_label})..."))
         state.node_status = "delegated"
         state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
         log_path = self._start_llm_log(

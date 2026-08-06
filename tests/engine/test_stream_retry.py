@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ft.engine.delegate import DelegateResult
@@ -90,3 +91,21 @@ def test_stream_retry_preserves_rolling_inactivity_window_without_wall_deadline(
 
     assert final.success is True
     assert [call["llm_timeout_seconds"] for call in calls] == [900, 900]
+
+
+def test_stream_retry_attaches_template_as_workflow():
+    calls = []
+
+    def fake_delegate(**kwargs):
+        calls.append(dict(kwargs))
+        return _result(success=True)
+
+    runner = object.__new__(StepRunner)
+    runner.state_mgr = SimpleNamespace(
+        state=SimpleNamespace(template_id="innovation")
+    )
+    with patch("ft.engine.runner.delegate_to_llm", side_effect=fake_delegate):
+        final = StepRunner._delegate_with_stream_retry(runner, task="t")
+
+    assert final.success is True
+    assert calls[0]["workflow_id"] == "innovation"

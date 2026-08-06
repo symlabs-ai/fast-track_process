@@ -27,8 +27,10 @@ def cores(monkeypatch):
     """Força constantes ANSI para sentinelas legíveis, simulando terminal."""
     marks = {
         "RESET": "[/]", "DIM": "[dim]", "ITALIC": "[it]", "GREEN": "[grn]",
-        "BLUE": "[blu]", "BOLD_GREEN": "[BGRN]", "BOLD_WHITE": "[BWHT]",
-        "BOLD_CYAN": "[BCYN]", "BOLD": "[B]", "CYAN": "[cyn]",
+        "BLUE": "[blu]", "WHITE": "[wht]", "RED": "[red]", "YELLOW": "[ylw]",
+        "BOLD_GREEN": "[BGRN]", "BOLD_WHITE": "[BWHT]",
+        "BOLD_YELLOW": "[BYLW]", "BOLD_CYAN": "[BCYN]", "BOLD": "[B]",
+        "CYAN": "[cyn]",
     }
     for name, val in marks.items():
         monkeypatch.setattr(ui, name, val)
@@ -71,6 +73,31 @@ def test_evento_generico_apagado(cores):
 
 def test_linha_desconhecida_intacta(cores):
     assert ui.paint_stream_line("NODE_SUMMARY: - fiz: impl") == "NODE_SUMMARY: - fiz: impl"
+
+
+@pytest.mark.parametrize(
+    ("tone", "prefix"),
+    [
+        ("pass", "[blu]"),
+        ("pending", "[wht]"),
+        ("skipped", "[dim]"),
+        ("error", "[red]"),
+        ("active", "[BYLW]"),
+        ("gate", "[ylw]"),
+    ],
+)
+def test_status_node_usa_paleta_semantica(cores, tone, prefix):
+    assert ui.status_node("node", tone) == f"{prefix}node[/]"
+
+
+def test_status_node_respeita_no_color_mesmo_com_constantes_ansi(
+    monkeypatch,
+):
+    monkeypatch.setattr(ui, "_COLOR", False)
+    monkeypatch.setattr(ui, "BLUE", "\033[34m")
+    monkeypatch.setattr(ui, "RESET", "\033[0m")
+
+    assert ui.status_node("    ✓ node: PASS", "pass") == "    ✓ node: PASS"
 
 
 # --- markdown leve na prosa (o prompt do nó) -------------------------------

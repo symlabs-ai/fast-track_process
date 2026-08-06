@@ -78,6 +78,8 @@ processes: {}
 o mesmo entrypoint:
 
 ```bash
+ft run . --template mdd --request "Definir o produto" --auto
+# após os gates: ft close --cycle <id-mdd>
 ft run . --template mvp-builder --auto
 ft run . --template mvp-builder-fast --auto --parallel
 ft run . --template mvp-builder-fast --route validation --input feedback.md --auto --parallel
@@ -144,6 +146,7 @@ ft continue --cycle <id>
 ft continue --cycle <id> --sprint
 ft continue --cycle <id> --auto
 ft status --cycle <id> --full
+ft status --cycle <id> --watch 60
 ft graph --cycle <id>
 ft approve "nota opcional" --cycle <id>
 ft reject "motivo objetivo" --cycle <id>
@@ -153,6 +156,8 @@ ft retry --cycle <id>
 ft abort --cycle <id>
 ft close --cycle <id>
 ft runs
+ft runs --done
+ft runs --done-detailed  # execuções de step, incluindo retries/loops
 ft project-status
 ft project-close
 ft project-reopen --reason "novo marco" --objective "Entregar ..." --target v2
@@ -165,6 +170,14 @@ Quando há exatamente um ciclo aplicável, comandos de acompanhamento podem
 inferi-lo. Com dois ou mais, `--cycle` é obrigatório e o erro lista as opções; o
 engine nunca escolhe pela data de criação.
 
+`ft status --watch [SEGUNDOS]` abre uma tela fixa de monitoramento e redesenha o
+status no mesmo lugar, sem acumular linhas como um log. Sem informar o intervalo,
+usa 60 segundos. Cada tela mostra o horário da última atualização. `Ctrl+C`
+encerra o monitoramento. O buffer normal do terminal é preservado para permitir
+rolagem durante o acompanhamento. O status também informa o caminho absoluto da
+worktree ativa do ciclo. A última linha mostra a atividade sanitizada mais recente
+do log LLM como um tail fixo, substituído a cada atualização.
+
 O DoD global versionado em `.ft/project.yml` exige `done`/`accepted` com
 evidência para o escopo selecionado e pode declarar gates JSON/YAML adicionais.
 Itens `blocked`/`deferred` continuam pendentes mesmo quando possuem decisão.
@@ -173,6 +186,11 @@ Somente `ft project-close`, com checkout limpo e nenhum ciclo aberto, registra
 
 `--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
 `--bypass-human-gates` delega essas decisões ao LLM.
+
+Todo gate humano é apresentado como um pacote de decisão: o que está sendo
+decidido, por que agora, onde avaliar, checklist, limites e consequências de
+aprovar ou rejeitar. `ft status --cycle <id>` repete o mesmo contexto; processos
+locais antigos recebem um fallback derivado do grafo e das evidências existentes.
 
 Todo `ft fix` dirigido renova obrigatoriamente o review que encontrou o defeito.
 Quando a correção nasce em human gate, `ft fix`/`ft reject` executam
@@ -212,6 +230,7 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 | `bug` | Correção focal em projeto entregue, com regressão RED→GREEN |
 | `bug-fast` | Bug de manutenção em duas chamadas LLM e fix focal |
 | `tweak` | Mudança pequena em projeto entregue |
+| `mdd` | Definição, pacote executivo, 12 PNGs do pitch, protótipo vertical do site e handoff |
 | `mvp-builder` | Construtor completo durante a fase `building` |
 | `mvp-builder-fast` | Construtor rápido com plano interno, sessões e macro-nodes |
 | `fast-track-v2` | Processo histórico V2 |

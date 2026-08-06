@@ -196,6 +196,7 @@ def execute_fix(args: Any, runner: Any) -> None:
         "llm_model": selection.model,
         "llm_effort": selection.effort,
         "log_path": str(log_path),
+        "workflow_id": getattr(state, "template_id", None),
     }
     if capture_path:
         kwargs["opencode_capture_output_path"] = capture_path
@@ -273,8 +274,8 @@ def execute_fix(args: Any, runner: Any) -> None:
                 fixed_state.node_status = "ready"
                 fixed_state.blocked_reason = None
                 runner.state_mgr.save()
-                print(ui.awaiting_approval(auto=runner._auto_approve))
                 runner.state_mgr.set_pending_approval(node.id)
+                runner._present_decision_gate(node)
                 return
 
             next_id = runner.graph.resolve_next(node.id)

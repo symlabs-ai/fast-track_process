@@ -23,7 +23,18 @@ from typing import Any, Mapping
 import yaml
 
 from ft.engine import paths
+from ft.engine.validation_profiles import (
+    ValidationProfileError,
+    default_validation_config,
+    resolve_validation_matrix,
+    safe_project_output,
+    normalize_validation_config,
+)
 from ft.engine.validators.artifacts import _backlog_rows, _row_value
+from ft.engine.validators.platforms import (
+    platform_validation_report,
+    validation_matrix_valid,
+)
 
 
 PROJECT_CONTRACT_VERSION = 1
@@ -135,6 +146,7 @@ def default_project_contract(project_root: str | Path) -> dict[str, Any]:
             "owner_template": None,
             "delivered_revision": None,
         },
+        "validation": default_validation_config(),
         "definition_of_done": {
             "backlog": {
                 "path": "docs/PROJECT_BACKLOG.md",
@@ -273,6 +285,12 @@ def validate_project_contract(
         raise ProjectContractError(
             "projeto em maintenance exige lifecycle.delivered_revision"
         )
+
+    if "validation" in contract:
+        try:
+            normalize_validation_config(contract["validation"])
+        except ValidationProfileError as exc:
+            raise ProjectContractError(str(exc)) from exc
 
     dod = contract.get("definition_of_done")
     if not isinstance(dod, Mapping):
@@ -442,6 +460,11 @@ def definition_of_done_digest(contract: Mapping[str, Any]) -> str:
         "objective": contract.get("objective"),
         "definition_of_done": contract.get("definition_of_done"),
     }
+    # Perfis selecionados são parte do aceite global: alterar um target depois
+    # do fechamento deve invalidar o receipt READY. Contratos legados sem a
+    # seção mantêm exatamente o digest histórico.
+    if "validation" in contract:
+        relevant["validation"] = contract.get("validation")
     return "sha256:" + hashlib.sha256(_canonical_json(relevant)).hexdigest()
 
 
@@ -840,6 +863,72 @@ def evaluate_project_readiness(
             blocker_code="project.gate_blocked",
             references=(gate_id, relative),
         )
+
+    validation_config = contract.get("validation")
+    if validation_config is not None:
+        try:
+            matrix = resolve_validation_matrix(root, contract)
+        except ValidationProfileError as exc:
+            _record_check(
+                checks,
+                blockers,
+                check_id="platform-validation",
+                passed=False,
+                detail=f"contrato de validação inválido: {exc}",
+                blocker_code="project.platform_validation",
+                references=(".ft/project.yml",),
+            )
+        else:
+            if matrix["status"] == "active":
+                matrix_path = str(matrix["matrix_path"])
+                report_path = str(matrix["report_path"])
+                evidence_root = str(matrix["evidence_root"])
+                identity_path = str(matrix["test_identity"]["path"])
+                matrix_ok, matrix_detail = validation_matrix_valid(
+                    matrix_path,
+                    project_root=str(root),
+                )
+                report_ok, report_detail = platform_validation_report(
+                    matrix_path=matrix_path,
+                    report_path=report_path,
+                    evidence_root=evidence_root,
+                    test_identity_path=identity_path,
+                    require_approved=True,
+                    project_root=str(root),
+                )
+                platform_ok = matrix_ok and report_ok
+                detail = (
+                    report_detail
+                    if matrix_ok
+                    else matrix_detail
+                )
+                _record_check(
+                    checks,
+                    blockers,
+                    check_id="platform-validation",
+                    passed=platform_ok,
+                    detail=detail,
+                    blocker_code="project.platform_validation",
+                    references=(matrix_path, report_path),
+                )
+                for relative in (matrix_path, report_path):
+                    try:
+                        evidence_path = safe_project_output(root, relative)
+                    except ValidationProfileError:
+                        continue
+                    if evidence_path.is_file():
+                        fingerprint.update(relative.encode("utf-8"))
+                        fingerprint.update(b"\0")
+                        fingerprint.update(evidence_path.read_bytes())
+            else:
+                _record_check(
+                    checks,
+                    blockers,
+                    check_id="platform-validation",
+                    passed=True,
+                    detail=f"matrix de plataforma: {matrix['status']}",
+                    blocker_code="project.platform_validation",
+                )
 
     if dod["require_no_active_cycles"]:
         active = _active_cycle_ids(root)

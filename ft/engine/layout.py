@@ -300,6 +300,9 @@ BUNDLE_IGNORED_FILES = frozenset({
     ".serve_backend.pid",
     ".serve_frontend.pid",
     ".serve_url",
+    ".presented_artifact",
+    ".presentation.log",
+    ".presentation.pid",
 })
 BUNDLE_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
 
@@ -1112,6 +1115,8 @@ def validate_template_is_pristine(template_dir: str | Path) -> None:
         "runs",
         ".serve.pid",
         ".serve_url",
+        ".presented_artifact",
+        ".presentation.pid",
     }
     offenders: list[str] = []
     for item in root.rglob("*"):
@@ -1715,6 +1720,9 @@ def _legacy_runtime_candidates(root: Path) -> list[Path]:
                 ".serve_backend.pid",
                 ".serve_frontend.pid",
                 ".serve.log",
+                ".presented_artifact",
+                ".presentation.pid",
+                ".presentation.log",
             )
         )
     return [path for path in candidates if path.exists() or path.is_symlink()]

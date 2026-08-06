@@ -245,6 +245,32 @@ def stage_prd() -> list[str]:
         row = re.search(rf"^\|\s*{sc}\s*\|(.+)$", prd, re.MULTILINE)
         if not row or not re.search(r"\bAC-\d{2}\b", row.group(1)):
             errors.append(f"docs/PRD.md: Rastreabilidade sem linha '{sc} | AC-*' — todo SC exige ao menos um AC")
+
+    handoff_path = DOCS / "handoff.md"
+    handoff_fm, handoff = read_frontmatter(handoff_path)
+    if handoff_fm.get("next_process") not in {"mvp-builder-fast", "feature-fast"}:
+        errors.append("docs/handoff.md: next_process deve ser mvp-builder-fast|feature-fast")
+    if handoff_fm.get("delivery_readiness") != "planning_required":
+        errors.append("docs/handoff.md: delivery_readiness deve ser planning_required")
+    if not isinstance(handoff_fm.get("implementation_authorized"), bool):
+        errors.append("docs/handoff.md: implementation_authorized deve ser true|false")
+    for section in ("Estado para o delivery", "Inventário durável"):
+        if not re.search(rf"^##\s+{re.escape(section)}\s*$", handoff, re.MULTILINE):
+            errors.append(f"docs/handoff.md: seção '## {section}' ausente")
+    for required in (
+        "docs/PROJECT_BACKLOG.md",
+        ".ft/project.yml",
+        ".ft/cycles/<cycle-id>/",
+        "building",
+        "BLOCKED",
+    ):
+        if required not in handoff:
+            errors.append(f"docs/handoff.md: Estado/Inventário deve citar '{required}'")
+    if "docs/research/" in handoff:
+        errors.append(
+            "docs/handoff.md: não publique docs/research/ como path durável; "
+            "use .ft/cycles/<cycle-id>/research/..."
+        )
     return errors
 
 

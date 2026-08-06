@@ -15,7 +15,7 @@
 #   cobertos por AC-* no PRD (validado deterministicamente).
 
 id: innovation
-version: "0.3.0"
+version: "0.3.2"
 title: "Innovation — Discovery, Validação e Business Case Automatizados"
 
 execution_policy:
@@ -59,6 +59,13 @@ artifact_policy:
     - docs/research/probes/
     - docs/validation.md
     - docs/research-questions.md
+
+# Discovery não entrega software nem reconcilia o DoD global. A ausência de
+# PROJECT_BACKLOG.md ao fechar este ciclo é intencional: o builder indicado no
+# handoff materializa backlog, contrato e matriz de validação antes de construir.
+close_policy:
+  backlog:
+    mode: none
 
 nodes:
   - id: innovation.intake
@@ -136,14 +143,25 @@ nodes:
     write_scope:
       - docs/research/market.md
       - docs/research/market-evidence.yml
+      - docs/research-questions.md
     prompt: |
       Pesquise na web evidências sobre MERCADO e PROBLEMA para as hipóteses de
       docs/hypotheses.md. Foco: o problema existe fora da nossa cabeça? Qual o
       tamanho? Há sinais de demanda (discussões, reclamações, buscas, gastos)?
 
-      Em uma reentrada (docs/research-questions.md contém respostas do
-      stakeholder), NÃO refaça a pesquisa inteira: preencha somente as lacunas
-      apontadas e preserve os claims já coletados.
+      Em uma reentrada, a mensagem do stakeholder aprovada no human gate é
+      injetada neste prompt. ANTES de pesquisar, persista cada resposta abaixo
+      da pergunta correspondente em docs/research-questions.md, prefixada por
+      `**Resposta do stakeholder:**`. Preserve as perguntas e respostas
+      anteriores literalmente; nunca invente, complete ou transforme números,
+      compromissos, orçamento ou preferências. Essa persistência é obrigatória
+      mesmo quando a resposta não pode virar claim externo.
+
+      Depois disso, NÃO refaça a pesquisa inteira: preencha somente as lacunas
+      que admitem evidência externa e preserve os claims já coletados. Resposta
+      interna do stakeholder não entra nos evidence.yml e não precisa de URL;
+      ela será tratada separadamente pela validação como evidência restrita ao
+      piloto declarado.
 
       Gere docs/research/market.md: síntese narrativa citando os claims por ID.
 
@@ -319,16 +337,23 @@ nodes:
       - docs/validation.md
       - docs/research-questions.md
     prompt: |
-      Julgue cada hipótese de docs/hypotheses.md exclusivamente contra os
-      claims dos três evidence.yml em docs/research/. Não pesquise mais nada
-      e não considere conhecimento próprio não citado: verdict sem EV-* é
-      inválido.
+      Julgue cada hipótese de docs/hypotheses.md contra os claims dos três
+      evidence.yml em docs/research/. Não pesquise mais nada e não considere
+      conhecimento próprio não citado.
+
+      EXCEÇÃO DE REENTRADA: respostas explicitamente persistidas em
+      docs/research-questions.md com `**Resposta do stakeholder:**` ou
+      `**[LLM Responde / ...]**` também são evidência de processo. Elas podem
+      resolver somente a pergunta e o piloto a que se referem; não podem ser
+      generalizadas para o mercado nem convertidas em EV-*. Cite-as na tabela
+      como `STAKEHOLDER` junto dos EV-* relevantes. Fora dessa exceção,
+      verdict sem EV-* é inválido.
 
       Gere docs/validation.md com frontmatter:
         overall_verdict: supported | refuted | inconclusive
 
       O corpo deve conter uma tabela com uma linha por hipótese:
-      | H-* | verdict (supported|refuted|inconclusive) | evidências (EV-*) | racional curto |
+      | H-* | verdict (supported|refuted|inconclusive) | evidências (EV-* e, em reentrada, STAKEHOLDER) | racional curto |
 
       Critérios:
       - supported: evidência de confiança medium/high sustenta a hipótese e
@@ -356,6 +381,11 @@ nodes:
       É proibido emitir inconclusive novamente pelos mesmos motivos já
       perguntados; inconclusive em reentrada só é legítimo para lacuna NOVA,
       surgida de evidência nova, e exige perguntas inéditas.
+
+      Se a resposta assumir compromisso de piloto mas recusar mensalidade,
+      julgue adoção no escopo do piloto separadamente de monetização: custo
+      zero pode sustentar adoção gratuita com risco econômico declarado; não
+      trate ausência de disposição a pagar como ausência de disposição a usar.
 
       Gere docs/research-questions.md:
       - Se overall_verdict for inconclusive: perguntas numeradas e objetivas ao
@@ -507,6 +537,21 @@ nodes:
     bypass_reject_when:
       path: docs/business-case.md
       pattern: "recommendation:\\s*no_go"
+    decision_context:
+      decision: "O business case sustenta avançar para a definição executável de um piloto ou produto?"
+      why_now: "Pesquisa, validação e critérios de sucesso terminaram; falta a decisão humana de investimento antes de gerar o PRD e o handoff."
+      review_paths:
+        - docs/validation.md
+        - docs/business-case.md
+      checklist:
+        - "A oportunidade e as alternativas justificam o investimento proposto."
+        - "Custos, riscos, horizonte e critérios SC-* são aceitáveis e verificáveis."
+        - "A mensagem de aprovação declara explicitamente se também autoriza iniciar a implementação."
+      limitations:
+        - "Aprovar gera somente PRD e handoff; não executa o builder nem entrega o produto."
+        - "Aprovar não configura infraestrutura, publica serviços nem fecha o projeto como READY."
+      approve_effect: "Gera o PRD e o handoff; a implementação continuará dependendo de autorização explícita e de um ciclo builder separado."
+      reject_effect: "Encerra a ideia com post-mortem auditável, preservando o dossiê da pesquisa."
     next: innovation.prd
 
   - id: innovation.prd
@@ -543,6 +588,11 @@ nodes:
       docs/handoff.md deve conter:
       - next_process no frontmatter: mvp-builder-fast (produto novo) ou
         feature-fast (evolução de produto existente), com justificativa.
+      - delivery_readiness: planning_required no frontmatter. Innovation
+        entrega definição, não software pronto nem readiness global.
+      - implementation_authorized: true|false no frontmatter. Use true SOMENTE
+        quando a mensagem do stakeholder no gate autorizar explicitamente
+        iniciar a implementação; aprovação genérica de go não basta.
       - O que copiar para o seed do delivery (PRD, restrições, test data
         sugerido).
       - Os SC-* como critérios do piloto: o delivery prova que funciona; o
@@ -550,6 +600,18 @@ nodes:
       - Alerta de validade: research_date das lentes; se a pesquisa tiver mais
         de 8 semanas quando o delivery começar, recomende re-checagem rápida
         de mercado/concorrência.
+      - Seção `## Estado para o delivery`: declare que o projeto permanece
+        `building` e que `mvp-builder-fast` deve criar/reconciliar
+        docs/PROJECT_BACKLOG.md, .ft/project.yml e a matriz de validação antes
+        de construir. `ft project-status` permanecer BLOCKED até haver produto
+        implementado e evidências; nunca apresente o fim de innovation como
+        READY.
+      - Seção `## Inventário durável`: liste docs/PRD.md,
+        docs/business-case.md e docs/handoff.md como artefatos canônicos. O
+        dossiê de pesquisa é cycle-local e, depois de `ft close`, fica sob
+        `.ft/cycles/<cycle-id>/`; referencie pesquisas somente pelo padrão
+        `.ft/cycles/<cycle-id>/research/...`. Não publique `docs/research/...`
+        como path durável, pois esse path deixa de existir após o close.
     validators:
       - file_exists: docs/PRD.md
       - file_exists: docs/handoff.md
@@ -565,6 +627,14 @@ nodes:
           path: docs/handoff.md
           key: next_process
           pattern: "next_process:\\s*(mvp-builder-fast|feature-fast)"
+      - read_artifact:
+          path: docs/handoff.md
+          key: delivery_readiness
+          pattern: "delivery_readiness:\\s*(planning_required)"
+      - read_artifact:
+          path: docs/handoff.md
+          key: implementation_authorized
+          pattern: "implementation_authorized:\\s*(true|false)"
       - command_succeeds: "python .ft/process/innovation/scripts/validate_innovation.py prd"
     next: innovation.end
 

@@ -459,6 +459,7 @@ class TestRealProcess:
         "templates/tweak/process.yml",
         "templates/mvp-builder/process.yml",
         "templates/mvp-builder-fast/process.yml",
+        "templates/mdd/process.yml",
         "templates/ft-ui-prototype/process.yml",
     ])
     def test_templates_pass_process_validation(self, template):

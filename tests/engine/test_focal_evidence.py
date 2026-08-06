@@ -534,3 +534,58 @@ def test_apk_finding_accepts_matching_local_and_observed_hash(tmp_path: Path) ->
     )
 
     assert result.passed, result.reason
+
+
+def test_headless_approval_does_not_inherit_physical_ui_requirements(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "docs" / "headless-regression.txt"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("25/25 programmatic checks passed\n", encoding="utf-8")
+    review_output = _review(
+        """focal_evidence:
+  coverage_complete: true
+  finding_kind: technical
+  evidence_level: integration
+  data_origin: local_product
+  mock_only: false
+  journey: [execute public SDK contract, inspect sanitized result]
+  visual_evidence: []
+  claims:
+    - requirement: headless SDK contract
+      expected: all programmatic checks pass
+      observed: 25/25 checks passed
+      status: PASS
+      evidence: [docs/headless-regression.txt]"""
+    )
+    misleading_meta_context = (
+        "EVIDENCE_FIDELITY_REJECTED: finding de dados visíveis deve declarar "
+        "finding_kind: ui_data. Confirme evidência visual quando o finding for de UI."
+    )
+
+    ui_result = validate_focal_approval(
+        review_output=review_output,
+        finding_context=misleading_meta_context,
+        project_root=tmp_path,
+    )
+    headless_result = validate_focal_approval(
+        review_output=review_output,
+        finding_context=misleading_meta_context,
+        project_root=tmp_path,
+        ui_validation_enabled=False,
+    )
+
+    assert not ui_result.passed
+    assert headless_result.passed, headless_result.reason
+
+    wrong_kind_result = validate_focal_approval(
+        review_output=review_output.replace(
+            "finding_kind: technical",
+            "finding_kind: ui_data",
+        ),
+        finding_context=misleading_meta_context,
+        project_root=tmp_path,
+        ui_validation_enabled=False,
+    )
+    assert not wrong_kind_result.passed
+    assert "headless" in wrong_kind_result.reason

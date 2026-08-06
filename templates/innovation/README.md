@@ -21,6 +21,13 @@ novo) ou `feature-fast` (evolução) começam. A saída go é `docs/PRD.md` +
 `docs/handoff.md`; a saída no-go é `docs/post-mortem.md` — ambos são fins
 legítimos. Matar uma ideia barata, com dossiê, é entrega de valor.
 
+Após um GO, o projeto continua deliberadamente em `building` e pode aparecer
+como `BLOCKED` em `ft project-status`: innovation não cria
+`docs/PROJECT_BACKLOG.md`, não reconcilia `.ft/project.yml` e não seleciona a
+matriz de validação. Essas são responsabilidades do builder indicado no
+handoff, antes da construção. O handoff também distingue o GO de uma autorização
+explícita para iniciar implementação.
+
 ## Uso
 
 ```bash
@@ -39,6 +46,7 @@ misturar produto e processo — o intake classifica e separa.
 | validation | H-* sem verdict, verdict sem EV-* citado, EV-* inexistente |
 | business_case | SC-* sem Métrica/Alvo/Prazo, frontmatter incompleto |
 | prd | SC-* do business case sem AC-* na tabela de Rastreabilidade |
+| handoff | boundary de delivery ausente, autorização ambígua ou path de pesquisa que ficará inválido após o close |
 | post_mortem | causa da morte sem citar evidência real |
 
 O gate não julga se a pesquisa é *verdadeira* — julga se é *auditável*: todo
@@ -72,6 +80,9 @@ sonda vale mais que dez claims lidos.
 - Somente executor `claude` (os nodes de pesquisa dependem de web search).
 - Pesquisa tem validade: `research_date` fica nos evidence.yml e o handoff
   alerta re-checagem se o delivery começar >8 semanas depois.
+- O dossiê é cycle-local: durante a execução está em `docs/research/`; após
+  `ft close`, o path durável é `.ft/cycles/<cycle-id>/research/`. O handoff não
+  pode anunciar o path transitório como fonte permanente.
 - Sem limite automático de rodadas research↔questions; o gate humano é o
   próprio freio. Em `--auto`, um verdict inconclusive para no gate.
 - Com `--bypass-human-gates`, o gate de perguntas não é pulado às cegas: o

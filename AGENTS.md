@@ -33,6 +33,8 @@ Há três níveis independentes:
 ```text
 ft init meu-projeto                      # base comum, sem processo
   → adicionar/commitar conhecimento      # fontes do projeto, se necessárias
+ft run . --template mdd --request ...    # definição + narrativa em ciclo próprio
+ft close --cycle <id-mdd>                # promover conhecimento aprovado
 ft run . --template mvp-builder --auto   # ciclo A
 ft run . --template tweak --request ...  # ciclo B, pode coexistir com A
   → status/graph/approve/reject/fix       # selecionar ciclo se houver ambiguidade
@@ -51,6 +53,18 @@ P0/P1 `blocked`, `deferred`, `planned` ou apenas “decidido” continuam penden
 somente `done`/`accepted` com evidência satisfazem o fechamento. Gates adicionais
 apontam para campos verificáveis de arquivos JSON/YAML. O receipt versionado
 fica em `.ft/project-readiness.yml`.
+
+O mesmo contrato declara `validation`: a matriz global de Android, iOS, web e
+desktop aplicável ao produto. Use `ft validation-profiles` para inspecionar o
+catálogo e `ft validation-matrix .` para materializar a seleção corrente. iPhone
+e iPad são targets físicos de iOS. Target obrigatório sem receipt aprovado
+bloqueia tanto o processo quanto `ft project-close`; não crie processos móveis
+separados nem aceite simulador como substituto silencioso de aparelho físico.
+Todo target de UI inclui o check `mockup_watermark`: cada tela, página ou janela
+do produto deve renderizar uma marca d'água discreta com o identificador exato
+do mockup correspondente (`S01`, `S02`, ...). O receipt inventaria todas as
+telas e exige screenshot real por tela; overlay da captura, referência genérica,
+tela sem mockup ou inventário incompleto reprova a validação.
 
 ## 0. Inicializar ou diagnosticar o repositório
 
@@ -91,7 +105,11 @@ implícita.
 Templates leem as fontes do projeto existentes no checkout. Antes de iniciar um
 ciclo, crie os documentos que o template escolhido exige e faça commit:
 
-- produto novo: em geral `docs/PRD.md` e `docs/TECH_STACK.md`;
+- produto novo com `mvp-builder-fast`: rode e encerre primeiro o template `mdd`,
+  que produz hipótese, visão, PRD, sumário executivo, pitch deck, proposta de
+  site, um PNG por slide, um PNG vertical do protótipo do site e handoff;
+- produto novo com `mvp-builder`: o próprio construtor ainda pode conduzir sua
+  fase MDD; `docs/PRD.md` e `docs/TECH_STACK.md` existentes são reaproveitados;
 - produto existente: preserve `docs/PROJECT_BACKLOG.md` como mudanças desejadas e
   `docs/FEATURES.md` como catálogo do que já foi entregue;
 - antes da construção, revise `.ft/project.yml`: objetivo maior, alvo, escopo
@@ -109,6 +127,7 @@ ciclo, crie os documentos que o template escolhido exige e faça commit:
 
 ```bash
 ft run . --template mvp-builder --auto
+ft run . --template mdd --request "Definir o problema e o produto" --codex
 ft run . --template feature --request "Adicionar busca por telefone" --codex
 ft run . --template feature --input demanda.md --claude
 ft run . --template bug --request "Terminal duplica o eco do input" --codex
@@ -136,6 +155,7 @@ Templates principais:
 | `bug` | Correção focal em projeto entregue, com regressão RED→GREEN |
 | `bug-fast` | Bug de manutenção em duas chamadas LLM e fix focal |
 | `tweak` | Mudança pequena e de baixo risco em projeto entregue |
+| `mdd` | Definição de produto e pacote executivo antes da construção |
 | `mvp-builder` | Processo construtor enquanto o projeto está em `building` |
 | `mvp-builder-fast` | Construtor rápido com plano interno, sessões persistentes e macro-nodes |
 | `fast-track-v2` | Processo histórico V2 |
@@ -215,9 +235,12 @@ ao LLM e deve ser usado deliberadamente.
 
 ```bash
 ft runs
+ft runs --done                         # DURAÇÃO LLM acumulada, inclusive em curso
+ft runs --done-detailed                # steps cronológicos com duração ativa de LLM
 ft status --cycle <id>
 ft status --cycle <id> --full
 ft status --cycle <id> --report
+ft status --cycle <id> --watch 60       # tela fixa, sem acumular linhas
 ft graph --cycle <id>
 ft log --cycle <id>
 ```
@@ -227,7 +250,25 @@ Enquanto uma delegação LLM estiver ativa, `ft status` atualiza o bloco
 de produtividade. O resumo é derivado do log e da supervisão da worktree,
 omite argumentos sensíveis e não interfere na execução. Logs novos mantêm um
 sidecar só de hashes/timestamps, portanto “nesta ação há” usa o instante real
-sem copiar prompt, comando ou segredo.
+sem copiar prompt, comando ou segredo. O cabeçalho informa o caminho absoluto da
+worktree ativa para facilitar inspeção direta. O rodapé é sempre uma linha
+sanitizada da atividade mais recente do log LLM; no modo `--watch`, ela é
+substituída no lugar como um tail fixo.
+
+`--watch [SEGUNDOS]` redesenha o status no mesmo lugar em um terminal
+interativo; sem valor, o intervalo é 60 segundos. O modo preserva o buffer normal
+para permitir rolagem, mostra o horário da última atualização e encerra ao
+receber `Ctrl+C`.
+
+`--done-detailed` implica `--done`. A seção de cada ciclo mostra toda execução
+real de node na ordem em que começou, sem colapsar retries, correções ou loops,
+e atribui duração e tokens ao respectivo step. Históricos anteriores ao tracing
+estruturado usam o `cycle-log.md` e exibem `—` onde não existe medição confiável.
+A última linha de cada tabela totaliza execuções, tentativas, duração e tokens;
+a última linha de toda a seção é o `TOTAL GERAL` dos ciclos exibidos. Qualquer
+parcela sem telemetria deixa a métrica consolidada como `—`, sem soma parcial.
+Em `ft status --full`, PASS aparece em azul, pending/não executado em branco,
+SKIPPED em cinza e erro em vermelho; ativo e gate mantêm destaque próprio.
 
 Regra única de seleção:
 
@@ -248,6 +289,33 @@ ft reject "motivo" --no-retry --cycle <id>
 ft fix "instrução de correção" --cycle <id>
 ft explore "pedido livre" --cycle <id>
 ```
+
+Todo human gate e todo node com `requires_approval` deve ser apresentado como
+um pacote de decisão, nunca apenas como “rode `ft approve`”. A engine mostra,
+na entrada do gate e em `ft status`, sete blocos obrigatórios: decisão, por que
+agora, onde avaliar (URL e artefatos existentes), checklist verificável, limites
+conhecidos, efeito de aprovar e efeito de rejeitar. Forks antigos recebem um
+fallback derivado do grafo, do estado e das evidências recentes.
+
+Templates podem tornar o pacote específico sem implementar UI própria:
+
+```yaml
+decision_context:
+  decision: "Qual decisão o stakeholder está tomando?"
+  why_now: "Quais verificações terminaram e por que o processo parou aqui?"
+  review_paths: [docs/PRD.md, docs/acceptance-report.md]
+  checklist:
+    - "Ação observável e critério de aprovação."
+  limitations:
+    - "O que esta aprovação não cobre."
+  approve_effect: "Próxima etapa e mudança de estado."
+  reject_effect: "Rota de correção e condição para reapresentar o gate."
+```
+
+`review_paths` aceita somente paths relativos e seguros; itens inexistentes não
+são apresentados como prova. Uma rejeição deve informar onde ocorreu, passos,
+resultado esperado e observado. Se a URL ou a evidência necessária estiver
+ausente ou inacessível, o humano ainda não tem base para aprovar.
 
 Quando só há um ciclo aplicável, `--cycle` pode ser omitido. Rejeições devem ter
 motivo objetivo porque o texto vira contexto do retry.

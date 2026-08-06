@@ -2,14 +2,15 @@ kind: init
 title: Organização Symlabs
 description: >
   Inicializa um projeto no ambiente da organização Symlabs: estrutura
-  Poetry (src/<nome>/, docs/), .env de dev, CLAUDE.md/AGENTS.md e registro
-  no workspace Symlabs [DEV] do SymGateway (projeto + caller key). Roda uma
-  única vez via `ft init --template symlabs`; `ft init --fix --template
-  symlabs` re-executa para consertar.
+  Poetry (src/<nome>/, docs/), .env de dev, Claude/Anthropic e Codex/OpenAI,
+  com projeto e caller key dedicada no workspace Symlabs [DEV] do SymGateway.
+  Codex é o executor default do FT e o AGENTS.md proíbe acesso direto aos
+  providers. Roda uma única vez via `ft init --template symlabs`; `ft init
+  --fix --template symlabs` re-executa para consertar.
 
-# A configuração da organização (workspace, caller key, admin key do gateway)
+# A configuração da organização (workspace, provider Anthropic e admin key)
 # vive em `environment/symlabs.env` no repo do engine — gitignored, nunca no
-# bundle. O script resolve a org pelo nome do template e falha alto se a
-# config estiver ausente. Ver environment/symlabs.env.example.
+# bundle. A caller é criada por projeto e salva somente no checkout local.
+# Ver environment/symlabs.env.example.
 scripts:
   - scripts/provision.sh

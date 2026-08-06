@@ -26,8 +26,10 @@ from ft.engine.api_context import enrich_api_contract_feedback
 from ft.engine.artifact_ops import remove_declared_outputs
 from ft.engine.graph import Node, load_graph
 from ft.engine.context_profiles import compose_context_profile
+from ft.engine.decision_gates import build_decision_gate_context
 from ft.engine.focal_evidence import (
     FOCAL_EVIDENCE_INSTRUCTIONS,
+    HEADLESS_FOCAL_EVIDENCE_INSTRUCTIONS,
     validate_focal_approval,
 )
 from ft.engine.state import StateManager, _atomic_write_state
@@ -38,6 +40,7 @@ from ft.engine.delegate import (
 )
 from ft.engine.validators import artifacts as val
 from ft.engine.validators import gates
+from ft.engine.validators import platforms as platform_val
 from ft.engine.validators import tests as test_val
 from ft.engine.validators import code as code_val
 from ft.engine.validators import review as review_val
@@ -91,6 +94,42 @@ RATE_LIMIT_MARKER = "[RATE_LIMIT]"
 _REVIEW_REJECT_VERDICTS = {"REJECTED", "BLOCKED", "INCOMPLETE", "INCOMPLETO", "ITERATE"}
 _REVIEW_APPROVE_VERDICTS = {"APPROVED", "APPROVED WITH NOTES"}
 _REVIEW_VERDICTS = _REVIEW_APPROVE_VERDICTS | _REVIEW_REJECT_VERDICTS
+_REVIEW_VERDICT_LABELS = (
+    "resultado",
+    "result",
+    "status",
+    "parecer",
+    "veredicto",
+    "veredito",
+    "verdict",
+)
+_REVIEW_VERDICT_ALIASES = {
+    "APPROVED WITH NOTES": "APPROVED WITH NOTES",
+    "APROVADO COM RESSALVAS": "APPROVED WITH NOTES",
+    "APROVADA COM RESSALVAS": "APPROVED WITH NOTES",
+    "NOT APPROVED": "REJECTED",
+    "NAO APROVADO": "REJECTED",
+    "NAO APROVADA": "REJECTED",
+    "REJECTED": "REJECTED",
+    "REJEITADO": "REJECTED",
+    "REJEITADA": "REJECTED",
+    "REPROVADO": "REJECTED",
+    "REPROVADA": "REJECTED",
+    "FAILED": "REJECTED",
+    "FAIL": "REJECTED",
+    "BLOCKED": "BLOCKED",
+    "BLOQUEADO": "BLOCKED",
+    "BLOQUEADA": "BLOCKED",
+    "INCOMPLETE": "INCOMPLETE",
+    "INCOMPLETO": "INCOMPLETO",
+    "INCOMPLETA": "INCOMPLETO",
+    "ITERATE": "ITERATE",
+    "APPROVED": "APPROVED",
+    "APROVADO": "APPROVED",
+    "APROVADA": "APPROVED",
+    "PASSED": "APPROVED",
+    "PASS": "APPROVED",
+}
 _CYCLE_OBJECTIVE_MAX_CHARS = 160
 _GENERIC_OBJECTIVE_HEADINGS = {
     "bug",
@@ -157,12 +196,14 @@ def _normalize_review_line(line: str) -> str:
 
 
 def _canonical_review_verdict(value: str) -> str | None:
-    upper = re.sub(r"\s+", " ", value.strip().upper())
-    if upper.startswith("APPROVED WITH NOTES"):
-        return "APPROVED WITH NOTES"
-    for verdict in sorted(_REVIEW_VERDICTS, key=len, reverse=True):
-        if upper == verdict or upper.startswith(f"{verdict} "):
-            return verdict
+    import unicodedata
+
+    upper = unicodedata.normalize("NFKD", value.strip().upper())
+    upper = "".join(character for character in upper if not unicodedata.combining(character))
+    upper = re.sub(r"\s+", " ", upper)
+    for alias in sorted(_REVIEW_VERDICT_ALIASES, key=len, reverse=True):
+        if upper == alias or re.match(rf"^{re.escape(alias)}(?:\s|[.,;:()\[\]\-\u2013\u2014])", upper):
+            return _REVIEW_VERDICT_ALIASES[alias]
     return None
 
 
@@ -171,8 +212,16 @@ def _line_review_verdict(line: str) -> str | None:
     if not clean:
         return None
 
+    if "|" in clean:
+        cells = [cell.strip() for cell in clean.strip("|").split("|")]
+        for cell in cells:
+            verdict = _canonical_review_verdict(cell)
+            if verdict:
+                return verdict
+
+    labels = "|".join(_REVIEW_VERDICT_LABELS)
     labeled = re.match(
-        r"(?i)^(resultado|result|status|parecer|veredicto|verdict)\s*[:=-]\s*(.+)$",
+        rf"(?i)^({labels})\s*[:=\-\u2013\u2014]\s*(.+)$",
         clean,
     )
     if labeled:
@@ -181,12 +230,49 @@ def _line_review_verdict(line: str) -> str | None:
     return _canonical_review_verdict(clean)
 
 
-def _parse_review_verdict(review_output: str) -> str:
-    """Parse explicit review verdicts without treating body text as a rejection."""
+def _explicit_review_verdicts(
+    review_output: str,
+    *,
+    allow_standalone: bool = True,
+) -> list[str]:
+    """Return every explicit verdict outside fenced evidence examples."""
+
+    verdicts: list[str] = []
+    fence: str | None = None
+    labels = "|".join(_REVIEW_VERDICT_LABELS)
     for line in review_output.splitlines():
+        stripped = line.lstrip()
+        marker = stripped[:3]
+        if marker in {"```", "~~~"}:
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        if not allow_standalone:
+            clean = _normalize_review_line(line)
+            if "|" not in clean and not re.match(
+                rf"(?i)^({labels})\s*[:=\-\u2013\u2014]",
+                clean,
+            ):
+                continue
         verdict = _line_review_verdict(line)
         if verdict:
+            verdicts.append(verdict)
+    return verdicts
+
+
+def _parse_review_verdict(review_output: str) -> str:
+    """Parse verdicts fail-closed: any explicit rejection wins."""
+
+    verdicts = _explicit_review_verdicts(review_output)
+    for verdict in verdicts:
+        if verdict in _REVIEW_REJECT_VERDICTS:
             return verdict
+    if verdicts:
+        return verdicts[0]
 
     upper = review_output.upper()
     if re.search(r"\bAPPROVED\s+WITH\s+NOTES\b", upper):
@@ -261,6 +347,8 @@ class _LLMProgressSnapshot:
     current_started_at: datetime | None = None
     evolution: str | None = None
     signal: str | None = None
+    terminal: bool = False
+    terminal_status: str | None = None
 
 
 _STATUS_LOG_TAIL_BYTES = 1_048_576
@@ -306,7 +394,9 @@ def _status_command_action(command: str, *, completed: bool = False) -> str:
     suffix = f" em `{target}`" if target else ""
     prefix = "concluiu" if completed else "executando"
 
-    if "connecteddebugandroidtest" in lowered or re.search(r"(^|\s)adb(?:\s|$)", lowered):
+    if "connecteddebugandroidtest" in lowered or re.search(
+        r"(^|\s)adb(?:\s|$)", lowered
+    ):
         return f"{prefix} validação no dispositivo Android"
     if "gradlew" in lowered:
         operation = "testes Android" if "test" in lowered else "build Android"
@@ -376,6 +466,7 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
     todo_done: int | None = None
     todo_total: int | None = None
     reported_findings: int | None = None
+    terminal_status: str | None = None
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -400,6 +491,17 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
         if not isinstance(event, dict):
             continue
         event_type = str(event.get("type") or "")
+        if event_type in {"turn.started", "message_start"}:
+            terminal_status = None
+        elif event_type in {"turn.completed", "result"}:
+            terminal_status = (
+                "failed"
+                if event.get("is_error") is True
+                or str(event.get("subtype") or "").casefold() in {"error", "failed"}
+                else "completed"
+            )
+        elif event_type in {"turn.failed", "turn.cancelled", "error"}:
+            terminal_status = "failed"
         item = event.get("item")
         if not isinstance(item, dict):
             # Claude stream-json carries text/tool activity inside assistant.
@@ -471,7 +573,11 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
                     reported_findings = int(finding_match.group(1))
 
     active = next(reversed(active_commands.values()), None)
-    if active is None:
+    if terminal_status is not None:
+        current = None
+        current_started_at = None
+        active_commands.clear()
+    elif active is None:
         current = last_action or last_agent_message
         current_started_at = last_action_started_at
     else:
@@ -498,7 +604,15 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
         current=current,
         current_started_at=current_started_at,
         evolution=" · ".join(evolution_parts) or None,
-        signal=last_signal or "stream/log recebendo eventos",
+        signal=(
+            "chamada LLM concluída"
+            if terminal_status == "completed"
+            else "chamada LLM encerrada com falha"
+            if terminal_status == "failed"
+            else last_signal or "stream/log recebendo eventos"
+        ),
+        terminal=terminal_status is not None,
+        terminal_status=terminal_status,
     )
 
 
@@ -541,6 +655,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "has_sections": val.has_sections,
     "document_quality": val.document_quality,
     "api_contract_complete": val.api_contract_complete,
+    "library_contract_complete": val.library_contract_complete,
     "relative_dates_only": val.relative_dates_only,
     "min_user_stories": val.min_user_stories,
     "sections_unchanged": val.sections_unchanged,
@@ -556,6 +671,14 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "process_improvements_classified": val.process_improvements_classified,
     "ui_criteria_ids": val.ui_criteria_ids,
     "ui_criteria_coverage": val.ui_criteria_coverage,
+    "navigation_contract_valid": val.navigation_contract_valid,
+    "navigation_reachability": val.navigation_reachability,
+    "review_outcome_valid": val.review_outcome_valid,
+    "review_chain_approved": val.review_chain_approved,
+    "validation_matrix_valid": platform_val.validation_matrix_valid,
+    "validation_profile_hooks": platform_val.validation_profile_hooks,
+    "platform_validation_report": platform_val.platform_validation_report,
+    "platform_validation_ready": platform_val.platform_validation_ready,
     "visual_p0_acceptance": val.visual_p0_acceptance,
     "unique_screenshots": val.unique_screenshots,
     "tests_pass": val.tests_pass,
@@ -2452,7 +2575,46 @@ class StepRunner:
             check_path = node.condition.split(":", 1)[1]
             full_path = Path(self._work_dir) / check_path
             decision_state[node.condition] = "true" if full_path.exists() else "false"
+        if node.condition == "validation_profiles_active":
+            decision_state[node.condition] = (
+                "true" if self._validation_profiles_active() else "false"
+            )
+        if node.condition == "project_validation_mode":
+            decision_state[node.condition] = self._project_validation_mode()
         return self.graph.resolve_next(node.id, decision_state)
+
+    def _project_validation_mode(self) -> str:
+        """Return the canonical project surface mode used by process routing."""
+
+        from ft.engine.validation_profiles import normalize_validation_config
+
+        contract_path = Path(self._work_dir) / ".ft" / "project.yml"
+        if not contract_path.is_file():
+            raise ValueError(".ft/project.yml ausente")
+        payload = yaml.safe_load(contract_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            raise ValueError(".ft/project.yml deve ser mapping")
+        validation = normalize_validation_config(payload.get("validation"))
+        return str(validation["mode"])
+
+    def _ui_evidence_validation_enabled(self) -> bool:
+        """Keep UI evidence fail-closed unless the project disables that surface."""
+
+        try:
+            return self._project_validation_mode() != "disabled"
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+            return True
+
+    def _validation_profiles_active(self) -> bool:
+        from ft.engine.validation_profiles import validation_profiles_active
+
+        contract_path = Path(self._work_dir) / ".ft" / "project.yml"
+        if not contract_path.is_file():
+            return False
+        payload = yaml.safe_load(contract_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            return False
+        return validation_profiles_active(self._work_dir, payload)
 
     def _collect_unselected_path(self, start_id: str | None, stop_ids: set[str], completed: set[str]) -> list[str]:
         skipped: list[str] = []
@@ -3510,6 +3672,55 @@ class StepRunner:
             print(ui.info("Bypass human gates: aplicando on_fail automaticamente"))
             self.apply_fix(gate_msg)
 
+    def _schedule_focal_evidence_review_retry(
+        self,
+        node: "Node",
+        feedback: str,
+    ) -> bool:
+        """Retry a malformed review receipt without routing into product code."""
+
+        state = self.state_mgr.state
+        raw_retries = state.metrics.get("focal_evidence_retries")
+        retries = dict(raw_retries) if isinstance(raw_retries, dict) else {}
+        try:
+            previous = int(retries.get(node.id, 0))
+        except (TypeError, ValueError):
+            previous = 0
+        limit = max(1, int(self._max_node_retries))
+        if previous >= limit:
+            return False
+
+        retries[node.id] = previous + 1
+        state.metrics["focal_evidence_retries"] = retries
+        directed = state.active_fix_return
+        if isinstance(directed, dict) and directed.get("review_node") == node.id:
+            directed["focal_evidence_feedback"] = feedback
+        state.current_node = node.id
+        state.node_status = "ready"
+        state.pending_fix = None
+        state.blocked_reason = None
+        state.last_approval_message = None
+        self.state_mgr.save()
+        print(ui.info(
+            "Recibo focal inválido; refazendo somente o review "
+            f"({previous + 1}/{limit}), sem encaminhar ao fix de produto"
+        ))
+        return True
+
+    def _clear_focal_evidence_review_retry(self, node_id: str) -> None:
+        state = self.state_mgr.state
+        raw_retries = state.metrics.get("focal_evidence_retries")
+        if isinstance(raw_retries, dict):
+            retries = dict(raw_retries)
+            retries.pop(node_id, None)
+            if retries:
+                state.metrics["focal_evidence_retries"] = retries
+            else:
+                state.metrics.pop("focal_evidence_retries", None)
+        directed = state.active_fix_return
+        if isinstance(directed, dict) and directed.get("review_node") == node_id:
+            directed.pop("focal_evidence_feedback", None)
+
     def _advance_state(self, completed_node: str, next_node: str | None, gate_result: str = "PASS") -> None:
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
         state = self.state_mgr.state
@@ -4104,8 +4315,8 @@ class StepRunner:
         )
 
         if node.requires_approval and not self._auto_approve:
-            print(ui.awaiting_approval(auto=False))
             self.state_mgr.set_pending_approval(node.id)
+            self._present_decision_gate(node)
             self._start_human_wait(node, "node_requires_approval")
             return True
 
@@ -4397,7 +4608,7 @@ class StepRunner:
                     self._advance_state(state.current_node, next_id)
                     state = self.state_mgr.load()
                 else:
-                    print(ui.awaiting_approval(auto=False))
+                    self._present_decision_gate(node)
                     self._start_human_wait(node, "node_requires_approval")
                     self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL",
                                        "aguardando aprovacao humana", sprint=node_sprint)
@@ -4432,12 +4643,21 @@ class StepRunner:
 
     _MAX_STREAM_RETRIES = 2
 
+    def _attach_template_workflow(self, delegate_kwargs: dict[str, Any]) -> None:
+        """Route every cycle delegation under its selected template name."""
+        state_mgr = getattr(self, "state_mgr", None)
+        state = getattr(state_mgr, "state", None)
+        workflow_id = getattr(state, "template_id", None)
+        if workflow_id:
+            delegate_kwargs.setdefault("workflow_id", str(workflow_id))
+
     def _delegate_once_with_attached_session(
         self,
         delegate_callable: Any,
         delegate_kwargs: dict[str, Any],
     ) -> DelegateResult:
         """Executa uma chamada já preparada preservando a fronteira injetável."""
+        self._attach_template_workflow(delegate_kwargs)
         context = delegate_kwargs.pop("_ft_session_context", None)
         result = delegate_callable(**delegate_kwargs)
         self._record_llm_session_result(context, result)
@@ -4460,6 +4680,7 @@ class StepRunner:
         **delegate_kwargs: Any,
     ) -> DelegateResult:
         """Re-delega feedback preservando a conversa do node quando habilitada."""
+        self._attach_template_workflow(delegate_kwargs)
         self._attach_llm_session(
             delegate_kwargs,
             node=node,
@@ -4490,6 +4711,7 @@ class StepRunner:
         inatividade renovável no delegate; nunca é convertido aqui em deadline
         cumulativo.
         """
+        self._attach_template_workflow(delegate_kwargs)
         session_context = delegate_kwargs.pop("_ft_session_context", None)
         attempt = 0
         session_recovered = False
@@ -4697,7 +4919,6 @@ class StepRunner:
                     # Sem isso, o batch bloqueia apesar de zero trabalho LLM.
                     self._maybe_auto_commit(node)
                     if node.requires_approval and not self._auto_approve:
-                        print(ui.awaiting_approval(auto=self._auto_approve))
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
@@ -4781,7 +5002,6 @@ class StepRunner:
                 self._record_node_summary(node, getattr(result, "output", None) or str(result))
 
                 if node.requires_approval and not self._auto_approve:
-                    print(ui.awaiting_approval(auto=self._auto_approve))
                     self.state_mgr.set_pending_approval(node.id)
                     return
 
@@ -4809,7 +5029,6 @@ class StepRunner:
             self._record_node_summary(node, getattr(result, "output", None) or str(result))
 
             if node.requires_approval and not self._auto_approve:
-                print(ui.awaiting_approval(auto=self._auto_approve))
                 self.state_mgr.set_pending_approval(node.id)
                 return
 
@@ -4892,7 +5111,6 @@ class StepRunner:
                     self._record_node_summary(node, getattr(result, "output", None) or str(result))
 
                     if node.requires_approval:
-                        print(ui.awaiting_approval(auto=self._auto_approve))
                         self.state_mgr.set_pending_approval(node.id)
                         return
                     next_id = self.graph.resolve_next(node.id)
@@ -4978,7 +5196,7 @@ class StepRunner:
         )
         if node.requires_approval and not self._auto_approve:
             self.state_mgr.set_pending_approval(node.id)
-            print(ui.awaiting_approval(auto=False))
+            self._present_decision_gate(node)
             return True
 
         next_id = self.graph.resolve_next(node.id)
@@ -5020,11 +5238,62 @@ class StepRunner:
             log_path=str(log_path),
             stream_prefix=self._stream_prefix(engine),
             llm_timeout_seconds=node.llm_timeout_seconds,
+            workflow_id=state.template_id,
         )
         if not result.success:
             print(ui.warn(
                 f"Bypass LLM não concluiu em {node.id}; o gate segue sem respostas"
             ))
+
+    def _present_decision_gate(
+        self,
+        node: Node,
+        *,
+        url: str | None = None,
+    ) -> None:
+        """Present enough context for a stakeholder to make the decision."""
+
+        if url is None:
+            serve_url_path = Path(self._work_dir) / ".serve_url"
+            if serve_url_path.is_file():
+                url = serve_url_path.read_text(encoding="utf-8").strip() or None
+        artifact = self._presented_artifact()
+        decision_context = build_decision_gate_context(
+            graph=self.graph,
+            node=node,
+            state=self.state_mgr.load(),
+            project_root=self.project_root,
+        )
+        print(ui.human_gate_card(
+            title=node.title,
+            description=node.description,
+            url=url,
+            artifact=artifact,
+            context=decision_context,
+            approval_message_required=node.approval_message_required,
+        ))
+
+    def _presented_artifact(self) -> str | None:
+        """Resolve the product artifact opened by a non-web presentation hook."""
+
+        marker = Path(self._work_dir) / ".presented_artifact"
+        if not marker.is_file():
+            return None
+        try:
+            raw = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not raw:
+            return None
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = Path(self._work_dir) / candidate
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(Path(self._work_dir).resolve())
+        except (OSError, ValueError):
+            return None
+        return str(resolved) if resolved.is_file() else None
 
     def _run_human_gate(self, node: Node) -> None:
         """Checkpoint humano obrigatório — pausa até ft approve ser chamado.
@@ -5072,18 +5341,13 @@ class StepRunner:
         url: str | None = None
         if serve_url_path.exists():
             url = serve_url_path.read_text().strip() or None
-        if not url and not env_ok:
-            print(ui.warn("env_setup falhou e .serve_url não encontrado — servidor pode não estar rodando"))
+        if not url and not self._presented_artifact() and not env_ok:
+            print(ui.warn(
+                "env_setup falhou e nenhuma URL ou aplicação apresentada foi "
+                "encontrada"
+            ))
 
-        gate_work_dir = str(self.state_mgr.path.parent.parent)
-        is_worktree = paths.is_worktree_path(gate_work_dir)
-        abs_files = [str(Path(gate_work_dir) / o) for o in (node.outputs or [])] if is_worktree else None
-        print(ui.human_gate_card(
-            title=node.title,
-            description=node.description,
-            url=url,
-            files=abs_files or None,
-        ))
+        self._present_decision_gate(node, url=url)
         self.state_mgr.set_pending_approval(node.id)
         self._start_human_wait(node, "human_gate")
 
@@ -5621,6 +5885,21 @@ class StepRunner:
             check_path = node.condition.split(":", 1)[1]
             full_path = Path(self._work_dir) / check_path
             state_dict[node.condition] = "true" if full_path.exists() else "false"
+        if node.condition == "validation_profiles_active":
+            try:
+                active = self._validation_profiles_active()
+            except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+                state.block(f"Contrato de validação de plataforma inválido: {exc}")
+                print(f"  DECISION BLOCK: validação de plataforma inválida ({exc})")
+                return
+            state_dict[node.condition] = "true" if active else "false"
+        if node.condition == "project_validation_mode":
+            try:
+                state_dict[node.condition] = self._project_validation_mode()
+            except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+                state.block(f"Contrato de validação do projeto inválido: {exc}")
+                print(f"  DECISION BLOCK: validação do projeto inválida ({exc})")
+                return
 
         next_id = self.graph.resolve_next(node.id, state_dict)
         if next_id:
@@ -5665,12 +5944,199 @@ class StepRunner:
 
 
     def _read_review_output(self, node: Node) -> str:
-        for output_path in node.outputs:
-            candidates = [Path(self._work_dir) / output_path, Path(self.project_root) / output_path]
-            for full in candidates:
-                if full.exists() and full.is_file():
-                    return full.read_text(encoding="utf-8", errors="ignore")
+        documents = self._review_output_documents(node)
+        if documents:
+            return documents[0][1]
         return ""
+
+    def _review_output_documents(self, node: Node) -> list[tuple[str, str]]:
+        """Read declared canonical review files in deterministic order."""
+
+        declared = list(node.outputs)
+        if node.review_route_path:
+            declared.append(node.review_route_path)
+        documents: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for output_path in declared:
+            if output_path in seen:
+                continue
+            seen.add(output_path)
+            candidates = [
+                Path(self._work_dir) / output_path,
+                Path(self.project_root) / output_path,
+            ]
+            for full in candidates:
+                if not full.is_file():
+                    continue
+                documents.append(
+                    (
+                        output_path,
+                        full.read_text(encoding="utf-8", errors="ignore"),
+                    )
+                )
+                break
+        return documents
+
+    def _review_rejection_reason(
+        self,
+        node: Node,
+        *,
+        response_output: str = "",
+    ) -> str | None:
+        """Return a fail-closed reason when any canonical/response verdict rejects."""
+
+        signals: list[tuple[str, str]] = []
+        rejection_details: list[str] = []
+        for source, content in self._review_output_documents(node):
+            verdicts = _explicit_review_verdicts(content)
+            signals.extend((source, verdict) for verdict in verdicts)
+            rejected_verdict = next(
+                (
+                    verdict
+                    for verdict in verdicts
+                    if verdict in _REVIEW_REJECT_VERDICTS
+                ),
+                None,
+            )
+            if rejected_verdict:
+                detail = _extract_review_rejection_reason(
+                    content,
+                    rejected_verdict,
+                ).strip()
+                if detail:
+                    rejection_details.append(f"{source}: {detail[:1200]}")
+        if response_output:
+            signals.extend(
+                ("resposta estruturada do reviewer", verdict)
+                for verdict in _explicit_review_verdicts(
+                    response_output,
+                    allow_standalone=False,
+                )
+            )
+
+        rejected = [
+            (source, verdict)
+            for source, verdict in signals
+            if verdict in _REVIEW_REJECT_VERDICTS
+        ]
+        if not rejected:
+            return None
+        approved = [
+            source
+            for source, verdict in signals
+            if verdict in _REVIEW_APPROVE_VERDICTS
+        ]
+        rejection_sources = ", ".join(
+            dict.fromkeys(f"{source}={verdict}" for source, verdict in rejected)
+        )
+        detail_suffix = (
+            " Detalhes: " + " | ".join(dict.fromkeys(rejection_details))
+            if rejection_details
+            else ""
+        )
+        if approved:
+            approval_sources = ", ".join(dict.fromkeys(approved))
+            return (
+                "REVIEW_VERDICT_CONFLICT: rejeição prevalece sobre aprovação; "
+                f"rejeição em {rejection_sources}; aprovação em {approval_sources}."
+                f"{detail_suffix}"
+            )
+        return f"CANONICAL_REVIEW_REJECTED: {rejection_sources}.{detail_suffix}"
+
+    def _structured_review_has_rejection_route(self, node: Node) -> bool:
+        """Confirm that a structured review cannot turn REJECTED into approved."""
+
+        if not node.review_route_path:
+            return False
+        route_file = None
+        for source, content in self._review_output_documents(node):
+            if source == node.review_route_path:
+                route_file = content
+                break
+        if route_file is None:
+            return False
+        try:
+            payload = yaml.safe_load(route_file) or {}
+        except yaml.YAMLError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        route = str(payload.get("review_route") or "").strip().casefold()
+        if not route:
+            return False
+        return route not in {
+            "approved",
+            "approve",
+            "aprovado",
+            "aprovada",
+            "pass",
+            "passed",
+        }
+
+    def _route_detected_review_rejection(
+        self,
+        node: Node,
+        reason: str,
+        *,
+        structured_review: bool,
+    ) -> None:
+        """Route a detected rejection without ever emitting an approval."""
+
+        if structured_review and self._structured_review_has_rejection_route(node):
+            for output_path in node.outputs:
+                self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+            next_id = self.graph.resolve_next(node.id)
+            self._advance_state(node.id, next_id, "STRUCTURED")
+            print(ui.fail("REVIEW REJECTED — seguindo rota estruturada de correção"))
+            print(ui.dim(f"  Motivo: {reason[:500]}"))
+            return
+
+        print(ui.fail("REVIEW REJECTED"))
+        print(ui.dim(f"  Motivo: {reason[:500]}"))
+        if node.on_fail:
+            self._handle_on_fail(node, reason)
+        else:
+            self.state_mgr.block(f"Expert Review REJECTED:\n{reason[:500]}")
+
+    def _review_outputs_snapshot(self, node: Node) -> str:
+        """Fingerprint every declared review output, not only the first file.
+
+        Review nodes may declare an immutable input/materialization artifact
+        before their mutable canonical report.  Comparing only the first file
+        makes a focal review look stale even when it correctly reconciles a
+        later report or its evidence directory.
+        """
+
+        digest = hashlib.sha256()
+        found = False
+        for output_path in node.outputs:
+            candidates = [
+                Path(self._work_dir) / output_path,
+                Path(self.project_root) / output_path,
+            ]
+            for full in candidates:
+                if not full.exists():
+                    continue
+                if full.is_file():
+                    files = [(Path(full.name), full)]
+                elif full.is_dir():
+                    files = [
+                        (path.relative_to(full), path)
+                        for path in sorted(full.rglob("*"))
+                        if path.is_file() and not path.is_symlink()
+                    ]
+                else:
+                    continue
+
+                found = True
+                digest.update(output_path.encode("utf-8"))
+                digest.update(b"\0")
+                for relative, path in files:
+                    digest.update(relative.as_posix().encode("utf-8"))
+                    digest.update(b"\0")
+                    digest.update(hashlib.sha256(path.read_bytes()).digest())
+                break
+        return digest.hexdigest() if found else ""
 
     def _review_source_mtime(self, node: Node) -> float:
         source_dirs: list[str] = []
@@ -5762,6 +6228,9 @@ class StepRunner:
     ) -> tuple[str, list[str]]:
         """Build review prompt and read restrictions for one provider attempt."""
         focal_review = self._active_focal_review_context(node)
+        focal_ui_validation_enabled = (
+            self._ui_evidence_validation_enabled() if focal_review else True
+        )
         if focal_review and focal_review[0] == "origin_fallback":
             focal_outputs = "\n".join(
                 f"- {output}" for output in node.outputs
@@ -5799,8 +6268,14 @@ class StepRunner:
                     "produzido pelo fix, registre sua identidade atual e não "
                     "exija igualdade byte a byte, salvo quando o stakeholder "
                     "declarar explicitamente que o hash é uma invariável.\n\n"
-                    "Para UI, confira o resultado renderizado no dispositivo "
-                    "ou evidência física exigida pelo finding. Encerre com uma "
+                    + (
+                        "Para UI, confira o resultado renderizado no dispositivo "
+                        "ou evidência física exigida pelo finding. "
+                        if focal_ui_validation_enabled
+                        else "Este projeto é headless: não crie nem solicite UI, "
+                        "browser, screenshot, mockup ou evidência física. "
+                    )
+                    + "Encerre com uma "
                     "linha exata `VERDICT: APPROVED` ou `VERDICT: REJECTED`, "
                     "seguida de evidência curta e verificável."
                 ),
@@ -5816,7 +6291,27 @@ class StepRunner:
             if focal_review:
                 task_prompt = f"{focal_review[1]}\n\n{task_prompt}"
         if focal_review:
-            task_prompt = f"{task_prompt}\n\n{FOCAL_EVIDENCE_INSTRUCTIONS}"
+            evidence_instructions = (
+                FOCAL_EVIDENCE_INSTRUCTIONS
+                if focal_ui_validation_enabled
+                else HEADLESS_FOCAL_EVIDENCE_INSTRUCTIONS
+            )
+            task_prompt = f"{task_prompt}\n\n{evidence_instructions}"
+            directed = self.state_mgr.state.active_fix_return
+            focal_evidence_feedback = (
+                directed.get("focal_evidence_feedback")
+                if isinstance(directed, dict)
+                else None
+            )
+            if isinstance(focal_evidence_feedback, str) and focal_evidence_feedback.strip():
+                task_prompt = (
+                    f"{task_prompt}\n\n"
+                    "CORREÇÃO DO RECIBO FOCAL\n"
+                    "A aprovação anterior falhou somente no contrato de evidência. "
+                    "Atualize os outputs deste review; não altere o produto e não "
+                    "encaminhe o problema ao node de implementação.\n"
+                    f"Feedback da engine: {focal_evidence_feedback.strip()}"
+                )
         deny_read_paths: list[str] = []
         if node.context_profile:
             task_prompt, deny_read_paths = self._compose_profile_context(
@@ -6004,7 +6499,7 @@ class StepRunner:
             focal_review and focal_review[0] == "origin_fallback"
         )
         runtime_focal_report_before = (
-            self._read_review_output(node) if runtime_focal_review else ""
+            self._review_outputs_snapshot(node) if runtime_focal_review else ""
         )
         allowed = self._resolve_allowed_paths(node)
         llm_selection = self._capture_delegation_llm_selection(state, node=node)
@@ -6033,6 +6528,14 @@ class StepRunner:
             or runtime_focal_review
         )
         if early_check.passed and not requires_fresh_review:
+            rejection_reason = self._review_rejection_reason(node)
+            if rejection_reason:
+                self._route_detected_review_rejection(
+                    node,
+                    rejection_reason,
+                    structured_review=structured_review,
+                )
+                return
             print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
             for output_path in node.outputs:
                 self.state_mgr.record_artifact(Path(output_path).stem, output_path)
@@ -6122,6 +6625,17 @@ class StepRunner:
                 result.success = True  # tratamos como sucesso
                 post_delegation_validation = pre_check
             else:
+                rejection_reason = self._review_rejection_reason(
+                    node,
+                    response_output=result.output or "",
+                )
+                if rejection_reason:
+                    self._route_detected_review_rejection(
+                        node,
+                        rejection_reason,
+                        structured_review=structured_review,
+                    )
+                    return
                 rejected_review_output = (
                     "" if structured_review else self._read_review_output(node)
                 )
@@ -6243,6 +6757,17 @@ class StepRunner:
         self._print_validation(validation)
 
         if not validation.passed:
+            rejection_reason = self._review_rejection_reason(
+                node,
+                response_output=result.output or "",
+            )
+            if rejection_reason:
+                self._route_detected_review_rejection(
+                    node,
+                    rejection_reason,
+                    structured_review=structured_review,
+                )
+                return
             rejected_review_output = (
                 "" if structured_review else self._read_review_output(node)
             )
@@ -6309,6 +6834,17 @@ class StepRunner:
 
         # Ler relatorio e verificar veredicto
         review_output = self._read_review_output(node)
+        rejection_reason = self._review_rejection_reason(
+            node,
+            response_output=result.output or "",
+        )
+        if rejection_reason and not focal_review:
+            self._route_detected_review_rejection(
+                node,
+                rejection_reason,
+                structured_review=structured_review,
+            )
+            return
 
         focal_verdict: str | None = None
         if focal_review:
@@ -6323,16 +6859,20 @@ class StepRunner:
                     review_output=focal_output,
                     finding_context=focal_review[1],
                     project_root=self._work_dir,
+                    ui_validation_enabled=self._ui_evidence_validation_enabled(),
                 )
                 if not fidelity.passed:
                     reason = f"EVIDENCE_FIDELITY_REJECTED: {fidelity.reason}"
                     print(ui.fail("FOCAL REVIEW REJECTED — evidência insuficiente"))
                     print(ui.dim(f"  Motivo: {reason[:300]}"))
-                    if node.on_fail:
-                        self._handle_on_fail(node, reason)
-                    else:
-                        self.state_mgr.block(reason)
+                    if self._schedule_focal_evidence_review_retry(node, reason):
+                        return
+                    self.state_mgr.block(
+                        f"{reason} — limite de retries do próprio review atingido; "
+                        "o produto não foi encaminhado ao fix"
+                    )
                     return
+                self._clear_focal_evidence_review_retry(node.id)
 
         if runtime_focal_review:
             focal_output = result.output or ""
@@ -6358,7 +6898,7 @@ class StepRunner:
                 )
                 print(ui.fail("FOCAL REVIEW BLOCK: veredito explícito ausente"))
                 return
-            runtime_focal_report_after = self._read_review_output(node)
+            runtime_focal_report_after = self._review_outputs_snapshot(node)
             if (
                 runtime_focal_report_before
                 and runtime_focal_report_after == runtime_focal_report_before
@@ -6375,15 +6915,12 @@ class StepRunner:
                 else:
                     self.state_mgr.block(reason)
                 return
-            canonical_verdict = (
-                _parse_review_verdict(runtime_focal_report_after)
-                if runtime_focal_report_after
-                else None
-            )
-            if canonical_verdict in _REVIEW_REJECT_VERDICTS:
+            canonical_rejection = self._review_rejection_reason(node)
+            if canonical_rejection:
                 reason = (
                     "EVIDENCE_RECEIPT_STALE: o output canônico do review ainda "
-                    f"declara {canonical_verdict} após a aprovação focal."
+                    "declara rejeição após a aprovação focal. "
+                    f"{canonical_rejection}"
                 )
                 print(ui.fail("FOCAL REVIEW REJECTED — veredito canônico divergente"))
                 print(ui.dim(f"  Motivo: {reason}"))
@@ -6777,6 +7314,8 @@ class StepRunner:
                 },
                 "lanes": {
                     lane.id: {
+                        "title": lane.title,
+                        "goal": lane.goal,
                         "status": "planned",
                         "attempts": 0,
                     }
@@ -6912,6 +7451,14 @@ próprias sob o namespace permitido acima. Encerre DONE.
             lane_state["wave"] = wave_index
             lane_state["attempts"] = int(lane_state.get("attempts", 0)) + 1
             lane_state["started_at"] = datetime.now(timezone.utc).isoformat()
+            for transient_key in (
+                "finished_at",
+                "llm_finished_at",
+                "llm_result",
+                "validated_at",
+                "last_error",
+            ):
+                lane_state.pop(transient_key, None)
             log_path = self._build_llm_log_path(
                 f"{node.id}.{lane.id}",
                 "lane",
@@ -6994,9 +7541,9 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 persist()
                 if tasks:
                     state = self.state_mgr.state
-                    state.metrics["llm_calls"] = (
-                        state.metrics.get("llm_calls", 0) + len(tasks)
-                    )
+                    state.metrics["llm_calls"] = state.metrics.get(
+                        "llm_calls", 0
+                    ) + len(tasks)
                     self.state_mgr.save()
 
                     completed_results: list[dict[str, Any]] = []
@@ -7011,23 +7558,52 @@ próprias sob o namespace permitido acima. Encerre DONE.
                         for future in as_completed(futures):
                             lane_id = futures[future]
                             try:
-                                completed_results.append(future.result())
+                                lane_result = future.result()
                             except BaseException as exc:
-                                completed_results.append(
-                                    {
-                                        "lane": lane_by_id[lane_id],
-                                        "result": None,
-                                        "exception": exc,
-                                    }
+                                lane_result = {
+                                    "lane": lane_by_id[lane_id],
+                                    "result": None,
+                                    "exception": exc,
+                                }
+                            completed_results.append(lane_result)
+
+                            # Observabilidade não espera a wave inteira: o
+                            # resultado da chamada fica persistido assim que o
+                            # future termina. ``llm_completed`` ainda NÃO
+                            # significa validada ou integrada; o fan-in abaixo
+                            # continua sendo a única transição para ``merged``.
+                            lane_state = runtime["lanes"][lane_id]
+                            finished_at = datetime.now(timezone.utc).isoformat()
+                            lane_state["llm_finished_at"] = finished_at
+                            lane_state["finished_at"] = finished_at
+                            if lane_result.get("log_path"):
+                                lane_state["log_path"] = lane_result["log_path"]
+                            result = lane_result.get("result")
+                            if result is not None and result.success:
+                                lane_state["status"] = "llm_completed"
+                                lane_state["llm_result"] = "success"
+                                lane_state["last_error"] = None
+                            else:
+                                error = lane_result.get("exception")
+                                detail = (
+                                    str(error)
+                                    if error is not None
+                                    else str(getattr(result, "output", "falha LLM"))
                                 )
+                                lane_state["status"] = "failed"
+                                lane_state["llm_result"] = "failed"
+                                lane_state["last_error"] = detail[:2000]
+                            persist()
 
                     for lane_result in completed_results:
                         lane = lane_result["lane"]
                         lane_state = runtime["lanes"][lane.id]
-                        lane_state["finished_at"] = datetime.now(
-                            timezone.utc
-                        ).isoformat()
-                        lane_state["log_path"] = lane_result.get("log_path")
+                        lane_state.setdefault(
+                            "finished_at",
+                            datetime.now(timezone.utc).isoformat(),
+                        )
+                        if lane_result.get("log_path"):
+                            lane_state["log_path"] = lane_result["log_path"]
                         result = lane_result.get("result")
                         if result is None or not result.success:
                             error = lane_result.get("exception")
@@ -7114,6 +7690,9 @@ próprias sob o namespace permitido acima. Encerre DONE.
                             lane_state["last_error"] = str(exc)
                             continue
                         lane_state["status"] = "ready_to_merge"
+                        lane_state["validated_at"] = datetime.now(
+                            timezone.utc
+                        ).isoformat()
                         lane_state["tip_sha"] = tip_sha
                         lane_state["changed_paths"] = actual_paths
                         lane_state["last_error"] = None
@@ -7525,6 +8104,10 @@ próprias sob o namespace permitido acima. Encerre DONE.
 
         node_id = state.pending_approval
         node = self.graph.get_node(node_id)
+        if node.approval_message_required and not (message or "").strip():
+            print(ui.fail("Este gate exige uma mensagem do stakeholder."))
+            print(ui.dim('  → ft approve "<direção objetiva>" para prosseguir'))
+            return
         self._finish_human_wait(node_id, "approved")
         if node.env_teardown:
             self._run_env_teardown(node)
@@ -7783,21 +8366,71 @@ próprias sob o namespace permitido acima. Encerre DONE.
             ))
             return False
 
+        completed = set(state.completed_nodes)
+
+        def review_reaches_gate(candidate: Node) -> bool:
+            """Aceita somente validadores determinísticos entre review e gate."""
+
+            pending = [candidate.next, *((candidate.branches or {}).values())]
+            visited: set[str] = set()
+            while pending:
+                current_id = pending.pop()
+                if not current_id or current_id in visited:
+                    continue
+                if current_id == gate_id:
+                    return True
+                if current_id not in completed:
+                    continue
+                visited.add(current_id)
+                current = self.graph.nodes.get(current_id)
+                if current is None or current.type not in {
+                    "decision",
+                    "gate",
+                    "sync",
+                }:
+                    continue
+                pending.append(current.next)
+                pending.extend((current.branches or {}).values())
+            return False
+
         review_id: str | None = None
         for candidate_id in reversed(state.completed_nodes):
             candidate = self.graph.nodes.get(candidate_id)
             if candidate is None or candidate.type != "review":
                 continue
-            targets = [candidate.next]
-            targets.extend((candidate.branches or {}).values())
-            if gate_id in targets:
+            if review_reaches_gate(candidate):
                 review_id = candidate_id
                 break
         if not review_id:
-            print(ui.fail(
-                f"Não foi possível identificar o review que antecede {gate_id}."
+            # Alguns processos válidos apresentam o human gate depois de um
+            # build e de gates determinísticos, sem um node ``review``. Nesse
+            # desenho não existe auditoria focal de origem para reabrir. O
+            # ``reject_next`` continua sendo a rota canônica: executa o fix e
+            # deixa o próprio grafo devolver o ciclo ao mesmo human gate.
+            self._finish_human_wait(gate_id, "rejected")
+            print(f"  REJEITADO: {gate_id} — {reason}")
+            if gate.env_teardown:
+                self._run_env_teardown(gate)
+
+            state.pending_approval = None
+            state.current_node = gate_id
+            state.node_status = "pending_fix"
+            state.blocked_reason = None
+            state.pending_fix = {
+                "goto": fix_id,
+                "feedback": (
+                    f"REJEITADO PELO STAKEHOLDER no gate {gate_id}:\n{reason}"
+                ),
+                "origin": gate_id,
+                "return_gate": gate_id,
+            }
+            state.gate_log[gate_id] = "REJECTED"
+            self.state_mgr.save()
+            print(ui.info(
+                "Gate sem review predecessor; seguindo a rota declarada "
+                f"{gate_id} → {fix_id} → {gate_id}."
             ))
-            return False
+            return self.apply_fix(reason, audit_origin=False)
 
         self._finish_human_wait(gate_id, "rejected")
         print(f"  REJEITADO: {gate_id} — {reason}")
@@ -8202,6 +8835,37 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 return candidate
         return None
 
+    def _status_log_tail_line(
+        self,
+        state: Any,
+        snapshot: _LLMProgressSnapshot | None = None,
+    ) -> str:
+        """Return one sanitized, bounded line for the status footer."""
+        log_ref = getattr(state, "active_llm_log", None) or getattr(
+            state, "last_llm_log", None
+        )
+        if not log_ref:
+            return "Log (tail): — nenhum log LLM disponível"
+
+        log_path = self._resolve_llm_log_path(log_ref)
+        if log_path is None:
+            return "Log (tail): — log LLM indisponível"
+        if snapshot is None:
+            snapshot = _llm_progress_snapshot(log_path)
+        if snapshot is None:
+            return "Log (tail): — sem atividade legível"
+
+        detail = snapshot.current or snapshot.signal or "sem atividade legível"
+        prefix = f"Log (tail): [{snapshot.timestamp}] "
+        try:
+            columns = os.get_terminal_size().columns
+        except OSError:
+            columns = 120
+        available = max(12, columns - len(prefix) - 4)
+        if len(detail) > available:
+            detail = detail[: max(1, available - 1)].rstrip() + "…"
+        return prefix + detail
+
     def _recent_delegation(self, state) -> tuple[float, bool] | None:
         """(idade_em_segundos, ativa?) do LLM log mais fresco, ou None.
 
@@ -8226,7 +8890,216 @@ próprias sob o namespace permitido acima. Encerre DONE.
             return max(0.0, now - last_mtime), False
         return None
 
-    def status(self, full: bool = False):
+    def _batch_status_snapshot(self, state: Any) -> dict[str, Any] | None:
+        """Load batch configuration, plan descriptions and runtime without LLM."""
+
+        policy = self.graph.meta.get("batch_policy")
+        if not isinstance(policy, dict):
+            return None
+        batch_nodes = [
+            node.id for node in self.graph.nodes.values() if node.type == "batch"
+        ]
+        try:
+            selected_nodes = set(self._selected_route_node_ids(state))
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+            selected_nodes = set()
+
+        runtime_path = self.state_mgr.path.parent / "mvp-builder-batch.yml"
+        runtime: dict[str, Any] = {}
+        if runtime_path.is_file():
+            try:
+                loaded_runtime = yaml.safe_load(
+                    runtime_path.read_text(encoding="utf-8")
+                ) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                loaded_runtime = {}
+            if isinstance(loaded_runtime, dict):
+                runtime = loaded_runtime
+
+        if not runtime and not any(node_id in selected_nodes for node_id in batch_nodes):
+            return None
+
+        plan_lanes: dict[str, dict[str, str]] = {}
+        plan_order: list[str] = []
+        plan_path = str(policy.get("plan_path") or "docs/mvp-batch-plan.yml")
+        for candidate in (
+            Path(self._work_dir) / plan_path,
+            Path(self.project_root) / plan_path,
+        ):
+            if not candidate.is_file():
+                continue
+            try:
+                plan = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                break
+            raw_lanes = plan.get("lanes") if isinstance(plan, dict) else None
+            if isinstance(raw_lanes, list):
+                for raw_lane in raw_lanes:
+                    if not isinstance(raw_lane, dict):
+                        continue
+                    lane_id = str(raw_lane.get("id") or "").strip()
+                    if not lane_id or lane_id in plan_lanes:
+                        continue
+                    title = str(raw_lane.get("title") or "").strip()
+                    goal = str(raw_lane.get("goal") or "").strip()
+                    plan_lanes[lane_id] = {"title": title, "goal": goal}
+                    plan_order.append(lane_id)
+            break
+
+        runtime_lanes = runtime.get("lanes")
+        if not isinstance(runtime_lanes, dict):
+            runtime_lanes = {}
+        lane_order = list(plan_order)
+        lane_order.extend(
+            lane_id
+            for lane_id in runtime_lanes
+            if isinstance(lane_id, str) and lane_id not in plan_lanes
+        )
+
+        parallel_enabled = bool(getattr(state, "parallel_enabled", False))
+        configured_max = max(1, int(getattr(state, "parallel_max_slots", 1) or 1))
+        runtime_max = runtime.get("max_parallel")
+        try:
+            effective_max = (
+                max(1, int(runtime_max)) if runtime_max is not None else configured_max
+            )
+        except (TypeError, ValueError):
+            effective_max = configured_max
+
+        waves = runtime.get("waves")
+        if not isinstance(waves, list):
+            waves = []
+        try:
+            current_wave = max(0, int(runtime.get("current_wave", 0) or 0))
+        except (TypeError, ValueError):
+            current_wave = 0
+        runtime_status = str(runtime.get("status") or "").strip().casefold()
+        if runtime:
+            fanout = {
+                "blocked": "bloqueado",
+                "done": "concluído",
+                "integrated": "fan-in concluído",
+                "running": "em andamento",
+            }.get(runtime_status, runtime_status or "estado desconhecido")
+        elif any(node_id in state.completed_nodes for node_id in batch_nodes):
+            fanout = "concluído"
+        elif state.current_node in batch_nodes:
+            fanout = "iniciando"
+        else:
+            target = next(
+                (node_id for node_id in batch_nodes if node_id in selected_nodes),
+                batch_nodes[0] if batch_nodes else "batch",
+            )
+            fanout = f"aguardando {target}"
+
+        wave_lookup = {
+            lane_id: wave_index
+            for wave_index, wave in enumerate(waves)
+            if isinstance(wave, list)
+            for lane_id in wave
+        }
+        lane_observations: dict[str, dict[str, Any]] = {}
+        for lane_id in lane_order:
+            raw_lane_state = runtime_lanes.get(lane_id)
+            lane_state = raw_lane_state if isinstance(raw_lane_state, dict) else {}
+            ledger_status = str(lane_state.get("status") or "planned").casefold()
+            log_snapshot = None
+            log_age = None
+            log_path = lane_state.get("log_path")
+            if isinstance(log_path, str) and log_path:
+                candidate = self._resolve_llm_log_path(log_path)
+                if candidate is not None:
+                    log_age = max(0, int(time.time() - candidate.stat().st_mtime))
+                    log_snapshot = _llm_progress_snapshot(candidate)
+
+            lane_wave = wave_lookup.get(lane_id)
+            if ledger_status == "merged":
+                display_state = "integrated"
+            elif ledger_status in {"failed", "merge_failed"}:
+                display_state = "failed"
+            elif ledger_status in {"llm_completed", "ready_to_merge"}:
+                display_state = "llm_completed"
+            elif ledger_status == "running":
+                if log_snapshot and log_snapshot.terminal_status == "failed":
+                    display_state = "failed"
+                elif log_snapshot and log_snapshot.terminal_status == "completed":
+                    # Fallback para ledgers antigos: turn.completed é prova de
+                    # que a chamada acabou, mas não de validação ou merge.
+                    display_state = "llm_completed"
+                else:
+                    display_state = "executing"
+            elif (
+                ledger_status == "planned"
+                and lane_wave is not None
+                and lane_wave > current_wave
+            ):
+                display_state = "waiting_dependencies"
+            else:
+                display_state = "waiting_execution"
+
+            if display_state == "executing":
+                action = (
+                    log_snapshot.current
+                    if log_snapshot and log_snapshot.current
+                    else "inicializando ou executando a chamada LLM"
+                )
+                activity = (
+                    f"atividade registrada há {log_age}s"
+                    if log_age is not None
+                    else None
+                )
+            elif display_state == "llm_completed":
+                action = (
+                    "validação focal concluída; aguardando fan-in"
+                    if ledger_status == "ready_to_merge"
+                    else "chamada LLM concluída; aguardando validação/fan-in"
+                )
+                activity = (
+                    f"conclusão LLM registrada às {log_snapshot.timestamp}"
+                    if log_snapshot and log_snapshot.terminal
+                    else None
+                )
+            elif display_state == "integrated":
+                action = "lane integrada no branch privado do batch"
+                activity = None
+            elif display_state == "failed":
+                action = "falha registrada; aguardando correção"
+                activity = (
+                    f"encerramento registrado às {log_snapshot.timestamp}"
+                    if log_snapshot and log_snapshot.terminal
+                    else None
+                )
+            elif display_state == "waiting_dependencies":
+                action = "aguardando dependências e liberação da próxima wave"
+                activity = None
+            else:
+                action = "aguardando início da execução"
+                activity = None
+
+            lane_observations[lane_id] = {
+                "display_state": display_state,
+                "ledger_status": ledger_status,
+                "wave": lane_wave,
+                "action": action,
+                "activity": activity,
+                "log_snapshot": log_snapshot,
+            }
+
+        return {
+            "parallel_enabled": parallel_enabled,
+            "configured_max": configured_max,
+            "effective_max": effective_max,
+            "fanout": fanout,
+            "runtime": runtime,
+            "runtime_lanes": runtime_lanes,
+            "plan_lanes": plan_lanes,
+            "lane_order": lane_order,
+            "waves": waves,
+            "current_wave": current_wave,
+            "lane_observations": lane_observations,
+        }
+
+    def status(self, full: bool = False, updated_at: str | None = None):
         """Mostra estado atual."""
         state = self.state_mgr.load()
         self._sync_process_meta(state)
@@ -8238,11 +9111,15 @@ próprias sob o namespace permitido acima. Encerre DONE.
         if state.current_node:
             current_sprint = self.graph.sprint_of(state.current_node)
 
-        print(ui.header(f"Process: {state.process_id} v{state.version}"))
+        title = f"Process: {state.process_id} v{state.version}"
+        if updated_at:
+            title = f"{title}  ·  Atualizado às {updated_at}"
+        print(ui.header(title))
         # Preserve the public text consumed by existing status parsers; model
         # and effort are additive lines instead of a breaking replacement.
         if state.current_cycle:
             print(ui.info(f"Ciclo: {state.current_cycle}"))
+        print(ui.info(f"Worktree: {Path(self.project_root).resolve()}"))
         persisted_objective = (
             _brief_cycle_objective(state.cycle_objective)
             if isinstance(state.cycle_objective, str)
@@ -8256,6 +9133,25 @@ próprias sob o namespace permitido acima. Encerre DONE.
             print(ui.info(f"LLM model: {state.llm_model}"))
         if state.llm_effort:
             print(ui.info(f"LLM effort: {state.llm_effort}"))
+        batch_status = self._batch_status_snapshot(state)
+        if batch_status is not None:
+            waves = batch_status["waves"]
+            current_wave = batch_status["current_wave"]
+            wave_label = (
+                f"{min(current_wave + 1, len(waves))}/{len(waves)}" if waves else "—/—"
+            )
+            parallel_label = (
+                "habilitado" if batch_status["parallel_enabled"] else "desabilitado"
+            )
+            max_parallel = batch_status["effective_max"]
+            inactive = " (inativo)" if not batch_status["parallel_enabled"] else ""
+            print(
+                ui.info(
+                    f"Batch parallel: {parallel_label} · "
+                    f"max_parallel: {max_parallel}{inactive} · "
+                    f"wave: {wave_label} · fan-out: {batch_status['fanout']}"
+                )
+            )
         node_label = state.current_node
         if state.current_node and state.current_node in self.graph.nodes:
             node_title = self.graph.nodes[state.current_node].title
@@ -8279,11 +9175,23 @@ próprias sob o namespace permitido acima. Encerre DONE.
         def _print_delegation_banner() -> None:
             secs = int(recent[0])
             when = f"há {secs}s" if secs < 60 else f"há {secs // 60}min{secs % 60:02d}s"
-            if recent[1]:
-                print(ui.success(
-                    f"⟳ TRABALHO EM ANDAMENTO — delegação LLM ativa (última escrita {when}). "
-                    "Aguarde; não é preciso intervir."
-                ))
+            if progress_snapshot is not None and progress_snapshot.terminal:
+                print(
+                    ui.success(
+                        "✓ DELEGAÇÃO LLM CONCLUÍDA — o runner processa validação/"
+                        "integração; não há chamada ativa neste log."
+                    )
+                )
+                if progress_snapshot.evolution:
+                    print(ui.dim(f"  Evolução: {progress_snapshot.evolution}"))
+                print(ui.dim(f"  Sinal terminal: {progress_snapshot.signal}"))
+            elif recent[1]:
+                print(
+                    ui.success(
+                        f"⟳ TRABALHO EM ANDAMENTO — delegação LLM ativa (última escrita {when}). "
+                        "Aguarde; não é preciso intervir."
+                    )
+                )
                 if progress_snapshot is not None:
                     if progress_snapshot.current:
                         action_line = progress_snapshot.current
@@ -8292,17 +9200,21 @@ próprias sob o namespace permitido acima. Encerre DONE.
                             started_at=progress_snapshot.current_started_at,
                         )
                         if action_elapsed:
-                            action_line = f"{action_line} (nesta ação há ~{action_elapsed})"
+                            action_line = (
+                                f"{action_line} (nesta ação há ~{action_elapsed})"
+                            )
                         print(ui.dim(f"  Agora: {action_line}"))
                     if progress_snapshot.evolution:
                         print(ui.dim(f"  Evolução: {progress_snapshot.evolution}"))
                     signal = progress_snapshot.signal or "stream/log ativo"
                     print(ui.dim(f"  Sinais: {signal} · última escrita {when}"))
             else:
-                print(ui.success(
-                    f"⟳ EM CONDUÇÃO — delegação concluída {when}; o ciclo avança para o "
-                    "próximo passo. Aguarde; não é preciso intervir."
-                ))
+                print(
+                    ui.success(
+                        f"⟳ EM CONDUÇÃO — delegação concluída {when}; o ciclo avança para o "
+                        "próximo passo. Aguarde; não é preciso intervir."
+                    )
+                )
 
         # Sem bloqueio, o banner fica logo após o Status. Com bloqueio, ele vem
         # imediatamente ABAIXO do motivo (BLOCKED: … / ⟳ …) — ver abaixo.
@@ -8334,53 +9246,155 @@ próprias sob o namespace permitido acima. Encerre DONE.
             progress_line += f" · última atividade {activity_label}"
         print(ui.highlight(progress_line))
 
-        batch_runtime_path = self.state_mgr.path.parent / "mvp-builder-batch.yml"
-        if batch_runtime_path.is_file():
-            try:
-                batch_runtime = yaml.safe_load(
-                    batch_runtime_path.read_text(encoding="utf-8")
-                ) or {}
-            except (OSError, UnicodeError, yaml.YAMLError):
-                batch_runtime = {}
-            if isinstance(batch_runtime, dict) and batch_runtime.get("lanes"):
-                waves = batch_runtime.get("waves") or []
-                current_wave = int(batch_runtime.get("current_wave", 0) or 0)
-                print(ui.info(
-                    "Batch interno: "
-                    f"{batch_runtime.get('status', 'unknown')} · "
-                    f"wave {min(current_wave + 1, len(waves))}/{len(waves)} · "
-                    f"até {batch_runtime.get('max_parallel', 1)} lanes"
-                ))
-                lane_rows = batch_runtime.get("lanes")
-                if isinstance(lane_rows, dict):
-                    for lane_id, lane_state in lane_rows.items():
-                        if not isinstance(lane_state, dict):
-                            continue
-                        lane_status = str(lane_state.get("status", "planned"))
-                        suffix = ""
-                        log_path = lane_state.get("log_path")
-                        if isinstance(log_path, str) and log_path:
-                            candidate = Path(log_path)
-                            if candidate.is_file():
-                                age = max(
-                                    0,
-                                    int(time.time() - candidate.stat().st_mtime),
-                                )
-                                suffix = f" · log atualizado há {age}s"
-                                lane_progress = _llm_progress_snapshot(candidate)
-                                if lane_progress.current:
-                                    suffix += (
-                                        " · agora: "
-                                        + lane_progress.current[:120]
-                                    )
-                        changed_count = len(lane_state.get("changed_paths") or [])
-                        if changed_count:
-                            suffix += f" · {changed_count} paths"
-                        print(ui.dim(
-                            f"  {lane_id}: {lane_status}"
-                            f" · tentativa {lane_state.get('attempts', 0)}"
-                            f"{suffix}"
-                        ))
+        if batch_status is not None:
+            runtime_lanes = batch_status["runtime_lanes"]
+            plan_lanes = batch_status["plan_lanes"]
+            waves = batch_status["waves"]
+            observations = batch_status["lane_observations"]
+            current_wave = batch_status["current_wave"]
+            effective_max = batch_status["effective_max"]
+            parallel = batch_status["parallel_enabled"] and effective_max > 1
+
+            # Each row owns its one semantic glyph. ``ui.success``/``ui.fail``
+            # and ``ui.highlight`` prepend another glyph, so use the color-only
+            # status renderer here to keep the lane state unambiguous.
+            display_meta = {
+                "executing": ("▶", "executando agora", "active"),
+                "llm_completed": (
+                    "✓",
+                    "chamada LLM concluída · aguardando integração",
+                    "pass",
+                ),
+                "integrated": ("◆", "integrada", "pass"),
+                "failed": ("✗", "falhou", "error"),
+                "waiting_dependencies": (
+                    "○",
+                    "aguardando dependências",
+                    "skipped",
+                ),
+                "waiting_execution": ("○", "aguardando execução", "pending"),
+            }
+
+            def render_lane(lane_id: str) -> None:
+                raw_lane_state = runtime_lanes.get(lane_id)
+                lane_state = raw_lane_state if isinstance(raw_lane_state, dict) else {}
+                descriptor = plan_lanes.get(lane_id, {})
+                title = str(
+                    descriptor.get("title") or lane_state.get("title") or ""
+                ).strip()
+                goal = str(
+                    descriptor.get("goal") or lane_state.get("goal") or ""
+                ).strip()
+                attempts = lane_state.get("attempts", 0)
+                changed_count = len(lane_state.get("changed_paths") or [])
+                paths_suffix = f" · {changed_count} paths" if changed_count else ""
+                lane_label = f"{lane_id} — {title}" if title else lane_id
+                observation = observations.get(lane_id, {})
+                display_state = str(
+                    observation.get("display_state") or "waiting_execution"
+                )
+                symbol, status_label, tone = display_meta.get(
+                    display_state,
+                    ("○", "estado legado", "pending"),
+                )
+                print(
+                    ui.status_node(
+                        f"    {symbol} {lane_label}: {status_label} · "
+                        f"tentativa {attempts}{paths_suffix}",
+                        tone,
+                    )
+                )
+                print(
+                    ui.dim(f"    objetivo: {goal or 'não informado no plano legado'}")
+                )
+                action = str(
+                    observation.get("action") or "estado registrado no ledger"
+                )[:160]
+                activity = observation.get("activity")
+                activity_suffix = f" · {activity}" if activity else ""
+                print(ui.dim(f"    ação atual: {action}{activity_suffix}"))
+
+            if waves:
+                for wave_index, raw_wave in enumerate(waves):
+                    wave_ids = (
+                        [lane_id for lane_id in raw_wave if isinstance(lane_id, str)]
+                        if isinstance(raw_wave, list)
+                        else []
+                    )
+                    wave_states = [
+                        str(observations.get(lane_id, {}).get("display_state") or "")
+                        for lane_id in wave_ids
+                    ]
+                    integrated_count = wave_states.count("integrated")
+                    completed_count = integrated_count + wave_states.count(
+                        "llm_completed"
+                    )
+                    executing_count = wave_states.count("executing")
+                    failed_count = wave_states.count("failed")
+                    waiting_count = len(wave_ids) - (
+                        completed_count + executing_count + failed_count
+                    )
+                    all_integrated = bool(wave_ids) and integrated_count == len(
+                        wave_ids
+                    )
+
+                    lane_count = len(wave_ids)
+                    lane_word = "lane" if lane_count == 1 else "lanes"
+                    parallel_suffix = (
+                        " em paralelo" if parallel and lane_count > 1 else ""
+                    )
+                    summary = [f"{lane_count} {lane_word}{parallel_suffix}"]
+                    if completed_count:
+                        summary.append(
+                            f"{completed_count} concluída"
+                            f"{'s' if completed_count != 1 else ''}"
+                        )
+                    if executing_count:
+                        summary.append(f"{executing_count} executando")
+                    if failed_count:
+                        summary.append(
+                            f"{failed_count} "
+                            f"{'falhou' if failed_count == 1 else 'falharam'}"
+                        )
+                    if wave_index > current_wave and waiting_count:
+                        summary.append("aguardando dependências")
+                    elif waiting_count:
+                        summary.append(f"{waiting_count} aguardando execução")
+                    if wave_index == current_wave and parallel:
+                        summary.append(
+                            f"{min(lane_count, effective_max)}/{effective_max} "
+                            "slots alocados à wave"
+                        )
+
+                    if all_integrated:
+                        heading = f"Wave {wave_index + 1}/{len(waves)} — CONCLUÍDA"
+                        tone = "pass"
+                    elif wave_index == current_wave:
+                        heading = f"Wave {wave_index + 1}/{len(waves)} — ATUAL"
+                        tone = "active"
+                    elif wave_index > current_wave:
+                        prefix = (
+                            "Próxima wave"
+                            if wave_index == current_wave + 1
+                            else "Wave futura"
+                        )
+                        heading = f"{prefix} {wave_index + 1}/{len(waves)}"
+                        tone = "skipped"
+                    else:
+                        heading = f"Wave {wave_index + 1}/{len(waves)} — ANTERIOR"
+                        tone = "skipped"
+                    print(
+                        ui.status_node(
+                            f"  {heading} · " + " · ".join(summary),
+                            tone,
+                        )
+                    )
+                    for lane_id in wave_ids:
+                        render_lane(lane_id)
+            else:
+                print(ui.dim("Lanes planejadas — fan-out ainda não iniciado"))
+                for lane_id in batch_status["lane_order"]:
+                    render_lane(lane_id)
         usage_summary = summarize_llm_usage(
             self._llm_log_dir(),
             default_engine=state.llm_engine,
@@ -8408,8 +9422,17 @@ próprias sob o namespace permitido acima. Encerre DONE.
             serve_url_file = Path(self._work_dir) / ".serve_url"
             if serve_url_file.exists():
                 print(ui.info(f"URL: {serve_url_file.read_text().strip()}"))
+            presented_artifact = self._presented_artifact()
+            if presented_artifact:
+                print(ui.info(f"Aplicativo apresentado: {presented_artifact}"))
             print(ui.warn(f"HUMAN GATE: {current_node_obj.title}"))
-            print(ui.dim("  → ft continue   para entrar no gate"))
+            if (
+                state.pending_approval == current_node_obj.id
+                or state.node_status == "awaiting_approval"
+            ):
+                print(ui.dim("  Pacote de decisão e comandos disponíveis abaixo"))
+            else:
+                print(ui.dim("  → ft continue   para entrar no gate"))
         if state.active_llm_log:
             print(ui.dim(f"LLM log ativo: {state.active_llm_log}"))
             if progress_snapshot is None:
@@ -8437,24 +9460,59 @@ próprias sob o namespace permitido acima. Encerre DONE.
             print(ui.fix_gate(gate_msg, feedback, goto))
         if state.pending_approval:
             pending_node = self.graph.nodes.get(state.pending_approval)
-            if pending_node and pending_node.type == "human_gate":
-                serve_url_file = Path(self._work_dir) / ".serve_url"
-                url: str | None = None
-                if serve_url_file.exists():
-                    url = serve_url_file.read_text().strip() or None
-                _gate_wt = str(self.state_mgr.path.parent.parent)
-                _is_wt = paths.is_worktree_path(self.state_mgr.path)
-                _abs_files = [str(Path(_gate_wt) / o) for o in (pending_node.outputs or [])] if _is_wt else None
-                print(ui.human_gate_card(
-                    title=pending_node.title,
-                    description=pending_node.description,
-                    url=url,
-                    files=_abs_files or None,
-                ))
+            if pending_node:
+                self._present_decision_gate(pending_node)
             else:
                 print(ui.warn(f"AGUARDANDO APROVAÇÃO: {state.pending_approval}"))
 
         if full:
+            def _graph_node_line(node: Node, status: str) -> str:
+                gate_result = str(state.gate_log.get(node.id, "") or "")
+                gate_status = gate_result.upper()
+                current = node.id == state.current_node
+                current_status = str(state.node_status or "").lower()
+                error_results = {
+                    "BLOCK",
+                    "BLOCKED",
+                    "ERROR",
+                    "FAIL",
+                    "FAILED",
+                    "REJECTED",
+                }
+                if gate_status == "SKIPPED":
+                    tone = "skipped"
+                elif gate_status in error_results or (
+                    current
+                    and (
+                        current_status
+                        in {"block", "blocked", "error", "fail", "failed", "pending_fix"}
+                        or bool(state.blocked_reason)
+                    )
+                ):
+                    tone = "error"
+                elif current and (
+                    state.pending_approval == node.id
+                    or current_status in {"awaiting_approval", "awaiting_human"}
+                ):
+                    tone = "gate"
+                elif current:
+                    tone = "active"
+                elif status == "done" or gate_status in {
+                    "COMPLETED",
+                    "DONE",
+                    "PASS",
+                    "SUCCESS",
+                }:
+                    tone = "pass"
+                else:
+                    tone = "pending"
+
+                icon = {"done": "✓", "ready": "→", "blocked": "○"}[status]
+                gate_str = f" [{gate_result}]" if gate_result else ""
+                current_marker = " ◀" if current else ""
+                line = f"    {icon} {node.id}: {node.title}{gate_str}{current_marker}"
+                return ui.status_node(line, tone)
+
             # Agrupar por sprint
             sprints = self.graph.get_sprints()
             no_sprint = [nid for nid, n in self.graph.nodes.items() if not n.sprint]
@@ -8466,11 +9524,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                     print(f"\n  [{sprint}] ({sprint_done}/{len(sprint_nodes)})")
                     for n in sprint_nodes:
                         status = node_status.get(n.id, "blocked")
-                        icon = {"done": "✓", "ready": "→", "blocked": "○"}[status]
-                        gate_result = state.gate_log.get(n.id, "")
-                        gate_str = f" [{gate_result}]" if gate_result else ""
-                        current = " ◀" if n.id == state.current_node else ""
-                        print(f"    {icon} {n.id}: {n.title}{gate_str}{current}")
+                        print(_graph_node_line(n, status))
 
             if no_sprint:
                 if sprints:
@@ -8480,11 +9534,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 for nid in no_sprint:
                     node = self.graph.get_node(nid)
                     status = node_status.get(nid, "blocked")
-                    icon = {"done": "✓", "ready": "→", "blocked": "○"}[status]
-                    gate_result = state.gate_log.get(nid, "")
-                    gate_str = f" [{gate_result}]" if gate_result else ""
-                    current = " ◀" if nid == state.current_node else ""
-                    print(f"    {icon} {nid}: {node.title}{gate_str}{current}")
+                    print(_graph_node_line(node, status))
 
             if state.artifacts:
                 print("\n  Artefatos:")
@@ -8492,7 +9542,11 @@ próprias sob o namespace permitido acima. Encerre DONE.
                     exists = "✓" if path and Path(self.project_root, path).exists() else "✗"
                     print(f"    {exists} {name}: {path}")
 
-    def status_report(self):
+        # Rodapé propositalmente final: no modo --watch, o redesenho substitui
+        # esta linha como um tail fixo sem fazer a página rolar.
+        print(ui.dim(self._status_log_tail_line(state, progress_snapshot)))
+
+    def status_report(self, updated_at: str | None = None):
         """Relatório de tempo e tokens por node do ciclo atual."""
         import json as _json
         from datetime import datetime as _dt
@@ -8504,7 +9558,10 @@ próprias sob o namespace permitido acima. Encerre DONE.
         )
         if trace_report.get("spans"):
             state = self.state_mgr.load()
-            print(ui.header(f"Relatório — {state.process_id} / {state.llm_engine}"))
+            title = f"Relatório — {state.process_id} / {state.llm_engine}"
+            if updated_at:
+                title = f"{title}  ·  Atualizado às {updated_at}"
+            print(ui.header(title))
             print()
             print(
                 f"  {'Node / operação':<48} {'Tipo':<10} {'Tent.':>6} "

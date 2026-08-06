@@ -7,11 +7,12 @@
 #   .ft/cycles/  — histórico durável criado por ft close
 #   project/  — todo código-fonte (frontend/, backend/, tests/, Makefile, etc.)
 #
-# REGRA: todo código de produto vai dentro de project/. Nunca criar frontend/,
-#        backend/ ou tests/ na raiz.
+# REGRA: produtos com interface/serviço seguem o layout project/. Bibliotecas
+#        headless preservam o layout canônico declarado em docs/TECH_STACK.md
+#        (por exemplo src/, tests/ e examples/ na raiz), sem inventar frontend.
 
 id: mvp_builder_fast
-version: "1.4.1"
+version: "1.11.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -26,6 +27,22 @@ execution_policy:
   project_role: builder
   allowed_project_phases:
     - building
+
+product_engineering_policy:
+  focus: product_and_software_engineering
+  includes:
+    - product_behavior_and_ux
+    - architecture_code_data_and_apis
+    - technical_security_quality_and_reliability
+    - packaging_installation_and_technical_maintenance
+  excludes:
+    - legal_and_contractual_approval
+    - marketing_sales_and_promotional_sites
+    - market_research_recruiting_and_commercial_metrics
+    - revenue_renewal_and_business_validation
+  external_items:
+    disposition: pending_downstream_team
+    block_builder_delivery: false
 
 session_policy:
   mode: sprint
@@ -59,7 +76,20 @@ batch_policy:
     - docs/task_list.md
     - docs/api_contract.md
     - docs/ui_criteria.md
+    - docs/ui-brief.md
+    - docs/mockups/
     - docs/test_data.md
+    - docs/mvp-batch-navigation-contract.yml
+
+# A engine resolve este catálogo pela seção `validation` de .ft/project.yml.
+# O grafo possui um único ponto de composição; Android, iOS, web e desktop não
+# duplicam o lifecycle do builder nem exigem processos separados.
+validation_policy:
+  registry: builtin_v1
+  project_contract_path: .ft/project.yml
+  matrix_path: docs/validation-matrix.yml
+  report_path: docs/platform-validation-report.yml
+  evidence_root: docs/evidence/platform-validation
 
 input_policy:
   required: false
@@ -72,12 +102,21 @@ artifact_policy:
     - docs/PRD.md
     - docs/TECH_STACK.md
     - docs/ui_criteria.md
+    - docs/ui-brief.md
+    - docs/mockups/
     - docs/PROJECT_BACKLOG.md
     - docs/FEATURES.md
     - docs/hipotese.md
     - docs/demanda.md
     - docs/api_contract.md
     - docs/test_data.md
+    - docs/headless-validation-plan.md
+    - docs/acceptance-result.json
+    - docs/navigation-contract.yml
+    - docs/test-identity.json
+    - docs/validation-matrix.yml
+    - docs/platform-validation-report.yml
+    - docs/evidence/platform-validation/
   cycle:
     - .build_ok
     - docs/task_list.md
@@ -85,8 +124,14 @@ artifact_policy:
     - docs/screenshot-review.md
     - docs/smoke-report.md
     - docs/acceptance-report.md
-    - docs/acceptance-result.json
     - docs/e2e-report.md
+    - docs/navigation-reachability.yml
+    - docs/evidence/navigation/
+    - docs/platform-fix-report.md
+    - docs/headless-build-report.md
+    - docs/headless-review.md
+    - docs/headless-review.yml
+    - docs/headless-fix-report.md
     - docs/visual-check-report.md
     - docs/stakeholder-feedback.md
     - docs/retro.md
@@ -100,11 +145,16 @@ artifact_policy:
     - docs/exploration-report.md
     - docs/mvp-batch-plan.yml
     - docs/mvp-batch-plan.md
+    - docs/mvp-batch-navigation-contract.yml
     - docs/mvp-batch-foundation.md
     - docs/mvp-batch-report.md
     - docs/mvp-batch-review.md
+    - docs/mvp-batch-review.yml
+    - docs/mvp-batch-navigation-reachability.yml
     - docs/mvp-batch-fix-report.md
     - docs/mvp-batch-fix-review.md
+    - docs/mvp-batch-fix-review.yml
+    - docs/mvp-batch-fix-evidence/
     - docs/mvp-validation-summary.md
 
 nodes:
@@ -138,6 +188,7 @@ nodes:
     outputs:
       - docs/mvp-batch-plan.yml
       - docs/mvp-batch-plan.md
+      - docs/mvp-batch-navigation-contract.yml
       - docs/PRD.md
       - docs/TECH_STACK.md
       - docs/PROJECT_BACKLOG.md
@@ -157,6 +208,28 @@ nodes:
       FEATURES, task_list, api_contract, ui_criteria, test_data e .ft/project.yml.
       Se um documento ainda não existir, crie-o com conteúdo suficiente para a
       construção. O lifecycle do projeto permanece building.
+
+      ESCOPO OBRIGATÓRIO: planeje e execute somente produto e engenharia de
+      software. Requisitos funcionais, UX, código, arquitetura, dados, APIs,
+      integrações, segurança técnica, testes, desempenho, confiabilidade,
+      empacotamento, instalação e manutenção técnica podem virar R-*, PB-*,
+      foundation ou lane. Jurídico, contratos como aprovação legal, marketing,
+      site promocional, recrutamento, pesquisa de mercado, vendas, conversão,
+      receita, renovação e validação comercial pertencem à equipe posterior:
+      preserve-os como contexto pendente, sem criar lane, task ou bloqueio do
+      builder e sem declará-los resolvidos.
+
+      Reconcile também `.ft/project.yml.validation` com `schema_version: 1`.
+      Use `mode: explicit` quando a stack já for conhecida e selecione somente
+      `android`, `ios`, `web` e/ou `desktop`. Cada perfil contém `targets` como
+      mapping e cada target declara `required: true|false`: Android aceita
+      emulator/physical; iOS aceita simulator/physical (iPhone/iPad físico não
+      é perfil separado); web aceita desktop_browser/mobile_browser; desktop
+      aceita windows/macos/linux. Use `mode: automatic` apenas enquanto a stack
+      ainda não puder ser determinada e `mode: disabled` somente para produto
+      sem superfície nessas plataformas, com `reason` explícito. Mantenha os
+      paths canônicos da matriz, relatório, evidências e identidade. Fluxos
+      autenticados/personalizados exigem `test_identity.policy: required`.
 
       Escreva docs/mvp-batch-plan.yml estritamente neste schema:
         schema_version: 1
@@ -187,11 +260,34 @@ nodes:
         documentos canônicos protegidos pelo batch_policy;
       - a foundation contém somente extrações, contratos, scaffold e baselines
         realmente compartilhados; funcionalidades ficam nas lanes;
+      - se a demanda criar ou alterar interface pública, atualize
+        docs/api_contract.md nesta chamada, antes do fan-out. Toda operação
+        consumida ou exposta deve existir no contrato canônico; é proibido às
+        lanes inventar endpoint, transporte ou schema paralelo/oculto;
       - não inclua comandos shell no YAML.
 
       Gere também docs/mvp-batch-plan.md como projeção legível: requisitos,
       foundation, lanes, dependências, ownership e critérios. Ao final, confira
       o SHA-256 e o YAML com parser antes de responder DONE.
+
+      Gere docs/mvp-batch-navigation-contract.yml sem assumir stack, domínio ou
+      plataforma. Use exatamente:
+        schema_version: 1
+        scope_sha256: <sha256 dos bytes de docs/mvp-batch-plan.yml>
+        scope_refs:
+          - ref: R-001
+            disposition: ui | non_ui
+            targets: [NAV-001]
+            reason: <obrigatório apenas para non_ui>
+        targets:
+          - id: NAV-001
+            label: <capacidade ou superfície reconhecível pelo usuário>
+            entry_policy: public | entitled | contextual | first_launch
+
+      Classifique exatamente todos os R-* do plano. Todo requisito que produz
+      ou altera uma capacidade visível usa disposition ui e aponta ao menos um
+      target; non_ui exige justificativa. O mesmo target pode servir a vários
+      requisitos. Não registre rota interna como ponto de entrada.
     validators:
       - builder_batch_plan_valid:
           path: docs/mvp-batch-plan.yml
@@ -210,12 +306,25 @@ nodes:
               - docs/api_contract.md
               - docs/ui_criteria.md
               - docs/test_data.md
+              - docs/mvp-batch-navigation-contract.yml
             evidence_root: docs/batches/mvp-builder-fast
       - file_exists: docs/mvp-batch-plan.md
+      - file_exists: docs/mvp-batch-navigation-contract.yml
+      - navigation_contract_valid:
+          path: docs/mvp-batch-navigation-contract.yml
+          scope_path: docs/mvp-batch-plan.yml
+          scope_pattern: "\\bR-\\d+\\b"
+          min_targets: 0
       - file_exists: docs/PRD.md
       - file_exists: docs/TECH_STACK.md
       - file_exists: docs/PROJECT_BACKLOG.md
       - file_exists: docs/task_list.md
+      - file_exists: docs/api_contract.md
+      - api_contract_complete:
+          path: docs/api_contract.md
+          min_endpoints: 3
+      - project_contract_valid:
+          path: .ft/project.yml
       - project_contract_valid:
           path: .ft/project.yml
     next: ft.batch.03.foundation
@@ -239,8 +348,10 @@ nodes:
       Leia docs/mvp-batch-plan.yml e implemente SOMENTE `foundation`: scaffold,
       extrações, contratos, interfaces, modelos compartilhados e baseline que as
       lanes precisam consumir. Não implemente funcionalidades pertencentes a uma
-      lane e não altere documentos canônicos. Faça verificações focais da base,
-      registre comandos/resultados e o contrato congelado em
+      lane e não altere documentos canônicos. Implemente consumidores e
+      provedores contra docs/api_contract.md, sem interface suplementar; o
+      contrato público já está congelado e permanece somente leitura durante o
+      fan-out. Faça verificações focais da base, registre comandos/resultados e o contrato congelado em
       docs/mvp-batch-foundation.md. Deixe o checkout compilável e encerre DONE.
     validators:
       - file_exists: docs/mvp-batch-foundation.md
@@ -275,16 +386,43 @@ nodes:
     max_turns: 80
     outputs:
       - docs/mvp-batch-review.md
+      - docs/mvp-batch-review.yml
+      - docs/test-identity.json
+      - docs/mvp-batch-navigation-reachability.yml
+      - docs/batches/mvp-builder-fast/navigation/
     write_scope:
       - docs/mvp-batch-review.md
+      - docs/mvp-batch-review.yml
+      - docs/test-identity.json
+      - docs/mvp-batch-navigation-reachability.yml
+      - docs/batches/mvp-builder-fast/navigation
     prompt: |
       Revise de forma independente o incremento integrado contra
       docs/mvp-batch-plan.yml, docs/demanda.md e o diff do checkpoint anterior.
       Execute apenas auditorias e testes focais necessários para comprovar cada
       requirement e critério. Não altere código. Escreva
-      docs/mvp-batch-review.md com matriz requirement→evidência e veredito
-      explícito APPROVED ou REJECTED. REJECTED deve listar somente defeitos
-      acionáveis, com path/teste/evidência.
+      docs/mvp-batch-review.md com matriz requirement→evidência e exatamente uma
+      linha `VERDICT: APPROVED` ou `VERDICT: REJECTED`. REJECTED deve listar
+      somente defeitos acionáveis, com path/teste/evidência.
+
+      Escreva também docs/mvp-batch-review.yml com o recibo determinístico:
+        schema_version: 1
+        scope_sha256: <sha256 dos bytes correntes de docs/mvp-batch-plan.yml>
+        verdict: APPROVED | REJECTED
+        results:
+          - ref: R-001
+            result: PASS | FAIL
+            evidence: [<path, teste ou resultado sanitizado>]
+        findings:
+          - id: F-001
+            refs: [R-001]
+            summary: <defeito reproduzível e acionável>
+            evidence: [<path, teste ou resultado sanitizado>]
+
+      Cubra exatamente todos os R-* do plano uma única vez. APPROVED exige todos
+      os resultados PASS e findings vazio. REJECTED exige ao menos um FAIL e
+      findings que cubram exatamente as referências reprovadas. O veredito do
+      Markdown e do YAML deve ser idêntico.
 
       Regra de fidelidade: um requirement sobre dado real exibido no produto
       deve ser provado pela jornada fonte pública→persistência→leitura→UI e por
@@ -294,8 +432,61 @@ nodes:
       autenticada, provisione antes um usuário exclusivo do agente por seed
       idempotente e resetável, com credenciais protegidas, e preserve somente o
       recibo sanitizado em docs/test-identity.json.
+
+      Para cada target de docs/mvp-batch-navigation-contract.yml, execute o
+      produto real a partir da primeira abertura ou de uma superfície principal
+      e navegue somente por controles visíveis da UI de produção. Registro de
+      rota, URL interna direta, deep link/debug, montagem isolada de componente,
+      catálogo técnico ou hook test-only não comprovam descoberta pelo usuário.
+      Targets condicionados exigem prova positiva com identidade técnica
+      elegível e prova negativa com identidade comum.
+
+      Escreva docs/mvp-batch-navigation-reachability.yml com:
+        schema_version: 1
+        contract_sha256: <sha256 do contrato corrente>
+        verdict: APPROVED | REJECTED
+        candidate_ref: <commit, build ou release observado>
+        observed_candidate_ref: <mesmo candidato realmente executado>
+        environment: {kind: <ambiente>, execution_surface: <browser, device ou UI>}
+        findings: []
+        journeys:
+          - id: <id único>
+            entry_type: primary_navigation | menu | first_launch | visible_control | external_event
+            start_surface: <origem reconhecível>
+            entry_point: <rótulo visível>
+            navigation_mode: production_ui
+            steps: [<ações visíveis>]
+            targets: [NAV-001]
+            result: PASS | FAIL
+            evidence: docs/batches/mvp-builder-fast/navigation/<arquivo novo>
+            shortcuts: []
+            access_context: public | entitled | contextual
+
+      Em contexto entitled acrescente entitlement_setup,
+      eligible_entry_result e ineligible_entry_result. Em contextual acrescente
+      context_setup e entry_result. Não registre segredo ou PII. APPROVED exige
+      todos os targets cobertos por jornadas PASS e findings vazio. O Markdown
+      mantém o veredito geral usado pelo review; o YAML julga somente
+      alcançabilidade e pode ser APPROVED mesmo quando outro finding rejeitar o
+      incremento.
     validators:
       - file_exists: docs/mvp-batch-review.md
+      - file_exists: docs/mvp-batch-review.yml
+      - review_outcome_valid:
+          path: docs/mvp-batch-review.yml
+          markdown_path: docs/mvp-batch-review.md
+          scope_path: docs/mvp-batch-plan.yml
+          scope_pattern: "\\bR-\\d+\\b"
+          require_approved: false
+      - file_exists: docs/mvp-batch-navigation-reachability.yml
+      - navigation_reachability:
+          contract_path: docs/mvp-batch-navigation-contract.yml
+          report_path: docs/mvp-batch-navigation-reachability.yml
+          evidence_root: docs/batches/mvp-builder-fast/navigation
+          scope_path: docs/mvp-batch-plan.yml
+          scope_pattern: "\\bR-\\d+\\b"
+          min_targets: 0
+          require_approved: false
     on_fail:
       human_gate: "O review combinado encontrou defeitos focais no batch."
       goto: ft.batch.06.fix
@@ -313,20 +504,35 @@ nodes:
     max_turns: 80
     outputs:
       - project/
+      - docs/api_contract.md
       - docs/mvp-batch-fix-report.md
     write_scope:
       - project
+      - docs/api_contract.md
       - docs/mvp-batch-fix-report.md
     prompt: |
-      Leia docs/mvp-batch-review.md e, quando esta etapa vier do aceite,
-      considere também o feedback mais recente do stakeholder. Corrija SOMENTE
-      os achados REJECTED.
+      Leia docs/mvp-batch-review.md, docs/mvp-batch-review.yml,
+      docs/platform-validation-report.yml quando existir e, quando esta etapa
+      vier do aceite, considere também o feedback mais recente do stakeholder.
+      Corrija SOMENTE os achados REJECTED mais recentes.
       Rode testes focais dos arquivos corrigidos; não repita a suíte completa,
-      não reabra requisitos aprovados e não reescreva documentos canônicos.
+      não reabra requisitos aprovados e preserve documentos canônicos. Se o
+      finding exigir interface pública nova ou corrigida, atualize
+      atomicamente docs/api_contract.md, provedor, consumidor e testes de
+      paridade; não crie endpoint, schema ou transporte oculto/suplementar.
+      Finding `mockup_watermark` exige corrigir a UI de produção e o mapa
+      tela→mockup; não maquie o resultado editando apenas receipt, screenshot
+      ou overlay do teste.
       Registre docs/mvp-batch-fix-report.md com
-      finding→causa→path→fix→teste→resultado e encerre DONE.
+      finding→causa→path→fix→teste→resultado. Normalize cada finding corrente
+      como FX-001, FX-002 etc., uma única vez; preserve na mesma linha o ID F-*
+      de origem quando ele vier do review combinado e preserve o ID PV-F-* de
+      origem quando vier da validação de plataforma. Encerre DONE.
     validators:
       - file_exists: docs/mvp-batch-fix-report.md
+      - api_contract_complete:
+          path: docs/api_contract.md
+          min_endpoints: 3
       - command_succeeds: "git diff --check"
     next: ft.batch.06b.fix_review
 
@@ -337,15 +543,23 @@ nodes:
     sprint: sprint-00-batch
     executor: codex
     no_pre_seed: true
+    preserve_outputs_on_reentry: true
     max_turns: 30
     outputs:
       - docs/mvp-batch-fix-review.md
+      - docs/mvp-batch-fix-review.yml
+      - docs/mvp-batch-fix-evidence/
     write_scope:
       - docs/mvp-batch-fix-review.md
+      - docs/mvp-batch-fix-review.yml
+      - docs/mvp-batch-fix-evidence/
+      - docs/mvp-batch-navigation-reachability.yml
+      - docs/batches/mvp-builder-fast/navigation
     prompt: |
       Audite SOMENTE o delta registrado em docs/mvp-batch-fix-report.md contra
-      os findings REJECTED do último docs/mvp-batch-review.md. Inspecione apenas
-      os paths e testes citados nesses findings. Não reabra requirements,
+      os findings REJECTED do último docs/mvp-batch-review.md ou
+      docs/platform-validation-report.yml. Inspecione apenas os paths e testes
+      citados nesses findings. Não reabra requirements,
       critérios ou arquivos anteriormente aprovados e não rode a regressão
       completa.
 
@@ -353,14 +567,49 @@ nodes:
       uma linha explícita VERDICT: APPROVED ou VERDICT: REJECTED. Rejeite apenas
       defeito reproduzível ainda presente. Para dados exibidos em UI, confronte
       cada campo citado no finding com a fonte real pela interface pública e a
-      tela executável; prova mock-only é insuficiente. Siga o contrato global
-      `focal_evidence` injetado pela engine. Se houver APK/hash no finding,
+      tela executável; prova mock-only é insuficiente. Nesses casos, preserve a
+      captura ou dump físico sanitizado como arquivo separado em
+      docs/mvp-batch-fix-evidence/ e referencie esse path em `visual_evidence` e
+      nas claims correspondentes. Auto-referenciar o Markdown ou incorporar a
+      imagem inline não satisfaz o contrato. Nunca grave certificado, chave
+      privada, senha ou dado pessoal bruto nesse diretório. Siga o contrato
+      global `focal_evidence` injetado pela engine. Se houver APK/hash no finding,
       comprove que candidato local e artefato observado no dispositivo têm o
       mesmo SHA-256. Jornada autenticada deve usar o usuário exclusivo do agente
       e citar o recibo sanitizado de seu seed; não dependa da conta ou de uma
-      ação manual do stakeholder. Não altere código.
+      ação manual do stakeholder. Se o finding envolver descoberta/navegação,
+      reexecute somente as jornadas afetadas pela UI de produção, renove suas
+      evidências e atualize docs/mvp-batch-navigation-reachability.yml. Não
+      altere código.
+
+      Para finding `mockup_watermark`, abra cada tela afetada no target real e
+      confirme visualmente que a marca d'água vem do produto, contém o ID exato
+      do mockup e permanece legível sem bloquear conteúdo ou interação.
+
+      Gere docs/mvp-batch-fix-review.yml com `schema_version: 1`,
+      `scope_sha256` dos bytes correntes de docs/mvp-batch-fix-report.md,
+      `verdict`, `results` e `findings`, no mesmo schema do review combinado.
+      Aqui cada `results[].ref` deve ser exatamente um FX-* do fix report.
+      Cubra todos os findings correntes. APPROVED exige todos PASS e findings
+      vazio; uma nova falha usa ID FFX-* e referencia o FX-* ainda reprovado. O
+      Markdown e o YAML devem declarar o mesmo veredito.
     validators:
       - file_exists: docs/mvp-batch-fix-review.md
+      - file_exists: docs/mvp-batch-fix-review.yml
+      - review_outcome_valid:
+          path: docs/mvp-batch-fix-review.yml
+          markdown_path: docs/mvp-batch-fix-review.md
+          scope_path: docs/mvp-batch-fix-report.md
+          scope_pattern: "\\bFX-\\d+\\b"
+          require_approved: true
+      - navigation_reachability:
+          contract_path: docs/mvp-batch-navigation-contract.yml
+          report_path: docs/mvp-batch-navigation-reachability.yml
+          evidence_root: docs/batches/mvp-builder-fast/navigation
+          scope_path: docs/mvp-batch-plan.yml
+          scope_pattern: "\\bR-\\d+\\b"
+          min_targets: 0
+          require_approved: true
       - command_succeeds: "git diff --check"
     on_fail:
       human_gate: "A auditoria focal ainda encontrou defeito no fix."
@@ -377,13 +626,184 @@ nodes:
     validation_mode: fail_fast
     validators:
       - command_succeeds: "make -C project verify"
+      - review_chain_approved:
+          review_path: docs/mvp-batch-review.yml
+          review_markdown_path: docs/mvp-batch-review.md
+          scope_path: docs/mvp-batch-plan.yml
+          scope_pattern: "\\bR-\\d+\\b"
+          fix_review_path: docs/mvp-batch-fix-review.yml
+          fix_review_markdown_path: docs/mvp-batch-fix-review.md
+          fix_scope_path: docs/mvp-batch-fix-report.md
+          fix_scope_pattern: "\\bFX-\\d+\\b"
+      - navigation_reachability:
+          contract_path: docs/mvp-batch-navigation-contract.yml
+          report_path: docs/mvp-batch-navigation-reachability.yml
+          evidence_root: docs/batches/mvp-builder-fast/navigation
+          scope_path: docs/mvp-batch-plan.yml
+          scope_pattern: "\\bR-\\d+\\b"
+          min_targets: 0
+          require_approved: true
       - command_succeeds: "git diff --check"
+    next: ft.batch.07a.platform_route
+
+  - id: ft.batch.07a.platform_route
+    type: decision
+    title: "Resolver Perfis de Validação do Batch"
+    description: "Instanciar somente Android, iOS, web e/ou desktop selecionados pelo contrato corrente."
+    sprint: sprint-00-batch
+    executor: python
+    condition: validation_profiles_active
+    branches:
+      "true": ft.batch.07b.platform_validation
+      "false": ft.batch.08.acceptance
+
+  - id: ft.batch.07b.platform_validation
+    type: review
+    title: "Validar Plataformas Selecionadas do Batch"
+    description: "Executar os targets da matriz resolvida, agregar evidências do candidato corrente e reprovar qualquer target obrigatório não comprovado."
+    sprint: sprint-00-batch
+    executor: codex
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    max_turns: 100
+    env_setup:
+      - ft validation-matrix .
+    outputs:
+      - docs/validation-matrix.yml
+      - docs/platform-validation-report.yml
+      - docs/evidence/platform-validation/
+      - docs/test-identity.json
+    write_scope:
+      - docs/validation-matrix.yml
+      - docs/platform-validation-report.yml
+      - docs/evidence/platform-validation
+      - docs/test-identity.json
+    prompt: |
+      Leia a matriz determinística em docs/validation-matrix.yml. Ela já
+      instancia somente os perfis e targets selecionados em .ft/project.yml;
+      não invente nem remova plataformas. Para cada target, execute o
+      `make_target` informado pela matriz. Targets independentes podem rodar em
+      paralelo; nunca concorram pelo mesmo dispositivo físico.
+
+      Valide o candidato integrado corrente, não um build/cache anterior. Em
+      Android/iOS instale o artefato corrente e compare SHA-256 local e
+      observado. Em dispositivo físico use somente aparelho autorizado;
+      indisponibilidade de target obrigatório é BLOCKED, não PASS nem defeito
+      do produto. Em web use navegador real; em desktop execute o aplicativo no
+      SO alvo. Um target opcional indisponível pode ser SKIP com motivo; falha
+      reproduzida é sempre FAIL.
+
+      Em Android físico, trate instaladores OEM interativos como gate humano e
+      minimize-os por construção. Compile o candidato uma vez; mantenha um
+      ledger sanitizado por package + SHA-256; instale app e APK instrumental
+      somente quando ausentes ou quando o hash observado divergir. Se apenas um
+      pacote divergir, instale somente ele; se app e instrumental divergirem
+      juntos, use uma única sessão multipacote quando suportada para concentrar
+      a confirmação OEM. Depois rode
+      todos os focais contra os pacotes já instalados com `adb shell am instrument`
+      (ou mecanismo equivalente comprovadamente sem reinstalação),
+      agregando classes quando possível. Não repita tasks que reinstalam ou
+      removem os pacotes entre subconjuntos. Um tap injetado não prova aceite:
+      somente sucesso do instalador e hash observado comprovam instalação. Se o
+      diálogo exigir pessoa, conclua antes todo trabalho independente, solicite
+      uma única autorização no checkpoint físico final e aguarde; nunca use o
+      aparelho físico interativo como loop de fix nem repita a solicitação.
+      Nunca declare que a automação confirmou sem essa prova. Não use root,
+      desbloqueio de bootloader
+      nem enfraqueça a segurança do aparelho sem autorização explícita.
+      O check `artifact_install_reuse` deve evidenciar hashes, quantidade de
+      instalações reais e execuções reutilizadas, sem identificadores sensíveis.
+
+      Execute exatamente todos os checks listados na matriz. Incorpore os
+      aprendizados gerais de validação física: identidade técnica exclusiva e
+      seed idempotente/resetável para jornadas autenticadas, estado vazio e
+      massa controlada, fonte→persistência→UI para dados exibidos, instalação e
+      launch reais, CTAs com efeito, navegação por menus/controles de produção,
+      permissões refletidas na UI, retorno/back sensível ao contexto,
+      persistência após rotação/reinício, insets/safe areas sem sobreposição,
+      acessibilidade e comparação visual com todas as referências declaradas.
+      Atalho técnico, rota direta, preview ou componente isolado pode apoiar
+      diagnóstico, mas nunca encerrar um check.
+
+      O check `mockup_watermark` é obrigatório em toda superfície de UI.
+      Descubra todas as telas, páginas e janelas alcançáveis no target e prove,
+      uma a uma, que o produto renderiza uma marca d'água discreta, legível e
+      não interativa com o identificador EXATO do mockup correspondente.
+      Overlay acrescentado pelo teste/captura não conta. Tela sem
+      mockup atribuído, inventário incompleto ou screenshot ausente é FAIL.
+
+      Se test_identity.policy=required, preserve docs/test-identity.json no
+      contrato sanitizado da engine, sem PII/segredo. Grave evidências NOVAS sob
+      docs/evidence/platform-validation/<run-id>/<perfil>/<target>/; evidência
+      de um target não pode provar outro. Não apague evidências históricas.
+
+      Gere docs/platform-validation-report.yml exatamente com:
+        schema_version: 1
+        matrix_sha256: <sha256 dos bytes correntes da matriz>
+        verdict: APPROVED | REJECTED
+        candidate_ref: <commit/build opaco corrente>
+        profiles:
+          - id: android | ios | web | desktop
+            targets:
+              - id: <target da matriz>
+                required: true | false
+                result: PASS | FAIL | SKIP
+                reason: <obrigatório somente em SKIP>
+                observed_candidate_ref: <igual a candidate_ref quando executado>
+                environment:
+                  kind: <igual à matriz>
+                  execution_surface: <igual à matriz>
+                  os_name: <nome sanitizado>
+                  os_version: <versão>
+                  device_ref: <opaco; obrigatório somente no físico>
+                installation:
+                  result: PASS
+                  artifact_sha256: <64 hex>
+                  observed_artifact_sha256: <mesmo hash>
+                checks:
+                  - id: <cada check, na ordem exata da matriz>
+                    result: PASS | FAIL
+                    evidence: [<path novo sob evidence_root>]
+                    # campos obrigatórios somente em mockup_watermark:
+                    inventory_complete: true | false
+                    discovered_screen_count: <screens + unmapped_screens>
+                    unmapped_screens: [<id de tela ainda sem mockup>]
+                    screens:
+                      - id: <tela/página/janela estável>
+                        mockup_ref: <identificador estável e exato do mockup>
+                        watermark_text: <idêntico a mockup_ref>
+                        result: PASS | FAIL
+                        evidence: [<screenshot real exclusivo desta tela>]
+        findings:
+          - id: PV-F-001
+            profile: <perfil>
+            target: <target>
+            check: <check FAIL>
+            summary: <defeito reproduzível>
+
+      APPROVED exige todo target obrigatório PASS, nenhum FAIL e findings
+      vazio. REJECTED exige um finding para cada check FAIL. Nunca registre
+      serial/UDID, SSID/BSSID, IP, email, telefone, senha, token ou segredo.
+    validators:
+      - validation_matrix_valid:
+          path: docs/validation-matrix.yml
+      - platform_validation_report:
+          matrix_path: docs/validation-matrix.yml
+          report_path: docs/platform-validation-report.yml
+          evidence_root: docs/evidence/platform-validation
+          test_identity_path: docs/test-identity.json
+          require_approved: true
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "A validação de plataforma encontrou uma divergência focal."
+      goto: ft.batch.06.fix
+      automatic: true
     next: ft.batch.08.acceptance
 
   - id: ft.batch.08.acceptance
     type: human_gate
     title: "Aceitar o Produto Validado"
-    description: "Exercite o produto no ambiente real de validação. Aprove somente se funcionalidade e estética estiverem corretas; ao rejeitar, descreva defeitos reproduzíveis e o fluxo volta apenas à correção focal."
+    description: "Exercite o produto no ambiente real de validação. Aprove somente se funcionalidade, estética e descoberta pelas entradas visíveis estiverem corretas e nenhum target estiver órfão; ao rejeitar, descreva defeitos reproduzíveis e o fluxo volta apenas à correção focal."
     sprint: sprint-00-batch
     executor: python
     outputs:
@@ -414,13 +834,14 @@ nodes:
     prompt: |
       O stakeholder aceitou o incremento. Reconcilie SOMENTE o delta descrito
       em docs/mvp-batch-plan.yml usando os relatórios de foundation, fan-in,
-      review, regressão e aceite. Preserve IDs e histórico.
+      review Markdown/YAML, fix review quando houver, regressão e aceite.
+      Preserve IDs e histórico.
 
       Marque como done/accepted apenas os PBs do plano que possuem evidência
-      real. Atualize FEATURES somente para capacidades efetivamente aceitas e
-      task_list somente para tarefas deste delta. Preserve o objetivo e o DoD
-      global em .ft/project.yml; o lifecycle permanece building até
-      `ft project-close`.
+      real, incluindo alcançabilidade pela UI de produção quando houver target.
+      Atualize FEATURES somente para capacidades efetivamente aceitas e task_list
+      somente para tarefas deste delta. Preserve o objetivo e o DoD global em
+      .ft/project.yml; o lifecycle permanece building até `ft project-close`.
 
       Escreva docs/mvp-validation-summary.md com requisitos, PBs, evidências,
       resultado da regressão e decisão do stakeholder. Não reescreva PRD,
@@ -442,38 +863,107 @@ nodes:
     next: ft.end
 
   # ================================================================
-  # HyperMode — rota para pular MDD quando PRD já existe
+  # Entrada — MDD agora é um template independente
   # ================================================================
 
   - id: ft.start.route
-    type: decision
-    title: "HyperMode — PRD existente?"
-    description: "Detecta se já existe docs/PRD.md no projeto. Se sim, pula o MDD, mas ainda valida se docs/ui_criteria.md existe antes do planejamento."
+    type: gate
+    title: "Validar entrada produzida pela MDD"
+    description: "Exige hipótese e PRD antes do planejamento. Para produzi-los, execute e encerre um ciclo com o template mdd."
     sprint: sprint-01-mdd
     executor: python
-    condition: "file_exists:docs/PRD.md"
-    branches:
-      "true": ft.start.ui_criteria.route
-      "false": ft.mdd.01.hipotese
+    outputs:
+      - docs/hipotese.md
+      - docs/PRD.md
+    validators:
+      - file_exists: docs/hipotese.md
+      - has_sections:
+          path: docs/hipotese.md
+          sections:
+            - Hipótese Central
+            - Problema Observado
+            - Público-Alvo
+            - Sinal de Validação
+      - file_exists: docs/PRD.md
+      - has_sections:
+          path: docs/PRD.md
+          sections:
+            - Hipótese
+            - User Stories
+            - Stack Técnico
+            - Critérios de Saída
+    next: ft.hyper.00.ui_criteria_questions
 
   - id: ft.start.ui_criteria.route
     type: decision
     title: "HyperMode — Critérios de UI existentes?"
-    description: "Detecta se já existe docs/ui_criteria.md. Se não existir, cria critérios visuais perguntando ao stakeholder antes de iniciar o planejamento. Depois valida/cria docs/PROJECT_BACKLOG.md antes da task list do ciclo."
+    description: "Depois do brief visual obrigatório, detecta se docs/ui_criteria.md precisa ser criado antes do planejamento."
     sprint: sprint-02-planning
     executor: python
     condition: "file_exists:docs/ui_criteria.md"
     branches:
       "true": ft.start.backlog.route
-      "false": ft.hyper.00.ui_criteria_questions
+      "false": ft.hyper.01.ui_criteria
 
   - id: ft.hyper.00.ui_criteria_questions
     type: human_gate
-    title: "Perguntas para Critérios Visuais"
-    description: "docs/ui_criteria.md não existe. Responda com o que deve guiar a UI: telas P0, ações primárias por tela, componentes obrigatórios, fluxos de criação/edição, estados de erro/vazio/loading e evidências esperadas. Use ft approve \"respostas...\" para continuar; sem mensagem, o engine deriva apenas do PRD."
+    title: "Superfície e Direção da Experiência"
+    description: "Brief obrigatório do stakeholder. Declare primeiro se o produto possui superfície visual. Para produto visual, informe plataforma/viewport, estética, referências, marca, acessibilidade, telas, ações e estados P0. Para biblioteca/SDK headless, declare explicitamente que não há UI, browser, telas ou mockups e descreva a experiência programática esperada. Use ft approve \"brief...\"; aprovação sem mensagem é recusada."
     sprint: sprint-02-planning
     executor: python
-    next: ft.hyper.01.ui_criteria
+    approval_message_required: true
+    next: ft.hyper.00b.ui_brief
+
+  - id: ft.hyper.00b.ui_brief
+    type: document
+    title: "Persistir Contrato de Experiência"
+    description: "Converter a direção fornecida pelo stakeholder em contrato curto e durável e registrar canonicamente quando o produto não possui superfície visual."
+    sprint: sprint-02-planning
+    executor: codex
+    max_turns: 20
+    outputs:
+      - docs/ui-brief.md
+      - .ft/project.yml
+    write_scope:
+      - docs/ui-brief.md
+      - .ft/project.yml
+    prompt: |
+      Use a mensagem CURRENT_FEEDBACK do gate anterior como fonte primária e
+      leia somente o necessário de docs/PRD.md. Escreva docs/ui-brief.md com:
+      presença ou ausência de superfície visual, plataforma/viewport quando
+      aplicável, personalidade, referências, marca, acessibilidade, ações P0,
+      estados exigidos, padrões obrigatórios/proibidos e decisões abertas.
+      Preserve literalmente nomes, cores e restrições fornecidos; não invente
+      preferência ausente.
+
+      Se, e somente se, o stakeholder declarar explicitamente biblioteca, SDK,
+      serviço ou produto headless sem Android, iOS, web ou desktop visual,
+      reconcilie `.ft/project.yml.validation` para `mode: disabled`,
+      `platforms: {}`, `test_identity.policy: not_required` e `reason` objetivo.
+      Preserve schema, paths, objetivo, lifecycle e DoD existentes. Nunca
+      fabrique um target desktop opcional para representar compatibilidade de
+      runtime. Se houver qualquer superfície visual, preserve mode automatic ou
+      explicit e não desabilite a validação. Responda DONE.
+    validators:
+      - file_exists: docs/ui-brief.md
+      - document_quality:
+          path: docs/ui-brief.md
+          min_lines_count: 12
+          max_lines_count: 180
+      - project_contract_valid:
+          path: .ft/project.yml
+    next: ft.start.surface.route
+
+  - id: ft.start.surface.route
+    type: decision
+    title: "Selecionar Planejamento Visual ou Headless"
+    description: "Usa o modo canônico de validação do projeto; disabled significa ausência explícita de superfície visual."
+    sprint: sprint-02-planning
+    executor: python
+    condition: project_validation_mode
+    branches:
+      disabled: ft.start.backlog.route
+      _default: ft.start.ui_criteria.route
 
   - id: ft.hyper.01.ui_criteria
     type: discovery
@@ -559,82 +1049,6 @@ nodes:
       "false": ft.plan.00.foundation_features
 
   # ================================================================
-  # Sprint 01 — MDD (Método de Desenvolvimento Dirigido)
-  # ================================================================
-
-  - id: ft.mdd.01.hipotese
-    type: discovery
-    title: "Capturar Hipótese"
-    description: "Entrevistar o stakeholder para capturar a hipótese central do produto: problema, público-alvo, solução proposta e sinal de validação."
-    sprint: sprint-01-mdd
-    executor: claude
-    outputs:
-      - docs/hipotese.md
-    validators:
-      - file_exists: docs/hipotese.md
-      - has_sections:
-          - Hipótese Central
-          - Problema Observado
-          - Público-Alvo
-          - Sinal de Validação
-    next: ft.mdd.01b.hipotese_gate
-
-  - id: ft.mdd.01b.hipotese_gate
-    type: human_gate
-    title: "Revisão da Hipótese"
-    description: "Leia docs/hipotese.md e confirme se a hipótese capturada reflete corretamente o problema e o público-alvo. Rejeite com sugestões de ajuste se necessário."
-    sprint: sprint-01-mdd
-    executor: python
-    outputs:
-      - docs/hipotese.md
-    reject_next: ft.mdd.01.hipotese
-    next: ft.mdd.02.prd
-
-  - id: ft.mdd.02.prd
-    type: document
-    title: "Redigir PRD"
-    description: "Elaborar o PRD completo com hipótese, visão, user stories priorizadas (P0/P1), stack técnico, contratos de navegação e critérios de saída do ciclo."
-    sprint: sprint-01-mdd
-    executor: claude
-    outputs:
-      - docs/PRD.md
-    validators:
-      - file_exists: docs/PRD.md
-      - has_sections:
-          - Hipótese
-          - Visão
-          - User Stories
-          - Stack Técnico
-          - Critérios de Saída
-    next: ft.mdd.02b.prd_gate
-
-  - id: ft.mdd.02b.prd_gate
-    type: human_gate
-    title: "Revisão do PRD"
-    description: "Leia docs/PRD.md. Verifique se as user stories P0 cobrem o fluxo core e se os critérios de saída são verificáveis. Rejeite com feedback específico se faltar algo."
-    sprint: sprint-01-mdd
-    executor: python
-    outputs:
-      - docs/PRD.md
-    reject_next: ft.mdd.02.prd
-    next: ft.mdd.03.prd_gate
-
-  - id: ft.mdd.03.prd_gate
-    type: gate
-    title: "Gate MDD"
-    description: "Verificação determinística: PRD existe, tem as seções obrigatórias e hipótese aprovada."
-    sprint: sprint-01-mdd
-    executor: python
-    validators:
-      - file_exists: docs/PRD.md
-      - file_exists: docs/hipotese.md
-      - has_sections:
-          - Hipótese
-          - User Stories
-          - Stack Técnico
-    next: ft.start.ui_criteria.route
-
-  # ================================================================
   # Sprint 02 — Planning
   # ================================================================
 
@@ -652,6 +1066,15 @@ nodes:
       - .ft/project.yml
     prompt: |
       Crie docs/PROJECT_BACKLOG.md como artefato canônico do produto.
+
+      Escopo obrigatório: PROJECT_BACKLOG, task_list e DoD deste builder cobrem
+      somente o produto e a engenharia de software. Inclua comportamento, UX,
+      arquitetura, código, dados, APIs, integrações, segurança técnica, testes,
+      desempenho, confiabilidade, empacotamento, instalação e manutenção.
+      Assuntos de jurídico, marketing, site promocional, recrutamento, pesquisa
+      de mercado, vendas, receita, renovação ou validação comercial ficam
+      pendentes para a equipe posterior; não crie PB/task/gate de engenharia
+      para eles, não os use como bloqueio e não os declare resolvidos.
 
       Fontes:
       - docs/PRD.md (fonte primária)
@@ -688,17 +1111,31 @@ nodes:
 
       Depois de criar o backlog, complete no mesmo turn:
       1. docs/FEATURES.md, somente com itens PB-* done/accepted, usando IDs FEAT-*.
-      2. docs/task_list.md, com 20-120 linhas, referências PB-* e tasks de frontend,
-         backend e testes para o ciclo.
+      2. docs/task_list.md, com 20-120 linhas, referências PB-* e tasks das
+         áreas reais do produto. Para `validation.mode: disabled`, decomponha
+         biblioteca/core, adapters, empacotamento, documentação e testes sem
+         inventar frontend, browser, mockup ou servidor HTTP.
       3. docs/TECH_STACK.md, com as seções Framework, Banco de Dados e
          Estrutura de Diretórios e justificativas das escolhas.
       4. .ft/project.yml como contrato global: preserve schema_version, project_id
          e lifecycle.owner_template; objective deve representar o resultado maior
          do PRD; mantenha phase=building e delivered_revision=null. O DoD deve
-         cobrir todo P0/P1, aceitar somente done/accepted, exigir evidência,
-         checkout limpo e nenhum ciclo aberto. Required_gates deve declarar cada
+         selecionar exatamente o escopo do marco alvo, aceitar somente
+         done/accepted, exigir evidência, checkout limpo e nenhum ciclo aberto.
+         Para um alvo MVP cujo PRD exige somente P0, use priorities: [P0]; P1
+         pós-MVP não pode bloquear esse marco. Inclua P1 somente quando o
+         objetivo/DoD do PRD o exigir. Required_gates deve declarar cada
          aceite/release obrigatório que tenha evidência JSON/YAML verificável.
          Nunca marque maintenance; somente `ft project-close` faz a transição.
+         Configure também `validation` schema 1. Como a stack já é conhecida,
+         use mode=explicit e selecione os targets necessários entre Android
+         (emulator/physical), iOS (simulator/physical), web
+         (desktop_browser/mobile_browser) e desktop (windows/macos/linux), com
+         `required` por target. iPhone/iPad são target physical de iOS. Exija
+         test_identity quando os fluxos forem autenticados ou personalizados.
+         Para biblioteca/SDK sem qualquer superfície visual, preserve ou use
+         mode=disabled com reason explícito, platforms vazio e test_identity
+         not_required; compatibilidade de runtime não é target desktop.
       Não encerre antes de produzir e verificar os cinco artefatos.
     validators:
       - file_exists: docs/PROJECT_BACKLOG.md
@@ -716,9 +1153,11 @@ nodes:
           min_refs: 1
       - file_exists: docs/TECH_STACK.md
       - has_sections:
-          - Framework
-          - Banco de Dados
-          - Estrutura de Diretórios
+          path: docs/TECH_STACK.md
+          sections:
+            - Framework
+            - Banco de Dados
+            - Estrutura de Diretórios
       - project_contract_valid:
           path: .ft/project.yml
     next: ft.plan.02b.tech_gate
@@ -737,6 +1176,12 @@ nodes:
     prompt: |
       Crie ou reconcilie docs/FEATURES.md como catálogo canônico das capacidades
       efetivamente implementadas e validadas do produto.
+
+      Escopo obrigatório: catalogue e planeje somente capacidades do produto e
+      trabalho de engenharia de software. Jurídico, marketing, site
+      promocional, recrutamento, pesquisa de mercado, vendas, receita,
+      renovação e validação comercial permanecem pendentes para a equipe
+      posterior e não viram feature, task ou bloqueio deste builder.
 
       Fontes:
       - docs/PROJECT_BACKLOG.md (fonte primária)
@@ -772,16 +1217,23 @@ nodes:
       |---|---|---|---|---|---|---|---|---|
 
       Depois do catálogo, complete no mesmo turn:
-      1. docs/task_list.md com 20-120 linhas, referências PB-* e tasks de
-         frontend, backend e testes.
+      1. docs/task_list.md com 20-120 linhas, referências PB-* e tasks das áreas
+         reais do produto. Em produto headless, use biblioteca/core, adapters,
+         empacotamento, documentação e testes; não invente frontend/browser.
       2. docs/TECH_STACK.md com as seções Framework, Banco de Dados e
          Estrutura de Diretórios.
       3. .ft/project.yml reconciliado com PRD/backlog. Preserve schema_version,
          project_id e lifecycle.owner_template; mantenha phase=building e
-         delivered_revision=null. O DoD cobre todo P0/P1, aceita somente
-         done/accepted, exige evidência, checkout limpo e nenhum ciclo aberto.
+         delivered_revision=null. O DoD seleciona exatamente o escopo do marco
+         alvo, aceita somente done/accepted, exige evidência, checkout limpo e
+         nenhum ciclo aberto. Um MVP P0 não inclui P1 pós-MVP como bloqueador.
          Declare required_gates apenas para aceites/releases obrigatórios com
          evidência JSON/YAML verificável. Nunca marque maintenance.
+         Reconcile também `validation` schema 1: mode=explicit somente para
+         superfícies Android/iOS/web/desktop reais; mode=disabled com reason e
+         platforms vazio para biblioteca/SDK headless. iPhone/iPad pertencem a
+         ios.targets.physical. Marque target obrigatório com `required: true` e
+         exija test_identity para jornadas autenticadas/personalizadas.
       Verifique os quatro artefatos antes de encerrar.
     validators:
       - file_exists: docs/FEATURES.md
@@ -798,9 +1250,11 @@ nodes:
           min_refs: 1
       - file_exists: docs/TECH_STACK.md
       - has_sections:
-          - Framework
-          - Banco de Dados
-          - Estrutura de Diretórios
+          path: docs/TECH_STACK.md
+          sections:
+            - Framework
+            - Banco de Dados
+            - Estrutura de Diretórios
       - project_contract_valid:
           path: .ft/project.yml
     next: ft.plan.02b.tech_gate
@@ -819,17 +1273,30 @@ nodes:
     prompt: |
       Gere os dois documentos de planejamento no mesmo turn:
 
+      Escopo obrigatório: selecione apenas trabalho de produto e engenharia de
+      software. Não transforme jurídico, marketing, site promocional,
+      recrutamento, pesquisa de mercado, vendas, receita, renovação ou
+      validação comercial em task, gate ou bloqueio; preserve esses assuntos
+      como pendentes para a equipe posterior, sem declará-los resolvidos.
+
       1. docs/task_list.md seleciona itens abertos de docs/PROJECT_BACKLOG.md para
          este ciclo. Use referências PB-*, 20-120 linhas e tasks técnicas
-         ordenadas de frontend, backend e testes, com critérios e evidências.
+         ordenadas pelas áreas reais do produto, com critérios e evidências.
+         Em produto headless, não invente frontend, browser, mockup ou servidor.
       2. docs/TECH_STACK.md documenta framework, banco de dados, bibliotecas,
          scripts e estrutura de diretórios, justificando as decisões.
       3. .ft/project.yml representa o objetivo/DoD maior. Preserve schema_version,
          project_id e lifecycle.owner_template; mantenha phase=building e
-         delivered_revision=null. Selecione todo P0/P1, aceite somente
-         done/accepted e exija evidência, checkout limpo e nenhum ciclo aberto.
+         delivered_revision=null. Selecione somente prioridades/IDs pertencentes
+         ao marco alvo, aceite done/accepted e exija evidência, checkout limpo e
+         nenhum ciclo aberto. Para MVP P0, P1 pós-MVP não é bloqueador.
          Required_gates deve registrar aceites/releases obrigatórios com evidência
          JSON/YAML verificável. Nunca marque maintenance.
+         Preserve/reconcile `validation` schema 1 em mode=explicit somente com
+         superfícies reais. Biblioteca/SDK sem UI usa mode=disabled, reason
+         explícito, platforms vazio e test_identity not_required. Android, iOS,
+         web e desktop são perfis; iPhone/iPad são target físico do iOS. Fluxo
+         autenticado/personalizado exige test_identity.
 
       Preserve docs/PROJECT_BACKLOG.md e docs/FEATURES.md existentes. Não encerre
       antes de produzir e verificar os três outputs.
@@ -840,17 +1307,19 @@ nodes:
           min_lines_count: 20
           max_lines_count: 120
           forbidden: ["<tool_call", "<arg_key", "<arg_value", "vou analisar", "vou criar", "preciso verificar", "devo decompor", "I'll help", "Let me first", "I need to", "I will"]
-          required_terms: ["PB-", "task", "frontend", "backend", "teste"]
-          min_required_terms: 5
+          required_terms: ["PB-", "task", "teste"]
+          min_required_terms: 3
       - task_list_references_backlog:
           task_path: docs/task_list.md
           backlog_path: docs/PROJECT_BACKLOG.md
           min_refs: 1
       - file_exists: docs/TECH_STACK.md
       - has_sections:
-          - Framework
-          - Banco de Dados
-          - Estrutura de Diretórios
+          path: docs/TECH_STACK.md
+          sections:
+            - Framework
+            - Banco de Dados
+            - Estrutura de Diretórios
       - project_contract_valid:
           path: .ft/project.yml
     next: ft.plan.02b.tech_gate
@@ -870,16 +1339,24 @@ nodes:
 
       Revise .ft/project.yml contra PRD e PROJECT_BACKLOG. Preserve schema_version,
       project_id e lifecycle.owner_template; mantenha phase=building e
-      delivered_revision=null. O DoD global deve selecionar todo P0/P1, aceitar
-      somente done/accepted, exigir evidência, checkout limpo e nenhum ciclo
-      aberto. Required_gates deve conter os aceites/releases obrigatórios com
+      delivered_revision=null. O DoD global deve selecionar exatamente o escopo
+      do marco alvo e, para MVP P0, não incluir P1 pós-MVP como bloqueador.
+      Aceite somente done/accepted, exija evidência, checkout limpo e nenhum
+      ciclo aberto. Required_gates deve conter os aceites/releases obrigatórios com
       evidência JSON/YAML verificável. Nunca marque maintenance.
+      Configure `validation` schema 1 em mode=explicit apenas para superfícies
+      Android/iOS/web/desktop reais. Biblioteca/SDK sem UI usa mode=disabled,
+      reason explícito, platforms vazio e test_identity not_required; não use
+      target desktop para representar runtime. Exija test_identity para jornadas
+      autenticadas ou personalizadas.
     validators:
       - file_exists: docs/TECH_STACK.md
       - has_sections:
-          - Framework
-          - Banco de Dados
-          - Estrutura de Diretórios
+          path: docs/TECH_STACK.md
+          sections:
+            - Framework
+            - Banco de Dados
+            - Estrutura de Diretórios
       - project_contract_valid:
           path: .ft/project.yml
     next: ft.plan.02b.tech_gate
@@ -894,7 +1371,391 @@ nodes:
       - docs/TECH_STACK.md
       - .ft/project.yml
     reject_next: ft.plan.02.tech_stack
-    next: ft.plan.03.api_contract
+    next: ft.plan.surface.route
+
+  - id: ft.plan.surface.route
+    type: decision
+    title: "Selecionar Entrega Visual ou Headless"
+    description: "Produtos sem superfície visual seguem contratos, build, testes e aceite de biblioteca; produtos visuais preservam o lifecycle de frontend/browser."
+    sprint: sprint-02-planning
+    executor: python
+    condition: project_validation_mode
+    branches:
+      disabled: ft.headless.plan.01.contract
+      _default: ft.plan.03.api_contract
+
+  # ================================================================
+  # Rota Headless — bibliotecas, SDKs e componentes sem UI
+  # ================================================================
+
+  - id: ft.headless.plan.01.contract
+    type: document
+    no_pre_seed: true
+    title: "Definir Contrato Público e Plano de Validação Headless"
+    description: "Transformar PRD, backlog e stack em contrato programático acionável e cenários de aceite sem endpoints, frontend, browser ou mockups inventados."
+    sprint: sprint-02-planning
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/api_contract.md
+      - docs/test_data.md
+      - docs/headless-validation-plan.md
+    write_scope:
+      - docs/api_contract.md
+      - docs/test_data.md
+      - docs/headless-validation-plan.md
+    prompt: |
+      Este produto possui `validation.mode: disabled`: não há superfície visual.
+      Leia PRD, PROJECT_BACKLOG, task_list, TECH_STACK e .ft/project.yml.
+
+      Gere `docs/api_contract.md` como contrato da API PÚBLICA PROGRAMÁTICA da
+      biblioteca/SDK, não como API HTTP. Use obrigatoriamente as seções:
+      `## API Pública`, `## Operações`, `## Modelos`, `## Erros` e
+      `## Compatibilidade`. Em Operações, inclua tabela exatamente com colunas:
+      `Símbolo | Tipo | Assinatura | Descrição | Erros`. Registre imports,
+      assinaturas async/sync, tipos, invariantes, efeitos, erros públicos,
+      compatibilidade/SemVer e exemplos mínimos. Cubra todos os comportamentos P0
+      selecionados sem criar Base URL, endpoint, servidor ou transporte público
+      suplementar.
+
+      Gere `docs/test_data.md` com cenários determinísticos do domínio, incluindo
+      sucesso, vazio, entrada inválida, falha de dependência, concorrência e
+      degradação quando aplicável. Datas/timestamps usam apenas HOJE, HOJE+N ou
+      HOJE-N. Credenciais, rede paga e PII não fazem parte da massa versionada.
+
+      Gere `docs/headless-validation-plan.md` como escopo fechado do ciclo. O
+      documento contém uma tabela `PB | Capacidade | Prova | Comando` com
+      exatamente os PB-* selecionados pelo DoD para este marco, uma vez cada.
+      Não cite IDs excluídos/pós-marco nesse arquivo. Exija evidência por API
+      pública real, testes unitários/contrato/integração/replay, build do pacote,
+      import em ambiente limpo, quickstart e auditoria de segredos. Fake/replay
+      pode substituir fornecedor externo em testes herméticos, mas não a própria
+      implementação pública. Termine com o contrato Makefile: `test`, `lint`,
+      `typecheck`, `build`, `smoke` e `verify`.
+    validators:
+      - file_exists: docs/api_contract.md
+      - library_contract_complete:
+          path: docs/api_contract.md
+          min_symbols: 3
+      - file_exists: docs/test_data.md
+      - relative_dates_only:
+          path: docs/test_data.md
+      - file_exists: docs/headless-validation-plan.md
+      - document_quality:
+          path: docs/headless-validation-plan.md
+          min_lines_count: 15
+          max_lines_count: 180
+          required_terms: ["PB-", "make", "verify", "build", "smoke"]
+          min_required_terms: 5
+      - project_contract_valid:
+          path: .ft/project.yml
+    next: ft.headless.plan.gate
+
+  - id: ft.headless.plan.gate
+    type: gate
+    title: "Gate de Planejamento Headless"
+    description: "Verificação determinística dos contratos programáticos e do escopo de validação da biblioteca."
+    sprint: sprint-02-planning
+    executor: python
+    validators:
+      - library_contract_complete:
+          path: docs/api_contract.md
+          min_symbols: 3
+      - relative_dates_only:
+          path: docs/test_data.md
+      - file_exists: docs/headless-validation-plan.md
+      - project_contract_valid:
+          path: .ft/project.yml
+      - command_succeeds: "git diff --check"
+    next: ft.headless.01.build
+
+  - id: ft.headless.01.build
+    type: build
+    no_pre_seed: true
+    title: "Construir Biblioteca P0"
+    description: "Implementar o escopo headless no layout canônico da stack, com pacote instalável, documentação e suíte hermética."
+    sprint: sprint-03-headless-build
+    executor: claude
+    max_turns: 160
+    outputs:
+      - src/
+      - tests/
+      - examples/
+      - migrations/
+      - pyproject.toml
+      - poetry.lock
+      - poetry.toml
+      - Makefile
+      - README.md
+      - CHANGELOG.md
+      - .github/workflows/
+      - .gitlab-ci.yml
+      - .circleci/
+      - azure-pipelines.yml
+      - Jenkinsfile
+      - docs/headless-build-report.md
+    write_scope:
+      - src
+      - tests
+      - examples
+      - migrations
+      - pyproject.toml
+      - poetry.lock
+      - poetry.toml
+      - Makefile
+      - README.md
+      - CHANGELOG.md
+      - .github/workflows
+      - .gitlab-ci.yml
+      - .circleci
+      - azure-pipelines.yml
+      - Jenkinsfile
+      - docs/headless-build-report.md
+    prompt: |
+      Implemente o escopo P0 de `docs/headless-validation-plan.md` seguindo
+      estritamente `docs/api_contract.md`, `docs/TECH_STACK.md` e o PRD.
+
+      Preserve o layout canônico de biblioteca declarado na stack; não crie
+      `project/frontend`, aplicação web, servidor HTTP, dashboard, browser,
+      mockup, screenshot ou watermark. Para Python use sempre Poetry e a venv do
+      projeto, nunca pip global. O pacote público, modelos, protocolos, adapters,
+      políticas, persistência e testes devem permanecer desacoplados conforme a
+      arquitetura aprovada. Implemente apenas P0 deste marco; P1/P2 ficam fora.
+      Preserve a versão de pacote encontrada no baseline; projeto novo permanece
+      em `0.0.1`. Não faça bump de versão sem direção explícita do stakeholder ou
+      um ciclo de release autorizado.
+
+      Crie/atualize um Makefile não interativo com os targets `test`, `lint`,
+      `typecheck`, `build`, `smoke` e `verify`. `verify` executa os checks
+      herméticos completos sem rede paga ou credenciais reais. `smoke` instala ou
+      importa o artefato construído em ambiente isolado e executa o quickstart
+      público. Testes reais de providers permanecem opt-in e nunca produzem PASS
+      falso quando indisponíveis.
+
+      Se algum PB selecionado exigir CI, preserve o provedor já versionado ou o
+      indicado pelo remote e faça o workflow executar o gate headless (`make ci`
+      ou `make verify`). Se não houver workflow nem remote/host configurado, use
+      `.github/workflows/quality.yml` como fallback local determinístico, registre
+      a suposição no relatório e limite-o a checks — sem deploy ou publicação.
+      Não crie um segundo provedor de CI nem introduza build de frontend,
+      browser ou screenshots.
+
+      Execute os targets até ficarem verdes. Gere
+      `docs/headless-build-report.md` mapeando cada PB selecionado para paths,
+      testes, comandos, resultados e limitações honestas. Responda DONE somente
+      após build e smoke reais.
+    validators:
+      - file_exists: Makefile
+      - file_exists: docs/headless-build-report.md
+      - command_succeeds: "make verify"
+      - command_succeeds: "make build"
+      - command_succeeds: "make smoke"
+      - command_succeeds: "git diff --check"
+    next: ft.headless.02.review
+
+  - id: ft.headless.02.review
+    type: review
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    title: "Revisar Biblioteca contra o Contrato Público"
+    description: "Auditoria independente e somente leitura do pacote, API pública, escopo P0, testes e evidências headless."
+    sprint: sprint-04-headless-review
+    executor: claude
+    max_turns: 80
+    outputs:
+      - docs/headless-review.md
+      - docs/headless-review.yml
+    write_scope:
+      - docs/headless-review.md
+      - docs/headless-review.yml
+    prompt: |
+      Faça revisão independente; não altere código. Leia o contrato público, o
+      plano headless, build report e diff do candidato. Execute `make verify`,
+      `make build` e `make smoke`. Audite imports/assinaturas, tipos, erros,
+      concorrência, persistência, políticas, compatibilidade, empacotamento,
+      quickstart e ausência de segredo. Confirme também que não foi criada UI,
+      servidor ou evidência visual para satisfazer o processo.
+      Compare também a versão do pacote com o baseline do ciclo; bump não
+      autorizado é finding, não evidência de entrega.
+
+      Escreva `docs/headless-review.md` com uma linha
+      `VERDICT: APPROVED` ou `VERDICT: REJECTED` e matriz PB→evidência.
+      Escreva `docs/headless-review.yml`:
+        schema_version: 1
+        scope_sha256: <sha256 dos bytes de docs/headless-validation-plan.md>
+        verdict: APPROVED | REJECTED
+        results:
+          - ref: PB-001
+            result: PASS | FAIL
+            evidence: [<path/comando/resultado sanitizado>]
+        findings:
+          - id: F-001
+            refs: [PB-001]
+            summary: <defeito reproduzível>
+            evidence: [<prova>]
+      Cubra exatamente os PB-* do plano uma vez. APPROVED exige todos PASS,
+      findings vazio e os três targets Make verdes. REJECTED exige findings que
+      cubram exatamente os PB reprovados. Não aprove mock/placeholder como
+      implementação da API pública.
+
+      No bloco `focal_evidence` exigido pelo engine, cada item de
+      `claims[].evidence` deve ser somente um path relativo existente no
+      repositório. Coloque comandos, exit codes, hashes e resultados textuais em
+      `observed`, nunca como itens de `evidence`; não invente arquivo de prova.
+    validators:
+      - file_exists: docs/headless-review.md
+      - file_exists: docs/headless-review.yml
+      - review_outcome_valid:
+          path: docs/headless-review.yml
+          markdown_path: docs/headless-review.md
+          scope_path: docs/headless-validation-plan.md
+          scope_pattern: "\\bPB-\\d+\\b"
+          require_approved: false
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "A revisão headless encontrou defeitos focais."
+      goto: ft.headless.03.fix
+      automatic: true
+    next: ft.headless.04.verify
+
+  - id: ft.headless.03.fix
+    type: build
+    no_pre_seed: true
+    title: "Corrigir Achados Headless"
+    description: "Corrigir somente findings reproduzidos pela revisão/aceite e retornar à auditoria independente."
+    sprint: sprint-04-headless-review
+    executor: claude
+    max_turns: 100
+    outputs:
+      - src/
+      - tests/
+      - examples/
+      - migrations/
+      - pyproject.toml
+      - poetry.lock
+      - Makefile
+      - README.md
+      - .github/workflows/
+      - .gitlab-ci.yml
+      - .circleci/
+      - azure-pipelines.yml
+      - Jenkinsfile
+      - docs/headless-fix-report.md
+    write_scope:
+      - src
+      - tests
+      - examples
+      - migrations
+      - pyproject.toml
+      - poetry.lock
+      - Makefile
+      - README.md
+      - .github/workflows
+      - .gitlab-ci.yml
+      - .circleci
+      - azure-pipelines.yml
+      - Jenkinsfile
+      - docs/headless-fix-report.md
+    prompt: |
+      Corrija somente os findings correntes de `docs/headless-review.yml` ou o
+      feedback focal mais recente do stakeholder. Preserve contrato, escopo e
+      evidências aprovadas; não adicione UI, HTTP, browser ou item P1/P2.
+      Preserve a versão do baseline, exceto quando o próprio finding exigir
+      restaurar um bump não autorizado ou houver direção explícita de release.
+      Quando um finding exigir CI, preserve o provedor já versionado ou indicado
+      pelo remote e faça-o executar o gate headless existente. Se nenhum host ou
+      workflow estiver configurado, crie `.github/workflows/quality.yml` como
+      fallback local determinístico e registre a suposição. O fallback executa
+      checks e serviços de teste necessários, sem deploy, publicação ou pipeline
+      visual; nunca adicione um segundo provedor de CI.
+      Execute testes focais e depois `make verify`. Registre finding→causa→paths
+      →correção→teste→resultado em `docs/headless-fix-report.md`.
+    validators:
+      - file_exists: docs/headless-fix-report.md
+      - command_succeeds: "make verify"
+      - command_succeeds: "git diff --check"
+    fix_review: ft.headless.02.review
+    next: ft.headless.02.review
+
+  - id: ft.headless.04.verify
+    type: gate
+    title: "Gate Integrado da Biblioteca"
+    description: "Exige revisão aprovada, suíte completa, pacote construído e quickstart público exercitado sem rede/segredo."
+    sprint: sprint-05-headless-verify
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - review_outcome_valid:
+          path: docs/headless-review.yml
+          markdown_path: docs/headless-review.md
+          scope_path: docs/headless-validation-plan.md
+          scope_pattern: "\\bPB-\\d+\\b"
+          require_approved: true
+      - command_succeeds: "make verify"
+      - command_succeeds: "make build"
+      - command_succeeds: "make smoke"
+      - command_succeeds: "git diff --check"
+    next: ft.headless.05.acceptance
+
+  - id: ft.headless.05.acceptance
+    type: review
+    no_pre_seed: true
+    title: "Aceite da API Pública Headless"
+    description: "Executar cenários P0 pela superfície programática real e produzir resultado estruturado, sem navegador ou servidor suplementar."
+    sprint: sprint-06-headless-acceptance
+    executor: claude
+    max_turns: 80
+    outputs:
+      - docs/acceptance-report.md
+      - docs/acceptance-result.json
+    write_scope:
+      - docs/acceptance-report.md
+      - docs/acceptance-result.json
+    prompt: |
+      Execute todos os cenários P0 de `docs/test_data.md` através da API pública
+      real descrita em `docs/api_contract.md`. Use o pacote construído e o
+      quickstart, não imports internos. Fake/replay pode representar dependência
+      externa, mas a implementação, roteamento, políticas, persistência e erros
+      da biblioteca devem ser reais. Não use HTTP, browser, screenshots ou
+      placeholders. Rode também `make verify`, `make build` e `make smoke`.
+      Confirme que a versão do pacote continua igual ao baseline do ciclo;
+      alteração sem autorização entra em `p0_blockers` e não pode ser aceita.
+
+      Gere `docs/acceptance-report.md` com cenário, PB, comando, resultado e
+      evidência. Gere `docs/acceptance-result.json` exatamente com
+      `pass`, `fail`, `skip` e `p0_blockers`. Cenário P0 não executado ou prova
+      principal substituída entra em p0_blockers; skip só pode ser não-P0.
+
+      No bloco `focal_evidence` exigido pelo engine, cada item de
+      `claims[].evidence` deve ser somente um path relativo existente no
+      repositório. Registre comandos, exit codes, hashes e resultados textuais em
+      `observed`, não em `evidence`, e nunca invente um arquivo de prova.
+    validators:
+      - file_exists: docs/acceptance-report.md
+      - file_exists: docs/acceptance-result.json
+      - command_succeeds: "python3 -c \"import json; d=json.load(open('docs/acceptance-result.json')); assert isinstance(d.get('pass'),int) and d['pass']>0 and d.get('fail')==0 and isinstance(d.get('skip'),int) and d['skip']>=0 and d.get('p0_blockers')==[], d\""
+      - command_succeeds: "make verify"
+      - command_succeeds: "make build"
+      - command_succeeds: "make smoke"
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "O aceite headless encontrou falha ou bloqueador P0."
+      goto: ft.headless.03.fix
+      automatic: true
+    next: ft.headless.06.stakeholder
+
+  - id: ft.headless.06.stakeholder
+    type: human_gate
+    title: "Validação da Biblioteca pelo Stakeholder"
+    description: "Revise o contrato público, execute o quickstart e confirme API, empacotamento, comportamento e evidências P0. Não há interface visual. Rejeite com um defeito reproduzível se necessário."
+    sprint: sprint-06-headless-acceptance
+    executor: python
+    outputs:
+      - docs/api_contract.md
+      - docs/acceptance-report.md
+      - docs/acceptance-result.json
+    reject_next: ft.headless.03.fix
+    next: ft.handoff.01.retro
 
   - id: ft.plan.03.api_contract
     type: document
@@ -924,17 +1785,53 @@ nodes:
   - id: ft.plan.04.ui_criteria
     type: document
     parallel_group: plan-docs
-    title: "Gerar Critérios Visuais de UI"
-    description: "Definir critérios objetivos de aceitação visual para cada tela do produto: componentes obrigatórios, estados (vazio, carregado, erro), navegação e ícones. Se este arquivo ainda não existir, faça perguntas objetivas ao stakeholder antes de fechar. Cada critério deve ter ID estável (C01, C02, C03...) para o screenshot_review/visual_check ou o código comprovarem cobertura item a item; no código, a evidência deve usar data-ui-criteria=\"C01\" ou comentário ui-criteria: C01."
+    title: "Gerar Critérios Visuais e Contrato de Navegação"
+    description: "Definir critérios objetivos de UI e classificar cada item do backlog entre capacidade visível, com entrada pela UI de produção, ou requisito não visual justificado."
     sprint: sprint-02-planning
     executor: claude
     outputs:
       - docs/ui_criteria.md
+      - docs/navigation-contract.yml
+    prompt: |
+      Gere ou reconcilie docs/ui_criteria.md com IDs estáveis e critérios
+      objetivos para telas, estados, componentes, responsividade e navegação.
+      Inclua explicitamente que uma capacidade não está entregue se só puder ser
+      aberta por rota/URL interna direta, deep link de debug, catálogo técnico,
+      montagem isolada de componente ou hook test-only.
+      Inclua também o critério global de rastreabilidade visual: toda tela,
+      página ou janela da UI de produção deve exibir uma marca d'água discreta,
+      legível e não interativa com o identificador exato do mockup associado.
+      Mapeie todas as superfícies; nenhuma pode ficar sem mockup.
+
+      Gere também docs/navigation-contract.yml a partir dos bytes correntes de
+      docs/PROJECT_BACKLOG.md, sem assumir stack, domínio ou plataforma:
+        schema_version: 1
+        scope_sha256: <sha256 dos bytes de docs/PROJECT_BACKLOG.md>
+        scope_refs:
+          - ref: PB-001
+            disposition: ui | non_ui
+            targets: [NAV-001]
+            reason: <obrigatório apenas para non_ui>
+        targets:
+          - id: NAV-001
+            label: <capacidade ou superfície reconhecível pelo usuário>
+            entry_policy: public | entitled | contextual | first_launch
+
+      Classifique exatamente todos os PB-* presentes no backlog. Todo PB que
+      cria ou altera uma capacidade visível usa disposition ui e aponta a um
+      target. Papéis, flags e coortes usam entry_policy entitled; fluxos que só
+      existem após uma ação usam contextual. Não use path técnico como label.
     validators:
       - file_exists: docs/ui_criteria.md
       - ui_criteria_ids:
           path: docs/ui_criteria.md
           min_count: 8
+      - file_exists: docs/navigation-contract.yml
+      - navigation_contract_valid:
+          path: docs/navigation-contract.yml
+          scope_path: docs/PROJECT_BACKLOG.md
+          scope_pattern: "\\bPB-\\d+\\b"
+          min_targets: 1
     next: ft.plan.05.test_data
 
   - id: ft.plan.05.test_data
@@ -956,6 +1853,157 @@ nodes:
           path: docs/test_data.md
       - project_contract_valid:
           path: .ft/project.yml
+    next: ft.plan.06.mockups
+
+  - id: ft.plan.06.mockups
+    type: build
+    title: "Gerar Imagens de Mockup P0"
+    description: "Gerar, antes do frontend, imagens raster reais e revisáveis para todas as telas e estados P0. HTML, CSS, JavaScript, SVG, canvas e screenshots de navegador são entregas proibidas neste step."
+    sprint: sprint-02-planning
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-sol
+    llm_effort: max
+    max_turns: 100
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    env_setup:
+      - >-
+          python3 -c "import os,subprocess;
+          p=os.environ.get('FT_CODEX_PROFILE','').strip();
+          cmd=['codex']+(['--profile',p] if p else [])+['features','list'];
+          out=subprocess.check_output(cmd,text=True);
+          rows=[line.split() for line in out.splitlines()];
+          assert any(row and row[0]=='image_generation' and row[-1]=='true' for row in rows),
+          'Codex image_generation indisponível ou desabilitado'"
+    outputs:
+      - docs/mockups/screen-map.yml
+      - docs/mockups/image-generation-receipt.yml
+      - docs/mockups/README.md
+      - docs/mockups/images/
+    write_scope:
+      - docs/mockups
+    prompt: |
+      Gere o pacote obrigatório de IMAGENS DE MOCKUP antes de qualquer código de
+      produto. Este node está fixado em gpt-5.6-sol com reasoning effort max; não
+      troque modelo nem reduza o esforço. O Sol/Max é a autoridade de direção
+      visual, composição dos prompts, seleção, inspeção e iteração dos assets.
+
+      Leia integralmente docs/PRD.md, docs/TECH_STACK.md, docs/ui_criteria.md,
+      docs/ui-brief.md quando existir, docs/api_contract.md e
+      docs/navigation-contract.yml. O brief do stakeholder é autoritativo para
+      estética; PRD e critérios são autoritativos para escopo e estados.
+
+      Carregue e siga integralmente a skill `imagegen`. Use obrigatoriamente a
+      ferramenta built-in `image_gen`, no caso de uso `ui-mockup`, uma chamada
+      por tela/estado distinto. Não use fallback CLI/API. Se a ferramenta
+      built-in não estiver disponível, responda BLOCKED: não improvise outro
+      renderer. Depois de cada geração, copie ou mova o PNG escolhido de
+      `$CODEX_HOME/generated_images/` para docs/mockups/images/, abra-o com
+      `view_image`, inspecione composição, hierarquia, legibilidade, texto e
+      aderência ao brief e itere com uma mudança focal quando necessário.
+
+      É PROIBIDO criar HTML, CSS, JavaScript, TypeScript, JSX, SVG, canvas,
+      frontend, página navegável, app de protótipo ou qualquer código usado para
+      desenhar a interface. Também é proibido usar Chromium, Playwright,
+      Puppeteer, browser/headless, screenshot de página/app, Pillow, ImageMagick
+      ou rasterização programática como origem do mockup. Os PNGs finais devem
+      sair da geração de imagem do modelo; operações locais servem apenas para
+      copiar, nomear, calcular hash e inspecionar os arquivos.
+
+      Trabalhe somente em docs/mockups/ e use dados sintéticos e sanitizados.
+      Cada superfície P0 recebe ID estável SNN. Se possuir exatamente uma view,
+      seu mockup usa o próprio SNN; se possuir duas ou mais views/estados, cada
+      uma recebe obrigatoriamente um ID composto sequencial SNN.1, SNN.2, ...
+      SNN.N, uma chamada image_gen própria e um PNG próprio. Renderize o ID exato
+      de cada view na imagem, de forma discreta e fora de conteúdo imprimível.
+      Nunca reúna múltiplas views em um único bitmap nem reutilize o badge
+      genérico SNN entre estados. Cubra todas as variantes exigidas nos critérios:
+      inicial, vazio, loading, sucesso, erro, bloqueio, confirmação e demais
+      estados aplicáveis. Para desktop, componha em 16:10
+      com referência visual 1440x900, preservando a resolução nativa entregue
+      pelo gerador; para outros targets, respeite o viewport do brief. Não faça
+      upscale, crop ou recomposição programática.
+
+      Produza docs/mockups/screen-map.yml com schema_version: 1 e `screens`.
+      Cada screen contém `id`, `title`, `criteria`, `acceptance_criteria` e
+      `states`; cada state contém `id`, `label`, `target`, `image`, `width`,
+      `height` e `prompt_ref`. Todo `image` aponta para PNG existente sob
+      docs/mockups/images/ e width/height registram as dimensões nativas reais.
+
+      Produza docs/mockups/image-generation-receipt.yml com schema_version: 1,
+      `executor: {engine: codex, model: gpt-5.6-sol, effort: max}`,
+      `generation: {tool: image_gen, mode: builtin, use_case: ui-mockup}`,
+      `code_native_sources: false`, `browser_capture: false` e `assets`. Cada
+      asset contém `id`, `screen`, `state`, `image`, `prompt`, `inspected: true`
+      e `revisions: {count: <inteiro não negativo>, notes: [<ajustes>]}`. Produza
+      README.md com inventário, decisões visuais,
+      instruções para abrir os PNGs e checklist de revisão; deixe explícito que
+      não existe protótipo executável neste pacote.
+
+      Em reentrada após rejeição, leia CURRENT_FEEDBACK, preserve os assets não
+      afetados e use o fluxo de edição da skill imagegen somente nas imagens
+      citadas. Antes de DONE, valide YAML, hashes distintos, unicidade dos IDs,
+      cobertura de todos os CIDs e estados P0, dimensões reais, recibo completo,
+      ausência de fontes code-native e `git diff --check`. Placeholder, imagem
+      vazia ou cópia do mesmo bitmap para estados diferentes é falha.
+    validators:
+      - file_exists: docs/mockups/screen-map.yml
+      - file_exists: docs/mockups/image-generation-receipt.yml
+      - file_exists: docs/mockups/README.md
+      - command_succeeds: >-
+          python3 -c "import hashlib,re,yaml; from pathlib import Path;
+          d=yaml.safe_load(Path('docs/mockups/screen-map.yml').read_text(encoding='utf-8'));
+          s=d.get('screens') if isinstance(d,dict) else None;
+          assert d.get('schema_version')==1 and isinstance(s,list) and s;
+          ids=[x.get('id') for x in s]; assert len(ids)==len(set(ids)) and all(re.fullmatch(r'S[0-9]{2,}',str(x)) for x in ids);
+          criteria=set(re.findall(r'\bC[0-9]{2,}\b',Path('docs/ui_criteria.md').read_text(encoding='utf-8')));
+          mapped={str(c) for x in s for c in (x.get('criteria') or [])}; assert criteria<=mapped, 'critérios visuais sem imagem';
+          states=[st for x in s for st in (x.get('states') or [])];
+          assert states and all(st.get('id') and st.get('label') and st.get('target') and st.get('image') and st.get('prompt_ref') for st in states);
+          state_ids=[str(st['id']) for st in states]; assert len(state_ids)==len(set(state_ids));
+          assert all([str(st['id']) for st in (x.get('states') or [])]==([str(x['id'])] if len(x.get('states') or [])==1 else [f\"{x['id']}.{i}\" for i in range(1,len(x['states'])+1)]) for x in s), 'IDs de views devem seguir SNN ou SNN.1..N';
+          refs=[Path(st['image']) for st in states]; assert len(refs)==len(set(refs));
+          assert all(p.parts[:1]==('images',) and p.name.startswith(str(st['id'])+'-') for p,st in zip(refs,states)), 'imagem relativa e nome do PNG devem usar o ID exato da view';
+          imgs=[Path('docs/mockups')/p for p in refs];
+          assert all(p.parts[:3]==('docs','mockups','images') and p.is_file() and p.suffix.lower()=='.png' and p.stat().st_size>51200 for p in imgs);
+          raw=[p.read_bytes() for p in imgs]; assert all(b[:8]==b'\\x89PNG\\r\\n\\x1a\\n' for b in raw);
+          actual=[(int.from_bytes(b[16:20],'big'),int.from_bytes(b[20:24],'big')) for b in raw];
+          declared=[(int(st.get('width',0)),int(st.get('height',0))) for st in states];
+          assert actual==declared and all(w>=768 and h>=768 for w,h in actual);
+          assert len({hashlib.sha256(b).hexdigest() for b in raw})==len(raw), 'bitmaps duplicados entre estados'"
+      - command_succeeds: >-
+          python3 -c "import yaml; from pathlib import Path;
+          r=yaml.safe_load(Path('docs/mockups/image-generation-receipt.yml').read_text(encoding='utf-8'));
+          assert r.get('schema_version')==1;
+          assert r.get('executor')=={'engine':'codex','model':'gpt-5.6-sol','effort':'max'};
+          assert r.get('generation')=={'tool':'image_gen','mode':'builtin','use_case':'ui-mockup'};
+          assert r.get('code_native_sources') is False and r.get('browser_capture') is False;
+          assets=r.get('assets'); assert isinstance(assets,list) and assets;
+          mapped=yaml.safe_load(Path('docs/mockups/screen-map.yml').read_text(encoding='utf-8'))['screens'];
+          expected={st['image'] for screen in mapped for st in screen['states']};
+          observed={a.get('image') for a in assets}; assert observed==expected;
+          assert all(a.get('id') and a.get('screen') and a.get('state') and a.get('prompt') and a.get('inspected') is True and isinstance(a.get('revisions'),dict) and isinstance(a['revisions'].get('count'),int) and a['revisions']['count']>=0 and isinstance(a['revisions'].get('notes'),list) for a in assets)"
+      - command_succeeds: >-
+          python3 -c "from pathlib import Path;
+          root=Path('docs/mockups'); files=[p for p in root.rglob('*') if p.is_file()];
+          forbidden={'.html','.htm','.css','.js','.mjs','.cjs','.ts','.tsx','.jsx','.svg','.vue','.svelte'};
+          bad=[str(p) for p in files if p.suffix.lower() in forbidden];
+          assert not bad, 'fontes code-native proibidas: '+', '.join(bad);
+          assert all(p.suffix.lower() in {'.png','.md','.yml','.yaml'} for p in files), 'tipo de artefato não permitido'"
+      - command_succeeds: "git diff --check"
+    next: ft.plan.06b.mockup_gate
+
+  - id: ft.plan.06b.mockup_gate
+    type: human_gate
+    title: "Revisão das Imagens de Mockup P0"
+    description: "Abra docs/mockups/README.md e os PNGs em docs/mockups/images/. Confirme estética, hierarquia, acessibilidade, cobertura de telas/estados e aderência ao brief. Verifique que são imagens geradas, não screenshots de HTML. O frontend não começa sem aprovação explícita e textual; rejeite descrevendo tela, estado e ajuste visual."
+    sprint: sprint-02-planning
+    executor: python
+    approval_message_required: true
+    outputs:
+      - docs/mockups/
+    reject_next: ft.plan.06.mockups
     next: ft.plan.gate
 
   - id: ft.plan.gate
@@ -997,6 +2045,12 @@ nodes:
       - ui_criteria_ids:
           path: docs/ui_criteria.md
           min_count: 8
+      - file_exists: docs/navigation-contract.yml
+      - navigation_contract_valid:
+          path: docs/navigation-contract.yml
+          scope_path: docs/PROJECT_BACKLOG.md
+          scope_pattern: "\\bPB-\\d+\\b"
+          min_targets: 1
       - file_exists: docs/test_data.md
       - relative_dates_only:
           path: docs/test_data.md
@@ -1025,10 +2079,13 @@ nodes:
       1. Crie o scaffold em project/frontend/ usando a stack aprovada.
       2. Configure roteamento, layout, navegação e proxy/rewrites de /api.
       3. Implemente todas as telas e funcionalidades P0 do PRD.
-      4. Cubra docs/ui_criteria.md, inclusive estados vazio, loading e erro.
+      4. Use os mockups aprovados em docs/mockups/ como contrato visual e cubra
+         docs/ui_criteria.md, inclusive estados vazio, loading e erro.
       5. Se o contrato possuir criação/cadastro, entregue um fluxo de formulário
          acessível pela UI e conectado ao endpoint correspondente.
-      6. Instale dependências e execute o build antes de encerrar.
+      6. Em cada tela, página ou janela renderize no próprio produto a marca
+         d'água com o identificador exato do mockup definido nos critérios.
+      7. Instale dependências e execute o build antes de encerrar.
       Todo código de produto deve permanecer abaixo de project/.
     validators:
       - file_exists: project/frontend/package.json
@@ -1069,8 +2126,10 @@ nodes:
          ambiente permitir.
       3. Verifique cada ID de docs/ui_criteria.md, incluindo responsividade,
          estados vazio/loading/erro e ações de criação.
-      4. Escreva docs/screenshot-review.md com cobertura rastreável e veredito.
-      5. Use REJECTED somente para falha bloqueante verificável; nesse caso,
+      4. Compare cada tela/estado com a imagem de mockup aprovada correspondente em
+         docs/mockups/screen-map.yml e registre divergências verificáveis.
+      5. Escreva docs/screenshot-review.md com cobertura rastreável e veredito.
+      6. Use REJECTED somente para falha bloqueante verificável; nesse caso,
          registre a evidência e pare.
     validators:
       - command_succeeds: "cd project/frontend && npm run build --silent"
@@ -1197,7 +2256,7 @@ nodes:
   - id: ft.delivery.01.entrypoint
     type: build
     title: "Preparar Delivery Completo"
-    description: "Em um único turn, finalizar entrypoint HTTP, self-review e comandos operacionais do produto."
+    description: "Em um único turn, finalizar os entrypoints das plataformas selecionadas, self-review e comandos operacionais do produto."
     sprint: sprint-05-delivery
     executor: claude
     outputs:
@@ -1209,14 +2268,28 @@ nodes:
       - .ft/process/scripts/serve.sh
     prompt: |
       Prepare o produto para execução e entrega no mesmo turn:
-      1. Garanta um entrypoint HTTP compatível com docs/TECH_STACK.md, porta
+      1. Garanta os entrypoints compatíveis com docs/TECH_STACK.md e com a
+         matriz em `.ft/project.yml.validation`. Para web/API, use porta
          configurável, health check, CORS, inicialização do banco e
-         X-Process-Time-Ms.
+         X-Process-Time-Ms. Para desktop, gere o pacote instalável/portável
+         exigido pelo target, sem substituir a aplicação nativa por uma URL.
       2. Faça self-review de segurança, performance, imports e código morto e
          aplique as correções encontradas.
-      3. Crie project/Makefile com dev, test, build, run e url.
-      4. Crie .ft/process/scripts/serve.sh, grave .serve_url e mantenha somente
-         os processos iniciados pelo próprio script.
+      3. Crie project/Makefile com dev, test, build, run e url. Leia
+         `.ft/project.yml.validation`: para cada target selecionado, implemente
+         também o `make_target` anunciado por `ft validation-profiles`
+         (`validate-android-emulator`, `validate-ios-physical`,
+         `validate-web-desktop-browser`, `validate-desktop-linux` etc.). Cada
+         target executa a superfície real e produz evidência; não transforme
+         indisponibilidade externa em PASS.
+      4. Crie .ft/process/scripts/serve.sh como apresentador da plataforma
+         selecionada e mantenha somente processos iniciados por ele. Para web,
+         abra/suba o produto e grave `.serve_url`. Para desktop Linux, exija
+         exatamente um AppImage executável corrente em `project/dist`, abra o
+         próprio AppImage e grave seu path relativo em `.presented_artifact`;
+         remova `.serve_url` e nunca use o servidor web como fallback. Outros
+         targets devem apresentar a aplicação instalada e uma evidência de
+         entrada correspondente, sem inventar uma URL.
       5. Rode testes, build, bash -n e dry-runs do Makefile.
     validators:
       - file_exists: project/backend/main.py
@@ -1225,6 +2298,8 @@ nodes:
       - command_succeeds: "bash -n .ft/process/scripts/serve.sh"
       - command_succeeds: "cd project && make --dry-run dev >/dev/null"
       - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \"$(make -s url)\""
+      - validation_profile_hooks:
+          path: project/Makefile
     next: gate.delivery
 
   - id: gate.delivery
@@ -1237,6 +2312,8 @@ nodes:
       - file_exists: project/Makefile
       - file_exists: project/backend/main.py
       - file_exists: .ft/process/scripts/serve.sh
+      - validation_profile_hooks:
+          path: project/Makefile
       - command_succeeds: "bash -n .ft/process/scripts/serve.sh"
       - command_succeeds: "cd project && python -m pytest tests/ -q"
     next: ft.smoke.01.run
@@ -1352,6 +2429,8 @@ nodes:
       Cada incompatibilidade, cenário P0 não executado ou evidência principal
       mocked/fallback deve entrar em p0_blockers. A lista só pode ficar vazia
       quando o aceite P0 for executado de forma real e completa.
+      Cenários fora do P0 podem ser registrados honestamente como SKIP, com
+      motivo no Markdown; eles não autorizam omitir nenhum cenário P0.
       O validator lê o JSON. O relatório é para leitura humana.
     sprint: sprint-07-acceptance
     executor: claude
@@ -1361,21 +2440,21 @@ nodes:
       - docs/acceptance-result.json
     validators:
       - file_exists: docs/acceptance-result.json
-      - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and d.get('skip')==0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
-      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and isinstance(d.get('skip'),int) and d.get('skip')>=0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
+      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text\""
     next: gate.acceptance
 
   - id: gate.acceptance
     type: gate
     title: "Gate Acceptance"
-    description: "Verificação determinística: relatório de aceitação existe, há cenários executados e não existem FAIL, SKIP ou p0_blockers. Contagem agregada isolada não representa cobertura."
+    description: "Verificação determinística: relatório de aceitação existe, há cenários executados e não existem FAIL ou p0_blockers. SKIP é permitido somente fora do P0 e deve permanecer documentado; cenário P0 não executado entra em p0_blockers. Contagem agregada isolada não representa cobertura."
     sprint: sprint-07-acceptance
     executor: python
     validators:
       - file_exists: docs/acceptance-report.md
       - file_exists: docs/acceptance-result.json
-      - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and d.get('skip')==0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
-      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and isinstance(d.get('skip'),int) and d.get('skip')>=0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
+      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text\""
     next: ft.e2e.01.browser
 
   # ================================================================
@@ -1395,6 +2474,8 @@ nodes:
       - docs/screenshots/e2e/
       - docs/e2e-report.md
       - docs/test-identity.json
+      - docs/navigation-reachability.yml
+      - docs/evidence/navigation/
     max_turns: 60
     prompt: |
       Entregue toda a etapa E2E no mesmo turn:
@@ -1406,34 +2487,221 @@ nodes:
       4. Execute a suíte e corrija falhas de produto ou teste dentro do escopo.
       5. Capture screenshots de cada fluxo em docs/screenshots/e2e/.
       6. Gere docs/e2e-report.md com resultado por cenário e paths das evidências.
+      7. Para cada target de docs/navigation-contract.yml, parta da primeira
+         abertura ou de uma superfície principal e use somente controles
+         visíveis da UI de produção. Rota/URL interna direta, deep link/debug,
+         catálogo técnico, montagem isolada de componente e hook test-only não
+         contam. Para target entitled, prove a entrada com identidade elegível e
+         a ausência/bloqueio com identidade comum.
+      8. Gere docs/navigation-reachability.yml com `schema_version: 1`, hash do
+         contrato corrente, `verdict`, `candidate_ref`,
+         `observed_candidate_ref`, `environment`, `findings` e `journeys`. Cada
+         jornada registra id, entry_type, start_surface, entry_point,
+         `navigation_mode: production_ui`, passos visíveis, targets, PASS/FAIL,
+         arquivo de evidência novo sob docs/evidence/navigation/, `shortcuts: []`
+         e access_context. Entitled exige setup sanitizado e resultados positivo
+         e negativo; contextual exige context_setup e entry_result.
       Não use placeholders nem declare cenário não executado como PASS.
     validators:
       - file_exists: project/tests/e2e/
       - file_exists: project/tests/e2e/test_navigation.py
       - command_succeeds: "python -c \"from pathlib import Path; text=Path('project/tests/e2e/test_navigation.py').read_text(encoding='utf-8', errors='ignore').lower(); assert 'placeholder' not in text and any(x in text for x in ['fill(', 'type(']) and any(x in text for x in ['create', 'criar', 'cadastrar', 'registrar']), 'e2e sem fluxo de criacao via ui'\""
       - file_exists: docs/e2e-report.md
+      - file_exists: docs/navigation-reachability.yml
       - test_identity_ready:
           path: docs/test-identity.json
       - command_succeeds: "cd project && python -m pytest tests/e2e -q"
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
       - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - navigation_reachability:
+          contract_path: docs/navigation-contract.yml
+          report_path: docs/navigation-reachability.yml
+          evidence_root: docs/evidence/navigation
+          scope_path: docs/PROJECT_BACKLOG.md
+          scope_pattern: "\\bPB-\\d+\\b"
+          min_targets: 1
+          require_approved: true
     next: gate.e2e
 
   - id: gate.e2e
     type: gate
     title: "Gate E2E"
-    description: "Verificação determinística: relatório E2E existe, screenshots foram gerados e a suíte E2E do projeto passa."
+    description: "Verificação determinística: relatório E2E e evidências existem, a suíte passa e nenhum target do contrato fica órfão ou depende de atalho técnico."
     sprint: sprint-08-e2e
     executor: python
     validators:
       - file_exists: docs/e2e-report.md
+      - file_exists: docs/navigation-reachability.yml
       - test_identity_ready:
           path: docs/test-identity.json
       - file_exists: docs/screenshots/e2e/
       - command_succeeds: "cd project && python -m pytest tests/e2e -q"
       - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
       - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - navigation_reachability:
+          contract_path: docs/navigation-contract.yml
+          report_path: docs/navigation-reachability.yml
+          evidence_root: docs/evidence/navigation
+          scope_path: docs/PROJECT_BACKLOG.md
+          scope_pattern: "\\bPB-\\d+\\b"
+          min_targets: 1
+          require_approved: true
+    next: ft.platform.00.route
+
+  - id: ft.platform.00.route
+    type: decision
+    title: "Resolver Perfis de Validação do Produto"
+    description: "Ativar somente os perfis Android, iOS, web e desktop selecionados no contrato do projeto."
+    sprint: sprint-08-platform-validation
+    executor: python
+    condition: validation_profiles_active
+    branches:
+      "true": ft.platform.01.validate
+      "false": ft.final.01.visual_check
+
+  - id: ft.platform.01.validate
+    type: review
+    title: "Executar Matriz Multiplataforma"
+    description: "Validar cada target selecionado no ambiente real correspondente e agregar um receipt determinístico do candidato corrente."
+    sprint: sprint-08-platform-validation
+    executor: codex
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    max_turns: 120
+    env_setup:
+      - ft validation-matrix .
+    outputs:
+      - docs/validation-matrix.yml
+      - docs/platform-validation-report.yml
+      - docs/evidence/platform-validation/
+      - docs/test-identity.json
+    write_scope:
+      - docs/validation-matrix.yml
+      - docs/platform-validation-report.yml
+      - docs/evidence/platform-validation
+      - docs/test-identity.json
+    prompt: |
+      Execute exatamente os perfis, targets, make_target e checks materializados
+      em docs/validation-matrix.yml. Não invente plataforma, não trate iPhone
+      como perfil separado de iOS e não substitua dispositivo físico por
+      simulador/emulador. Targets disjuntos podem ser executados em paralelo;
+      serialize qualquer uso do mesmo dispositivo.
+
+      Vincule todas as provas ao candidato integrado corrente. Para targets com
+      instalação, compare SHA-256 do artefato local e observado. Ausência de
+      ambiente obrigatório produz BLOCKED sem relatório falso. Target opcional
+      indisponível pode ser SKIP com motivo; comportamento executado e incorreto
+      é FAIL. Execute o make_target anunciado pela matrix e registre seus logs.
+
+      Em Android físico, trate instaladores OEM interativos como gate humano e
+      minimize-os por construção. Compile o candidato uma vez; mantenha um
+      ledger sanitizado por package + SHA-256; instale app e APK instrumental
+      somente quando ausentes ou quando o hash observado divergir. Se apenas um
+      pacote divergir, instale somente ele; se app e instrumental divergirem
+      juntos, use uma única sessão multipacote quando suportada para concentrar
+      a confirmação OEM. Depois rode
+      todos os focais contra os pacotes já instalados com `adb shell am instrument`
+      (ou mecanismo equivalente comprovadamente sem reinstalação),
+      agregando classes quando possível. Não repita tasks que reinstalam ou
+      removem os pacotes entre subconjuntos. Um tap injetado não prova aceite:
+      somente sucesso do instalador e hash observado comprovam instalação. Se o
+      diálogo exigir pessoa, conclua antes todo trabalho independente, solicite
+      uma única autorização no checkpoint físico final e aguarde; nunca use o
+      aparelho físico interativo como loop de fix nem repita a solicitação.
+      Nunca declare que a automação confirmou sem essa prova. Não use root,
+      desbloqueio de bootloader
+      nem enfraqueça a segurança do aparelho sem autorização explícita.
+      O check `artifact_install_reuse` deve evidenciar hashes, quantidade de
+      instalações reais e execuções reutilizadas, sem identificadores sensíveis.
+
+      Aplique estes critérios comuns, derivados de incidentes reais de
+      validação: use identidade técnica exclusiva e seed idempotente/resetável
+      quando exigido; prove dados pela jornada fonte→persistência→UI; verifique
+      estados vazios e ausência de seed residual; abra pela entrada normal e
+      navegue por menus/controles visíveis; comprove CTAs, permissões refletidas
+      na UI, back/retorno contextual, rotação/redimensionamento sem perder
+      estado, insets/safe areas sem sobreposição, acessibilidade e estética
+      contra todas as referências declaradas. Preview, rota direta, deep link
+      de debug, montagem isolada ou mock não encerram um check de produto.
+
+      No check `mockup_watermark`, inventarie todas as telas, páginas e janelas
+      alcançáveis no target. Cada uma deve exibir, no próprio produto, marca
+      d'água discreta, legível e não interativa com o identificador EXATO do
+      mockup correspondente. Overlay da ferramenta de captura
+      não conta. Tela sem mockup, inventário incompleto ou screenshot real
+      exclusivo é FAIL e deve originar finding focal.
+
+      Escreva evidências novas sob
+      docs/evidence/platform-validation/<run-id>/<perfil>/<target>/, sem apagar
+      histórico nem reutilizar uma prova entre targets. Se a matriz exigir
+      test_identity, gere o recibo sanitizado esperado pela engine.
+
+      Gere docs/platform-validation-report.yml no schema_version 1. Inclua
+      matrix_sha256 dos bytes correntes, verdict APPROVED|REJECTED,
+      candidate_ref, uma entrada para cada profile/target e findings. Cada
+      target repete id/required da matriz; em execução contém result,
+      observed_candidate_ref igual ao candidato, environment.kind,
+      environment.execution_surface, os_name/os_version e device_ref opaco no
+      físico. Quando installation_required, inclua installation.result=PASS,
+      artifact_sha256 e observed_artifact_sha256 idênticos. Liste cada check na
+      ordem exata da matriz com PASS|FAIL e ao menos uma evidência. SKIP só para
+      target opcional, com reason e checks vazio. Cada check FAIL possui
+      exatamente um finding `PV-F-NNN` com profile, target, check e summary.
+      Para `mockup_watermark`, acrescente ao check `inventory_complete`,
+      `discovered_screen_count`, `unmapped_screens` e `screens`; cada item de
+      `screens` contém id, mockup_ref, watermark_text idêntico, result e
+      screenshot real exclusivo. A evidence do check é exatamente a união
+      desses screenshots.
+      APPROVED exige todos os obrigatórios PASS, nenhum FAIL e findings vazio.
+      Não registre serial/UDID, rede, IP, PII, credencial, token ou segredo.
+    validators:
+      - validation_matrix_valid:
+          path: docs/validation-matrix.yml
+      - platform_validation_report:
+          matrix_path: docs/validation-matrix.yml
+          report_path: docs/platform-validation-report.yml
+          evidence_root: docs/evidence/platform-validation
+          test_identity_path: docs/test-identity.json
+          require_approved: true
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "A matriz multiplataforma encontrou uma divergência focal."
+      goto: ft.platform.02.fix
+      automatic: true
     next: ft.final.01.visual_check
+
+  - id: ft.platform.02.fix
+    type: build
+    title: "Corrigir Achados da Matriz Multiplataforma"
+    description: "Corrigir somente os PV-F-* reproduzidos e retornar obrigatoriamente à mesma validação de plataforma."
+    sprint: sprint-08-platform-validation
+    executor: codex
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    max_turns: 80
+    fix_review: ft.platform.01.validate
+    outputs:
+      - project/
+      - docs/platform-fix-report.md
+    write_scope:
+      - project
+      - docs/platform-fix-report.md
+    prompt: |
+      Leia somente os findings PV-F-* correntes de
+      docs/platform-validation-report.yml. Corrija o menor delta de produto e
+      testes diretamente relacionado; preserve targets já aprovados, contratos,
+      mockups e evidências históricas. Rode apenas testes focais nesta etapa.
+      Finding de `mockup_watermark` exige corrigir a UI de produção e seu mapa
+      tela→mockup; editar somente receipt, screenshot ou overlay de teste não é
+      correção.
+      Registre docs/platform-fix-report.md com
+      PV-F→causa→paths→fix→teste→resultado. Não altere a matriz nem rebaixe
+      target obrigatório. A etapa seguinte repetirá a auditoria de plataforma
+      no candidato corrigido antes de qualquer entrega ao stakeholder.
+    validators:
+      - file_exists: docs/platform-fix-report.md
+      - command_succeeds: "git diff --check"
+    next: ft.platform.01.validate
 
   # ================================================================
   # Sprint 09 — Final
@@ -1442,7 +2710,7 @@ nodes:
   - id: ft.final.01.visual_check
     type: build
     title: "Verificação Visual Final"
-    description: "Comparar screenshots E2E com docs/ui_criteria.md e gerar PASS/FAIL por critério. A síntese deve conter exatamente uma linha P0_ACCEPTANCE: PASS ou P0_ACCEPTANCE: FAIL; o marcador representa o aceite do produto, não apenas a conclusão da auditoria. Qualquer critério P0 FAIL torna o marcador FAIL."
+    description: "Comparar screenshots E2E com os mockups aprovados e docs/ui_criteria.md, confrontar navegação e considerar o receipt multiplataforma corrente. Uma capacidade visualmente correta mas órfã na UI de produção reprova o P0_ACCEPTANCE."
     sprint: sprint-09-final
     executor: claude
     max_turns: 40
@@ -1459,6 +2727,11 @@ nodes:
           report_path: docs/visual-check-report.md
           source_dir: project/frontend/src
           evidence: any
+      - platform_validation_ready:
+          matrix_path: docs/validation-matrix.yml
+          report_path: docs/platform-validation-report.yml
+          evidence_root: docs/evidence/platform-validation
+          test_identity_path: docs/test-identity.json
     next: gate.visual_check
 
   - id: gate.visual_check
@@ -1478,14 +2751,47 @@ nodes:
           report_path: docs/visual-check-report.md
           source_dir: project/frontend/src
           evidence: any
+      - platform_validation_ready:
+          matrix_path: docs/validation-matrix.yml
+          report_path: docs/platform-validation-report.yml
+          evidence_root: docs/evidence/platform-validation
+          test_identity_path: docs/test-identity.json
     next: ft.final.02.stakeholder
 
   - id: ft.final.02.stakeholder
     type: human_gate
     title: "Validação do Stakeholder"
-    description: "Abra a URL no browser, navegue por todas as telas e verifique se o produto está funcionando conforme o PRD. Teste o fluxo completo: criar, listar, editar e excluir em cada módulo. Se encontrar bugs ou desvios, rejeite descrevendo o problema."
+    description: "Abra o produto pela entrada normal na plataforma selecionada, navegue por menus e controles visíveis até todas as capacidades P0 e verifique PRD e receipt multiplataforma. Não use rotas internas diretas como prova. Rejeite capacidade órfã, target obrigatório ausente, bug ou desvio funcional/visual."
     sprint: sprint-09-final
     executor: python
+    decision_context:
+      decision: >-
+        Decidir se o candidato P0 validado pode avançar para consolidação e
+        handoff, sem ampliar o escopo desta entrega.
+      why_now: >-
+        Implementação, regressão integrada, auditoria visual e validação dos
+        targets obrigatórios terminaram. A decisão humana confirma a experiência
+        observável antes de os catálogos e o handoff serem consolidados.
+      review_paths:
+        - docs/PRD.md
+        - docs/ui_criteria.md
+        - docs/acceptance-report.md
+        - docs/visual-check-report.md
+        - docs/platform-validation-report.yml
+      checklist:
+        - Abra o produto pela entrada apresentada para cada target selecionado — URL somente para web, AppImage/aplicativo nativo para desktop ou app instalado no dispositivo — e complete o fluxo P0 usando apenas menus e controles visíveis.
+        - Compare o comportamento e a aparência observados com PRD, critérios visuais, mockups e relatório de aceite.
+        - Confirme que cada target obrigatório está em PASS, sem finding aberto, e que nenhuma capacidade P0 está órfã.
+        - Rejeite qualquer bug reproduzível, desvio funcional/visual, evidência inacessível ou limitação relevante não declarada.
+      limitations:
+        - A aprovação cobre somente o candidato, o escopo P0 e os targets apresentados neste gate.
+        - A aprovação não autoriza expansão comercial, novos targets ou capacidades fora do PRD.
+      approve_effect: >-
+        Registra o aceite do candidato e avança para a consolidação da retro,
+        backlog, catálogo de features e handoff.
+      reject_effect: >-
+        Registra o defeito reproduzível, retorna somente à correção stakeholder
+        e exige nova apresentação deste gate após a correção.
     env_setup:
       - bash .ft/process/scripts/serve.sh
     outputs:
@@ -1503,7 +2809,8 @@ nodes:
     max_turns: 60
     outputs:
       - project/
-    next: ft.final.02.stakeholder
+    fix_review: ft.platform.01.validate
+    next: ft.platform.01.validate
 
   # ================================================================
   # Sprint 10 — Handoff
@@ -1569,9 +2876,11 @@ nodes:
       - docs/PROJECT_BACKLOG.md
       - docs/task_list.md
       - docs/acceptance-report.md
-      - docs/e2e-report.md
-      - docs/visual-check-report.md
       - docs/retro.md
+      - docs/headless-review.md quando existir
+      - docs/headless-build-report.md quando existir
+      - docs/e2e-report.md quando houver superfície visual
+      - docs/visual-check-report.md quando houver superfície visual
       - docs/critical-analysis.md se existir
 
       Regras:
@@ -1620,8 +2929,9 @@ nodes:
       - docs/PROJECT_BACKLOG.md já atualizado
       - docs/task_list.md
       - docs/acceptance-report.md
-      - docs/e2e-report.md
-      - docs/visual-check-report.md
+      - docs/headless-review.md quando existir
+      - docs/e2e-report.md quando houver superfície visual
+      - docs/visual-check-report.md quando houver superfície visual
       - docs/stakeholder-feedback.md, quando existir
       - docs/retro.md
 
@@ -1664,11 +2974,21 @@ nodes:
     type: document
     parallel_group: handoff-analysis   # com ft run --parallel: roda junto de handoff.03
     title: "Propor Ajustes ao PRD"
-    description: "Gerar docs/PRD.next.md com propostas de atualização do PRD canônico a partir do backlog, decisões e aprendizados do ciclo. Não usar este documento como backlog paralelo: pendências concretas devem estar em docs/PROJECT_BACKLOG.md."
+    description: "Gerar docs/PRD.next.md somente com propostas funcionais e técnicas para o software, a partir do backlog, decisões e aprendizados do ciclo. Não usar este documento como backlog paralelo nem propor execução de jurídico, marketing, vendas, pesquisa de mercado ou operação comercial."
     sprint: sprint-10-handoff
     executor: claude
     outputs:
       - docs/PRD.next.md
+    prompt: |
+      Proponha somente evolução do produto e da engenharia de software:
+      comportamento, UX, requisitos funcionais e não funcionais, arquitetura,
+      código, dados, APIs, integrações, segurança técnica, testes, desempenho,
+      confiabilidade, empacotamento, instalação e manutenção.
+
+      Não crie requisitos, gates ou bloqueios de jurídico, marketing, site
+      promocional, recrutamento, pesquisa de mercado, vendas, receita,
+      renovação ou validação comercial. Esses assuntos permanecem pendentes
+      para uma equipe posterior e não fazem parte deste ciclo de build.
     validators:
       - file_exists: docs/PRD.next.md
     next: ft.handoff.03.critical_analysis
@@ -1678,9 +2998,22 @@ nodes:
     type: document
     parallel_group: handoff-analysis
     title: "Análise Crítica — Sugestões do LLM"
-    description: "O LLM produz uma análise crítica honesta do produto entregue: o que está bom, o que está frágil, oportunidades de melhoria que o stakeholder pode não ter visto. Numeradas e priorizadas."
+    description: "Produzir uma análise crítica estritamente de produto e engenharia: funcionalidades, UX, arquitetura, implementação, segurança técnica, testes, desempenho, confiabilidade, distribuição e manutenção. Não criar tarefas ou bloqueios de jurídico, marketing, vendas, pesquisa de mercado, recrutamento ou operação comercial."
     sprint: sprint-10-handoff
     executor: claude
+    prompt: |
+      Analise somente o software e a experiência do produto entregue.
+      Inclua funcionalidades completas ou parciais, defeitos, riscos técnicos,
+      arquitetura, segurança implementável em código/infraestrutura, testes,
+      desempenho, confiabilidade, empacotamento, distribuição técnica e
+      manutenção.
+
+      Não inclua parecer jurídico, contratos, licenças como decisão legal,
+      marketing, site promocional, landing page, recrutamento, pesquisa de
+      mercado, vendas, metas de conversão, receita, renovação ou validação da
+      tese de negócio. Essas responsabilidades pertencem a outra equipe depois
+      da entrega do software. Uma integração de cobrança pode aparecer apenas
+      pelo seu estado de implementação técnica, nunca como meta comercial.
     outputs:
       - docs/critical-analysis.md
     validators:
@@ -1691,9 +3024,76 @@ nodes:
     no_pre_seed: true   # artefato por ciclo — nunca herdar do ciclo anterior
     type: document
     title: "Gerar Plano de Voo — Próximo Ciclo"
-    description: "Documentar o contexto para o próximo ciclo: estado atual do produto, progresso do docs/PROJECT_BACKLOG.md, mudanças em docs/FEATURES.md (novas, evoluídas, depreciadas ou removidas), itens entregues, pendências P0/P1 com decisão, dívidas P2, sugestões da análise crítica escolhidas pelo stakeholder e qualquer contexto técnico necessário. Tanto o plano quanto o handoff devem ter a seção Mudanças em Features."
+    description: "Produzir um handoff humano que um stakeholder não técnico consiga decidir em poucos minutos e um plano de voo operacional para o próximo ciclo. Explicar em linguagem comum o que está pronto, o que não está, as opções e as consequências de fazer, adiar ou não fazer. Detalhes técnicos ficam somente em anexo."
     sprint: sprint-10-handoff
     executor: claude
+    prompt: |
+      Gere docs/handoff.md e docs/plano_de_voo.md para dois leitores distintos,
+      preservando os fatos de PROJECT_BACKLOG, FEATURES e das evidências.
+
+      docs/handoff.md é o documento PRINCIPAL DE DECISÃO para uma pessoa que não
+      conhece os códigos, o processo nem a arquitetura do projeto. Ele deve:
+      1. abrir com "Decisão solicitada" e dizer em uma frase o que a pessoa está
+         decidindo agora;
+      2. trazer um "Resumo em linguagem simples" que possa ser entendido sem
+         abrir outro arquivo;
+      3. separar claramente o que está pronto do que ainda não está pronto;
+      4. incluir "Opções e consequências" com, para cada opção real, o que
+         acontece, benefício, risco/custo, consequência de fazer e consequência
+         de não fazer ou adiar;
+      5. explicar separadamente "O que a aprovação autoriza" e "O que a
+         aprovação não autoriza";
+      6. apresentar o próximo ciclo como resultados funcionais e redução de
+         risco, não como lista de tecnologias;
+      7. distinguir fatos comprovados, recomendação e pontos ainda desconhecidos;
+      8. manter "Mudanças em Features", traduzindo IDs e status para nomes e
+         consequências compreensíveis;
+      9. mover hashes, commits, paths, nomes internos de gates, siglas de
+         prioridade e stack para um "Anexo técnico" no fim. No corpo executivo,
+         não usar PB-*, FEAT-*, P0/P1/P2, D0, SC-*, H-* ou nomes de receipts sem
+         explicar imediatamente em português comum;
+      10. não pressupor que a aprovação do handoff transforma capacidade parcial
+          em pronta, autoriza expor uma superfície sem suporte técnico, aceita
+          outro binário ou muda o escopo. Diga expressamente o alcance da decisão
+          corrente somente em termos de produto e engenharia.
+
+      ESCOPO OBRIGATÓRIO DESTE HANDOFF: produto e engenharia de software.
+      Para cada capacidade, diga se está pronta, parcial ou não implementada,
+      qual lacuna técnica permanece e qual é o impacto concreto para a pessoa
+      usuária ou para quem consome a API. Pode tratar de UX, código, arquitetura,
+      persistência, APIs, integrações, segurança técnica, testes, desempenho,
+      confiabilidade, empacotamento, instalação e manutenção.
+
+      Não transforme em tarefa, risco, bloqueio, alternativa ou próximo passo da
+      engenharia nenhum assunto de jurídico, contratos, aprovação de licença,
+      marketing, site promocional, landing page, recrutamento, pesquisa de
+      mercado, coorte, vendas, metas de conversão, receita, renovação ou
+      validação comercial. Preserve esses assuntos como pendentes para a equipe
+      posterior; não os apague, não os declare resolvidos e não os use para
+      impedir a conclusão da engenharia. No handoff, demarque essa fronteira com
+      uma única frase em "Fora do escopo desta equipe", sem reproduzir planos ou
+      listas de pendências externas.
+
+      Diferencie funcionalidade de cobrança de resultado comercial: estado da
+      integração, sandbox, webhooks e tratamento de falhas são engenharia;
+      quantidade de compradores, receita e renovação são negócio e não entram.
+      Da mesma forma, armazenamento, busca, isolamento, backup e exclusão são
+      software; consentimento jurídico, recrutamento e pesquisa não entram.
+
+      As opções do handoff devem ser decisões de produto/engenharia, por exemplo:
+      aceitar o escopo de software entregue, continuar implementando capacidades
+      parciais ou remover/desabilitar superfícies ainda não suportadas. Para cada
+      opção, explique consequência funcional, técnica e de manutenção.
+
+      docs/plano_de_voo.md é o documento de execução do próximo time. Também deve
+      começar com "Objetivo em linguagem simples" e conter "Decisões e
+      consequências" antes dos detalhes operacionais. Pode usar IDs rastreáveis,
+      mas sempre acompanhados do nome e do efeito prático.
+
+      Evite linguagem burocrática, frases passivas e tabelas que obriguem o
+      leitor a decodificar siglas. Não invente prazo, orçamento, autorização ou
+      conclusão sem evidência. Se houver incerteza, escreva "ainda não sabemos"
+      e explique como ela muda a decisão.
     outputs:
       - docs/plano_de_voo.md
       - docs/handoff.md
@@ -1704,6 +3104,8 @@ nodes:
       - has_sections:
           path: docs/plano_de_voo.md
           sections:
+            - Objetivo em linguagem simples
+            - Decisões e consequências
             - O que foi entregue
             - Mudanças em Features
             - O que ficou pendente
@@ -1712,10 +3114,19 @@ nodes:
       - has_sections:
           path: docs/handoff.md
           sections:
+            - Decisão solicitada
+            - Resumo em linguagem simples
+            - Escopo deste handoff de engenharia
             - O que foi entregue
             - Mudanças em Features
             - O que ficou pendente
+            - Funcionalidades incompletas e impacto
+            - Opções e consequências
+            - O que a aprovação autoriza
+            - O que a aprovação não autoriza
+            - Fora do escopo desta equipe
             - Próximo Ciclo
+            - Anexo técnico
       - backlog_pending_decisions:
           path: docs/PROJECT_BACKLOG.md
       - features_catalog_valid:
@@ -1729,9 +3140,38 @@ nodes:
   - id: ft.handoff.gate
     type: human_gate
     title: "Revisão do Handoff"
-    description: "Leia docs/handoff.md, docs/plano_de_voo.md e docs/FEATURES.md. Confirme se o contexto para o próximo ciclo e as features novas/evoluídas/depreciadas/removidas estão completos e corretos. Rejeite com ajustes se algo estiver faltando. APPROVED, REJECTED e BYPASSED permanecem distintos; bypass não valida o handoff."
+    description: "Leia primeiro docs/handoff.md como documento humano de engenharia. Aprove somente se ele tratar de software e produto, mostrar o que está pronto, parcial ou ausente e explicar impactos e alternativas técnicas sem atribuir ao time responsabilidades de jurídico, marketing, pesquisa, vendas ou operação comercial."
     sprint: sprint-10-handoff
     executor: python
+    decision_context:
+      decision: >-
+        Decidir se o handoff representa fielmente o software entregue e oferece
+        contexto suficiente para aceitar a entrega técnica ou pedir ajustes.
+      why_now: >-
+        O candidato já passou pelas validações técnicas e pelo aceite funcional;
+        este gate confirma que uma pessoa consegue entender alcance, lacunas,
+        alternativas e consequências antes do encerramento do ciclo.
+      review_paths:
+        - docs/handoff.md
+        - docs/plano_de_voo.md
+        - docs/FEATURES.md
+      checklist:
+        - Leia apenas o corpo principal de docs/handoff.md e confirme que a decisão solicitada pode ser explicada em uma frase, sem conhecer códigos internos do projeto.
+        - Confirme que o documento se limita a produto e engenharia de software; jurídico, marketing, site promocional, recrutamento, pesquisa de mercado, vendas e métricas comerciais não podem aparecer como tarefas ou bloqueios desta equipe.
+        - Confirme que cada capacidade relevante está classificada como pronta, parcial ou não implementada, com a lacuna técnica e o impacto concreto para o usuário ou consumidor da API.
+        - Confirme que cada alternativa informa benefício, risco ou custo e as consequências de fazer, não fazer ou adiar.
+        - Confirme que fatos comprovados, recomendações e pontos ainda desconhecidos estão separados e não são apresentados como equivalentes.
+        - Confirme que o documento diz claramente o que esta aprovação autoriza e o que ela não autoriza.
+        - Consulte docs/plano_de_voo.md e docs/FEATURES.md somente para verificar se o resumo humano não omitiu ou distorceu entregas e pendências.
+      limitations:
+        - A aprovação cobre somente a clareza e a fidelidade do handoff técnico deste candidato.
+        - A aprovação não declara prontas capacidades parciais, não amplia escopo e não transfere responsabilidades da equipe posterior para a engenharia.
+      approve_effect: >-
+        Registra que o handoff técnico está compreensível e fiel e avança para a
+        meta-melhoria do processo.
+      reject_effect: >-
+        Retorna à redação do plano de voo e do handoff para corrigir contexto,
+        escopo, alternativas ou consequências; exige nova apresentação do gate.
     outputs:
       - docs/handoff.md
       - docs/plano_de_voo.md

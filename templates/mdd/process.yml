@@ -1,0 +1,1078 @@
+# MDD — Desenvolvimento Orientado ao Mercado (Market-Driven Development)
+# Uso: ft run . --template mdd --request "descreva a ideia" --auto
+
+id: mdd
+version: "2.3.0"
+title: "MDD — Definição de produto, narrativa executiva e presença comercial"
+
+execution_policy:
+  entrypoint: run
+  template: mdd
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/mdd/process.yml
+  merge_command: ft close --merge full
+  project_role: neutral
+  allowed_project_phases:
+    - building
+    - maintenance
+
+session_policy:
+  mode: sprint
+  providers:
+    - claude
+    - codex
+  initial_plan: internal
+  parallel_strategy: fork
+  recovery: rehydrate
+
+input_policy:
+  required: true
+  destination: docs/demanda.md
+  prompt: "Descreva o problema, o público e o resultado esperado"
+
+artifact_policy:
+  canonical:
+    - docs/demanda.md
+    - docs/hipotese.md
+    - docs/VISION.md
+    - docs/PRD.md
+    - docs/executive-summary.md
+    - docs/pitch-deck.md
+    - docs/site-proposal.md
+    - docs/pitch-deck-images/
+    - docs/site-prototype/
+    - docs/mdd-handoff.md
+  cycle: []
+
+close_policy:
+  backlog:
+    mode: none
+
+nodes:
+  # 1. Descobrir antes de propor: a hipótese delimita o problema falseável.
+  - id: mdd.01.hipotese
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: discovery
+    title: "Capturar e qualificar a hipótese"
+    description: "Transformar a demanda em uma hipótese de produto falseável, separando fatos, premissas e perguntas ainda abertas."
+    sprint: mdd-01-hypothesis
+    executor: claude
+    max_turns: 24
+    llm_timeout_seconds: 480
+    outputs:
+      - docs/hipotese.md
+    write_scope:
+      - docs/hipotese.md
+    prompt: |
+      Leia docs/demanda.md e todo conhecimento de produto já versionado em
+      docs/. Se docs/hipotese.md existir, refine-o sem apagar decisões válidas
+      nem o feedback recebido no gate anterior.
+
+      Construa uma hipótese útil para orientar produto e software, sem fabricar
+      pesquisa de mercado nem declarar validação comercial. Diferencie fatos,
+      premissas e perguntas. O sinal de validação deve ser observável.
+
+      Use exatamente estas seções:
+      ## Hipótese Central
+      ## Problema Observado
+      ## Público-Alvo
+      ## Comportamento Esperado
+      ## Sinal de Validação
+      ## Premissas e Evidências
+      ## Perguntas em Aberto
+      ## Fora do Escopo
+    validators:
+      - file_exists: docs/hipotese.md
+      - has_sections:
+          path: docs/hipotese.md
+          sections:
+            - Hipótese Central
+            - Problema Observado
+            - Público-Alvo
+            - Comportamento Esperado
+            - Sinal de Validação
+            - Premissas e Evidências
+            - Perguntas em Aberto
+            - Fora do Escopo
+      - document_quality:
+          path: docs/hipotese.md
+          min_lines_count: 24
+    next: mdd.01b.hipotese_gate
+
+  - id: mdd.01b.hipotese_gate
+    type: human_gate
+    title: "Revisão da hipótese"
+    description: "Confirmar se problema, público, comportamento esperado e sinal observável representam a intenção do stakeholder."
+    sprint: mdd-01-hypothesis
+    executor: python
+    outputs:
+      - docs/hipotese.md
+    reject_next: mdd.01.hipotese
+    next: mdd.02.vision
+    decision_context:
+      decision: "A hipótese descreve corretamente o problema que merece orientar o produto?"
+      why_now: "A hipótese será a origem da visão e ainda pode ser corrigida sem contaminar os demais artefatos."
+      review_paths:
+        - docs/demanda.md
+        - docs/hipotese.md
+      checklist:
+        - "Problema e público correspondem à demanda real."
+        - "Comportamento esperado e sinal de validação são observáveis."
+        - "Premissas não aparecem disfarçadas como fatos."
+        - "Perguntas em aberto e fora do escopo estão explícitos."
+      limitations:
+        - "A aprovação não comprova mercado, receita ou viabilidade comercial."
+        - "A aprovação ainda não define solução, escopo ou implementação."
+      approve_effect: "Libera a formulação da visão do produto."
+      reject_effect: "Retorna somente à hipótese com o motivo como instrução."
+
+  # 2. Definir direção antes do contrato: visão estabelece promessa e princípios.
+  - id: mdd.02.vision
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Definir a visão do produto"
+    description: "Converter a hipótese aprovada em direção durável, posicionamento, princípios e experiência-alvo antes de detalhar requisitos."
+    sprint: mdd-02-vision
+    executor: claude
+    max_turns: 24
+    llm_timeout_seconds: 480
+    outputs:
+      - docs/VISION.md
+    write_scope:
+      - docs/VISION.md
+    prompt: |
+      Leia docs/demanda.md e docs/hipotese.md, além das decisões relevantes em
+      docs/. Se docs/VISION.md existir, refine-o sem apagar decisões válidas.
+
+      A visão é direcional e durável: explica por que o produto existe, para
+      quem, qual mudança promete, como se posiciona e quais princípios limitam
+      decisões futuras. Não antecipe backlog, arquitetura detalhada, copy de
+      campanha ou números de mercado não comprovados.
+
+      Use exatamente estas seções:
+      ## Propósito
+      ## Problema e Oportunidade
+      ## Público Prioritário
+      ## Promessa de Valor
+      ## Posicionamento
+      ## Experiência-Alvo
+      ## Princípios do Produto
+      ## Horizonte e Sinais de Sucesso
+      ## Não Objetivos
+      ## Decisões e Questões em Aberto
+    validators:
+      - file_exists: docs/VISION.md
+      - has_sections:
+          path: docs/VISION.md
+          sections:
+            - Propósito
+            - Problema e Oportunidade
+            - Público Prioritário
+            - Promessa de Valor
+            - Posicionamento
+            - Experiência-Alvo
+            - Princípios do Produto
+            - Horizonte e Sinais de Sucesso
+            - Não Objetivos
+            - Decisões e Questões em Aberto
+      - document_quality:
+          path: docs/VISION.md
+          min_lines_count: 32
+    next: mdd.02b.vision_gate
+
+  - id: mdd.02b.vision_gate
+    type: human_gate
+    title: "Revisão da visão"
+    description: "Confirmar a direção do produto antes que ela seja convertida em requisitos e compromissos verificáveis."
+    sprint: mdd-02-vision
+    executor: python
+    outputs:
+      - docs/VISION.md
+    reject_next: mdd.02.vision
+    next: mdd.03.prd
+    decision_context:
+      decision: "Esta visão expressa a direção, a promessa e os limites corretos para o produto?"
+      why_now: "O PRD deve derivar de uma visão aprovada, não definir posicionamento por acidente durante o detalhamento."
+      review_paths:
+        - docs/hipotese.md
+        - docs/VISION.md
+      checklist:
+        - "Propósito, público e promessa de valor são coerentes com a hipótese."
+        - "O posicionamento diferencia o produto sem alegações inventadas."
+        - "Princípios orientam decisões concretas e não são slogans genéricos."
+        - "Horizonte, não objetivos e questões abertas estão claros."
+      limitations:
+        - "A visão não substitui critérios de aceite nem prova demanda comercial."
+        - "A aprovação não autoriza construção antes do PRD."
+      approve_effect: "Congela a direção usada para redigir o PRD."
+      reject_effect: "Retorna somente à visão, preservando a hipótese aprovada."
+
+  # 3. Contratar o produto: PRD traduz visão em comportamento verificável.
+  - id: mdd.03.prd
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Redigir o PRD"
+    description: "Converter hipótese e visão aprovadas em requisitos de produto e engenharia priorizados, verificáveis e delimitados."
+    sprint: mdd-03-prd
+    executor: claude
+    max_turns: 36
+    llm_timeout_seconds: 720
+    outputs:
+      - docs/PRD.md
+    write_scope:
+      - docs/PRD.md
+    prompt: |
+      Leia docs/demanda.md, docs/hipotese.md, docs/VISION.md e o conhecimento
+      relevante em docs/. Se docs/PRD.md existir, refine-o sem apagar decisões
+      válidas nem o feedback recebido no gate anterior.
+
+      Escreva um contrato implementável. Cada user story deve ter ID US-NN,
+      prioridade P0 ou P1 e critérios de aceite observáveis. Requisitos não
+      funcionais devem ser verificáveis. Declare riscos, dependências, decisões
+      pendentes e exclusões; não atribua à engenharia compromissos jurídicos,
+      comerciais, de marketing ou pesquisa de mercado.
+
+      Use exatamente estas seções:
+      ## Hipótese
+      ## Visão
+      ## Objetivos e Não Objetivos
+      ## Público e Jornadas
+      ## User Stories
+      ## Requisitos Não Funcionais
+      ## Stack Técnico
+      ## Dados e Integrações
+      ## Critérios de Saída
+      ## Riscos e Dependências
+      ## Rastreabilidade
+      ## Questões Pendentes
+    validators:
+      - file_exists: docs/PRD.md
+      - has_sections:
+          path: docs/PRD.md
+          sections:
+            - Hipótese
+            - Visão
+            - Objetivos e Não Objetivos
+            - Público e Jornadas
+            - User Stories
+            - Requisitos Não Funcionais
+            - Stack Técnico
+            - Dados e Integrações
+            - Critérios de Saída
+            - Riscos e Dependências
+            - Rastreabilidade
+            - Questões Pendentes
+      - document_quality:
+          path: docs/PRD.md
+          min_lines_count: 48
+          required_terms:
+            - US-
+            - P0
+          min_required_terms: 2
+    next: mdd.03b.prd_gate
+
+  - id: mdd.03b.prd_gate
+    type: human_gate
+    title: "Revisão do PRD"
+    description: "Decidir se o escopo P0 traduz a visão em um contrato suficientemente claro e verificável para construção."
+    sprint: mdd-03-prd
+    executor: python
+    outputs:
+      - docs/PRD.md
+    reject_next: mdd.03.prd
+    next: mdd.04.definition_gate
+    decision_context:
+      decision: "O PRD está pronto para orientar planejamento e construção sem decisões essenciais implícitas?"
+      why_now: "Hipótese e visão foram aprovadas; este é o último gate humano antes de derivar a narrativa executiva."
+      review_paths:
+        - docs/hipotese.md
+        - docs/VISION.md
+        - docs/PRD.md
+      checklist:
+        - "As histórias P0 cobrem a jornada central de ponta a ponta."
+        - "Cada US-* possui prioridade e critérios de aceite observáveis."
+        - "Requisitos não funcionais e critérios de saída são verificáveis."
+        - "Escopo, riscos, dependências e questões pendentes estão explícitos."
+        - "A rastreabilidade liga hipótese, visão e escopo P0/P1."
+      limitations:
+        - "A aprovação não afirma que o produto foi implementado ou validado."
+        - "Itens externos à engenharia continuam com seus responsáveis."
+      approve_effect: "Libera a checagem da definição e a produção dos materiais derivados."
+      reject_effect: "Retorna somente ao PRD, preservando hipótese e visão aprovadas."
+
+  - id: mdd.04.definition_gate
+    type: gate
+    title: "Gate da definição do produto"
+    description: "Provar que hipótese, visão e PRD formam uma baseline estruturalmente completa antes de resumir ou apresentar."
+    sprint: mdd-04-narrative
+    executor: python
+    outputs:
+      - docs/hipotese.md
+      - docs/VISION.md
+      - docs/PRD.md
+    validators:
+      - file_exists: docs/hipotese.md
+      - has_sections:
+          path: docs/hipotese.md
+          sections:
+            - Hipótese Central
+            - Problema Observado
+            - Público-Alvo
+            - Sinal de Validação
+      - file_exists: docs/VISION.md
+      - has_sections:
+          path: docs/VISION.md
+          sections:
+            - Propósito
+            - Promessa de Valor
+            - Posicionamento
+            - Princípios do Produto
+      - file_exists: docs/PRD.md
+      - has_sections:
+          path: docs/PRD.md
+          sections:
+            - Hipótese
+            - Visão
+            - User Stories
+            - Critérios de Saída
+            - Rastreabilidade
+      - command_succeeds: "git diff --check"
+    next: mdd.05.executive_summary
+
+  # 4. Derivar a narrativa na ordem: resumo → deck → presença comercial.
+  - id: mdd.05.executive_summary
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Produzir o sumário executivo"
+    description: "Condensar a definição aprovada em uma decisão executiva curta, fiel e verificável."
+    sprint: mdd-04-narrative
+    executor: claude
+    max_turns: 20
+    outputs:
+      - docs/executive-summary.md
+    write_scope:
+      - docs/executive-summary.md
+    prompt: |
+      Leia docs/hipotese.md, docs/VISION.md e docs/PRD.md. Produza um sumário
+      executivo autocontido, curto e fiel. Não invente métricas, mercado,
+      receita, tração, aprovação ou readiness. Diferencie evidência existente,
+      hipótese, decisão e pendência. Termine com a decisão ou próximo passo que
+      o leitor executivo precisa tomar.
+
+      Use exatamente estas seções:
+      ## Oportunidade
+      ## Público e Problema
+      ## Visão e Proposta de Valor
+      ## Produto e Escopo
+      ## Diferenciais
+      ## Evidências e Estado Atual
+      ## Riscos e Pendências
+      ## Marcos e Critérios de Sucesso
+      ## Decisão Solicitada
+    validators:
+      - file_exists: docs/executive-summary.md
+      - has_sections:
+          path: docs/executive-summary.md
+          sections:
+            - Oportunidade
+            - Público e Problema
+            - Visão e Proposta de Valor
+            - Produto e Escopo
+            - Diferenciais
+            - Evidências e Estado Atual
+            - Riscos e Pendências
+            - Marcos e Critérios de Sucesso
+            - Decisão Solicitada
+      - document_quality:
+          path: docs/executive-summary.md
+          min_lines_count: 24
+          max_lines_count: 180
+    next: mdd.06.pitch_deck
+
+  - id: mdd.06.pitch_deck
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Estruturar o pitch deck"
+    description: "Transformar a definição aprovada em uma narrativa de proposta de valor para stakeholders, sem virar relatório de andamento."
+    sprint: mdd-04-narrative
+    executor: claude
+    max_turns: 24
+    outputs:
+      - docs/pitch-deck.md
+    write_scope:
+      - docs/pitch-deck.md
+    prompt: |
+      Leia docs/executive-summary.md, docs/VISION.md e docs/PRD.md. Crie um deck
+      textual de 12 slides para apresentar a proposta de valor a stakeholders.
+      Cada slide deve conter mensagem principal, conteúdo enxuto, sugestão visual
+      e notas do apresentador. A narrativa explica por que o produto merece
+      existir, para quem, quais benefícios entrega, como funciona, por que é
+      diferente, qual impacto pretende criar e como o stakeholder pode se
+      envolver. Não invente TAM, receita, tração, clientes, citações ou validação;
+      resultados ainda não comprovados devem ser marcados como hipótese.
+
+      O pitch deck não é relatório de progresso do projeto. Não crie slides de
+      status, backlog, blockers, readiness, gates de engenharia, percentuais de
+      conclusão, hashes, IDs internos ou matriz de release. Limites essenciais
+      podem aparecer como ressalva curta e subordinada à proposta de valor, nunca
+      como eixo narrativo. Detalhes operacionais pertencem ao PRD e ao handoff.
+
+      Use exatamente estes headings:
+      ## Slide 01 — Abertura
+      ## Slide 02 — Problema
+      ## Slide 03 — Público
+      ## Slide 04 — Proposta de Valor
+      ## Slide 05 — Solução
+      ## Slide 06 — Jornada
+      ## Slide 07 — Benefícios
+      ## Slide 08 — Diferenciais
+      ## Slide 09 — Impacto Esperado
+      ## Slide 10 — Estratégia de Adoção
+      ## Slide 11 — Visão de Futuro
+      ## Slide 12 — Convite ao Stakeholder
+    validators:
+      - file_exists: docs/pitch-deck.md
+      - has_sections:
+          path: docs/pitch-deck.md
+          sections:
+            - Slide 01 — Abertura
+            - Slide 02 — Problema
+            - Slide 03 — Público
+            - Slide 04 — Proposta de Valor
+            - Slide 05 — Solução
+            - Slide 06 — Jornada
+            - Slide 07 — Benefícios
+            - Slide 08 — Diferenciais
+            - Slide 09 — Impacto Esperado
+            - Slide 10 — Estratégia de Adoção
+            - Slide 11 — Visão de Futuro
+            - Slide 12 — Convite ao Stakeholder
+      - document_quality:
+          path: docs/pitch-deck.md
+          min_lines_count: 60
+          max_lines_count: 300
+          required_terms:
+            - Sugestão visual
+            - Notas do apresentador
+          min_required_terms: 2
+    next: mdd.07.site_proposal
+
+  - id: mdd.07.site_proposal
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Elaborar a proposta comercial do site"
+    description: "Converter visão e narrativa em uma presença comercial moderna para usuários finais, com arquitetura de conversão e contrato visual — sem implementar o site."
+    sprint: mdd-04-narrative
+    executor: claude
+    max_turns: 28
+    outputs:
+      - docs/site-proposal.md
+    write_scope:
+      - docs/site-proposal.md
+    prompt: |
+      Leia integralmente docs/VISION.md, docs/executive-summary.md,
+      docs/pitch-deck.md e docs/PRD.md. Produza uma única proposta comercial de
+      site dirigida ao usuário final. O site-alvo apresenta o produto definido
+      como uma oferta pronta para ser compreendida, usada ou adquirida pelo seu
+      público; não apresenta o processo que levou à definição do produto.
+
+      Escreva copy objetiva de produto: promessa direta, benefício observável,
+      funcionamento compreensível, diferenciais, confiança e uma chamada para
+      ação principal. Chamada para ação (call to action — CTA) e otimização para
+      mecanismos de busca (Search Engine Optimization — SEO) devem ser explicadas
+      na primeira ocorrência. Quando o produto for software distribuível, trate
+      download e plataformas aprovadas como elementos comerciais; para outro tipo
+      de produto, derive da definição a ação principal equivalente.
+
+      A arquitetura da home deve parecer contemporânea e pronta para produção:
+      navegação simples, hero comercial, benefícios rápidos, funcionamento,
+      demonstração dos recursos centrais, confiança/privacidade, oferta ou preço
+      quando aplicável, perguntas frequentes, CTA final e rodapé. Defina também
+      páginas auxiliares realmente necessárias e uma direção visual moderna,
+      responsiva e acessível.
+
+      A copy pública não pode mencionar projeto, iniciativa, piloto, stakeholder,
+      roadmap, backlog, fase, progresso, prontidão, validação pendente ou convite
+      para acompanhar a construção. Não transforme o site em relatório de status
+      nem exponha ressalvas de engenharia ao usuário. Se uma alegação não estiver
+      sustentada pela visão ou pelo PRD aprovado, omita-a da copy pública e
+      registre o limite apenas no contrato interno do protótipo.
+
+      Isto continua sendo proposta, não implementação: não crie HTML, CSS,
+      aplicação, domínio nem publique o site. Não invente clientes, depoimentos,
+      números, certificações, garantias jurídicas, compatibilidades, preço ou
+      recursos ausentes das fontes aprovadas.
+
+      Use exatamente estas seções:
+      ## Objetivo
+      ## Posicionamento
+      ## Público
+      ## Arquitetura Comercial da Home
+      ## Sitemap
+      ## Direção Visual Moderna
+      ## Hierarquia de Conversão
+      ## Linguagem
+      ## Acessibilidade e Responsividade
+      ## Otimização para Busca
+      ## Contrato do Protótipo Visual
+    validators:
+      - file_exists: docs/site-proposal.md
+      - has_sections:
+          path: docs/site-proposal.md
+          sections:
+            - Objetivo
+            - Posicionamento
+            - Público
+            - Arquitetura Comercial da Home
+            - Sitemap
+            - Direção Visual Moderna
+            - Hierarquia de Conversão
+            - Linguagem
+            - Acessibilidade e Responsividade
+            - Otimização para Busca
+            - Contrato do Protótipo Visual
+      - document_quality:
+          path: docs/site-proposal.md
+          min_lines_count: 64
+          required_terms:
+            - Hero
+            - CTA
+            - usuário final
+          min_required_terms: 3
+    next: mdd.08.package_gate
+
+  - id: mdd.08.package_gate
+    type: gate
+    title: "Gate do pacote MDD"
+    description: "Validar estruturalmente todos os artefatos antes da decisão humana sobre a narrativa derivada."
+    sprint: mdd-05-package
+    executor: python
+    outputs:
+      - docs/hipotese.md
+      - docs/VISION.md
+      - docs/PRD.md
+      - docs/executive-summary.md
+      - docs/pitch-deck.md
+      - docs/site-proposal.md
+    validators:
+      - file_exists: docs/hipotese.md
+      - file_exists: docs/VISION.md
+      - file_exists: docs/PRD.md
+      - file_exists: docs/executive-summary.md
+      - has_sections:
+          path: docs/executive-summary.md
+          sections:
+            - Visão e Proposta de Valor
+            - Evidências e Estado Atual
+            - Decisão Solicitada
+      - file_exists: docs/pitch-deck.md
+      - has_sections:
+          path: docs/pitch-deck.md
+          sections:
+            - Slide 01 — Abertura
+            - Slide 12 — Convite ao Stakeholder
+      - file_exists: docs/site-proposal.md
+      - has_sections:
+          path: docs/site-proposal.md
+          sections:
+            - Arquitetura Comercial da Home
+            - Sitemap
+            - Direção Visual Moderna
+            - Contrato do Protótipo Visual
+      - command_succeeds: "git diff --check"
+    next: mdd.09.package_review
+
+  - id: mdd.09.package_review
+    type: human_gate
+    title: "Revisão do pacote MDD"
+    description: "Aprovar a fidelidade e utilidade do sumário, deck e proposta de site derivados da definição já aprovada."
+    sprint: mdd-05-package
+    executor: python
+    outputs:
+      - docs/executive-summary.md
+      - docs/pitch-deck.md
+      - docs/site-proposal.md
+    reject_next: mdd.09b.package_revision
+    next: mdd.10.pitch_images
+    decision_context:
+      decision: "O pacote comunica a definição aprovada com fidelidade e o site apresenta o produto comercialmente ao usuário final?"
+      why_now: "Os materiais derivados passaram pelo gate estrutural e precisam de aceite humano antes do handoff."
+      review_paths:
+        - docs/VISION.md
+        - docs/PRD.md
+        - docs/executive-summary.md
+        - docs/pitch-deck.md
+        - docs/site-proposal.md
+      checklist:
+        - "O sumário é curto, decisório e não promove hipótese como fato."
+        - "O deck conta uma história coerente e não inventa mercado, tração ou readiness."
+        - "A proposta do site é comercial, objetiva e dirigida ao usuário final."
+        - "A home apresenta o produto como oferta, com benefício, funcionamento e conversão claros."
+        - "A copy pública não contém linguagem de projeto, piloto, roadmap, progresso ou prontidão."
+        - "Mensagens, compatibilidades e claims permanecem sustentados pela definição aprovada."
+        - "Todos os materiais permanecem coerentes com visão e PRD aprovados."
+      limitations:
+        - "A aprovação não implementa nem publica um site."
+        - "A aprovação não transforma o pitch em evidência comercial ou jurídica."
+      approve_effect: "Congela a narrativa e libera a produção visual do deck e do protótipo de site."
+      reject_effect: "Abre correção focal somente dos materiais derivados e reapresenta este gate."
+
+  - id: mdd.09b.package_revision
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Revisar o pacote derivado"
+    description: "Aplicar o feedback do gate somente ao sumário executivo, pitch deck e proposta de site."
+    sprint: mdd-05-package
+    executor: claude
+    max_turns: 28
+    outputs:
+      - docs/executive-summary.md
+      - docs/pitch-deck.md
+      - docs/site-proposal.md
+    write_scope:
+      - docs/executive-summary.md
+      - docs/pitch-deck.md
+      - docs/site-proposal.md
+    prompt: |
+      Aplique estritamente o feedback do stakeholder ao pacote derivado. Leia
+      docs/VISION.md e docs/PRD.md como fontes imutáveis neste node. Corrija
+      docs/executive-summary.md, docs/pitch-deck.md e docs/site-proposal.md sem
+      ampliar escopo, inventar fatos ou alterar a definição aprovada. Preserve
+      no site a linguagem comercial para usuários finais; não reintroduza
+      linguagem de projeto, piloto, roadmap, progresso ou prontidão.
+    validators:
+      - file_exists: docs/executive-summary.md
+      - file_exists: docs/pitch-deck.md
+      - file_exists: docs/site-proposal.md
+      - command_succeeds: "git diff --check"
+    next: mdd.08.package_gate
+
+  # 5. Materializar a narrativa aprovada como imagens antes do handoff.
+  - id: mdd.10.pitch_images
+    type: build
+    title: "Gerar os slides visuais do pitch deck"
+    description: "Gerar um PNG distinto por slide aprovado, com direção visual consistente e inspeção individual."
+    sprint: mdd-06-visual-assets
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-sol
+    llm_effort: max
+    max_turns: 100
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    env_setup:
+      - >-
+          python3 -c "import os,subprocess;
+          p=os.environ.get('FT_CODEX_PROFILE','').strip();
+          cmd=['codex']+(['--profile',p] if p else [])+['features','list'];
+          out=subprocess.check_output(cmd,text=True);
+          rows=[line.split() for line in out.splitlines()];
+          assert any(row and row[0]=='image_generation' and row[-1]=='true' for row in rows),
+          'Codex image_generation indisponível ou desabilitado'"
+    outputs:
+      - docs/pitch-deck-images/
+    write_scope:
+      - docs/pitch-deck-images
+    prompt: |
+      A narrativa textual já foi aprovada. Leia integralmente docs/pitch-deck.md,
+      docs/executive-summary.md, docs/VISION.md e a direção recomendada em
+      docs/site-proposal.md. Não altere nenhum desses documentos.
+
+      Este node está fixado em gpt-5.6-sol com reasoning effort max. O Sol/Max é
+      a autoridade de direção visual, composição dos prompts, seleção, inspeção
+      e iteração dos assets; não troque modelo nem reduza o esforço.
+
+      Carregue e siga integralmente a skill `imagegen`. Use obrigatoriamente a
+      ferramenta built-in `image_gen`, no caso de uso `productivity-visual`,
+      com EXATAMENTE uma chamada de geração por slide: 12 chamadas independentes
+      e 12 PNGs finais distintos. Não use fallback CLI/API. Se a ferramenta
+      built-in não estiver disponível, responda BLOCKED: não improvise renderer.
+
+      Gere os arquivos docs/pitch-deck-images/slide-01.png até
+      docs/pitch-deck-images/slide-12.png. Cada bitmap representa somente um
+      slide em proporção 16:9, nunca montage, contato, grade ou múltiplos slides.
+      Preserve um sistema visual único entre as 12 imagens. Use o primeiro slide
+      aprovado como referência de estilo nas demais gerações, sem copiar o mesmo
+      bitmap. Mantenha texto curto, exato, legível e em português brasileiro;
+      diferencie visualmente fato, hipótese, roadmap, blocker e decisão. Não
+      invente números, logos, clientes, endossos, screenshots ou claims.
+
+      O conjunto deve parecer um pitch de proposta de valor para stakeholders,
+      nunca um status report. Não introduza dashboards, estados de backlog,
+      blockers, readiness, gates internos, hashes ou matrizes de release. Dê
+      protagonismo ao problema, público, benefícios, solução, diferenciais,
+      impacto pretendido, adoção, futuro e convite ao stakeholder.
+
+      Faça uma auditoria de linguagem antes de gerar: nenhuma sigla técnica ou
+      institucional pode aparecer sem explicação. Na primeira ocorrência ao
+      longo da ordem 01→12, escreva o termo por extenso seguido da sigla entre
+      parênteses; depois a forma curta pode ser reutilizada. Isso inclui, entre
+      outras, CLI, API, PKI, ITI, ACT/TSA, OCR e SBOM. Identificadores rastreáveis
+      como PB-013 e FEAT-001 não são siglas e devem permanecer exatos. Se a
+      expansão não couber, simplifique ou reorganize o texto sem reduzir a fonte.
+
+      Depois de cada geração, copie ou mova o PNG escolhido de
+      `$CODEX_HOME/generated_images/` para docs/pitch-deck-images/, abra-o com
+      `view_image`, inspecione composição, consistência, hierarquia, legibilidade,
+      texto e fidelidade ao respectivo slide e itere com uma mudança focal quando
+      necessário. Não faça upscale, crop, montagem ou recomposição programática.
+
+      É proibido criar HTML, CSS, JavaScript, TypeScript, JSX, SVG, canvas,
+      frontend ou apresentação code-native como origem dos PNGs. Também é
+      proibido usar Chromium, Playwright, Puppeteer, browser/headless, screenshot
+      de página/app, Pillow, ImageMagick ou rasterização programática como origem.
+      Operações locais servem apenas para copiar, nomear, calcular hash e
+      inspecionar os PNGs gerados pelo modelo.
+
+      Produza docs/pitch-deck-images/image-generation-receipt.yml com
+      `schema_version: 1`,
+      `executor: {engine: codex, model: gpt-5.6-sol, effort: max}`,
+      `generation: {tool: image_gen, mode: builtin, use_case: productivity-visual}`,
+      `code_native_sources: false`, `browser_capture: false` e `assets`. Cada
+      asset contém `id` (`SLIDE-01` a `SLIDE-12`), `image`, `width`, `height`,
+      `sha256`, `prompt`, `inspected: true` e
+      `revisions: {count: <inteiro não negativo>, notes: [<ajustes>]}`.
+      Produza também docs/pitch-deck-images/README.md com inventário, sistema
+      visual, instruções de abertura e checklist de revisão.
+
+      Antes de DONE, valide os 12 IDs e paths exatos, assinaturas PNG, dimensões
+      nativas, hashes únicos, receipts e `git diff --check`. Placeholder, imagem
+      vazia, texto essencial ilegível ou bitmap repetido é falha.
+    validators:
+      - file_exists: docs/pitch-deck-images/image-generation-receipt.yml
+      - file_exists: docs/pitch-deck-images/README.md
+      - command_succeeds: >-
+          python3 -c "import hashlib,yaml; from pathlib import Path;
+          root=Path('docs/pitch-deck-images'); expected=[root/f'slide-{i:02d}.png' for i in range(1,13)];
+          assert all(p.is_file() and p.stat().st_size>51200 for p in expected);
+          raw=[p.read_bytes() for p in expected]; assert all(b[:8]==b'\x89PNG\r\n\x1a\n' for b in raw);
+          dims=[(int.from_bytes(b[16:20],'big'),int.from_bytes(b[20:24],'big')) for b in raw];
+          assert all(w>h and w>=1024 and h>=576 for w,h in dims), 'slides devem ser PNG 16:9 horizontal em resolução revisável';
+          hashes=[hashlib.sha256(b).hexdigest() for b in raw]; assert len(set(hashes))==12, 'cada slide exige bitmap próprio';
+          r=yaml.safe_load((root/'image-generation-receipt.yml').read_text(encoding='utf-8'));
+          assert r.get('schema_version')==1;
+          assert r.get('executor')=={'engine':'codex','model':'gpt-5.6-sol','effort':'max'};
+          assert r.get('generation')=={'tool':'image_gen','mode':'builtin','use_case':'productivity-visual'};
+          assert r.get('code_native_sources') is False and r.get('browser_capture') is False;
+          assets=r.get('assets'); assert isinstance(assets,list) and len(assets)==12;
+          assert [a.get('id') for a in assets]==[f'SLIDE-{i:02d}' for i in range(1,13)];
+          assert [a.get('image') for a in assets]==[f'docs/pitch-deck-images/slide-{i:02d}.png' for i in range(1,13)];
+          assert [(a.get('width'),a.get('height')) for a in assets]==dims;
+          assert [a.get('sha256') for a in assets]==hashes;
+          assert all(a.get('prompt') and a.get('inspected') is True and isinstance(a.get('revisions'),dict) and isinstance(a['revisions'].get('count'),int) and a['revisions']['count']>=0 and isinstance(a['revisions'].get('notes'),list) for a in assets)"
+      - command_succeeds: >-
+          python3 -c "from pathlib import Path;
+          root=Path('docs/pitch-deck-images'); files=[p for p in root.rglob('*') if p.is_file()];
+          assert all(p.suffix.lower() in {'.png','.md','.yml','.yaml'} for p in files), 'tipo de artefato não permitido'"
+      - command_succeeds: "git diff --check"
+    next: mdd.11.site_prototype
+
+  - id: mdd.11.site_prototype
+    type: build
+    title: "Gerar o protótipo visual do site"
+    description: "Gerar um PNG vertical comprido da home comercial aprovada, com linguagem de produto para usuários finais."
+    sprint: mdd-06-visual-assets
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-sol
+    llm_effort: max
+    max_turns: 40
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    env_setup:
+      - >-
+          python3 -c "import os,subprocess;
+          p=os.environ.get('FT_CODEX_PROFILE','').strip();
+          cmd=['codex']+(['--profile',p] if p else [])+['features','list'];
+          out=subprocess.check_output(cmd,text=True);
+          rows=[line.split() for line in out.splitlines()];
+          assert any(row and row[0]=='image_generation' and row[-1]=='true' for row in rows),
+          'Codex image_generation indisponível ou desabilitado'"
+    outputs:
+      - docs/site-prototype/
+    write_scope:
+      - docs/site-prototype
+    prompt: |
+      A proposta textual do site já foi aprovada. Leia integralmente
+      docs/site-proposal.md, docs/executive-summary.md, docs/VISION.md e
+      docs/PRD.md. Não altere nenhum desses documentos.
+
+      Este node está fixado em gpt-5.6-sol com reasoning effort max. O Sol/Max é
+      a autoridade de direção visual, prompt, seleção, inspeção e iteração do
+      asset; não troque modelo nem reduza o esforço.
+
+      Carregue e siga integralmente a skill `imagegen`. Use obrigatoriamente a
+      ferramenta built-in `image_gen`, no caso de uso `ui-mockup`, para gerar
+      uma única imagem PNG vertical e comprida de protótipo da home na direção
+      recomendada e aprovada. Não use fallback CLI/API. Se a ferramenta built-in
+      não estiver disponível, responda BLOCKED: não improvise renderer.
+
+      Gere docs/site-prototype/home-full-page.png como um único bitmap vertical
+      da home comercial, nunca uma montagem de alternativas. O resultado deve
+      parecer um site moderno e pronto para produção, dirigido ao usuário final,
+      e apresentar o produto como oferta — não como projeto em construção.
+
+      Mostre da navegação ao rodapé a arquitetura aprovada em
+      docs/site-proposal.md: hero comercial, CTA principal, benefícios rápidos,
+      funcionamento, recursos centrais, confiança e privacidade, oferta/preço ou
+      plataformas quando aplicável, perguntas frequentes, CTA final e rodapé.
+      Para software distribuível, represente os downloads e sistemas aprovados;
+      para outros produtos, use a conversão equivalente definida nas fontes.
+      Omita qualquer seção que não se aplique, sem criar blocos vazios.
+
+      A copy visível não pode mencionar projeto, iniciativa, piloto, stakeholder,
+      roadmap, backlog, fase, progresso, prontidão, validação pendente ou convite
+      para acompanhar a construção. Não renderize dashboards, relatórios ou
+      ressalvas internas. Use somente recursos, compatibilidades, preços e claims
+      sustentados pelos textos aprovados; não invente prova social, certificação,
+      cliente, depoimento, número, selo ou logotipo de terceiro.
+
+      O protótipo deve ser visualmente coerente com o deck, mas otimizado como
+      landing page comercial contemporânea: hierarquia forte, grid responsivo,
+      boa densidade, alternância de seções, mockups úteis e texto essencial
+      curto, exato, legível e em português brasileiro.
+
+      Faça uma auditoria de linguagem da página inteira: nenhuma sigla técnica
+      ou institucional pode aparecer sem explicação. Na primeira ocorrência,
+      escreva o termo por extenso seguido da sigla entre parênteses; depois a
+      forma curta pode ser reutilizada. Isso inclui, entre outras, MVP, CLI, API,
+      PKI, ITI, ACT/TSA, OCR e SBOM. Identificadores rastreáveis como PB-013 e
+      FEAT-001 não são siglas e devem permanecer exatos. Se a expansão não
+      couber, simplifique ou reorganize o texto sem reduzir a legibilidade.
+
+      Depois da geração, copie ou mova o PNG escolhido de
+      `$CODEX_HOME/generated_images/` para docs/site-prototype/, abra-o com
+      `view_image`, inspecione o bitmap inteiro, hierarquia, continuidade
+      vertical, legibilidade, conteúdo, estados e claims e itere com uma mudança
+      focal quando necessário. Preserve a resolução nativa; não faça stitching,
+      upscale, crop ou recomposição programática.
+
+      É proibido criar HTML, CSS, JavaScript, TypeScript, JSX, SVG, canvas,
+      frontend, página navegável ou código como origem do protótipo. Também é
+      proibido usar Chromium, Playwright, Puppeteer, browser/headless, screenshot
+      de página/app, Pillow, ImageMagick ou rasterização programática como origem.
+
+      Produza docs/site-prototype/image-generation-receipt.yml com
+      `schema_version: 1`,
+      `executor: {engine: codex, model: gpt-5.6-sol, effort: max}`,
+      `generation: {tool: image_gen, mode: builtin, use_case: ui-mockup}`,
+      `code_native_sources: false`, `browser_capture: false` e um asset contendo
+      `id: SITE-HOME-FULL-PAGE`, `image`, `width`, `height`, `sha256`, `prompt`,
+      `inspected: true` e `revisions`. Produza também
+      docs/site-prototype/README.md com direção, seções visíveis, instruções de
+      abertura e checklist.
+
+      Antes de DONE, valide orientação vertical, assinatura PNG, dimensão nativa,
+      hash, receipt e `git diff --check`. Placeholder, imagem vazia, página
+      cortada ou texto essencial ilegível é falha.
+    validators:
+      - file_exists: docs/site-prototype/home-full-page.png
+      - file_exists: docs/site-prototype/image-generation-receipt.yml
+      - file_exists: docs/site-prototype/README.md
+      - command_succeeds: >-
+          python3 -c "import hashlib,yaml; from pathlib import Path;
+          p=Path('docs/site-prototype/home-full-page.png'); b=p.read_bytes();
+          assert p.stat().st_size>51200 and b[:8]==b'\x89PNG\r\n\x1a\n';
+          dims=(int.from_bytes(b[16:20],'big'),int.from_bytes(b[20:24],'big'));
+          assert dims[1]>dims[0] and dims[0]>=768 and dims[1]>=1024, 'protótipo deve ser PNG vertical e comprido';
+          digest=hashlib.sha256(b).hexdigest();
+          r=yaml.safe_load(Path('docs/site-prototype/image-generation-receipt.yml').read_text(encoding='utf-8'));
+          assert r.get('schema_version')==1;
+          assert r.get('executor')=={'engine':'codex','model':'gpt-5.6-sol','effort':'max'};
+          assert r.get('generation')=={'tool':'image_gen','mode':'builtin','use_case':'ui-mockup'};
+          assert r.get('code_native_sources') is False and r.get('browser_capture') is False;
+          a=r.get('asset'); assert isinstance(a,dict) and a.get('id')=='SITE-HOME-FULL-PAGE';
+          assert a.get('image')=='docs/site-prototype/home-full-page.png' and (a.get('width'),a.get('height'))==dims and a.get('sha256')==digest;
+          assert a.get('prompt') and a.get('inspected') is True and isinstance(a.get('revisions'),dict) and isinstance(a['revisions'].get('count'),int) and a['revisions']['count']>=0 and isinstance(a['revisions'].get('notes'),list)"
+      - command_succeeds: >-
+          python3 -c "from pathlib import Path;
+          root=Path('docs/site-prototype'); files=[p for p in root.rglob('*') if p.is_file()];
+          assert all(p.suffix.lower() in {'.png','.md','.yml','.yaml'} for p in files), 'tipo de artefato não permitido'"
+      - command_succeeds: "git diff --check"
+    next: mdd.12.visual_gate
+
+  - id: mdd.12.visual_gate
+    type: gate
+    title: "Gate dos artefatos visuais"
+    description: "Validar deterministicamente os 12 slides, o protótipo vertical e os receipts antes da revisão humana."
+    sprint: mdd-07-visual-review
+    executor: python
+    outputs:
+      - docs/pitch-deck-images/
+      - docs/site-prototype/
+    validators:
+      - file_exists: docs/pitch-deck-images/image-generation-receipt.yml
+      - file_exists: docs/pitch-deck-images/README.md
+      - file_exists: docs/site-prototype/home-full-page.png
+      - file_exists: docs/site-prototype/image-generation-receipt.yml
+      - file_exists: docs/site-prototype/README.md
+      - command_succeeds: >-
+          python3 -c "from pathlib import Path;
+          slides=list(Path('docs/pitch-deck-images').glob('slide-*.png'));
+          assert len(slides)==12 and all(p.stat().st_size>51200 for p in slides);
+          site=Path('docs/site-prototype/home-full-page.png'); assert site.is_file() and site.stat().st_size>51200"
+      - command_succeeds: "git diff --check"
+    next: mdd.13.visual_review
+
+  - id: mdd.13.visual_review
+    type: human_gate
+    title: "Revisão dos artefatos visuais"
+    description: "Aprovar os 12 PNGs do pitch deck e o PNG vertical do protótipo do site antes do handoff."
+    sprint: mdd-07-visual-review
+    executor: python
+    approval_message_required: true
+    outputs:
+      - docs/pitch-deck-images/
+      - docs/site-prototype/
+    reject_next: mdd.13b.visual_revision
+    next: mdd.14.handoff
+    decision_context:
+      decision: "Os 12 slides e o protótipo vertical traduzem fielmente os textos aprovados e estão visualmente prontos para entrega?"
+      why_now: "Os bitmaps foram gerados por Sol/Max e passaram pelos checks técnicos; falta avaliar estética, legibilidade, consistência e claims."
+      review_paths:
+        - docs/pitch-deck-images/README.md
+        - docs/pitch-deck-images/
+        - docs/site-prototype/README.md
+        - docs/site-prototype/home-full-page.png
+      checklist:
+        - "Há exatamente um PNG distinto por slide, na ordem 01 a 12."
+        - "Hierarquia, tipografia, contraste e sistema visual são consistentes."
+        - "Texto essencial está correto e legível em português brasileiro."
+        - "Toda sigla técnica ou institucional está explicada na primeira ocorrência."
+        - "O deck apresenta proposta de valor e benefícios, não progresso do projeto."
+        - "Hipóteses e fatos não se confundem, sem status interno dominar a narrativa."
+        - "O protótipo é uma home comercial vertical completa e segue a direção aprovada."
+        - "A página fala com o usuário final como produto, sem linguagem de projeto, piloto ou roadmap."
+        - "A conversão principal está clara e é coerente com o tipo de produto definido."
+        - "Não há claims, logos, números, preços ou compatibilidades inventados."
+      limitations:
+        - "A aprovação não implementa, publica ou torna navegável o site."
+        - "Os PNGs do deck não constituem validação comercial, jurídica ou técnica."
+      approve_effect: "Libera o handoff final com o pacote textual e visual completo."
+      reject_effect: "Reabre somente os PNGs citados e seus receipts, preservando textos e imagens aprovados."
+
+  - id: mdd.13b.visual_revision
+    type: build
+    title: "Revisar os artefatos visuais"
+    description: "Aplicar o feedback visual somente aos PNGs citados e atualizar os receipts correspondentes."
+    sprint: mdd-07-visual-review
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-sol
+    llm_effort: max
+    max_turns: 80
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    env_setup:
+      - >-
+          python3 -c "import os,subprocess;
+          p=os.environ.get('FT_CODEX_PROFILE','').strip();
+          cmd=['codex']+(['--profile',p] if p else [])+['features','list'];
+          out=subprocess.check_output(cmd,text=True);
+          rows=[line.split() for line in out.splitlines()];
+          assert any(row and row[0]=='image_generation' and row[-1]=='true' for row in rows),
+          'Codex image_generation indisponível ou desabilitado'"
+    outputs:
+      - docs/pitch-deck-images/
+      - docs/site-prototype/
+    write_scope:
+      - docs/pitch-deck-images
+      - docs/site-prototype
+    prompt: |
+      Leia CURRENT_FEEDBACK e os textos aprovados como fontes imutáveis. Este
+      node está fixado em gpt-5.6-sol com reasoning effort max. Carregue e siga
+      integralmente a skill `imagegen` e use somente a ferramenta built-in
+      `image_gen`. Preserve todos os PNGs não citados no feedback. Para cada
+      imagem citada, use uma chamada própria de edição ou nova geração, faça
+      somente a mudança focal solicitada, abra o resultado com `view_image`,
+      inspecione-o e atualize dimensões, SHA-256, prompt e revisions no receipt.
+      Refaça a auditoria de linguagem: nenhuma sigla técnica ou institucional
+      pode permanecer sem explicação na primeira ocorrência do deck ou da página.
+      Não altere documentos textuais aprovados e não use fallback, HTML, SVG,
+      browser, screenshot ou rasterização programática.
+    validators:
+      - file_exists: docs/pitch-deck-images/image-generation-receipt.yml
+      - file_exists: docs/site-prototype/image-generation-receipt.yml
+      - command_succeeds: >-
+          python3 -c "from pathlib import Path;
+          slides=list(Path('docs/pitch-deck-images').glob('slide-*.png'));
+          assert len(slides)==12 and all(p.stat().st_size>51200 and p.read_bytes()[:8]==b'\x89PNG\r\n\x1a\n' for p in slides);
+          site=Path('docs/site-prototype/home-full-page.png'); assert site.is_file() and site.stat().st_size>51200 and site.read_bytes()[:8]==b'\x89PNG\r\n\x1a\n'"
+      - command_succeeds: "git diff --check"
+    next: mdd.12.visual_gate
+
+  # 6. Entregar somente depois que definição, narrativa e imagens forem aprovadas.
+  - id: mdd.14.handoff
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: document
+    title: "Preparar o handoff da MDD"
+    description: "Inventariar decisões, artefatos, pendências e próximos processos sem reescrever as fontes aprovadas."
+    sprint: mdd-06-handoff
+    executor: claude
+    max_turns: 18
+    outputs:
+      - docs/mdd-handoff.md
+    write_scope:
+      - docs/mdd-handoff.md
+    prompt: |
+      Leia docs/hipotese.md, docs/VISION.md, docs/PRD.md,
+      docs/executive-summary.md, docs/pitch-deck.md, docs/site-proposal.md,
+      docs/pitch-deck-images/ e docs/site-prototype/.
+      Gere um handoff fiel, sem inventar aprovação, pesquisa ou requisito.
+      Recomende `mvp-builder-fast` para construir o produto e trate a execução
+      futura do site como trabalho separado, condicionado à proposta comercial
+      aprovada. Registre que o site é dirigido ao usuário final e não deve virar
+      página de projeto ou relatório de progresso.
+
+      Use exatamente estas seções:
+      ## Resultado da MDD
+      ## Definição Aprovada
+      ## Narrativa e Presença Comercial
+      ## Escopo P0
+      ## Decisões Consolidadas
+      ## Pendências e Riscos
+      ## Inventário de Artefatos
+      ## Próximos Processos
+    validators:
+      - file_exists: docs/mdd-handoff.md
+      - has_sections:
+          path: docs/mdd-handoff.md
+          sections:
+            - Resultado da MDD
+            - Definição Aprovada
+            - Narrativa e Presença Comercial
+            - Escopo P0
+            - Decisões Consolidadas
+            - Pendências e Riscos
+            - Inventário de Artefatos
+            - Próximos Processos
+      - document_quality:
+          path: docs/mdd-handoff.md
+          min_lines_count: 24
+          required_terms:
+            - docs/hipotese.md
+            - docs/VISION.md
+            - docs/PRD.md
+            - docs/executive-summary.md
+            - docs/pitch-deck.md
+            - docs/site-proposal.md
+            - docs/pitch-deck-images/
+            - docs/site-prototype/
+            - mvp-builder-fast
+          min_required_terms: 9
+    next: mdd.end
+
+  - id: mdd.end
+    type: end
+    title: "MDD concluída"

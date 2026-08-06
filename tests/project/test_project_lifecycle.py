@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import subprocess
 
@@ -15,6 +16,10 @@ from ft.project.lifecycle import (
     read_project_contract,
     reopen_project_contract,
     write_project_contract,
+)
+from ft.engine.validation_profiles import (
+    MOCKUP_WATERMARK_CHECK,
+    write_validation_matrix,
 )
 
 
@@ -173,6 +178,131 @@ def test_required_structured_gate_must_be_green(tmp_path):
     gate_path.write_text('{"decision": {"status": "GO"}}\n', encoding="utf-8")
     _commit_all(root, "approve release")
     assert evaluate_project_readiness(root).status == "READY_TO_CLOSE"
+
+
+def test_active_platform_matrix_is_a_project_level_definition_of_done_gate(tmp_path):
+    root = _project(tmp_path)
+    contract = read_project_contract(root)
+    contract["validation"] = {
+        "schema_version": 1,
+        "mode": "explicit",
+        "matrix_path": "docs/validation-matrix.yml",
+        "report_path": "docs/platform-validation-report.yml",
+        "evidence_root": "docs/evidence/platform-validation",
+        "test_identity": {
+            "policy": "optional",
+            "path": "docs/test-identity.json",
+        },
+        "platforms": {
+            "web": {
+                "targets": {
+                    "desktop_browser": {"required": True},
+                }
+            }
+        },
+    }
+    write_project_contract(root, contract)
+    _commit_all(root, "require web validation")
+
+    blocked = evaluate_project_readiness(root)
+    assert any(
+        blocker.code == "project.platform_validation" for blocker in blocked.blockers
+    )
+
+    matrix_path, matrix = write_validation_matrix(root, contract)
+    evidence = root / matrix["evidence_root"] / "web-desktop.txt"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("browser evidence\n", encoding="utf-8")
+    screenshot = root / matrix["evidence_root"] / "web-desktop-S01.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 2048)
+    target = matrix["profiles"][0]["targets"][0]
+    checks = []
+    for check in target["checks"]:
+        if check == MOCKUP_WATERMARK_CHECK:
+            screenshot_path = screenshot.relative_to(root).as_posix()
+            checks.append(
+                {
+                    "id": check,
+                    "result": "PASS",
+                    "evidence": [screenshot_path],
+                    "inventory_complete": True,
+                    "discovered_screen_count": 1,
+                    "unmapped_screens": [],
+                    "screens": [
+                        {
+                            "id": "home",
+                            "mockup_ref": "S01",
+                            "watermark_text": "S01",
+                            "result": "PASS",
+                            "evidence": [screenshot_path],
+                        }
+                    ],
+                }
+            )
+            continue
+        checks.append(
+            {
+                "id": check,
+                "result": "PASS",
+                "evidence": [evidence.relative_to(root).as_posix()],
+            }
+        )
+    report = {
+        "schema_version": 1,
+        "matrix_sha256": hashlib.sha256(matrix_path.read_bytes()).hexdigest(),
+        "verdict": "APPROVED",
+        "candidate_ref": "candidate-ready",
+        "profiles": [
+            {
+                "id": "web",
+                "targets": [
+                    {
+                        "id": "desktop_browser",
+                        "required": True,
+                        "result": "PASS",
+                        "observed_candidate_ref": "candidate-ready",
+                        "environment": {
+                            "kind": "browser",
+                            "execution_surface": "web_desktop_browser",
+                            "os_name": "linux",
+                            "os_version": "test",
+                        },
+                        "checks": checks,
+                    }
+                ],
+            }
+        ],
+        "findings": [],
+    }
+    (root / matrix["report_path"]).write_text(
+        yaml.safe_dump(report, sort_keys=False),
+        encoding="utf-8",
+    )
+    _commit_all(root, "prove web validation")
+
+    ready = evaluate_project_readiness(root)
+    assert ready.status == "READY_TO_CLOSE"
+    assert any(
+        check.id == "platform-validation" and check.status == "PASS"
+        for check in ready.checks
+    )
+
+
+def test_changing_validation_profiles_invalidates_closed_project_receipt(tmp_path):
+    root = _project(tmp_path)
+    closed = close_project_contract(root)
+    assert closed.ready
+
+    contract = read_project_contract(root)
+    contract["validation"]["mode"] = "disabled"
+    contract["validation"]["reason"] = "produto sem superfície executável"
+    write_project_contract(root, contract)
+
+    readiness = evaluate_project_readiness(root)
+    assert readiness.status == "INVALID_MAINTENANCE"
+    assert any(
+        blocker.code == "project.closure_receipt" for blocker in readiness.blockers
+    )
 
 
 def test_dirty_checkout_and_open_cycle_are_project_blockers(tmp_path, monkeypatch):

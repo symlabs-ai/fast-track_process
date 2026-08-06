@@ -6,6 +6,93 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### MDD completo e independente do builder rápido
+
+- O novo template `mdd` conduz demanda → hipótese aprovada → visão aprovada →
+  PRD aprovado → sumário executivo → pitch deck → três propostas de site com
+  recomendação → aprovação do pacote → handoff, sem assumir ownership do
+  objetivo construtor.
+- O `mvp-builder-fast` deixa de gerar hipótese e PRD internamente e passa a
+  validar esses artefatos na entrada. Isso permite encerrar e auditar a MDD em
+  um ciclo próprio antes de iniciar a construção.
+
+### Human gates com contexto decisório obrigatório
+
+- A entrada de todo `human_gate`, toda pausa por `requires_approval` e o
+  respectivo `ft status` agora exibem decisão, motivo, local de avaliação,
+  checklist, limites e efeitos de aprovar/rejeitar.
+- O novo `decision_context` permite que templates especializem o pacote; forks
+  antigos continuam úteis com fallback derivado do grafo, estado e artefatos
+  existentes.
+- Paths inseguros são recusados e artefatos inexistentes não são apresentados
+  como evidência. O `mvp-builder-fast` passou a declarar contexto completo no
+  gate final de stakeholder.
+- `ft reject` agora segue o `reject_next` declarado quando um human gate não
+  possui um node formal de review predecessor, preservando a trilha
+  `gate → fix → gate` em vez de deixar a rejeição sem efeito.
+- O launcher do `mvp-builder-fast` republica o checkout corrente a cada entrada
+  no gate e delega ao launcher testado do produto quando ele existe, evitando
+  apresentar um backend mantido em memória antes do candidato atual.
+
+### Histórico detalhado de execuções
+
+- O novo `ft runs --done-detailed` preserva o resumo de `--done` e abre, para
+  cada ciclo, a sequência cronológica de execuções de step com tentativa,
+  início, duração, tokens, última atividade, resultado e fonte.
+- Retries, correções e loops deixam de ser colapsados no detalhe. Spans LLM são
+  vinculados à tentativa do node para atribuir consumo corretamente; históricos
+  antigos usam o run log e mantêm `—` quando não há telemetria confiável.
+- Cada tabela detalhada termina em uma linha `TOTAL` com execuções, tentativas,
+  duração acumulada e tokens. Um `TOTAL GERAL` encerra a seção consolidando os
+  ciclos exibidos; qualquer parcela sem telemetria mantém a métrica como `—`.
+- O grafo de `ft status --full` diferencia PASS em azul, pending em branco,
+  SKIPPED em cinza e falhas em vermelho, preservando ativo/gate e `NO_COLOR`.
+
+### Perfis de validação multiplataforma componíveis
+
+- A engine ganhou um registry único de validação para Android, iOS, web e
+  desktop. iPhone/iPad são targets físicos do perfil iOS; não há processos
+  móveis duplicados.
+- `.ft/project.yml.validation` seleciona targets obrigatórios ou opcionais. O
+  novo `ft validation-matrix` materializa uma matriz determinística, enquanto
+  `ft validation-profiles` expõe o catálogo e os `make_target` esperados.
+- `mvp-builder-fast` instancia somente os perfis ativos, agrega evidências em
+  um receipt ligado por SHA-256 à matriz e retorna findings ao fix focal. Sem
+  perfil ativo, a branch é pulada sem chamada LLM.
+- Targets físicos vinculam build local e artefato observado; targets opcionais
+  podem usar SKIP apenas por indisponibilidade documentada. Serial, UDID, rede,
+  PII e credenciais são recusados nos receipts.
+- Os checks absorvem aprendizados generalizáveis de validação em aparelho:
+  identidade de teste e seed resetável, estado vazio, fonte→persistência→UI,
+  instalação/launch, CTAs, navegação visível, permissões, back, rotação/resize,
+  insets/safe areas, acessibilidade e comparação visual do candidato corrente.
+- Todo target de UI exige `mockup_watermark`: inventário completo de telas,
+  marca d'água produzida pelo próprio app com o ID exato do mockup e screenshot
+  real exclusivo por tela. Overlay de captura e tela sem referência são FAIL.
+- O DoD global passa a bloquear `ft project-close` quando uma matriz ativa não
+  possui receipt integral aprovado.
+
+### Gates estruturados no `mvp-builder-fast`
+
+- A engine ganhou os validadores genéricos `navigation_contract_valid` e
+  `navigation_reachability`. Eles ligam o contrato ao escopo por SHA-256 e
+  recusam targets órfãos, evidência reutilizada, candidato divergente e atalhos
+  técnicos apresentados como navegação real.
+- O `mvp-builder-fast` agora classifica cada requisito entre UI e non-UI no
+  planejamento e exige jornadas pela interface de produção antes dos gates
+  humanos, tanto na rota terminal quanto no fluxo integral.
+- Capacidades condicionadas por papel, coorte ou flag exigem evidência positiva
+  para identidade elegível e negativa para identidade comum. A regra é neutra
+  de domínio, stack, plataforma e dispositivo.
+- Os novos validadores `review_outcome_valid` e `review_chain_approved` ligam
+  reviews ao escopo por SHA-256, exigem cobertura por referência e impedem que
+  Markdown e recibo YAML discordem ou que um review rejeitado atravesse o gate
+  sem auditoria focal aprovada de todos os findings.
+- O batch congela o contrato público antes do fan-out; correções contratuais
+  atualizam contrato, provedor, consumidor e testes de paridade atomicamente.
+- O aceite pode registrar `SKIP` fora do P0 sem esconder trabalho: todo cenário
+  P0 não executado continua obrigatório em `p0_blockers` e bloqueia a entrega.
+
 ## [v0.19.0] - 2026-07-30
 
 ### Rota terminal e paralelismo deixam de ser acoplados

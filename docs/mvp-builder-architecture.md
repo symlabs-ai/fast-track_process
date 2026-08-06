@@ -34,6 +34,8 @@ produto/
 │   ├── project-readiness.yml           # último receipt de fechamento
 │   ├── .gitignore
 │   ├── process/
+│   │   ├── mdd/                        # definição + narrativa antes do builder
+│   │   │   └── process.yml
 │   │   ├── mvp-builder/
 │   │   │   ├── process.yml
 │   │   │   ├── environment.yml
@@ -104,7 +106,7 @@ somente `plano reutilizável → foundation → lanes → auditoria → fix → 
 somente do fix → regressão integrada → aceite → reconciliação do delta`.
 `--route` escolhe o trabalho; `--parallel` escolhe apenas a concorrência.
 Rejeição de validação nunca
-reinicia MDD, planejamento global, delivery ou handoff. O plano interno e as
+reinicia o ciclo MDD independente, planejamento global, delivery ou handoff. O plano interno e as
 métricas são projeções da branch efetivamente escolhida, não do catálogo inteiro
 de nodes.
 

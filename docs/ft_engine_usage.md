@@ -156,6 +156,16 @@ ft run . --template tweak --request "Mudar o botão Salvar para azul"
 `ft run` é o único entrypoint para todos os templates. Não há comando específico
 por categoria de trabalho nem opção para fornecer um YAML arbitrário.
 
+Para separar definição e construção de um produto novo, encerre primeiro um
+ciclo MDD e depois abra o builder rápido. O primeiro ciclo é `neutral` e não
+assume ownership do objetivo construtor:
+
+```bash
+ft run . --template mdd --request "Descrever problema e resultado" --auto
+ft close --cycle <id-mdd>
+ft run . --template mvp-builder-fast --auto
+```
+
 ### Resolução local-first
 
 Para `--template T`, o engine:
@@ -236,12 +246,16 @@ O engine nunca escolhe pela data de criação. A regra vale para `continue`,
 `cancel`, `process-candidates` e `close`. `ft status` é a exceção somente
 leitura: sem `--cycle`, ele imprime um bloco rotulado para cada ciclo aberto;
 com `--cycle`, mostra apenas o selecionado. O mesmo fan-out vale para
-`ft status --report`.
+`ft status --report`. Cada bloco de status informa o caminho absoluto da
+worktree ativa correspondente e termina com uma linha sanitizada da atividade
+mais recente do log LLM. Em `--watch`, esse rodapé é substituído a cada atualização
+sem funcionar como um log rolante.
 
 ```bash
 ft runs
 ft status --cycle cycle-07 --full
 ft status --cycle cycle-07 --report
+ft status --cycle cycle-07 --watch 60
 ft graph --cycle cycle-08
 ft continue --cycle cycle-07 --auto
 ft close --cycle cycle-08
@@ -264,9 +278,12 @@ ft continue --cycle <id> --auto
 ft status --cycle <id>
 ft status --cycle <id> --full
 ft status --cycle <id> --report
+ft status --cycle <id> --watch 60
 ft graph --cycle <id>
 ft log --cycle <id>
 ft runs
+ft runs --done
+ft runs --done-detailed
 
 # Gates e recuperação
 ft approve "nota opcional" --cycle <id>
@@ -278,6 +295,43 @@ ft fix "instrução" --cycle <id>
 ft explore "pedido livre" --cycle <id>
 ft abort --cycle <id>
 ft cancel "motivo" --cycle <id>
+```
+
+`ft status --watch [SEGUNDOS]` abre uma tela fixa em terminal interativo e
+redesenha o status no mesmo lugar, sem produzir uma sequência de snapshots no
+histórico. O intervalo default é 60 segundos quando `--watch` é usado sem valor;
+cada tela mostra o horário da última atualização. O buffer normal é preservado
+para permitir rolagem, e `Ctrl+C` encerra o acompanhamento.
+
+### Pacote obrigatório de decisão humana
+
+Ao entrar em `human_gate`, pausar por `requires_approval` ou exibir um gate
+pendente em `ft status`, a engine sempre apresenta contexto suficiente para a
+decisão. O card contém: decisão, motivo temporal, URL/artefatos para inspeção,
+checklist, limites, efeito de aprovar e efeito de rejeitar. Processos locais
+antigos recebem contexto derivado dos últimos nodes concluídos e de evidências
+existentes; portanto a garantia não depende de rematerializar o template.
+
+Um template pode declarar `decision_context` para substituir os fallbacks:
+
+```yaml
+decision_context:
+  decision: "Liberar este candidato para handoff?"
+  why_now: "Regressão e validação de plataforma terminaram."
+  review_paths:
+    - docs/PRD.md
+    - docs/acceptance-report.md
+  checklist:
+    - "Executar o fluxo P0 pela entrada normal."
+    - "Confirmar todos os targets obrigatórios em PASS."
+  limitations:
+    - "Aprovação limitada ao candidato e escopo apresentados."
+  approve_effect: "Avança para o handoff."
+  reject_effect: "Retorna ao fix e exige nova apresentação do gate."
+```
+
+Os paths devem ser relativos, seguros e existentes. Ausência de URL ou prova
+necessária aparece como limitação e não deve ser convertida em aprovação.
 
 Todo fix dirigido executa auditoria focal obrigatória. A engine preserva os
 nodes e gates já aprovados, invalida apenas os receipts do fix e do review que
@@ -338,6 +392,29 @@ ft close --cycle <id>
 ft project-status
 ft project-close
 ```
+
+`ft runs --done` mantém o comparativo por ciclo. A coluna `DURAÇÃO LLM` soma
+somente os spans ativos de delegação LLM; espera por human gate, intervalos
+ociosos, fila, validadores e close não entram no valor. Históricos sem
+telemetria capaz de separar esse tempo exibem `—`, nunca o wall-clock como
+aproximação. Em ciclos em curso, o valor é recalculado do trace no instante da
+consulta e inclui o trecho já executado da chamada LLM corrente; o status do
+node continua indicando que a execução ainda não terminou. `--done-detailed`
+implica `--done` e acrescenta uma tabela para
+cada ciclo com as execuções de node na ordem cronológica real, incluindo
+tentativa, início, duração LLM, tokens, última atividade, resultado e fonte da
+telemetria. Retries e loops aparecem em linhas separadas; steps sem delegação
+LLM mostram `0s`, enquanto ciclos legados não recebem duração ou tokens
+estimados quando o dado não foi persistido. Cada tabela termina em `TOTAL`, com
+quantidade de execuções e tentativas, duração LLM acumulada e tokens. A última
+linha da seção é o `TOTAL GERAL` de todos os ciclos exibidos. Se qualquer
+execução não tiver a telemetria da métrica, o consolidado correspondente
+permanece `—`.
+
+No grafo de `ft status --full`, nodes PASS são azuis, pending/não executados são
+brancos, SKIPPED são cinza e FAIL/BLOCKED/erros são vermelhos. O node ativo e
+os gates preservam seus destaques semânticos. `NO_COLOR` e saída não-TTY
+continuam removendo todo ANSI.
 
 `--auto` avança até human gate, MVP ou BLOCK. Ele não pula human gates;
 `--bypass-human-gates` autoriza o LLM a decidir nesses pontos.
@@ -717,6 +794,21 @@ O sprint report é gerado ao cruzar boundaries. Quando documentos já existem em
 
 ## Templates do catálogo
 
+### `mdd`
+
+Processo independente de definição e narrativa do produto. Aprova hipótese,
+visão e PRD nessa ordem; somente depois deriva sumário executivo, pitch deck e
+três alternativas de site com recomendação. Um gate estrutural e um human gate
+validam o pacote textual. Depois da aprovação, nodes fixados em
+`gpt-5.6-sol`/`max` geram 12 PNGs — um por slide — e um PNG vertical comprido do
+protótipo da home com a ferramenta built-in `image_gen`. Receipts e um segundo
+human gate visual antecedem `docs/mdd-handoff.md`. O `mvp-builder-fast` exige
+hipótese e PRD como entrada e não executa mais esses nodes internamente.
+
+```bash
+ft run . --template mdd --request "Descrever problema e resultado" --auto
+```
+
 ### `mvp-builder`
 
 Processo construtor completo para projeto em `building`. Materialize e execute:
@@ -788,15 +880,162 @@ do usuário. O engine então:
    todas passam;
 7. faz review inicial e, se necessário, corrige e audita somente o fix;
 8. roda a regressão completa uma única vez depois que o delta focal está verde;
-9. aguarda o aceite real; rejeição volta somente ao fix e à auditoria do delta;
-10. após o aceite, reconcilia apenas backlog, features, tarefas e DoD afetados e
+9. antes do aceite, valida que toda capacidade de UI do escopo é alcançável por
+   entradas e controles visíveis do produto, sem aceitar rota interna, deep link
+   de debug, catálogo técnico ou montagem isolada como prova.
+10. aguarda o aceite real; rejeição volta somente ao fix e à auditoria do delta;
+11. após o aceite, reconcilia apenas backlog, features, tarefas e DoD afetados e
    encerra o ciclo, sem reabrir discovery, planejamento global, delivery ou
    handoff completo.
 
+O planejamento produz um contrato estruturado de navegação ligado por SHA-256
+ao escopo. Cada referência é classificada como `ui` ou `non_ui`; capacidades de
+UI apontam para targets com política `public`, `entitled`, `contextual` ou
+`first_launch`. O recibo E2E precisa cobrir todos os targets por jornadas
+`production_ui`. Targets condicionados exigem prova positiva para uma identidade
+elegível e negativa para uma identidade comum. Os validadores genéricos
+`navigation_contract_valid` e `navigation_reachability` não assumem domínio,
+framework, browser, sistema operacional ou dispositivo.
+
+#### Perfis de validação multiplataforma
+
+Validação de plataforma é uma capacidade global da engine, não um processo
+Android/iOS/desktop separado e nem um fork completo do builder. O catálogo pode
+ser inspecionado sem projeto:
+
+```bash
+ft validation-profiles
+ft validation-profiles --json
+```
+
+Ele contém quatro perfis: `android`, `ios`, `web` e `desktop`. iPhone e iPad são
+targets físicos de `ios`, não perfis próprios. Cada target declara o ambiente,
+os checks obrigatórios e um `make_target` estável. O contrato durável vive em
+`.ft/project.yml`:
+
+```yaml
+validation:
+  schema_version: 1
+  mode: explicit
+  matrix_path: docs/validation-matrix.yml
+  report_path: docs/platform-validation-report.yml
+  evidence_root: docs/evidence/platform-validation
+  test_identity:
+    policy: required
+    path: docs/test-identity.json
+  platforms:
+    android:
+      targets:
+        emulator: {required: true}
+        physical: {required: true}
+    ios:
+      targets:
+        simulator: {required: false}
+    web:
+      targets:
+        desktop_browser: {required: true}
+        mobile_browser: {required: true}
+    desktop:
+      targets:
+        windows: {required: false}
+        macos: {required: false}
+        linux: {required: true}
+```
+
+`mode: automatic` detecta manifests de código e usa defaults conservadores;
+`mode: explicit` é obrigatório quando a stack/intenção já é conhecida.
+`mode: disabled` só serve para produto sem nenhuma dessas superfícies e exige
+`reason`. O planner do `mvp-builder-fast` reconcilia a seleção depois de definir
+a stack. Para materializar a resolução determinística no candidato corrente:
+
+```bash
+ft validation-matrix .
+```
+
+O comando escreve `docs/validation-matrix.yml`. O processo executa somente os
+targets selecionados e agrega `docs/platform-validation-report.yml`. Um target
+obrigatório indisponível bloqueia; um target opcional indisponível pode usar
+`SKIP` com motivo; uma falha observada continua `FAIL`. O receipt liga matriz,
+candidato, ambiente, instalação e evidências por hash. Targets físicos exigem
+artefato local/instalado idêntico e identificador opaco do aparelho; serial,
+UDID, rede, PII e credenciais são recusados.
+
+Os checks comuns incluem funcionalidade, estética, acessibilidade, navegação,
+isolamento da massa e persistência. Os adaptadores acrescentam permissões,
+back/rotação e insets no Android; signing, safe area e orientação no iOS;
+responsividade/navegação por teclado no web; e instalação, resize e navegação
+nativa no desktop. Fluxos autenticados usam identidade técnica sanitizada,
+idempotente e resetável. Evidência precisa vir do candidato corrente pela UI de
+produção; rota direta, preview, mock ou componente isolado não substituem a
+jornada real.
+
+No Android físico, o perfil inclui `artifact_install_reuse`. O runner compila
+uma vez, compara os hashes local e instalado e só instala app/APK instrumental
+quando o pacote estiver ausente ou o hash mudar. Subconjuntos focais seguintes
+rodam sobre os pacotes já instalados com `adb shell am instrument` ou equivalente
+que comprovadamente não reinstale; classes devem ser agregadas quando possível.
+Se somente um pacote divergir, apenas ele é instalado; se app e APK instrumental
+divergirem juntos, uma única sessão multipacote deve concentrar a confirmação OEM
+quando o instalador suportar esse modo.
+Isso evita repetir diálogos de instaladores OEM. Tap injetado não é evidência de
+autorização: somente término bem-sucedido da instalação e hash observado contam.
+Se o sistema exigir confirmação humana, o processo pede uma vez e aguarda, sem
+alegar aceite automático. Antes disso, conclui toda validação independente e
+estabiliza o candidato em ambiente não interativo; o aparelho físico não vira
+loop de fix e a autorização fica concentrada no checkpoint final. Root,
+desbloqueio de bootloader ou redução de segurança do aparelho exigem autorização
+explícita e nunca são fallback do validador.
+
+Todos os targets de UI contêm ainda o check obrigatório `mockup_watermark`.
+Android, iOS, web e desktop devem inventariar cada tela, página ou janela
+alcançável e provar, com screenshot real exclusivo, que o próprio produto
+renderiza uma marca d'água discreta e legível com o identificador exato do
+mockup correspondente (`S01`, `S02`, ...). O receipt registra
+`discovered_screen_count`, telas mapeadas e `unmapped_screens`; inventário
+incompleto, tela sem referência, ID divergente ou overlay inserido apenas pela
+ferramenta de captura reprova o target.
+
+O `mvp-builder-fast` possui um único ponto de composição em cada rota. Se não há
+perfil ativo ele segue sem chamada de validação; se há, executa o fan-out lógico
+e só libera o fan-in com `platform_validation_report` aprovado. Um finding volta
+ao fix focal e obrigatoriamente repete essa auditoria, sem reiniciar discovery,
+planejamento ou construção. `ft project-close` também avalia esse receipt como
+parte do DoD quando a seção `validation` existe e resolve targets ativos.
+
+O review combinado também produz um recibo YAML ligado ao plano por SHA-256,
+com uma linha estruturada por requisito e findings acionáveis para cada falha.
+`review_outcome_valid` exige consistência com o veredito Markdown;
+`review_chain_approved` só libera a regressão quando o review original estiver
+aprovado ou quando um fix review corrente cobrir e aprovar todos os findings.
+O contrato público é finalizado antes do fan-out e permanece protegido durante
+as lanes; um fix contratual precisa atualizar contrato, provedor, consumidor e
+testes de paridade no mesmo delta.
+
+No aceite, `SKIP` é permitido apenas para cenários fora do P0 e deve permanecer
+documentado. Cenário P0 não executado, evidência principal mock/fallback ou
+incompatibilidade entra em `p0_blockers`, que continua bloqueando o gate.
+
 Falhas preservam branch, worktree, sessão e ledger em
-`state/mvp-builder-batch.yml`. `ft status` mostra wave, lane, tentativas, paths
-e atividade de log. O batch não abre ciclos `feature-fast` filhos: lifecycle,
-histórico e `ft close` continuam únicos.
+`state/mvp-builder-batch.yml`. `ft status` e `ft status --full` mostram o modo
+parallel, `max_parallel`, wave e estado do fan-out mesmo antes da criação do
+ledger. Para cada lane, leem do plano persistido o ID, título e objetivo e os
+combinam com status, tentativa, ação atual, paths e atividade de log. Planos
+legados sem título ou objetivo continuam inspecionáveis com fallback explícito,
+sem nova chamada LLM. As lanes ficam agrupadas por wave e usam um único glifo:
+`▶` executando, `✓` chamada LLM concluída e ainda não integrada, `◆`
+integrada, `✗` falhou e `○` aguardando. A fração de slots é rotulada como
+alocação da wave; o total que está efetivamente ativo aparece separadamente em
+`executando`. Um `turn.completed` terminal encerra imediatamente a apresentação
+de atividade da lane, inclusive em ledgers antigos, mas não a declara integrada:
+o estado transitório `llm_completed` ainda aguarda validação e fan-in. O batch não
+abre ciclos `feature-fast` filhos: lifecycle, histórico e `ft close` continuam
+únicos.
+
+Reviews são roteadas de forma fail-closed. `REJECTED`, `FAIL` e equivalentes
+explícitos em português ou inglês, em qualquer output canônico declarado,
+prevalecem sobre sinais de aprovação no Markdown, no recibo estruturado ou na
+resposta do reviewer. Uma contradição nunca libera o próximo gate: segue o
+`on_fail`/`pending_fix` do grafo ou a rota estruturada de rejeição declarada.
 
 Enquanto o projeto estiver em `building`, um novo feedback de validação usa
 novamente o construtor owner com `--route validation`. Se o hash da demanda e o plano

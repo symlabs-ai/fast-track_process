@@ -7,6 +7,11 @@ from __future__ import annotations
 import os
 import re
 import sys
+from textwrap import wrap
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ft.engine.decision_gates import DecisionGateContext
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +61,7 @@ BOLD_WHITE = _ansi("1;37")
 
 def header(text: str) -> str:
     """Header grande para inicio de processo."""
-    w = 54
+    w = 55
     line = "━" * w
     return f"\n{BOLD_CYAN}{line}{RESET}\n{BOLD_WHITE}  {text}{RESET}\n{BOLD_CYAN}{line}{RESET}"
 
@@ -122,6 +127,26 @@ def dim(text: str) -> str:
     return f"  {DIM}{text}{RESET}"
 
 
+def status_node(text: str, tone: str) -> str:
+    """Color one ``ft status --full`` graph row without changing its text.
+
+    ``_COLOR`` is the same NO_COLOR/non-TTY switch used by the rest of this
+    module. Keeping the guard here also makes redirected status output byte-for-
+    byte free of ANSI sequences.
+    """
+    if not _COLOR:
+        return text
+    color = {
+        "pass": BLUE,
+        "pending": WHITE,
+        "skipped": DIM,
+        "error": RED,
+        "active": BOLD_YELLOW,
+        "gate": YELLOW,
+    }.get(tone, WHITE)
+    return f"{color}{text}{RESET}"
+
+
 def gate_pass(next_id: str | None) -> str:
     target = next_id or "fim"
     return f"  {BOLD_GREEN}GATE PASS{RESET} → {target}"
@@ -146,42 +171,149 @@ def awaiting_approval(auto: bool = False) -> str:
     return f"  {BOLD_YELLOW}AGUARDANDO APROVAÇÃO{RESET} — rode: {BOLD}ft approve{RESET}"
 
 
-def human_gate_card(title: str, description: str | None = None,
-                    url: str | None = None, reject_hint: str | None = None,
-                    work_dir: str | None = None,
-                    files: list[str] | None = None) -> str:
-    """Card de checkpoint humano — foco em O QUE FAZER, não em artefatos internos."""
-    w = 54
-    sep = f"  {DIM}{'─' * (w - 2)}{RESET}"
-    lines = [
-        f"\n{BOLD_YELLOW}  ● {title}{RESET}",
-        sep,
+def _wrapped_card_lines(
+    text: str,
+    prefix: str = "    ",
+    width: int = 72,
+    continuation_prefix: str | None = None,
+) -> list[str]:
+    wrapped = wrap(
+        text,
+        width=width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    if not wrapped:
+        return [prefix.rstrip()]
+    continuation = continuation_prefix if continuation_prefix is not None else prefix
+    return [
+        f"{prefix if index == 0 else continuation}{line}"
+        for index, line in enumerate(wrapped)
     ]
-    if description:
-        # Quebra em linhas de ~48 chars para caber no card
-        words = description.split()
-        current_line = ""
-        for word in words:
-            if len(current_line) + len(word) + 1 > 48:
-                lines.append(f"  {current_line}")
-                current_line = word
-            else:
-                current_line = (current_line + " " + word).strip()
-        if current_line:
-            lines.append(f"  {current_line}")
-        lines.append(sep)
-    if files:
-        for f in files:
-            lines.append(f"  {DIM}📄 {f}{RESET}")
-        lines.append(sep)
+
+
+def human_gate_card(
+    title: str,
+    description: str | None = None,
+    url: str | None = None,
+    artifact: str | None = None,
+    reject_hint: str | None = None,
+    work_dir: str | None = None,
+    files: list[str] | None = None,
+    context: "DecisionGateContext | None" = None,
+    approval_message_required: bool = False,
+) -> str:
+    """Render a complete decision packet instead of a context-free pause."""
+
+    del work_dir  # kept for API compatibility with older callers
+    w = 78
+    sep = f"  {DIM}{'─' * (w - 2)}{RESET}"
+    decision = getattr(context, "decision", None) or description or (
+        f"Decidir se o gate “{title}” pode avançar."
+    )
+    why_now = getattr(context, "why_now", None) or (
+        "O processo chegou a um checkpoint que exige decisão humana explícita."
+    )
+    checklist = list(getattr(context, "checklist", ()) or ())
+    if not checklist:
+        checklist = [description] if description else [
+            "Examine o produto e as evidências antes de decidir."
+        ]
+    limitations = list(getattr(context, "limitations", ()) or ()) or [
+        "A aprovação cobre somente o escopo apresentado neste gate.",
+        "Evidência ausente ou ambígua é motivo para não aprovar.",
+    ]
+    approve_effect = getattr(context, "approve_effect", None) or (
+        "Registra a aprovação e avança o processo."
+    )
+    reject_effect = getattr(context, "reject_effect", None) or (
+        "Registra o motivo e retorna o ciclo para correção/revisão."
+    )
+
+    review_paths = list(getattr(context, "review_paths", ()) or ())
+    for path in files or []:
+        if path not in review_paths:
+            review_paths.append(path)
+
+    lines = [
+        f"\n{BOLD_YELLOW}  ● DECISION GATE · {title}{RESET}",
+        sep,
+        f"  {BOLD_WHITE}DECISÃO{RESET}",
+        *_wrapped_card_lines(decision),
+        "",
+        f"  {BOLD_WHITE}POR QUE AGORA{RESET}",
+        *_wrapped_card_lines(why_now),
+        "",
+        f"  {BOLD_WHITE}ONDE AVALIAR{RESET}",
+    ]
+    review_index = 1
     if url:
-        lines.append(f"  {BOLD_WHITE}URL:{RESET} {BOLD_CYAN}{url}{RESET}")
-        lines.append(sep)
-    lines.append(f"  Aprovar:   {BOLD}ft approve{RESET}")
+        lines.extend(_wrapped_card_lines(
+            f"{review_index}. Produto em execução: {url}",
+            prefix="    ",
+            continuation_prefix="       ",
+        ))
+        review_index += 1
+    if artifact:
+        lines.extend(_wrapped_card_lines(
+            f"{review_index}. Aplicativo desktop aberto: {artifact}",
+            prefix="    ",
+            continuation_prefix="       ",
+        ))
+        review_index += 1
+    for path in review_paths:
+        lines.extend(_wrapped_card_lines(
+            f"{review_index}. Evidência/artefato: {path}",
+            prefix="    ",
+            continuation_prefix="       ",
+        ))
+        review_index += 1
+    if review_index == 1:
+        lines.extend(_wrapped_card_lines(
+            "Nenhum produto ou artefato foi localizado. Não aprove sem pedir "
+            "uma evidência acessível.",
+            prefix="    ! ",
+        ))
+
+    lines.extend(["", f"  {BOLD_WHITE}CHECKLIST DE DECISÃO{RESET}"])
+    for item in checklist:
+        lines.extend(_wrapped_card_lines(
+            item,
+            prefix="    [ ] ",
+            continuation_prefix="        ",
+            width=68,
+        ))
+
+    lines.extend(["", f"  {BOLD_WHITE}LIMITES CONHECIDOS{RESET}"])
+    for item in limitations:
+        lines.extend(_wrapped_card_lines(
+            item,
+            prefix="    - ",
+            continuation_prefix="      ",
+            width=70,
+        ))
+
+    lines.extend([
+        "",
+        f"  {BOLD_GREEN}SE APROVAR{RESET}",
+        *_wrapped_card_lines(approve_effect),
+        f"  {BOLD_RED}SE REJEITAR{RESET}",
+        *_wrapped_card_lines(reject_effect),
+        sep,
+        f"  Contexto:  {BOLD}ft status --full{RESET}",
+    ])
+    approve_command = (
+        'ft approve "decisão/ressalvas"'
+        if approval_message_required
+        else "ft approve"
+    )
+    lines.append(f"  Aprovar:   {BOLD}{approve_command}{RESET}")
     if reject_hint:
         lines.append(f"  Rejeitar:  {BOLD}ft reject \"{RESET}{reject_hint}{BOLD}\"{RESET}")
     else:
-        lines.append(f"  Rejeitar:  {BOLD}ft reject \"motivo\"{RESET}")
+        lines.append(
+            f"  Rejeitar:  {BOLD}ft reject \"onde; passos; esperado; observado\"{RESET}"
+        )
     return "\n".join(lines)
 
 

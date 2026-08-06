@@ -6,6 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+from ft.engine import ui
 from ft.engine.api_context import (
     enrich_api_contract_feedback,
     extract_api_endpoint_candidates,
@@ -18,6 +19,7 @@ from ft.engine.runner import (
     build_task_prompt,
     _brief_cycle_objective,
     _llm_progress_snapshot,
+    _parse_review_verdict,
 )
 from ft.engine.delegate import DelegateResult
 from ft.engine.state import EngineState
@@ -604,6 +606,29 @@ class TestApproveReject:
         out = capsys.readouterr().out
         assert "pendente" in out.lower()
 
+    def test_approve_requires_message_when_gate_declares_it(
+        self, runner_v2, capsys
+    ):
+        runner_v2.init_state()
+        node = runner_v2.graph.get_node("step.01.hipotese")
+        node.approval_message_required = True
+        runner_v2.state_mgr.set_pending_approval(node.id)
+
+        runner_v2.approve()
+
+        blocked = runner_v2.state_mgr.load()
+        assert blocked.pending_approval == node.id
+        assert blocked.current_node == node.id
+        assert node.id not in blocked.completed_nodes
+        assert "exige uma mensagem" in capsys.readouterr().out
+
+        runner_v2.approve("Direção visual objetiva")
+
+        approved = runner_v2.state_mgr.load()
+        assert approved.pending_approval is None
+        assert approved.current_node == "step.02.prd"
+        assert approved.last_approval_message == "Direção visual objetiva"
+
     def test_reject_no_retry_blocks(self, runner_v2):
         runner_v2.init_state()
         runner_v2.state_mgr.set_pending_approval("step.01.hipotese")
@@ -611,6 +636,70 @@ class TestApproveReject:
         state = runner_v2.state_mgr.load()
         assert state.node_status == "blocked"
         assert "Rejeitado" in state.blocked_reason
+
+    def test_reject_with_declared_fix_without_predecessor_review_follows_graph(
+        self, tmp_path
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: stakeholder_without_review
+version: "1.0.0"
+title: Stakeholder without review
+nodes:
+  - id: evidence
+    type: build
+    title: Produce evidence
+    executor: codex
+    next: deterministic.gate
+  - id: deterministic.gate
+    type: gate
+    title: Deterministic gate
+    executor: python
+    next: stakeholder.gate
+  - id: stakeholder.gate
+    type: human_gate
+    title: Stakeholder gate
+    executor: python
+    reject_next: stakeholder.fix
+    next: end
+  - id: stakeholder.fix
+    type: build
+    title: Stakeholder fix
+    executor: codex
+    next: stakeholder.gate
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.completed_nodes = ["evidence", "deterministic.gate"]
+        state.current_node = "stakeholder.gate"
+        state.node_status = "awaiting_approval"
+        state.pending_approval = "stakeholder.gate"
+        runner.state_mgr.save()
+
+        assert runner.reject_with_origin_audit("XML real foi recusado")
+
+        rejected = runner.state_mgr.load()
+        assert rejected.current_node == "stakeholder.fix"
+        assert rejected.node_status == "running"
+        assert rejected.pending_approval is None
+        assert rejected.active_fix_return is None
+        assert rejected.completed_nodes == ["evidence", "deterministic.gate"]
+        assert rejected.gate_log["stakeholder.gate"] == "REJECTED"
+        assert "XML real foi recusado" in rejected.last_approval_message
 
 
 class TestDelegationDisplay:
@@ -1660,6 +1749,153 @@ nodes:
         assert "plan" not in state.completed_nodes
         assert state.gate_log.get("plan") != "SKIPPED"
 
+    def test_validation_profile_decision_uses_project_contract(self, tmp_path):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        (project_root / ".ft").mkdir(parents=True)
+        state_dir.mkdir(parents=True)
+        (project_root / ".ft" / "project.yml").write_text(
+            """
+validation:
+  schema_version: 1
+  mode: explicit
+  matrix_path: docs/validation-matrix.yml
+  report_path: docs/platform-validation-report.yml
+  evidence_root: docs/evidence/platform-validation
+  test_identity:
+    policy: optional
+    path: docs/test-identity.json
+  platforms:
+    web:
+      targets:
+        desktop_browser:
+          required: true
+""",
+            encoding="utf-8",
+        )
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: profile_route
+version: "0.1.0"
+title: Profile route
+nodes:
+  - id: route
+    type: decision
+    title: Profiles?
+    condition: validation_profiles_active
+    branches:
+      "true": validate
+      "false": end
+  - id: validate
+    type: gate
+    title: Validate
+    executor: python
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        runner._run_decision(runner.graph.get_node("route"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "validate"
+        assert state.route_choices["route"] == "validate"
+
+    @pytest.mark.parametrize(
+        ("mode", "platforms", "expected"),
+        [
+            ("disabled", "{}", "headless"),
+            (
+                "explicit",
+                "{web: {targets: {desktop_browser: {required: true}}}}",
+                "visual",
+            ),
+        ],
+    )
+    def test_project_validation_mode_routes_headless_without_guessing_from_files(
+        self,
+        tmp_path,
+        mode,
+        platforms,
+        expected,
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        (project_root / ".ft").mkdir(parents=True)
+        state_dir.mkdir(parents=True)
+        reason = (
+            "reason: Produto sem superfície visual.\n  "
+            if mode == "disabled"
+            else ""
+        )
+        (project_root / ".ft" / "project.yml").write_text(
+            f"""
+validation:
+  schema_version: 1
+  mode: {mode}
+  {reason}matrix_path: docs/validation-matrix.yml
+  report_path: docs/platform-validation-report.yml
+  evidence_root: docs/evidence/platform-validation
+  test_identity:
+    policy: not_required
+    path: docs/test-identity.json
+  platforms: {platforms}
+""",
+            encoding="utf-8",
+        )
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: surface_route
+version: "0.1.0"
+title: Surface route
+nodes:
+  - id: route
+    type: decision
+    title: Surface?
+    condition: project_validation_mode
+    branches:
+      disabled: headless
+      _default: visual
+  - id: headless
+    type: gate
+    title: Headless
+    executor: python
+    next: end
+  - id: visual
+    type: gate
+    title: Visual
+    executor: python
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        runner._run_decision(runner.graph.get_node("route"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == expected
+        assert state.route_choices["route"] == expected
+
     def test_approved_human_gate_skips_reject_branch_progress(self, tmp_path):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
@@ -1915,6 +2151,237 @@ nodes:
         assert state.node_status != "blocked"
         assert state.gate_log["review"] == "STRUCTURED"
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "**Veredito: REJECTED**",
+            "Veredicto: REJEITADO",
+            "Parecer — REPROVADO",
+            "Verdict: FAILED",
+            "| R-002 | REJECTED | evidência |",
+        ],
+    )
+    def test_review_verdict_parser_recognizes_rejection_variants(self, line):
+        assert _parse_review_verdict(line) == "REJECTED"
+
+    def test_review_rejection_wins_over_approved_response_and_other_outputs(
+        self,
+        tmp_path,
+        capsys,
+    ):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: fail_closed_batch_review
+title: Fail-closed batch review
+nodes:
+  - id: batch.review
+    type: review
+    title: Combined review
+    executor: claude
+    no_pre_seed: true
+    outputs: [docs/mvp-batch-review.md, docs/mvp-batch-review.yml]
+    validators:
+      - file_exists: docs/mvp-batch-review.md
+      - file_exists: docs/mvp-batch-review.yml
+    on_fail:
+      human_gate: Corrigir somente os findings do batch.
+      goto: batch.fix
+    next: batch.verify
+  - id: batch.fix
+    type: build
+    title: Fix
+    next: batch.review
+  - id: batch.verify
+    type: gate
+    title: Verify
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        def review(**_kwargs):
+            (docs / "mvp-batch-review.md").write_text(
+                "VERDICT: APPROVED\n\n"
+                "**Veredito: REJECTED**\n\n"
+                "| Requisito | Resultado |\n"
+                "| --- | --- |\n"
+                "| R-001 | PASS |\n"
+                "| R-002 | REJECTED |\n",
+                encoding="utf-8",
+            )
+            (docs / "mvp-batch-review.yml").write_text(
+                "verdict: APPROVED\n"
+                "results:\n"
+                "  - ref: R-001\n"
+                "    result: PASS\n"
+                "  - ref: R-002\n"
+                "    result: REJECTED\n",
+                encoding="utf-8",
+            )
+            return DelegateResult(
+                True,
+                "VERDICT: APPROVED",
+                ["docs/mvp-batch-review.md", "docs/mvp-batch-review.yml"],
+                [],
+            )
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=review):
+            runner._run_review(runner.graph.get_node("batch.review"))
+
+        state = runner.state_mgr.load()
+        rendered = capsys.readouterr().out
+        assert state.current_node == "batch.review"
+        assert state.node_status == "pending_fix"
+        assert state.pending_fix["goto"] == "batch.fix"
+        assert "REVIEW_VERDICT_CONFLICT" in state.pending_fix["feedback"]
+        assert "REVIEW REJECTED" in rendered
+        assert "batch.verify" not in state.completed_nodes
+
+    def test_existing_canonical_rejection_cannot_be_preseeded_as_approved(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        (docs / "review.md").write_text(
+            "**Veredito: REJECTED**\nFinding ainda aberto.\n",
+            encoding="utf-8",
+        )
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: stale_rejected_review
+title: Stale rejected review
+nodes:
+  - id: review
+    type: review
+    title: Review
+    executor: claude
+    outputs: [docs/review.md]
+    validators:
+      - file_exists: docs/review.md
+    on_fail:
+      human_gate: Corrigir finding aberto.
+      goto: fix
+    next: verify
+  - id: fix
+    type: build
+    title: Fix
+    next: review
+  - id: verify
+    type: gate
+    title: Verify
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            side_effect=AssertionError("review rejeitado não deve ser pulado"),
+        ):
+            runner._run_review(runner.graph.get_node("review"))
+
+        state = runner.state_mgr.load()
+        assert state.current_node == "review"
+        assert state.node_status == "pending_fix"
+        assert state.pending_fix["goto"] == "fix"
+        assert "CANONICAL_REVIEW_REJECTED" in state.pending_fix["feedback"]
+
+    def test_structured_rejection_overrides_approved_reviewer_response(
+        self,
+        tmp_path,
+        capsys,
+    ):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: structured_conflict
+title: Structured conflict
+nodes:
+  - id: review
+    type: review
+    title: Review
+    executor: claude
+    no_pre_seed: true
+    review_route_path: docs/review.yml
+    outputs: [docs/review.md, docs/review.yml]
+    validators:
+      - file_exists: docs/review.md
+      - file_exists: docs/review.yml
+    next: route
+  - id: route
+    type: decision
+    title: Route
+    condition: review_route
+    branches:
+      implementation: end
+      approved: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        def review(**_kwargs):
+            (docs / "review.md").write_text(
+                "**Veredito: REJECTED**\n",
+                encoding="utf-8",
+            )
+            (docs / "review.yml").write_text(
+                "review_route: implementation\nverdict: REJECTED\n",
+                encoding="utf-8",
+            )
+            return DelegateResult(True, "VERDICT: APPROVED", [], [])
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=review):
+            runner._run_review(runner.graph.get_node("review"))
+
+        state = runner.state_mgr.load()
+        rendered = capsys.readouterr().out
+        assert state.current_node == "route"
+        assert state.gate_log["review"] == "STRUCTURED"
+        assert "REVIEW REJECTED — seguindo rota estruturada" in rendered
+
     def test_runtime_focal_review_persists_live_verdict_in_canonical_report(
         self,
         tmp_path,
@@ -2120,6 +2587,54 @@ nodes:
         assert rejected.node_status == "pending_fix"
         assert "EVIDENCE_RECEIPT_STALE" in rejected.pending_fix["feedback"]
 
+    def test_review_output_snapshot_tracks_later_outputs(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        evidence = docs / "evidence"
+        state_dir = project_root / "state"
+        evidence.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: multi_output_review
+title: Multi-output review
+nodes:
+  - id: review
+    type: review
+    title: Review
+    outputs:
+      - docs/immutable-matrix.yml
+      - docs/canonical-report.yml
+      - docs/evidence/
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        (docs / "immutable-matrix.yml").write_text("status: active\n", encoding="utf-8")
+        report = docs / "canonical-report.yml"
+        report.write_text("verdict: REJECTED\n", encoding="utf-8")
+        (evidence / "before.txt").write_text("before\n", encoding="utf-8")
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        node = runner.graph.get_node("review")
+
+        before = runner._review_outputs_snapshot(node)
+        report.write_text("verdict: APPROVED\n", encoding="utf-8")
+        after_report = runner._review_outputs_snapshot(node)
+        (evidence / "after.txt").write_text("after\n", encoding="utf-8")
+        after_evidence = runner._review_outputs_snapshot(node)
+
+        assert before
+        assert before != after_report
+        assert after_report != after_evidence
+
     def test_runtime_focal_review_refuses_mock_only_ui_data_approval(self, tmp_path):
         project_root = tmp_path / "project"
         docs = project_root / "docs"
@@ -2218,9 +2733,150 @@ nodes:
 
         reviewed = runner.state_mgr.load()
         assert reviewed.current_node == "physical.review"
-        assert reviewed.node_status == "pending_fix"
-        assert "EVIDENCE_FIDELITY_REJECTED" in reviewed.pending_fix["feedback"]
-        assert "mock" in reviewed.pending_fix["feedback"].casefold()
+        assert reviewed.node_status == "ready"
+        assert reviewed.pending_fix is None
+        assert "EVIDENCE_FIDELITY_REJECTED" in (
+            reviewed.active_fix_return["focal_evidence_feedback"]
+        )
+        assert "mock" in (
+            reviewed.active_fix_return["focal_evidence_feedback"].casefold()
+        )
+
+    def test_declared_focal_review_uses_headless_evidence_contract(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        contract_dir = project_root / ".ft"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        contract_dir.mkdir()
+        (contract_dir / "project.yml").write_text(
+            "validation:\n"
+            "  schema_version: 1\n"
+            "  mode: disabled\n"
+            "  reason: Python SDK sem interface gráfica\n"
+            "  test_identity:\n"
+            "    policy: not_required\n"
+            "    path: docs/test-identity.json\n"
+            "  platforms: {}\n",
+            encoding="utf-8",
+        )
+        (docs / "headless-regression.txt").write_text(
+            "25/25 programmatic checks passed\n",
+            encoding="utf-8",
+        )
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: focal_headless_review
+title: Focal headless review
+nodes:
+  - id: fix
+    type: build
+    title: Fix
+    fix_review: review
+    next: review
+  - id: review
+    type: review
+    title: Headless review
+    no_pre_seed: true
+    outputs: [docs/headless-review.md]
+    validators:
+      - file_exists: docs/headless-review.md
+    on_fail:
+      human_gate: Corrigir divergência focal.
+      goto: fix
+    next: acceptance
+  - id: acceptance
+    type: human_gate
+    title: Acceptance
+    reject_next: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.current_node = "review"
+        state.node_status = "ready"
+        state.active_fix_return = {
+            "fix_node": "fix",
+            "audit_entry_node": "review",
+            "review_node": "review",
+            "evidence_origin": "review",
+            "review_mode": "declared",
+            "review_context": (
+                "EVIDENCE_FIDELITY_REJECTED: finding de dados visíveis deve "
+                "declarar finding_kind: ui_data. Confirme evidência visual "
+                "quando o finding for de UI."
+            ),
+        }
+        runner.state_mgr.save()
+
+        report = (
+            "VERDICT: APPROVED\n\n"
+            "```yaml\n"
+            "focal_evidence:\n"
+            "  coverage_complete: true\n"
+            "  finding_kind: technical\n"
+            "  evidence_level: integration\n"
+            "  data_origin: local_product\n"
+            "  mock_only: false\n"
+            "  journey: [execute public SDK contract, inspect sanitized result]\n"
+            "  visual_evidence: []\n"
+            "  claims:\n"
+            "    - requirement: headless SDK contract\n"
+            "      expected: all programmatic checks pass\n"
+            "      observed: 25/25 checks passed\n"
+            "      status: PASS\n"
+            "      evidence: [docs/headless-regression.txt]\n"
+            "```\n"
+        )
+        wrong_kind_report = report.replace(
+            "finding_kind: technical",
+            "finding_kind: ui_data",
+        )
+        attempts = 0
+
+        def headless_approval(**kwargs):
+            nonlocal attempts
+            assert "AUDITORIA FOCAL HEADLESS" in kwargs["task"]
+            assert "não crie, solicite ou use tela" in kwargs["task"].casefold()
+            selected_report = wrong_kind_report if attempts == 0 else report
+            if attempts:
+                assert "CORREÇÃO DO RECIBO FOCAL" in kwargs["task"]
+                assert "não altere o produto" in kwargs["task"]
+            attempts += 1
+            (docs / "headless-review.md").write_text(
+                selected_report,
+                encoding="utf-8",
+            )
+            return DelegateResult(True, "DONE", [], ["docs/headless-review.md"])
+
+        with patch("ft.engine.runner.delegate_to_llm", side_effect=headless_approval):
+            runner._run_review(runner.graph.get_node("review"))
+            retrying = runner.state_mgr.load()
+            assert retrying.current_node == "review"
+            assert retrying.node_status == "ready"
+            assert retrying.pending_fix is None
+            assert "headless" in (
+                retrying.active_fix_return["focal_evidence_feedback"].casefold()
+            )
+
+            runner._run_review(runner.graph.get_node("review"))
+
+        reviewed = runner.state_mgr.load()
+        assert reviewed.current_node == "acceptance"
+        assert reviewed.active_fix_return is None
+        assert "focal_evidence_retries" not in reviewed.metrics
 
     def test_opencode_review_and_retry_use_bounded_restricted_options(self, tmp_path):
         project_root = tmp_path / "project"
@@ -3126,6 +3782,83 @@ nodes:
             "physical.review",
         ]
 
+    def test_human_rejection_finds_review_through_completed_verify_gate(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        state_dir.mkdir(parents=True)
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: terminal_acceptance_after_verify
+version: "1.0.0"
+title: Terminal acceptance after verify
+nodes:
+  - id: foundation
+    type: build
+    title: Foundation
+    next: combined.review
+  - id: combined.review
+    type: review
+    title: Combined review
+    next: integrated.verify
+  - id: integrated.verify
+    type: gate
+    title: Integrated verify
+    next: acceptance
+  - id: acceptance
+    type: human_gate
+    title: Acceptance
+    reject_next: fix
+    next: end
+  - id: fix
+    type: build
+    title: Focal fix
+    fix_review: fix.review
+    next: fix.review
+  - id: fix.review
+    type: review
+    title: Review only the fix
+    next: integrated.verify
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.completed_nodes = [
+            "foundation",
+            "combined.review",
+            "integrated.verify",
+        ]
+        state.current_node = "acceptance"
+        state.node_status = "awaiting_approval"
+        state.pending_approval = "acceptance"
+        runner.state_mgr.save()
+
+        assert runner.reject_with_origin_audit("Fluxo público ainda incompleto")
+
+        fixing = runner.state_mgr.load()
+        assert fixing.current_node == "fix"
+        assert fixing.pending_approval is None
+        assert fixing.active_fix_return["evidence_origin"] == "combined.review"
+        assert fixing.active_fix_return["review_node"] == "fix.review"
+        assert fixing.active_fix_return["gate_node"] == "acceptance"
+        assert fixing.completed_nodes == [
+            "foundation",
+            "combined.review",
+            "integrated.verify",
+        ]
+
     def test_human_rejection_uses_declared_fix_review_without_broad_rewind(
         self,
         tmp_path,
@@ -3646,12 +4379,15 @@ nodes:
             runner._run_llm_step(node)
 
         assert delegate_mock.called
-        assert not (project_root / "project" / "state" / "prd_rewrite_baseline.md").exists()
+        assert not (
+            project_root / "project" / "state" / "prd_rewrite_baseline.md"
+        ).exists()
 
 
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
+
 
 class TestStatus:
     def test_progress_snapshot_reports_current_action_evolution_and_signal(
@@ -3767,6 +4503,44 @@ class TestStatus:
         assert snapshot.current == "executando testes focais em `test_app.py`"
         assert snapshot.current_started_at == observed
 
+    def test_progress_snapshot_marks_completed_turn_as_terminal(self, tmp_path):
+        log_path = tmp_path / "completed.jsonl"
+        events = [
+            {
+                "type": "item.started",
+                "item": {
+                    "id": "cmd-finished",
+                    "type": "command_execution",
+                    "command": "pytest tests/test_lane.py -q",
+                    "status": "in_progress",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "summary",
+                    "type": "agent_message",
+                    "text": "NODE_SUMMARY:\n- verificado: testes verdes\nDONE",
+                },
+            },
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            },
+        ]
+        log_path.write_text(
+            "\n".join(json.dumps(event) for event in events) + "\n",
+            encoding="utf-8",
+        )
+
+        snapshot = _llm_progress_snapshot(log_path)
+
+        assert snapshot is not None
+        assert snapshot.terminal is True
+        assert snapshot.terminal_status == "completed"
+        assert snapshot.current is None
+        assert snapshot.signal == "chamada LLM concluída"
+
     def test_status_expands_active_banner_with_live_progress(
         self,
         runner_v2,
@@ -3821,6 +4595,61 @@ class TestStatus:
         assert "LLM model: gpt-5.6-sol" in out
         assert "LLM effort: max" in out
 
+    def test_status_places_updated_at_in_process_title(self, runner_v2, capsys):
+        runner_v2.init_state()
+
+        runner_v2.status(updated_at="14:35:09")
+
+        out = capsys.readouterr().out
+        assert "Process:" in out
+        assert "·  Atualizado às 14:35:09" in out
+
+    def test_status_shows_active_worktree_path(self, runner_v2, capsys):
+        runner_v2.init_state()
+
+        runner_v2.status()
+
+        out = capsys.readouterr().out
+        expected = Path(runner_v2.project_root).resolve()
+        assert f"Worktree: {expected}" in out
+
+    def test_status_ends_with_sanitized_log_tail(self, runner_v2, capsys):
+        runner_v2.init_state()
+        log_path = runner_v2.state_mgr.path.parent / "llm_logs" / "current.jsonl"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text(
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "cmd-tail",
+                        "type": "command_execution",
+                        "command": "pytest tests/engine/test_runner.py",
+                        "status": "in_progress",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        state = runner_v2.state_mgr.load()
+        state.active_llm_log = str(log_path)
+        runner_v2.state_mgr.save()
+
+        runner_v2.status()
+
+        last_line = capsys.readouterr().out.rstrip().splitlines()[-1]
+        assert "Log (tail): [" in last_line
+        assert "testes focais" in last_line
+
+    def test_status_always_has_log_tail_footer_without_log(self, runner_v2, capsys):
+        runner_v2.init_state()
+
+        runner_v2.status()
+
+        last_line = capsys.readouterr().out.rstrip().splitlines()[-1]
+        assert last_line.endswith("Log (tail): — nenhum log LLM disponível")
+
     def test_status_shows_current_node(self, runner_v2, capsys):
         runner_v2.init_state()
         runner_v2.status()
@@ -3833,6 +4662,57 @@ class TestStatus:
         out = capsys.readouterr().out
         assert "sprint-01-discovery" in out
         assert "sprint-02-build" in out
+
+    def test_status_full_colors_pass_pending_skipped_gate_and_error(
+        self,
+        runner_v2,
+        capsys,
+        monkeypatch,
+    ):
+        runner_v2.init_state()
+        state = runner_v2.state_mgr.load()
+        state.completed_nodes = ["step.01.hipotese", "step.02.prd"]
+        state.gate_log = {
+            "step.01.hipotese": "PASS",
+            "step.02.prd": "SKIPPED",
+        }
+        state.current_node = "gate.01.discovery"
+        state.node_status = "awaiting_approval"
+        state.pending_approval = "gate.01.discovery"
+        runner_v2.state_mgr.save()
+
+        palette = {
+            "_COLOR": True,
+            "BLUE": "[blue]",
+            "WHITE": "[white]",
+            "DIM": "[gray]",
+            "RED": "[red]",
+            "YELLOW": "[gate]",
+            "BOLD_YELLOW": "[active]",
+            "RESET": "[/]",
+        }
+        for name, value in palette.items():
+            monkeypatch.setattr(ui, name, value)
+
+        runner_v2.status(full=True)
+        out = capsys.readouterr().out
+        assert "[blue]    ✓ step.01.hipotese:" in out
+        assert "[gray]    ✓ step.02.prd:" in out
+        assert "[SKIPPED] ◀" not in out
+        assert "[gate]    → gate.01.discovery:" in out
+        assert "[white]    ○ step.03.implementacao:" in out
+
+        state = runner_v2.state_mgr.load()
+        state.node_status = "blocked"
+        state.blocked_reason = "falha focal"
+        state.pending_approval = None
+        state.gate_log["gate.01.discovery"] = "FAIL"
+        runner_v2.state_mgr.save()
+
+        runner_v2.status(full=True)
+        failed_out = capsys.readouterr().out
+        assert "[red]    → gate.01.discovery:" in failed_out
+        assert "[FAIL] ◀" in failed_out
 
     def test_status_shows_blocked_reason(self, runner_v2, capsys):
         runner_v2.init_state()

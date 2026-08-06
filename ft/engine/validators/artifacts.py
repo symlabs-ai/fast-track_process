@@ -137,6 +137,707 @@ def test_identity_ready(
     return True, f"test_identity_ready: {identity_ref} ready em {payload['environment']}"
 
 
+_NAVIGATION_ENTRY_POLICIES = {"public", "entitled", "contextual", "first_launch"}
+_NAVIGATION_ENTRY_TYPES = {
+    "primary_navigation",
+    "menu",
+    "first_launch",
+    "visible_control",
+    "external_event",
+}
+_NAVIGATION_ACCESS_CONTEXTS = {"public", "entitled", "contextual"}
+_NAVIGATION_FORBIDDEN_SHORTCUT_RE = re.compile(
+    r"direct[ _-]?route|rota direta|deep[ _-]?link(?: de debug)?|"
+    r"setcontent\s*\(|component[ _-]?mount|storybook|screen[ _-]?catalog|"
+    r"catalogo tecnico|catálogo técnico|adb\s+shell\s+am\s+start|"
+    r"test[ _-]?only|hook de teste",
+    re.IGNORECASE,
+)
+
+
+def _navigation_mapping(value: object, label: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} deve ser um mapping")
+    return value
+
+
+def _navigation_list(value: object, label: str) -> list:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} deve ser uma lista")
+    return value
+
+
+def _navigation_text(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} deve ser texto não vazio")
+    return value.strip()
+
+
+def _navigation_repo_file(
+    root: Path,
+    raw_path: object,
+    label: str,
+    *,
+    under: Path | None = None,
+) -> Path:
+    text = _navigation_text(raw_path, label)
+    relative = Path(text)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"{label} deve ser um path relativo seguro")
+    resolved = (root / relative).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{label} escapou do repositório") from exc
+    if under is not None:
+        try:
+            resolved.relative_to(under.resolve())
+        except ValueError as exc:
+            raise ValueError(f"{label} deve ficar sob {under.relative_to(root)}") from exc
+    if not resolved.is_file() or resolved.stat().st_size == 0:
+        raise ValueError(f"{label} não existe ou está vazio: {relative.as_posix()}")
+    return resolved
+
+
+def _navigation_scope_ids(scope_file: Path, scope_pattern: str) -> set[str]:
+    try:
+        pattern = re.compile(scope_pattern, re.IGNORECASE)
+    except re.error as exc:
+        raise ValueError(f"scope_pattern inválido: {exc}") from exc
+    text = scope_file.read_text(encoding="utf-8", errors="strict")
+    return {match.group(0).upper() for match in pattern.finditer(text)}
+
+
+def _load_navigation_contract(
+    *,
+    root: Path,
+    path: str,
+    scope_path: str,
+    scope_pattern: str,
+    min_targets: int,
+) -> tuple[dict, dict[str, dict], set[str]]:
+    contract_file = _navigation_repo_file(root, path, "navigation contract")
+    scope_file = _navigation_repo_file(root, scope_path, "navigation scope")
+    payload = _navigation_mapping(
+        yaml.safe_load(contract_file.read_text(encoding="utf-8", errors="strict")),
+        "navigation contract",
+    )
+    if payload.get("schema_version") != 1:
+        raise ValueError("schema_version deve ser 1")
+
+    expected_scope_hash = hashlib.sha256(scope_file.read_bytes()).hexdigest()
+    if str(payload.get("scope_sha256") or "").strip().lower() != expected_scope_hash:
+        raise ValueError("scope_sha256 não corresponde aos bytes do escopo")
+
+    scope_ids = _navigation_scope_ids(scope_file, scope_pattern)
+    if not scope_ids:
+        raise ValueError("o escopo não contém referências identificáveis")
+
+    targets: dict[str, dict] = {}
+    for index, raw_target in enumerate(_navigation_list(payload.get("targets"), "targets")):
+        target = _navigation_mapping(raw_target, f"targets[{index}]")
+        target_id = _navigation_text(target.get("id"), f"targets[{index}].id").upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_.:-]{2,63}", target_id):
+            raise ValueError(f"targets[{index}].id inválido: {target_id!r}")
+        if target_id in targets:
+            raise ValueError(f"target duplicado: {target_id}")
+        _navigation_text(target.get("label"), f"targets[{index}].label")
+        policy = _navigation_text(
+            target.get("entry_policy"), f"targets[{index}].entry_policy"
+        )
+        if policy not in _NAVIGATION_ENTRY_POLICIES:
+            raise ValueError(
+                f"targets[{index}].entry_policy deve ser um de "
+                f"{sorted(_NAVIGATION_ENTRY_POLICIES)}"
+            )
+        targets[target_id] = target
+    if len(targets) < min_targets:
+        raise ValueError(f"targets possui {len(targets)} item(ns); mínimo {min_targets}")
+
+    scope_rows: dict[str, dict] = {}
+    used_targets: set[str] = set()
+    for index, raw_row in enumerate(
+        _navigation_list(payload.get("scope_refs"), "scope_refs")
+    ):
+        row = _navigation_mapping(raw_row, f"scope_refs[{index}]")
+        ref = _navigation_text(row.get("ref"), f"scope_refs[{index}].ref").upper()
+        if ref in scope_rows:
+            raise ValueError(f"scope ref duplicada: {ref}")
+        disposition = _navigation_text(
+            row.get("disposition"), f"scope_refs[{index}].disposition"
+        )
+        if disposition not in {"ui", "non_ui"}:
+            raise ValueError(
+                f"scope_refs[{index}].disposition deve ser ui ou non_ui"
+            )
+        raw_targets = _navigation_list(
+            row.get("targets", []), f"scope_refs[{index}].targets"
+        )
+        row_targets = {
+            _navigation_text(value, f"scope_refs[{index}].targets").upper()
+            for value in raw_targets
+        }
+        if disposition == "ui" and not row_targets:
+            raise ValueError(f"scope ref UI sem target: {ref}")
+        if disposition == "non_ui":
+            if row_targets:
+                raise ValueError(f"scope ref non_ui não pode apontar targets: {ref}")
+            _navigation_text(row.get("reason"), f"scope_refs[{index}].reason")
+        unknown_targets = sorted(row_targets - set(targets))
+        if unknown_targets:
+            raise ValueError(f"scope ref {ref} aponta targets inexistentes: {unknown_targets}")
+        used_targets.update(row_targets)
+        scope_rows[ref] = row
+
+    missing_refs = sorted(scope_ids - set(scope_rows))
+    extra_refs = sorted(set(scope_rows) - scope_ids)
+    if missing_refs or extra_refs:
+        raise ValueError(
+            f"cobertura do escopo divergente; ausentes={missing_refs}, extras={extra_refs}"
+        )
+    orphan_targets = sorted(set(targets) - used_targets)
+    if orphan_targets:
+        raise ValueError(f"targets sem referência de escopo: {orphan_targets}")
+    return payload, targets, scope_ids
+
+
+def navigation_contract_valid(
+    path: str = "docs/navigation-contract.yml",
+    scope_path: str = "docs/PROJECT_BACKLOG.md",
+    scope_pattern: str = r"\bPB-\d+\b",
+    min_targets: int = 1,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate a generic, scope-bound contract of user-visible entry targets."""
+
+    try:
+        _payload, targets, scope_ids = _load_navigation_contract(
+            root=Path(project_root).resolve(),
+            path=path,
+            scope_path=scope_path,
+            scope_pattern=scope_pattern,
+            min_targets=min_targets,
+        )
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+        return False, f"navigation_contract_valid FAIL: {exc}"
+    return True, (
+        "navigation_contract_valid: "
+        f"{len(scope_ids)} refs classificadas, {len(targets)} targets"
+    )
+
+
+def navigation_reachability(
+    contract_path: str = "docs/navigation-contract.yml",
+    report_path: str = "docs/navigation-reachability.yml",
+    evidence_root: str = "docs/evidence/navigation",
+    scope_path: str = "docs/PROJECT_BACKLOG.md",
+    scope_pattern: str = r"\bPB-\d+\b",
+    min_targets: int = 1,
+    require_approved: bool = True,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Prove that every contracted target is reachable through production UI.
+
+    A rendered component or an internal route is not sufficient. The structured
+    receipt must bind to the current navigation contract, identify the observed
+    candidate and cover every target through visible production controls.
+    """
+
+    root = Path(project_root).resolve()
+    try:
+        _contract, targets, _scope_ids = _load_navigation_contract(
+            root=root,
+            path=contract_path,
+            scope_path=scope_path,
+            scope_pattern=scope_pattern,
+            min_targets=min_targets,
+        )
+        contract_file = _navigation_repo_file(
+            root, contract_path, "navigation contract"
+        )
+        report_file = _navigation_repo_file(root, report_path, "reachability report")
+        evidence_dir = (root / evidence_root).resolve()
+        try:
+            evidence_dir.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("evidence_root escapou do repositório") from exc
+
+        report = _navigation_mapping(
+            yaml.safe_load(report_file.read_text(encoding="utf-8", errors="strict")),
+            "reachability report",
+        )
+        if report.get("schema_version") != 1:
+            raise ValueError("reachability schema_version deve ser 1")
+        contract_hash = hashlib.sha256(contract_file.read_bytes()).hexdigest()
+        if str(report.get("contract_sha256") or "").strip().lower() != contract_hash:
+            raise ValueError("contract_sha256 não corresponde ao contrato corrente")
+
+        verdict = _navigation_text(report.get("verdict"), "verdict").upper()
+        if verdict not in {"APPROVED", "REJECTED"}:
+            raise ValueError("verdict deve ser APPROVED ou REJECTED")
+        if require_approved and verdict != "APPROVED":
+            raise ValueError("este gate exige verdict APPROVED")
+
+        candidate_ref = _navigation_text(
+            report.get("candidate_ref"), "candidate_ref"
+        )
+        observed_ref = _navigation_text(
+            report.get("observed_candidate_ref"), "observed_candidate_ref"
+        )
+        environment = _navigation_mapping(report.get("environment"), "environment")
+        _navigation_text(environment.get("kind"), "environment.kind")
+        _navigation_text(
+            environment.get("execution_surface"), "environment.execution_surface"
+        )
+        findings = _navigation_list(report.get("findings"), "findings")
+        journeys = _navigation_list(report.get("journeys"), "journeys")
+        if targets and not journeys:
+            raise ValueError("journeys não pode ser vazio quando há targets")
+
+        seen_journeys: set[str] = set()
+        seen_evidence_hashes: dict[str, str] = {}
+        covered_by_pass: set[str] = set()
+        failed_journeys: list[str] = []
+        shortcut_journeys: list[str] = []
+
+        for index, raw_journey in enumerate(journeys):
+            journey = _navigation_mapping(raw_journey, f"journeys[{index}]")
+            prefix = f"journeys[{index}]"
+            journey_id = _navigation_text(journey.get("id"), f"{prefix}.id")
+            if journey_id in seen_journeys:
+                raise ValueError(f"journey id duplicado: {journey_id}")
+            seen_journeys.add(journey_id)
+
+            entry_type = _navigation_text(
+                journey.get("entry_type"), f"{prefix}.entry_type"
+            )
+            if entry_type not in _NAVIGATION_ENTRY_TYPES:
+                raise ValueError(
+                    f"{prefix}.entry_type deve ser um de "
+                    f"{sorted(_NAVIGATION_ENTRY_TYPES)}"
+                )
+            start_surface = _navigation_text(
+                journey.get("start_surface"), f"{prefix}.start_surface"
+            )
+            entry_point = _navigation_text(
+                journey.get("entry_point"), f"{prefix}.entry_point"
+            )
+            if journey.get("navigation_mode") != "production_ui":
+                raise ValueError(f"{prefix}.navigation_mode deve ser production_ui")
+            raw_steps = _navigation_list(journey.get("steps"), f"{prefix}.steps")
+            if not raw_steps:
+                raise ValueError(f"{prefix}.steps não pode ser vazio")
+            steps = [
+                _navigation_text(step, f"{prefix}.steps[{step_index}]")
+                for step_index, step in enumerate(raw_steps)
+            ]
+
+            raw_targets = _navigation_list(
+                journey.get("targets"), f"{prefix}.targets"
+            )
+            if not raw_targets:
+                raise ValueError(f"{prefix}.targets não pode ser vazio")
+            journey_targets = {
+                _navigation_text(value, f"{prefix}.targets").upper()
+                for value in raw_targets
+            }
+            unknown_targets = sorted(journey_targets - set(targets))
+            if unknown_targets:
+                raise ValueError(
+                    f"{prefix} aponta targets inexistentes: {unknown_targets}"
+                )
+
+            result = _navigation_text(journey.get("result"), f"{prefix}.result").upper()
+            if result not in {"PASS", "FAIL"}:
+                raise ValueError(f"{prefix}.result deve ser PASS ou FAIL")
+            if result == "PASS":
+                covered_by_pass.update(journey_targets)
+            else:
+                failed_journeys.append(journey_id)
+
+            evidence_file = _navigation_repo_file(
+                root,
+                journey.get("evidence"),
+                f"{prefix}.evidence",
+                under=evidence_dir,
+            )
+            evidence_hash = hashlib.sha256(evidence_file.read_bytes()).hexdigest()
+            if evidence_hash in seen_evidence_hashes:
+                raise ValueError(
+                    f"{journey_id} reutiliza a evidência de "
+                    f"{seen_evidence_hashes[evidence_hash]}"
+                )
+            seen_evidence_hashes[evidence_hash] = journey_id
+
+            shortcuts = _navigation_list(
+                journey.get("shortcuts"), f"{prefix}.shortcuts"
+            )
+            path_text = " ".join([start_surface, entry_point, *steps])
+            if shortcuts or _NAVIGATION_FORBIDDEN_SHORTCUT_RE.search(path_text):
+                shortcut_journeys.append(journey_id)
+
+            access_context = _navigation_text(
+                journey.get("access_context"), f"{prefix}.access_context"
+            )
+            if access_context not in _NAVIGATION_ACCESS_CONTEXTS:
+                raise ValueError(
+                    f"{prefix}.access_context deve ser um de "
+                    f"{sorted(_NAVIGATION_ACCESS_CONTEXTS)}"
+                )
+            policies = {
+                str(targets[target_id]["entry_policy"])
+                for target_id in journey_targets
+            }
+            if "public" in policies and access_context != "public":
+                raise ValueError(f"{prefix} não comprova acesso público")
+            if "entitled" in policies and access_context != "entitled":
+                raise ValueError(f"{prefix} não comprova acesso condicionado")
+            if "contextual" in policies and access_context != "contextual":
+                raise ValueError(f"{prefix} não comprova entrada contextual")
+            if "first_launch" in policies and entry_type != "first_launch":
+                raise ValueError(f"{prefix} não comprova primeira abertura")
+
+            if access_context == "entitled":
+                _navigation_text(
+                    journey.get("entitlement_setup"), f"{prefix}.entitlement_setup"
+                )
+                for field in ("eligible_entry_result", "ineligible_entry_result"):
+                    field_result = str(journey.get(field) or "").strip().upper()
+                    if field_result not in {"PASS", "FAIL"}:
+                        raise ValueError(f"{prefix}.{field} deve ser PASS ou FAIL")
+                    if verdict == "APPROVED" and field_result != "PASS":
+                        raise ValueError(
+                            f"verdict APPROVED exige {prefix}.{field}: PASS"
+                        )
+            if access_context == "contextual":
+                _navigation_text(
+                    journey.get("context_setup"), f"{prefix}.context_setup"
+                )
+                if str(journey.get("entry_result") or "").strip().upper() not in {
+                    "PASS",
+                    "FAIL",
+                }:
+                    raise ValueError(f"{prefix}.entry_result deve ser PASS ou FAIL")
+                if (
+                    verdict == "APPROVED"
+                    and str(journey["entry_result"]).strip().upper() != "PASS"
+                ):
+                    raise ValueError(
+                        f"verdict APPROVED exige {prefix}.entry_result: PASS"
+                    )
+
+        missing_targets = sorted(set(targets) - covered_by_pass)
+        if verdict == "APPROVED":
+            if candidate_ref != observed_ref:
+                raise ValueError("candidato testado difere do candidato declarado")
+            if findings:
+                raise ValueError("verdict APPROVED exige findings vazio")
+            if failed_journeys:
+                raise ValueError(
+                    f"verdict APPROVED contém jornadas FAIL: {failed_journeys}"
+                )
+            if shortcut_journeys:
+                raise ValueError(
+                    "atalhos técnicos não comprovam navegação do produto: "
+                    f"{shortcut_journeys}"
+                )
+            if missing_targets:
+                raise ValueError(
+                    "targets órfãos, sem jornada PASS pela UI de produção: "
+                    f"{missing_targets}"
+                )
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+        return False, f"navigation_reachability FAIL: {exc}"
+
+    return True, (
+        "navigation_reachability: "
+        f"{len(targets)} targets, {len(journeys)} jornadas, verdict={verdict}"
+    )
+
+
+_REVIEW_OUTCOME_VERDICTS = {"APPROVED", "REJECTED"}
+
+
+def _review_markdown_verdict(path: Path) -> str:
+    raw = path.read_text(encoding="utf-8", errors="strict")
+    verdicts = [
+        match.group(1).upper()
+        for match in re.finditer(
+            r"(?mi)^\s*(?:verdict|veredicto|resultado|result|parecer)\s*"
+            r"[:=-]\s*(APPROVED|REJECTED)\s*$",
+            raw,
+        )
+    ]
+    if len(verdicts) != 1:
+        raise ValueError(
+            "o relatório Markdown deve conter exatamente um veredito explícito "
+            "APPROVED ou REJECTED"
+        )
+    return verdicts[0]
+
+
+def _validate_review_outcome_payload(
+    *,
+    payload: dict,
+    expected_refs: set[str],
+    expected_scope_hash: str,
+    markdown_file: Path | None,
+    require_approved: bool,
+) -> tuple[str, set[str]]:
+    if payload.get("schema_version") != 1:
+        raise ValueError("schema_version deve ser 1")
+    if str(payload.get("scope_sha256") or "").strip().lower() != expected_scope_hash:
+        raise ValueError("scope_sha256 não corresponde aos bytes do escopo")
+    if not expected_refs:
+        raise ValueError("o escopo não contém referências identificáveis")
+
+    verdict = _navigation_text(payload.get("verdict"), "verdict").upper()
+    if verdict not in _REVIEW_OUTCOME_VERDICTS:
+        raise ValueError("verdict deve ser APPROVED ou REJECTED")
+    if require_approved and verdict != "APPROVED":
+        raise ValueError("este gate exige verdict APPROVED")
+
+    results: dict[str, dict] = {}
+    failed_refs: set[str] = set()
+    for index, raw_result in enumerate(
+        _navigation_list(payload.get("results"), "results")
+    ):
+        result = _navigation_mapping(raw_result, f"results[{index}]")
+        ref = _navigation_text(result.get("ref"), f"results[{index}].ref").upper()
+        if ref in results:
+            raise ValueError(f"resultado duplicado para {ref}")
+        status = _navigation_text(
+            result.get("result"), f"results[{index}].result"
+        ).upper()
+        if status not in {"PASS", "FAIL"}:
+            raise ValueError(f"results[{index}].result deve ser PASS ou FAIL")
+        evidence = _navigation_list(
+            result.get("evidence"), f"results[{index}].evidence"
+        )
+        if not evidence:
+            raise ValueError(f"results[{index}].evidence não pode ser vazio")
+        for evidence_index, value in enumerate(evidence):
+            _navigation_text(
+                value,
+                f"results[{index}].evidence[{evidence_index}]",
+            )
+        if status == "FAIL":
+            failed_refs.add(ref)
+        results[ref] = result
+
+    missing_refs = sorted(expected_refs - set(results))
+    extra_refs = sorted(set(results) - expected_refs)
+    if missing_refs or extra_refs:
+        raise ValueError(
+            f"cobertura do review divergente; ausentes={missing_refs}, "
+            f"extras={extra_refs}"
+        )
+
+    finding_ids: set[str] = set()
+    finding_refs: set[str] = set()
+    findings = _navigation_list(payload.get("findings"), "findings")
+    for index, raw_finding in enumerate(findings):
+        finding = _navigation_mapping(raw_finding, f"findings[{index}]")
+        finding_id = _navigation_text(
+            finding.get("id"), f"findings[{index}].id"
+        ).upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_.:-]{2,63}", finding_id):
+            raise ValueError(f"findings[{index}].id inválido: {finding_id!r}")
+        if finding_id in finding_ids:
+            raise ValueError(f"finding duplicado: {finding_id}")
+        finding_ids.add(finding_id)
+        refs = {
+            _navigation_text(value, f"findings[{index}].refs").upper()
+            for value in _navigation_list(
+                finding.get("refs"), f"findings[{index}].refs"
+            )
+        }
+        if not refs:
+            raise ValueError(f"findings[{index}].refs não pode ser vazio")
+        unknown_refs = sorted(refs - expected_refs)
+        if unknown_refs:
+            raise ValueError(
+                f"finding {finding_id} aponta referências inexistentes: {unknown_refs}"
+            )
+        _navigation_text(finding.get("summary"), f"findings[{index}].summary")
+        evidence = _navigation_list(
+            finding.get("evidence"), f"findings[{index}].evidence"
+        )
+        if not evidence:
+            raise ValueError(f"findings[{index}].evidence não pode ser vazio")
+        for evidence_index, value in enumerate(evidence):
+            _navigation_text(
+                value,
+                f"findings[{index}].evidence[{evidence_index}]",
+            )
+        finding_refs.update(refs)
+
+    if verdict == "APPROVED":
+        if failed_refs:
+            raise ValueError(
+                f"verdict APPROVED contém resultados FAIL: {sorted(failed_refs)}"
+            )
+        if findings:
+            raise ValueError("verdict APPROVED exige findings vazio")
+    else:
+        if not failed_refs:
+            raise ValueError("verdict REJECTED exige ao menos um resultado FAIL")
+        if not findings:
+            raise ValueError("verdict REJECTED exige findings acionáveis")
+        uncovered_failures = sorted(failed_refs - finding_refs)
+        findings_without_failure = sorted(finding_refs - failed_refs)
+        if uncovered_failures or findings_without_failure:
+            raise ValueError(
+                "findings e resultados FAIL divergem; "
+                f"falhas_sem_finding={uncovered_failures}, "
+                f"findings_sem_falha={findings_without_failure}"
+            )
+
+    if markdown_file is not None:
+        markdown_verdict = _review_markdown_verdict(markdown_file)
+        if markdown_verdict != verdict:
+            raise ValueError(
+                "veredito do Markdown diverge do recibo estruturado: "
+                f"{markdown_verdict} != {verdict}"
+            )
+    return verdict, finding_ids
+
+
+def _load_review_outcome(
+    *,
+    root: Path,
+    path: str,
+    expected_refs: set[str],
+    scope_file: Path,
+    markdown_path: str | None,
+    require_approved: bool,
+) -> tuple[str, set[str]]:
+    receipt_file = _navigation_repo_file(root, path, "review outcome")
+    markdown_file = (
+        _navigation_repo_file(root, markdown_path, "review Markdown")
+        if markdown_path
+        else None
+    )
+    payload = _navigation_mapping(
+        yaml.safe_load(receipt_file.read_text(encoding="utf-8", errors="strict")),
+        "review outcome",
+    )
+    return _validate_review_outcome_payload(
+        payload=payload,
+        expected_refs=expected_refs,
+        expected_scope_hash=hashlib.sha256(scope_file.read_bytes()).hexdigest(),
+        markdown_file=markdown_file,
+        require_approved=require_approved,
+    )
+
+
+def review_outcome_valid(
+    path: str,
+    scope_path: str,
+    scope_pattern: str,
+    markdown_path: str | None = None,
+    require_approved: bool = False,
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Validate a scope-bound, deterministic review verdict and finding set."""
+
+    root = Path(project_root).resolve()
+    try:
+        scope_file = _navigation_repo_file(root, scope_path, "review scope")
+        expected_refs = _navigation_scope_ids(scope_file, scope_pattern)
+        verdict, finding_ids = _load_review_outcome(
+            root=root,
+            path=path,
+            expected_refs=expected_refs,
+            scope_file=scope_file,
+            markdown_path=markdown_path,
+            require_approved=require_approved,
+        )
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+        return False, f"review_outcome_valid FAIL: {exc}"
+    return True, (
+        "review_outcome_valid: "
+        f"{len(expected_refs)} refs, {len(finding_ids)} findings, verdict={verdict}"
+    )
+
+
+def review_chain_approved(
+    review_path: str,
+    review_markdown_path: str,
+    scope_path: str,
+    scope_pattern: str,
+    fix_review_path: str,
+    fix_review_markdown_path: str,
+    fix_scope_path: str | None = None,
+    fix_scope_pattern: str = r"\bFX-\d+\b",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Require either an approved review or an approved receipt for all findings."""
+
+    root = Path(project_root).resolve()
+    try:
+        scope_file = _navigation_repo_file(root, scope_path, "review scope")
+        expected_refs = _navigation_scope_ids(scope_file, scope_pattern)
+        verdict, finding_ids = _load_review_outcome(
+            root=root,
+            path=review_path,
+            expected_refs=expected_refs,
+            scope_file=scope_file,
+            markdown_path=review_markdown_path,
+            require_approved=False,
+        )
+        fix_scope_candidate = root / (fix_scope_path or "")
+        fix_review_candidate = root / fix_review_path
+        has_fix_scope = bool(fix_scope_path) and fix_scope_candidate.is_file()
+        has_fix_review = fix_review_candidate.is_file()
+        if has_fix_scope != has_fix_review:
+            raise ValueError(
+                "fix scope e fix review devem existir juntos para comprovar o delta"
+            )
+        if not has_fix_scope:
+            if verdict == "APPROVED":
+                return True, "review_chain_approved: review original aprovado"
+            raise ValueError("review rejeitado ainda não possui fix review aprovado")
+
+        fix_scope_file = _navigation_repo_file(
+            root, fix_scope_path, "fix review scope"
+        )
+        fix_refs = _navigation_scope_ids(fix_scope_file, fix_scope_pattern)
+        if verdict == "REJECTED":
+            if not finding_ids:
+                raise ValueError("review rejeitado não possui findings para auditar")
+            normalized_fix_scope = fix_scope_file.read_text(
+                encoding="utf-8", errors="strict"
+            ).upper()
+            missing_findings = sorted(
+                finding_id
+                for finding_id in finding_ids
+                if finding_id not in normalized_fix_scope
+            )
+            if missing_findings:
+                raise ValueError(
+                    "fix report não referencia findings do review original: "
+                    f"{missing_findings}"
+                )
+
+        fix_verdict, remaining_findings = _load_review_outcome(
+            root=root,
+            path=fix_review_path,
+            expected_refs=fix_refs,
+            scope_file=fix_scope_file,
+            markdown_path=fix_review_markdown_path,
+            require_approved=True,
+        )
+        if remaining_findings:
+            raise ValueError("fix review aprovado não pode manter findings")
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+        return False, f"review_chain_approved FAIL: {exc}"
+    return True, (
+        "review_chain_approved: "
+        f"{len(fix_refs)} findings corrigidos, verdict={fix_verdict}"
+    )
+
+
 def builder_batch_plan_valid(
     path: str,
     request_path: str,
@@ -312,6 +1013,91 @@ def api_contract_complete(
             return False, "api_contract_complete FAIL: produto exige criacao mas contrato nao tem POST"
 
     return True, f"api_contract_complete: {len(non_health)} endpoint(s), methods={sorted({m for m, _ in endpoint_matches})}"
+
+
+def library_contract_complete(
+    path: str = "docs/api_contract.md",
+    project_root: str = ".",
+    min_symbols: int = 3,
+) -> tuple[bool, str]:
+    """Validate an actionable public contract for a headless library/SDK."""
+
+    full = Path(project_root) / path
+    if not full.exists():
+        return False, f"library_contract_complete FAIL: {path} nao existe"
+
+    content = full.read_text(encoding="utf-8", errors="ignore")
+    required_sections = {
+        "API Publica": ("API Pública", "Public API"),
+        "Operacoes": ("Operações", "Operations"),
+        "Modelos": ("Modelos", "Models"),
+        "Erros": ("Erros", "Errors"),
+        "Compatibilidade": ("Compatibilidade", "Compatibility"),
+    }
+    missing = [
+        label
+        for label, aliases in required_sections.items()
+        if not any(_extract_markdown_section(content, alias) for alias in aliases)
+    ]
+    if missing:
+        return False, (
+            "library_contract_complete FAIL: "
+            f"{path} faltam secoes: {missing}"
+        )
+
+    expected_columns = {
+        "symbol": {"symbol", "simbolo"},
+        "kind": {"kind", "tipo"},
+        "signature": {"signature", "assinatura"},
+        "description": {"description", "descricao"},
+        "errors": {"errors", "erros"},
+    }
+    table_lines = [line.strip() for line in content.splitlines() if line.strip().startswith("|")]
+    header_index: int | None = None
+    column_indexes: dict[str, int] = {}
+    for index, line in enumerate(table_lines):
+        cells = [_normalize(cell.strip().strip("`")) for cell in line.strip("|").split("|")]
+        resolved: dict[str, int] = {}
+        for canonical, aliases in expected_columns.items():
+            for cell_index, cell in enumerate(cells):
+                if cell in aliases:
+                    resolved[canonical] = cell_index
+                    break
+        if len(resolved) == len(expected_columns):
+            header_index = index
+            column_indexes = resolved
+            break
+
+    if header_index is None:
+        return False, (
+            "library_contract_complete FAIL: falta tabela publica com colunas "
+            "Symbol | Kind | Signature | Description | Errors"
+        )
+
+    symbols: set[str] = set()
+    for line in table_lines[header_index + 1 :]:
+        raw_cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(raw_cells) <= max(column_indexes.values()):
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in raw_cells):
+            continue
+        symbol = raw_cells[column_indexes["symbol"]].strip("` ")
+        signature = raw_cells[column_indexes["signature"]].strip("` ")
+        description = raw_cells[column_indexes["description"]].strip()
+        errors = raw_cells[column_indexes["errors"]].strip()
+        if symbol and signature and description and errors:
+            symbols.add(symbol)
+
+    if len(symbols) < min_symbols:
+        return False, (
+            f"library_contract_complete FAIL: {path} tem {len(symbols)} "
+            f"simbolo(s) publico(s) acionavel(is) (min {min_symbols})"
+        )
+
+    return True, (
+        f"library_contract_complete: {len(symbols)} simbolo(s) publico(s) "
+        "com assinatura, descricao e erros"
+    )
 
 
 def relative_dates_only(path: str = "docs/test_data.md", project_root: str = ".") -> tuple[bool, str]:

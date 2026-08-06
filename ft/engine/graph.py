@@ -73,6 +73,11 @@ class Node:
     optional: bool = False
     # Override provider-specific de reasoning effort para este node
     llm_effort: str | None = None
+    # Human gate que exige instrução textual do stakeholder para avançar.
+    approval_message_required: bool = False
+    # Pacote opcional que enriquece a apresentação da decisão humana. A engine
+    # sempre deriva fallbacks para forks antigos que não declaram este campo.
+    decision_context: dict[str, Any] | None = None
     # Sugestão de janela para a política global de inatividade da engine.
     # Stream, toda a worktree isolada e processo renovam a lease sem teto.
     llm_timeout_seconds: int | None = None
@@ -368,6 +373,10 @@ def load_graph(path: str | Path) -> ProcessGraph:
             llm_engine=node_raw.get("llm_engine"),
             llm_model=node_raw.get("llm_model"),
             llm_effort=node_raw.get("llm_effort"),
+            approval_message_required=node_raw.get(
+                "approval_message_required", False
+            ),
+            decision_context=node_raw.get("decision_context"),
             llm_timeout_seconds=node_raw.get("llm_timeout_seconds"),
             llm_episode=node_raw.get("llm_episode"),
             llm_episode_budget_seconds=node_raw.get("llm_episode_budget_seconds"),

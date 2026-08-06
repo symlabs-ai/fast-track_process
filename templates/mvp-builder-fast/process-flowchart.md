@@ -1,4 +1,4 @@
-# Fluxograma — MVP Builder Fast (process.yml v1.0.0)
+# Fluxograma — MVP Builder Fast (process.yml v1.11.0)
 
 Fluxo principal do template `mvp-builder-fast`. Uma sessão LLM é mantida por
 sprint; `⑂` indica lanes paralelas e `R` indica a lane independente de review.
@@ -6,21 +6,7 @@ sprint; `⑂` indica lanes paralelas e `R` indica a lane independente de review.
 ```mermaid
 flowchart TD
     START([ft run]) --> PLAN["Plano interno<br/>state/llm_execution_plan.yml"]
-    PLAN --> PRD{"PRD existe?"}
-
-    subgraph S1["Sprint 01 — MDD · sessão s1"]
-        HIP["Capturar hipótese"]
-        HIPG{{"Revisão da hipótese"}}
-        WRITEPRD["Redigir PRD"]
-        PRDG{{"Revisão do PRD"}}
-        MDD[["Gate MDD"]]
-        HIP --> HIPG --> WRITEPRD --> PRDG --> MDD
-        HIPG -. reject .-> HIP
-        PRDG -. reject .-> WRITEPRD
-    end
-
-    PRD -- não --> HIP
-    PRD -- sim --> UI
+    PLAN --> MDD[["Validar hipótese + PRD<br/>produzidos pelo template mdd"]]
     MDD --> UI
 
     subgraph S2["Sprint 02 — Planning · sessão s2 + lanes"]

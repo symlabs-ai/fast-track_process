@@ -659,6 +659,25 @@ class TestAbort:
 
 
 class TestClose:
+    def test_post_close_instructions_are_headless_when_ui_is_disabled(
+        self,
+        tmp_path,
+    ):
+        contract = tmp_path / ".ft" / "project.yml"
+        contract.parent.mkdir(parents=True)
+        contract.write_text(
+            "validation:\n  mode: disabled\n",
+            encoding="utf-8",
+        )
+
+        instructions = cli_main._post_close_validation_instructions(tmp_path)
+        rendered = "\n".join(instructions)
+
+        assert "make ci" in rendered
+        assert "API pública" in rendered
+        assert "HTTP 200" not in rendered
+        assert ".next" not in rendered
+
     @pytest.mark.parametrize(
         "state",
         [

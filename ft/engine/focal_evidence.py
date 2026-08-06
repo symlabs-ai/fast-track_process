@@ -164,6 +164,46 @@ pré-condições aceitáveis.
 """
 
 
+HEADLESS_FOCAL_EVIDENCE_INSTRUCTIONS = """\
+CONTRATO GLOBAL DE FIDELIDADE DA AUDITORIA FOCAL HEADLESS
+
+Este projeto não possui interface gráfica. Não crie, solicite ou use tela,
+navegador, screenshot, mockup, captura visual, dispositivo físico ou jornada de
+UI como evidência. Uma aprovação precisa terminar com `VERDICT: APPROVED` e
+incluir exatamente um bloco YAML `focal_evidence`; sem esse recibo, a engine
+rejeitará a aprovação. Use esta estrutura:
+
+```yaml
+focal_evidence:
+  coverage_complete: true
+  finding_kind: behavior | technical
+  evidence_level: integration | unit
+  data_origin: public_interface | real_backend | local_product
+  mock_only: false
+  journey:
+    - comando, chamada pública ou etapa programática realmente executada
+  visual_evidence: []
+  claims:
+    - requirement: trecho verificável do finding
+      expected: resultado exigido
+      observed: resultado realmente observado
+      status: PASS
+      evidence:
+        - path/repo-local.log
+```
+
+Liste uma claim para cada comportamento, campo programático, artefato ou estado
+citado no finding. `evidence` aceita somente arquivos repo-locais existentes;
+registre comandos e resultados sanitizados em `observed`. Use integração real
+quando o finding atravessar persistência, rede, banco ou outro sistema externo;
+mock ou teste isolado não prova esse tipo de aceite. Se a integração necessária
+não puder ser executada ou qualquer claim falhar, emita `VERDICT: REJECTED`.
+Se um recibo histórico usar `ui_data` ou `ui_visual`, substitua essa classificação
+por `behavior` ou `technical`; a evidência antiga não cria uma superfície de UI.
+Nunca grave segredos, credenciais ou dados pessoais brutos na evidência.
+"""
+
+
 def _normalized(value: object) -> str:
     text = unicodedata.normalize("NFKD", str(value)).encode("ascii", "ignore").decode()
     return re.sub(r"\s+", " ", text.casefold()).strip()
@@ -421,13 +461,16 @@ def validate_focal_approval(
     review_output: str,
     finding_context: str,
     project_root: str | Path,
+    ui_validation_enabled: bool = True,
 ) -> FocalEvidenceValidation:
     """Validate evidence fidelity only when a focal reviewer approves.
 
     A rejection remains fail-safe and needs no approval receipt.  An approval
     must carry a structured, repository-verifiable claim matrix.  Findings
     about real data rendered in UI additionally require a physical end-to-end
-    journey and cannot be proved by mocks or component fixtures.
+    journey and cannot be proved by mocks or component fixtures. Projects whose
+    surface contract explicitly disables UI validation retain the common
+    repository-evidence checks without inheriting physical-screen requirements.
     """
 
     verdict = _explicit_verdict(review_output)
@@ -493,6 +536,39 @@ def validate_focal_approval(
                 False,
                 f"claim focal {index} não possui evidência repo-local existente",
             )
+
+    if not ui_validation_enabled:
+        if _normalized(record.get("finding_kind")) not in {"behavior", "technical"}:
+            return FocalEvidenceValidation(
+                False,
+                "projeto headless exige finding_kind: behavior ou technical",
+            )
+        if _normalized(record.get("evidence_level")) not in {"integration", "unit"}:
+            return FocalEvidenceValidation(
+                False,
+                "projeto headless exige evidence_level: integration ou unit",
+            )
+        if _normalized(record.get("data_origin")) not in {
+            "real_system",
+            "public_interface",
+            "real_backend",
+            "local_product",
+        }:
+            return FocalEvidenceValidation(
+                False,
+                "projeto headless exige origem programática verificável",
+            )
+        if not _list_of_strings(record.get("journey")):
+            return FocalEvidenceValidation(
+                False,
+                "projeto headless exige ao menos uma etapa programática executada",
+            )
+        if _list_of_strings(record.get("visual_evidence")):
+            return FocalEvidenceValidation(
+                False,
+                "projeto headless não aceita visual_evidence",
+            )
+        return FocalEvidenceValidation(True)
 
     if not _requires_real_ui_data(finding_context):
         return FocalEvidenceValidation(True)

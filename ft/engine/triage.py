@@ -141,6 +141,7 @@ def classify_demand(
         llm_model=llm_model,
         llm_effort=llm_effort,
         raw_output=True,
+        workflow_id=Path(process_yaml_path).parent.name,
     )
 
     # Parse JSON da resposta
@@ -256,6 +257,7 @@ def adapt_process(
         llm_model=llm_model,
         llm_effort=llm_effort,
         raw_output=True,
+        workflow_id=Path(process_yaml_path).parent.name,
     )
 
     if not result.success:

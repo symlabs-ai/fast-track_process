@@ -1,9 +1,11 @@
 """Unit tests for ft.engine.validators.*"""
 
+import hashlib
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from ft.engine.parallel import check_independence
 from ft.engine.validators.artifacts import (
@@ -15,8 +17,13 @@ from ft.engine.validators.artifacts import (
     features_catalog_valid,
     has_sections,
     implemented_backlog_covered_by_features,
+    library_contract_complete,
     min_lines,
     min_user_stories,
+    navigation_contract_valid,
+    navigation_reachability,
+    review_chain_approved,
+    review_outcome_valid,
     backlog_pending_decisions,
     project_backlog_valid,
     pytest_red_quality,
@@ -88,6 +95,171 @@ class TestIdentityReady:
         assert not passed
         assert "sensível" in detail
 
+
+class TestNavigationReachability:
+    @staticmethod
+    def _write_fixture(tmp_path):
+        docs = tmp_path / "docs"
+        evidence = docs / "evidence" / "navigation"
+        evidence.mkdir(parents=True)
+        scope = docs / "scope.yml"
+        scope.write_text("requirements:\n  - id: R-001\n  - id: R-002\n", encoding="utf-8")
+        contract = {
+            "schema_version": 1,
+            "scope_sha256": hashlib.sha256(scope.read_bytes()).hexdigest(),
+            "scope_refs": [
+                {"ref": "R-001", "disposition": "ui", "targets": ["NAV-HOME"]},
+                {"ref": "R-002", "disposition": "ui", "targets": ["NAV-ADMIN"]},
+            ],
+            "targets": [
+                {
+                    "id": "NAV-HOME",
+                    "label": "Resumo principal",
+                    "entry_policy": "public",
+                },
+                {
+                    "id": "NAV-ADMIN",
+                    "label": "Administração",
+                    "entry_policy": "entitled",
+                },
+            ],
+        }
+        contract_path = docs / "navigation-contract.yml"
+        contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+
+        public_evidence = evidence / "public.txt"
+        entitled_evidence = evidence / "entitled.txt"
+        public_evidence.write_text("browser journey public PASS\n", encoding="utf-8")
+        entitled_evidence.write_text("browser journey entitled PASS\n", encoding="utf-8")
+        report = {
+            "schema_version": 1,
+            "contract_sha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(),
+            "verdict": "APPROVED",
+            "candidate_ref": "build:abc123",
+            "observed_candidate_ref": "build:abc123",
+            "environment": {
+                "kind": "local_browser",
+                "execution_surface": "chromium",
+            },
+            "findings": [],
+            "journeys": [
+                {
+                    "id": "public-home",
+                    "entry_type": "primary_navigation",
+                    "start_surface": "first product page",
+                    "entry_point": "Home",
+                    "navigation_mode": "production_ui",
+                    "steps": ["Open the product", "Select Home"],
+                    "targets": ["NAV-HOME"],
+                    "result": "PASS",
+                    "evidence": "docs/evidence/navigation/public.txt",
+                    "shortcuts": [],
+                    "access_context": "public",
+                },
+                {
+                    "id": "entitled-admin",
+                    "entry_type": "menu",
+                    "start_surface": "authenticated home",
+                    "entry_point": "Account menu > Administration",
+                    "navigation_mode": "production_ui",
+                    "steps": ["Open account menu", "Select Administration"],
+                    "targets": ["NAV-ADMIN"],
+                    "result": "PASS",
+                    "evidence": "docs/evidence/navigation/entitled.txt",
+                    "shortcuts": [],
+                    "access_context": "entitled",
+                    "entitlement_setup": "role assigned to isolated test identity",
+                    "eligible_entry_result": "PASS",
+                    "ineligible_entry_result": "PASS",
+                },
+            ],
+        }
+        report_path = docs / "navigation-reachability.yml"
+        report_path.write_text(yaml.safe_dump(report, sort_keys=False), encoding="utf-8")
+        return scope, contract_path, report_path
+
+    @staticmethod
+    def _contract_args(tmp_path):
+        return {
+            "path": "docs/navigation-contract.yml",
+            "scope_path": "docs/scope.yml",
+            "scope_pattern": r"\bR-\d+\b",
+            "project_root": str(tmp_path),
+        }
+
+    @staticmethod
+    def _reachability_args(tmp_path):
+        return {
+            "contract_path": "docs/navigation-contract.yml",
+            "report_path": "docs/navigation-reachability.yml",
+            "evidence_root": "docs/evidence/navigation",
+            "scope_path": "docs/scope.yml",
+            "scope_pattern": r"\bR-\d+\b",
+            "project_root": str(tmp_path),
+        }
+
+    def test_contract_classifies_every_scope_reference(self, tmp_path):
+        self._write_fixture(tmp_path)
+
+        passed, detail = navigation_contract_valid(**self._contract_args(tmp_path))
+
+        assert passed, detail
+        assert "2 refs" in detail
+        assert "2 targets" in detail
+
+    def test_contract_rejects_omitted_scope_reference(self, tmp_path):
+        _scope, contract_path, _report = self._write_fixture(tmp_path)
+        payload = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+        payload["scope_refs"] = payload["scope_refs"][:1]
+        contract_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+        passed, detail = navigation_contract_valid(**self._contract_args(tmp_path))
+
+        assert not passed
+        assert "R-002" in detail
+
+    def test_reachability_accepts_visible_public_and_entitled_journeys(self, tmp_path):
+        self._write_fixture(tmp_path)
+
+        passed, detail = navigation_reachability(**self._reachability_args(tmp_path))
+
+        assert passed, detail
+        assert "2 targets" in detail
+
+    def test_reachability_rejects_orphan_target(self, tmp_path):
+        _scope, _contract, report_path = self._write_fixture(tmp_path)
+        payload = yaml.safe_load(report_path.read_text(encoding="utf-8"))
+        payload["journeys"] = payload["journeys"][:1]
+        report_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+        passed, detail = navigation_reachability(**self._reachability_args(tmp_path))
+
+        assert not passed
+        assert "NAV-ADMIN" in detail
+        assert "órfãos" in detail
+
+    def test_reachability_rejects_technical_shortcut(self, tmp_path):
+        _scope, _contract, report_path = self._write_fixture(tmp_path)
+        payload = yaml.safe_load(report_path.read_text(encoding="utf-8"))
+        payload["journeys"][0]["shortcuts"] = ["direct_route"]
+        report_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+        passed, detail = navigation_reachability(**self._reachability_args(tmp_path))
+
+        assert not passed
+        assert "atalhos técnicos" in detail
+
+    def test_reachability_requires_both_entitlement_directions(self, tmp_path):
+        _scope, _contract, report_path = self._write_fixture(tmp_path)
+        payload = yaml.safe_load(report_path.read_text(encoding="utf-8"))
+        payload["journeys"][1]["ineligible_entry_result"] = "FAIL"
+        report_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+        passed, detail = navigation_reachability(**self._reachability_args(tmp_path))
+
+        assert not passed
+        assert "ineligible_entry_result" in detail
+
     def test_rejects_receipt_with_nested_sensitive_field(self, tmp_path):
         receipt = tmp_path / "docs" / "test-identity.json"
         receipt.parent.mkdir(parents=True)
@@ -105,6 +277,213 @@ class TestIdentityReady:
 
         assert not passed
         assert "sensível" in detail
+
+
+class TestReviewOutcome:
+    @staticmethod
+    def _write_primary(tmp_path, *, verdict="APPROVED"):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        scope = docs / "plan.yml"
+        scope.write_text(
+            "requirements:\n  - id: R-001\n  - id: R-002\n",
+            encoding="utf-8",
+        )
+        rejected = verdict == "REJECTED"
+        receipt = {
+            "schema_version": 1,
+            "scope_sha256": hashlib.sha256(scope.read_bytes()).hexdigest(),
+            "verdict": verdict,
+            "results": [
+                {
+                    "ref": "R-001",
+                    "result": "FAIL" if rejected else "PASS",
+                    "evidence": ["tests/test_one.py::test_one"],
+                },
+                {
+                    "ref": "R-002",
+                    "result": "PASS",
+                    "evidence": ["tests/test_two.py::test_two"],
+                },
+            ],
+            "findings": (
+                [
+                    {
+                        "id": "F-001",
+                        "refs": ["R-001"],
+                        "summary": "resultado observável diverge",
+                        "evidence": ["tests/test_one.py::test_one FAIL"],
+                    }
+                ]
+                if rejected
+                else []
+            ),
+        }
+        receipt_path = docs / "review.yml"
+        receipt_path.write_text(
+            yaml.safe_dump(receipt, sort_keys=False), encoding="utf-8"
+        )
+        markdown = docs / "review.md"
+        markdown.write_text(f"VERDICT: {verdict}\n", encoding="utf-8")
+        return scope, receipt_path, markdown
+
+    @staticmethod
+    def _args(tmp_path):
+        return {
+            "path": "docs/review.yml",
+            "scope_path": "docs/plan.yml",
+            "scope_pattern": r"\bR-\d+\b",
+            "markdown_path": "docs/review.md",
+            "project_root": str(tmp_path),
+        }
+
+    def test_accepts_approved_scope_bound_receipt(self, tmp_path):
+        self._write_primary(tmp_path)
+
+        passed, detail = review_outcome_valid(**self._args(tmp_path))
+
+        assert passed, detail
+        assert "2 refs" in detail
+        assert "APPROVED" in detail
+
+    def test_accepts_rejected_receipt_before_fix_but_not_at_gate(self, tmp_path):
+        self._write_primary(tmp_path, verdict="REJECTED")
+
+        passed, detail = review_outcome_valid(**self._args(tmp_path))
+        gated, gated_detail = review_outcome_valid(
+            **self._args(tmp_path), require_approved=True
+        )
+
+        assert passed, detail
+        assert not gated
+        assert "exige verdict APPROVED" in gated_detail
+
+    def test_rejects_markdown_and_structured_verdict_divergence(self, tmp_path):
+        self._write_primary(tmp_path)
+        (tmp_path / "docs/review.md").write_text(
+            "VERDICT: REJECTED\n", encoding="utf-8"
+        )
+
+        passed, detail = review_outcome_valid(**self._args(tmp_path))
+
+        assert not passed
+        assert "diverge" in detail
+
+    def test_chain_accepts_approved_focal_review_for_original_findings(self, tmp_path):
+        _scope, _review_path, _markdown = self._write_primary(
+            tmp_path, verdict="REJECTED"
+        )
+        fix_scope = tmp_path / "docs/fix-report.md"
+        fix_scope.write_text(
+            "FX-001 | origem F-001 | correção aplicada\n", encoding="utf-8"
+        )
+        fix_receipt = {
+            "schema_version": 1,
+            "scope_sha256": hashlib.sha256(fix_scope.read_bytes()).hexdigest(),
+            "verdict": "APPROVED",
+            "results": [
+                {
+                    "ref": "FX-001",
+                    "result": "PASS",
+                    "evidence": ["tests/test_one.py::test_one PASS"],
+                }
+            ],
+            "findings": [],
+        }
+        (tmp_path / "docs/fix-review.yml").write_text(
+            yaml.safe_dump(fix_receipt, sort_keys=False), encoding="utf-8"
+        )
+        (tmp_path / "docs/fix-review.md").write_text(
+            "VERDICT: APPROVED\n", encoding="utf-8"
+        )
+
+        passed, detail = review_chain_approved(
+            review_path="docs/review.yml",
+            review_markdown_path="docs/review.md",
+            scope_path="docs/plan.yml",
+            scope_pattern=r"\bR-\d+\b",
+            fix_review_path="docs/fix-review.yml",
+            fix_review_markdown_path="docs/fix-review.md",
+            fix_scope_path="docs/fix-report.md",
+            fix_scope_pattern=r"\bFX-\d+\b",
+            project_root=str(tmp_path),
+        )
+
+        assert passed, detail
+        assert "1 findings corrigidos" in detail
+
+    def test_chain_rejects_stale_fix_receipt(self, tmp_path):
+        self._write_primary(tmp_path, verdict="REJECTED")
+        (tmp_path / "docs/fix-report.md").write_text(
+            "FX-001 | origem F-001 | correção aplicada\n", encoding="utf-8"
+        )
+        fix_receipt = {
+            "schema_version": 1,
+            "scope_sha256": "0" * 64,
+            "verdict": "APPROVED",
+            "results": [
+                {"ref": "FX-001", "result": "PASS", "evidence": ["PASS"]}
+            ],
+            "findings": [],
+        }
+        (tmp_path / "docs/fix-review.yml").write_text(
+            yaml.safe_dump(fix_receipt), encoding="utf-8"
+        )
+        (tmp_path / "docs/fix-review.md").write_text(
+            "VERDICT: APPROVED\n", encoding="utf-8"
+        )
+
+        passed, detail = review_chain_approved(
+            review_path="docs/review.yml",
+            review_markdown_path="docs/review.md",
+            scope_path="docs/plan.yml",
+            scope_pattern=r"\bR-\d+\b",
+            fix_review_path="docs/fix-review.yml",
+            fix_review_markdown_path="docs/fix-review.md",
+            fix_scope_path="docs/fix-report.md",
+            fix_scope_pattern=r"\bFX-\d+\b",
+            project_root=str(tmp_path),
+        )
+
+        assert not passed
+        assert "scope_sha256" in detail
+
+    def test_chain_validates_fix_from_stakeholder_after_approved_review(self, tmp_path):
+        self._write_primary(tmp_path, verdict="APPROVED")
+        fix_scope = tmp_path / "docs/fix-report.md"
+        fix_scope.write_text(
+            "FX-001 | origem stakeholder | correção aplicada\n", encoding="utf-8"
+        )
+        fix_receipt = {
+            "schema_version": 1,
+            "scope_sha256": hashlib.sha256(fix_scope.read_bytes()).hexdigest(),
+            "verdict": "APPROVED",
+            "results": [
+                {"ref": "FX-001", "result": "PASS", "evidence": ["PASS"]}
+            ],
+            "findings": [],
+        }
+        (tmp_path / "docs/fix-review.yml").write_text(
+            yaml.safe_dump(fix_receipt), encoding="utf-8"
+        )
+        (tmp_path / "docs/fix-review.md").write_text(
+            "VERDICT: APPROVED\n", encoding="utf-8"
+        )
+
+        passed, detail = review_chain_approved(
+            review_path="docs/review.yml",
+            review_markdown_path="docs/review.md",
+            scope_path="docs/plan.yml",
+            scope_pattern=r"\bR-\d+\b",
+            fix_review_path="docs/fix-review.yml",
+            fix_review_markdown_path="docs/fix-review.md",
+            fix_scope_path="docs/fix-report.md",
+            fix_scope_pattern=r"\bFX-\d+\b",
+            project_root=str(tmp_path),
+        )
+
+        assert passed, detail
+        assert "1 findings corrigidos" in detail
 
 
 class TestMinLines:
@@ -514,6 +893,65 @@ class TestApiContractComplete:
 
         assert not passed
         assert "1 endpoint" in detail
+
+
+class TestLibraryContractComplete:
+    def test_passes_actionable_headless_contract(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "api_contract.md").write_text(
+            "# Contrato Público\n\n"
+            "## API Pública\n\nImport canônico `forgeplaces`.\n\n"
+            "## Operações\n\n"
+            "| Símbolo | Tipo | Assinatura | Descrição | Erros |\n"
+            "|---|---|---|---|---|\n"
+            "| `ForgePlaces` | class | `ForgePlaces(config)` | Cliente público | `ConfigurationError` |\n"
+            "| `search_nearby` | method | `search_nearby(request)` | Busca locais | `ProviderError` |\n"
+            "| `geocode` | method | `geocode(request)` | Resolve endereço | `ValidationError` |\n\n"
+            "## Modelos\n\nModelos são imutáveis e tipados.\n\n"
+            "## Erros\n\nErros públicos são normalizados.\n\n"
+            "## Compatibilidade\n\nPython 3.12+ e SemVer.\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = library_contract_complete(project_root=str(tmp_path))
+
+        assert passed
+        assert "3 simbolo" in detail
+
+    def test_rejects_endpoint_only_contract(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "api_contract.md").write_text(
+            "## API Pública\n\nHTTP.\n\n"
+            "## Operações\n\n| Método | Path |\n|---|---|\n| GET | /health |\n\n"
+            "## Modelos\n\nJSON.\n\n## Erros\n\nHTTP.\n\n"
+            "## Compatibilidade\n\nV1.\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = library_contract_complete(project_root=str(tmp_path))
+
+        assert not passed
+        assert "Symbol | Kind | Signature" in detail
+
+    def test_rejects_incomplete_symbol_rows(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "api_contract.md").write_text(
+            "## Public API\n\nSDK.\n\n## Operations\n\n"
+            "| Symbol | Kind | Signature | Description | Errors |\n"
+            "|---|---|---|---|---|\n"
+            "| `Client` | class | `Client()` | Cliente | — |\n\n"
+            "## Models\n\nTyped.\n\n## Errors\n\nTyped.\n\n"
+            "## Compatibility\n\nSemVer.\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = library_contract_complete(project_root=str(tmp_path))
+
+        assert not passed
+        assert "1 simbolo" in detail
 
 
 class TestRelativeDatesOnly:

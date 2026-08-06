@@ -7,12 +7,13 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import time
 
 import yaml
 
@@ -37,6 +38,10 @@ from ft.engine.process_improvements import (
     load_process_improvement_review,
     process_improvement_close_readiness,
     resolve_global_process_candidate,
+)
+from ft.engine.validation_profiles import (
+    validation_profile_catalog,
+    write_validation_matrix,
 )
 from ft.engine.runner import StepRunner
 from ft.engine.validators.artifacts import (
@@ -63,16 +68,46 @@ def _oneline(s: str | None, limit: int = 100) -> str:
     return s[:limit] + ("…" if len(s) > limit else "")
 
 
+def _positive_interval_seconds(value: str) -> int:
+    try:
+        seconds = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("deve ser um número inteiro") from exc
+    if seconds <= 0:
+        raise argparse.ArgumentTypeError("deve ser maior que zero")
+    return seconds
+
+
 def add_llm_engine_flags(parser):
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--claude", nargs="?", const=True, metavar="MODEL",
-                       help="Usar Claude CLI (opcional: modelo, ex: --claude opus)")
-    group.add_argument("--codex", nargs="?", const=True, metavar="MODEL",
-                       help="Usar Codex CLI (opcional: modelo, ex: --codex gpt-5.3)")
-    group.add_argument("--gemini", nargs="?", const=True, metavar="MODEL",
-                       help="Usar Gemini CLI (opcional: modelo, ex: --gemini gemini-2.5-pro)")
-    group.add_argument("--opencode", nargs="?", const=True, metavar="MODEL",
-                       help="Usar OpenCode CLI (default: pgx/zai-org_glm-4.7-flash)")
+    group.add_argument(
+        "--claude",
+        nargs="?",
+        const=True,
+        metavar="MODEL",
+        help="Usar Claude CLI (opcional: modelo, ex: --claude opus)",
+    )
+    group.add_argument(
+        "--codex",
+        nargs="?",
+        const=True,
+        metavar="MODEL",
+        help="Usar Codex CLI (opcional: modelo, ex: --codex gpt-5.3)",
+    )
+    group.add_argument(
+        "--gemini",
+        nargs="?",
+        const=True,
+        metavar="MODEL",
+        help="Usar Gemini CLI (opcional: modelo, ex: --gemini gemini-2.5-pro)",
+    )
+    group.add_argument(
+        "--opencode",
+        nargs="?",
+        const=True,
+        metavar="MODEL",
+        help="Usar OpenCode CLI (default: pgx/zai-org_glm-4.7-flash)",
+    )
     parser.add_argument(
         "--effort",
         metavar="LEVEL",
@@ -222,8 +257,7 @@ def _template_process_file(template_dir: Path) -> Path | None:
     if canonical.is_file():
         return canonical
     legacy = sorted(
-        path for path in template_dir.glob("*.yml")
-        if path.name != "environment.yml"
+        path for path in template_dir.glob("*.yml") if path.name != "environment.yml"
     )
     return legacy[0] if legacy else None
 
@@ -277,7 +311,9 @@ def _guard_engine_repo(root: Path) -> None:
     if os.environ.get("FT_ALLOW_ENGINE_REPO"):
         return
     if root.resolve() == engine_root().resolve():
-        print("ERRO: este é o repositório do ft engine/template — não pode ser usado como projeto.")
+        print(
+            "ERRO: este é o repositório do ft engine/template — não pode ser usado como projeto."
+        )
         print("  Crie um projeto novo: ft init <nome>")
         _print_template_options()
         print("  Depois execute: ft run <path-do-projeto> --template <template>")
@@ -397,7 +433,10 @@ def _overlay_project_llm_defaults(
             if effective_effort is None:
                 reported_effort = model.get("default_effort")
                 effective_effort = str(reported_effort) if reported_effort else None
-            elif not isinstance(advertised_efforts, list) or effective_effort not in advertised_efforts:
+            elif (
+                not isinstance(advertised_efforts, list)
+                or effective_effort not in advertised_efforts
+            ):
                 valid = False
                 reason = (
                     f"Effort salvo não é compatível com {effective_agent}/"
@@ -463,6 +502,41 @@ def cmd_llm_capabilities(args) -> None:
     capabilities = discover_llm_capabilities(cwd=root)
     _overlay_project_llm_defaults(capabilities, root)
     _print_llm_json(capabilities, bool(getattr(args, "json", False)))
+
+
+def cmd_validation_profiles(args) -> None:
+    """List the built-in cross-template platform validation catalog."""
+
+    payload = validation_profile_catalog()
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).rstrip())
+
+
+def cmd_validation_matrix(args) -> None:
+    """Resolve and optionally materialize one project's selected profiles."""
+
+    from ft.project.lifecycle import read_project_contract
+
+    # A matriz pertence ao candidato corrente. Em um ciclo, isso é a worktree,
+    # nunca o checkout principal retornado por canonical_project_root().
+    root = Path(args.project).resolve()
+    _guard_engine_repo(root)
+    contract = read_project_contract(root)
+    assert contract is not None
+    destination, matrix = write_validation_matrix(root, contract)
+    if getattr(args, "json", False):
+        payload = dict(matrix)
+        payload["written_to"] = destination.relative_to(root).as_posix()
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
+    target_count = sum(len(profile["targets"]) for profile in matrix["profiles"])
+    print(
+        f"validation matrix: {matrix['status']} · "
+        f"{len(matrix['profiles'])} perfil(is) · {target_count} target(s)"
+    )
+    print(f"written: {destination.relative_to(root)}")
 
 
 def cmd_llm_defaults(args) -> None:
@@ -688,9 +762,7 @@ def _latest_archived_cycle(root: Path) -> tuple[Path, dict] | None:
     candidates = [
         cycle
         for cycle in archive_home.iterdir()
-        if cycle.is_dir()
-        and _is_cycle_dir(cycle)
-        and (cycle / "cycle.yml").is_file()
+        if cycle.is_dir() and _is_cycle_dir(cycle) and (cycle / "cycle.yml").is_file()
     ]
     if not candidates:
         return None
@@ -813,11 +885,13 @@ def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     url = f"{base_url}/v1/messages"
-    payload = json.dumps({
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": "ping"}],
-    }).encode()
+    payload = json.dumps(
+        {
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "ping"}],
+        }
+    ).encode()
 
     headers = {
         "Content-Type": "application/json",
@@ -841,12 +915,15 @@ def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
         else:
             print(_ui.fail(f"API health check: {code} — {body}"))
             if code == 403:
-                print("    → Acesso negado. Verifique credenciais ou rode: ft init --fix --template <org>")
+                print(
+                    "    → Acesso negado. Verifique credenciais ou rode: ft init --fix --template <org>"
+                )
             elif code == 405:
                 print("    → Rota inválida. Verifique ANTHROPIC_BASE_URL.")
             raise SystemExit(1)
     except Exception as e:
         from ft.engine import ui as _ui
+
         print(_ui.info(f"API health check: timeout/erro ({e}) — continuando"))
 
 
@@ -860,7 +937,9 @@ def _validate_cycle_name(name: str | None) -> str | None:
     if name in {".", ".."} or "/" in name or "\\" in name:
         raise ValueError("nome de ciclo deve ser relativo e não pode conter barras")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", name):
-        raise ValueError("nome de ciclo deve usar apenas letras, números, '.', '_' ou '-'")
+        raise ValueError(
+            "nome de ciclo deve usar apenas letras, números, '.', '_' ou '-'"
+        )
     return name
 
 
@@ -877,9 +956,7 @@ def _worktree_root_from_state(state_path: Path) -> Path | None:
     if (
         paths.is_worktree_path(candidate)
         and (candidate / "state").is_dir()
-        and (
-            paths.project_manifest(candidate).is_file()
-        )
+        and (paths.project_manifest(candidate).is_file())
     ):
         return candidate
     return None
@@ -945,7 +1022,9 @@ def get_runner(
         process_path = _resolve_pinned_process(effective_root, str(pinned_path))
         if pinned_digest:
             payload = yaml.safe_load(process_path.read_text(encoding="utf-8")) or {}
-            execution = payload.get("execution_policy", {}) if isinstance(payload, dict) else {}
+            execution = (
+                payload.get("execution_policy", {}) if isinstance(payload, dict) else {}
+            )
             if (
                 (
                     pinned_immutable
@@ -955,9 +1034,7 @@ def get_runner(
                     )
                 )
                 and not process_digest_matches(process_path, pinned_digest)
-                and not _completed_process_evolution_allows_digest_change(
-                    state_payload
-                )
+                and not _completed_process_evolution_allows_digest_change(state_payload)
             ):
                 raise ValueError(
                     f"processo local do ciclo divergiu do digest fixado: {pinned_path}"
@@ -983,7 +1060,12 @@ def get_runner(
 def cmd_init(args):
     """Initialize, diagnose, or repair the common project workspace."""
     from ft.engine import ui as _ui
-    from ft.project import BootstrapError, bootstrap_project, check_project, repair_project
+    from ft.project import (
+        BootstrapError,
+        bootstrap_project,
+        check_project,
+        repair_project,
+    )
     from ft.project.bootstrap import DEFAULT_INIT_TEMPLATE, load_init_descriptor
     from ft.project.init_scripts import (
         execute_and_record_init_template,
@@ -1042,7 +1124,11 @@ def cmd_init(args):
         # consertar o ambiente antes do reparo estrutural — os scripts são
         # idempotentes e podem restaurar o próprio Git (HEAD, commit inicial).
         if not paths.project_ft_dir(root).is_dir():
-            print(_ui.fail("Diretório não é um workspace Fast Track; use ft init primeiro."))
+            print(
+                _ui.fail(
+                    "Diretório não é um workspace Fast Track; use ft init primeiro."
+                )
+            )
             raise SystemExit(1)
         try:
             apply_init_template(DEFAULT_INIT_TEMPLATE, mode="fix", adopt=True)
@@ -1077,10 +1163,12 @@ def cmd_init(args):
     if template_name:
         applied = read_init_marker(root)
         if template_name in applied:
-            print(_ui.warn(
-                f"Init template '{template_name}' já aplicado nesta máquina; "
-                f"re-execute com: ft init --fix --template {template_name}"
-            ))
+            print(
+                _ui.warn(
+                    f"Init template '{template_name}' já aplicado nesta máquina; "
+                    f"re-execute com: ft init --fix --template {template_name}"
+                )
+            )
         else:
             try:
                 apply_init_template(template_name, mode="init", adopt=adopt)
@@ -1091,14 +1179,20 @@ def cmd_init(args):
 
             status = _subprocess.run(
                 ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-                cwd=root, capture_output=True, text=True, timeout=30, check=False,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
             )
             if not adopt and status.returncode == 0 and status.stdout.strip():
-                print(_ui.warn(
-                    f"Init template '{template_name}' deixou arquivos fora do Git; "
-                    "commite-os ou adicione ao .gitignore antes de ft run "
-                    "(worktrees exigem checkout limpo)."
-                ))
+                print(
+                    _ui.warn(
+                        f"Init template '{template_name}' deixou arquivos fora do Git; "
+                        "commite-os ou adicione ao .gitignore antes de ft run "
+                        "(worktrees exigem checkout limpo)."
+                    )
+                )
 
     if result.status == "unchanged":
         print(_ui.success("Workspace Fast Track já estava inicializado e saudável."))
@@ -1109,26 +1203,40 @@ def cmd_init(args):
 
         status = _subprocess.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=root, capture_output=True, text=True, timeout=30, check=False,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
         if status.returncode == 0 and status.stdout.strip():
-            print(_ui.warn(
-                "Adoção deixou arquivos legados fora do Git; commite-os antes de "
-                "ft run (worktrees exigem checkout limpo)."
-            ))
+            print(
+                _ui.warn(
+                    "Adoção deixou arquivos legados fora do Git; commite-os antes de "
+                    "ft run (worktrees exigem checkout limpo)."
+                )
+            )
     print("  Nenhum processo foi selecionado. Inicie um ciclo com:")
     print("    ft run . --template <template>")
 
 
 def cmd_continue(args):
     import sys
+
     sys.stdout.reconfigure(line_buffering=True)
     if not _ensure_runtime_selected(args):
         return
-    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
 
     from ft.engine.state import StateLockError
+
     try:
         state = runner.state_mgr.claim()
     except StateLockError as exc:
@@ -1141,11 +1249,14 @@ def cmd_continue(args):
     # done chamava init_state e recomeçava tudo).
     if _cycle_complete(state):
         from ft.engine import ui as _ui
+
         template = getattr(state, "template_id", None) or "<template>"
-        print(_ui.warn(
-            "Ciclo já concluído — nada a retomar. Novo ciclo: "
-            f"ft run . --template {template}"
-        ))
+        print(
+            _ui.warn(
+                "Ciclo já concluído — nada a retomar. Novo ciclo: "
+                f"ft run . --template {template}"
+            )
+        )
         return
     # Inicializar estado só se nunca rodou
     if state.current_node is None:
@@ -1161,16 +1272,19 @@ def cmd_continue(args):
     mode = resolve_run_mode(args)
     # Herança dos flags do run original (override explícito via --no-*).
     from ft.engine import ui as _flags_ui
+
     if (
         not runner._bypass_human_gates
         and getattr(state, "run_bypass_human_gates", False)
         and not getattr(args, "no_bypass_human_gates", False)
     ):
         runner._bypass_human_gates = True
-        print(_flags_ui.dim(
-            "  Herdando --bypass-human-gates do run original "
-            "(--no-bypass-human-gates para desativar)"
-        ))
+        print(
+            _flags_ui.dim(
+                "  Herdando --bypass-human-gates do run original "
+                "(--no-bypass-human-gates para desativar)"
+            )
+        )
     if (
         mode == "step"
         and getattr(state, "run_autonomous", False)
@@ -1178,9 +1292,11 @@ def cmd_continue(args):
         and not getattr(args, "sprint", False)
     ):
         mode = "mvp"
-        print(_flags_ui.dim(
-            "  Herdando modo autônomo do run original (--no-auto para avançar um passo)"
-        ))
+        print(
+            _flags_ui.dim(
+                "  Herdando modo autônomo do run original (--no-auto para avançar um passo)"
+            )
+        )
     recovered = runner.recover_orphaned_delegation(mode=mode)
     if recovered:
         recovered_state = runner.state_mgr.load()
@@ -1203,39 +1319,72 @@ def cmd_status(args):
             cycle=cycle,
         )
 
-    def _print_status(runner):
+    def _print_status(runner, updated_at=None):
         if getattr(args, "report", False):
-            runner.status_report()
+            if updated_at:
+                runner.status_report(updated_at=updated_at)
+            else:
+                runner.status_report()
         else:
-            runner.status(full=getattr(args, "full", False))
+            if updated_at:
+                runner.status(
+                    full=getattr(args, "full", False),
+                    updated_at=updated_at,
+                )
+            else:
+                runner.status(full=getattr(args, "full", False))
 
-    requested = getattr(args, "cycle", None)
-    if requested is None:
-        # Vários ciclos abertos sem --cycle: um bloco de status rotulado por
-        # ciclo, em vez de erro — mesmo contrato do multi-status pré-registry.
-        # A pré-resolução espelha _select_cycle_for_command, mas trata a
-        # ambiguidade como fan-out em vez de SystemExit.
-        from ft.runs import AmbiguousCycleError, select_cycle
+    def _render_once(updated_at=None):
+        requested = getattr(args, "cycle", None)
+        if requested is None:
+            # Vários ciclos abertos sem --cycle: um bloco de status rotulado por
+            # ciclo, em vez de erro — mesmo contrato do multi-status pré-registry.
+            # A pré-resolução espelha _select_cycle_for_command, mas trata a
+            # ambiguidade como fan-out em vez de SystemExit.
+            from ft.runs import AmbiguousCycleError, select_cycle
 
-        location = find_project_root().resolve()
-        owner = canonical_project_root(location)
-        implicit = location.name if paths.is_worktree_path(location) else None
-        try:
-            select_cycle(owner, implicit, include_terminal=True)
-        except AmbiguousCycleError as error:
-            from ft.engine import ui as _ui
+            location = find_project_root().resolve()
+            owner = canonical_project_root(location)
+            implicit = location.name if paths.is_worktree_path(location) else None
+            try:
+                select_cycle(owner, implicit, include_terminal=True)
+            except AmbiguousCycleError as error:
+                from ft.engine import ui as _ui
 
-            for index, cycle_id in enumerate(error.cycle_ids):
-                if index:
-                    print()
-                print(_ui.header(f"Ciclo: {cycle_id}"))
-                _print_status(_runner_for(cycle_id))
-            return
-        except Exception:
-            # Sem ciclo/erros de seleção: o caminho normal abaixo reporta
-            # com a mensagem canônica.
-            pass
-    _print_status(_runner_for(requested))
+                for index, cycle_id in enumerate(error.cycle_ids):
+                    if index:
+                        print()
+                    print(_ui.header(f"Ciclo: {cycle_id}"))
+                    _print_status(_runner_for(cycle_id), updated_at=updated_at)
+                return
+            except Exception:
+                # Sem ciclo/erros de seleção: o caminho normal abaixo reporta
+                # com a mensagem canônica.
+                pass
+        _print_status(_runner_for(requested), updated_at=updated_at)
+
+    watch_interval = getattr(args, "watch", None)
+    if watch_interval is None:
+        _render_once()
+        return
+
+    if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
+        print("ft status --watch exige um terminal interativo.")
+        raise SystemExit(2)
+
+    try:
+        while True:
+            # Redesenha no buffer normal. Isso preserva a rolagem nativa do
+            # terminal e evita que o scroll do mouse seja ecoado como códigos
+            # de controle, comportamento comum no buffer alternativo.
+            sys.stdout.write("\x1b[H\x1b[J")
+            updated_at = f"{datetime.now().astimezone():%H:%M:%S}"
+            _render_once(updated_at=updated_at)
+            sys.stdout.flush()
+            time.sleep(watch_interval)
+    except KeyboardInterrupt:
+        print()
+        sys.stdout.flush()
 
 
 def _truncate_visible(s: str, width: int, reset: str = "") -> str:
@@ -1312,7 +1461,9 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
         if subtype == "thinking_tokens":
             toks = ev.get("estimated_tokens", 0)
             snippet = _think_snippet(ctx.get("think"))
-            ctx["desc"] = f"pensando (~{toks} tokens)" + (f": …{snippet}" if snippet else "")
+            ctx["desc"] = f"pensando (~{toks} tokens)" + (
+                f": …{snippet}" if snippet else ""
+            )
         elif subtype == "init":
             # Evento de abertura de sessão: expõe modelo, modo de permissão e
             # nº de ferramentas em vez de um "evento system" opaco.
@@ -1340,8 +1491,11 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
             name = tool.get("name") or "ferramenta"
             inp = tool.get("input") or {}
             target = str(
-                inp.get("file_path") or inp.get("command")
-                or inp.get("pattern") or inp.get("path") or ""
+                inp.get("file_path")
+                or inp.get("command")
+                or inp.get("pattern")
+                or inp.get("path")
+                or ""
             )
             # Para ferramentas de arquivo, mostra só o basename.
             if name in ("Read", "Edit", "Write", "NotebookEdit") and "/" in target:
@@ -1350,15 +1504,24 @@ def _track_heartbeat(raw: str, ctx: dict) -> str | None:
             ctx["desc"] = f"{name}: {target}" if target else name
         else:
             txt = next(
-                (b.get("text", "") for b in blocks
-                 if b.get("type") == "text" and b.get("text", "").strip()),
+                (
+                    b.get("text", "")
+                    for b in blocks
+                    if b.get("type") == "text" and b.get("text", "").strip()
+                ),
                 "",
             )
             if txt:
                 ctx["desc"] = "escrevendo: " + " ".join(txt.split())
             else:
-                think = next((b.get("thinking", "") for b in blocks
-                              if b.get("type") == "thinking"), None)
+                think = next(
+                    (
+                        b.get("thinking", "")
+                        for b in blocks
+                        if b.get("type") == "thinking"
+                    ),
+                    None,
+                )
                 if think is not None:
                     snip = _think_snippet(think)
                     ctx["desc"] = f"raciocinando: …{snip}" if snip else "raciocinando"
@@ -1398,9 +1561,13 @@ def _needs_block_blank(prev_is_bash: bool, cur_is_bash: bool) -> bool:
     return prev_is_bash != cur_is_bash
 
 
-def _wait_reason(node_status: str | None, pending_approval: str | None,
-                 blocked_reason: str | None, node: str | None,
-                 orchestrator_alive: bool = True) -> tuple[str | None, str | None]:
+def _wait_reason(
+    node_status: str | None,
+    pending_approval: str | None,
+    blocked_reason: str | None,
+    node: str | None,
+    orchestrator_alive: bool = True,
+) -> tuple[str | None, str | None]:
     """Motivo REAL da espera, derivado do estado do engine (não do log).
 
     Retorna (kind, texto): kind ∈ {"gate", "blocked", "stalled", None}. None
@@ -1414,7 +1581,10 @@ def _wait_reason(node_status: str | None, pending_approval: str | None,
         gate = pending_approval or node or "?"
         return "gate", f"aguardando APROVAÇÃO em {gate} — ft approve / ft reject"
     if node_status == "blocked":
-        return "blocked", f"BLOQUEADO em {node or '?'}: {_oneline(blocked_reason) or 'sem motivo registrado'}"
+        return (
+            "blocked",
+            f"BLOQUEADO em {node or '?'}: {_oneline(blocked_reason) or 'sem motivo registrado'}",
+        )
     if not orchestrator_alive:
         return "stalled", f"ciclo PARADO em {node or '?'} — rode `ft continue --auto`"
     return None, None
@@ -1476,9 +1646,7 @@ def _run_log_timestamps(root: Path) -> list[datetime]:
         if not match:
             continue
         try:
-            timestamps.append(
-                datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
-            )
+            timestamps.append(datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S"))
         except ValueError:
             continue
     return timestamps
@@ -1507,22 +1675,85 @@ def _cycle_run_report(root: Path) -> dict:
     return report if isinstance(report, dict) else {}
 
 
-def _cycle_duration_seconds(
-    root: Path,
-    report: dict | None = None,
-    log_timestamps: list[datetime] | None = None,
-) -> float | int | None:
-    """Duração wall-clock persistida do ciclo, com fallback para históricos."""
-    report = _cycle_run_report(root) if report is None else report
-    wall = report.get("wall", {}) if isinstance(report, dict) else {}
-    duration_ms = wall.get("duration_ms") if isinstance(wall, dict) else None
+def _span_duration_seconds(span: dict) -> float | None:
+    """Duração medida de um span, sem inferir lacunas entre atividades."""
+    duration_ms = span.get("duration_ms")
     if (
         isinstance(duration_ms, (int, float))
         and not isinstance(duration_ms, bool)
         and duration_ms >= 0
     ):
         return duration_ms / 1000
-    return _run_log_duration_seconds(root, log_timestamps)
+    started = _cycle_datetime(span.get("started_at"))
+    ended = _cycle_datetime(span.get("ended_at"))
+    if started is None or ended is None:
+        return None
+    return max(0.0, (ended - started).total_seconds())
+
+
+def _llm_spans_duration_seconds(spans: list[dict]) -> float | None:
+    durations = [_span_duration_seconds(span) for span in spans]
+    if any(duration is None for duration in durations):
+        return None
+    return sum(duration or 0.0 for duration in durations)
+
+
+def _report_llm_duration_seconds(report: dict) -> float | None:
+    """Soma somente execução LLM; nunca usa wall-clock ou espera humana."""
+    active = report.get("active_time_ms")
+    duration_ms = active.get("llm") if isinstance(active, dict) else None
+    if (
+        isinstance(duration_ms, (int, float))
+        and not isinstance(duration_ms, bool)
+        and duration_ms >= 0
+    ):
+        return duration_ms / 1000
+
+    spans = report.get("spans")
+    if not isinstance(spans, list):
+        return None
+    llm_spans = [
+        span
+        for span in spans
+        if isinstance(span, dict) and span.get("category") == "llm"
+    ]
+    return _llm_spans_duration_seconds(llm_spans)
+
+
+def _cycle_live_run_report(root: Path) -> dict | None:
+    """Deriva telemetria corrente do trace, incluindo spans LLM ainda abertos."""
+    trace_candidates = (
+        root / "state" / "trace" / "events.jsonl",
+        root / "trace" / "events.jsonl",
+    )
+    for trace_path in trace_candidates:
+        if not trace_path.is_file():
+            continue
+        try:
+            from ft.engine.trace import build_run_report
+
+            return build_run_report(trace_path, log_root=root)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def _cycle_llm_duration_seconds(
+    root: Path,
+    report: dict | None = None,
+) -> float | None:
+    """Tempo ativo de LLM do ciclo; históricos inseparáveis ficam desconhecidos."""
+    report = _cycle_run_report(root) if report is None else report
+    duration = _report_llm_duration_seconds(report)
+    if duration is not None:
+        return duration
+
+    live_report = _cycle_live_run_report(root)
+    if live_report is not None:
+        duration = _report_llm_duration_seconds(live_report)
+        if duration is not None:
+            return duration
+    return None
 
 
 def _cycle_created_date(
@@ -1531,11 +1762,7 @@ def _cycle_created_date(
     log_timestamps: list[datetime] | None = None,
 ) -> date | None:
     """Data local do primeiro evento conhecido do ciclo."""
-    timestamps = (
-        _run_log_timestamps(root)
-        if log_timestamps is None
-        else log_timestamps
-    )
+    timestamps = _run_log_timestamps(root) if log_timestamps is None else log_timestamps
     if timestamps:
         return timestamps[0].date()
 
@@ -1623,6 +1850,365 @@ def _cycle_tokens(
     return live_total if live_total is not None else (0 if zero_llm_calls else None)
 
 
+@dataclass(frozen=True)
+class _CycleStepRow:
+    """Uma execução real de node, sem colapsar retries ou loops."""
+
+    order: int
+    node_id: str
+    attempt: str
+    started_at: str
+    duration: str
+    duration_seconds: float | None
+    tokens: str
+    token_count: int | None
+    model: str
+    last_activity: str
+    status: str
+    source: str
+
+
+_STEP_TOKEN_KEYS = (
+    "input_tokens",
+    "cache_write_tokens",
+    "cache_read_tokens",
+    "output_tokens",
+)
+
+
+def _cycle_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone() if parsed.tzinfo is not None else parsed
+
+
+def _cycle_datetime_order(value: object) -> float:
+    parsed = _cycle_datetime(value)
+    if parsed is None:
+        return float("inf")
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed.timestamp()
+
+
+def _step_attempt(node_id: str, value: object) -> str:
+    if value is None:
+        return "—"
+    attempt_id = str(value).strip()
+    prefix = f"{node_id}:"
+    if attempt_id.startswith(prefix):
+        return attempt_id[len(prefix) :] or "—"
+    return attempt_id or "—"
+
+
+def _step_status(status: object, result: object) -> str:
+    raw_status = str(status or "").strip()
+    raw_result = str(result or "").strip()
+    if raw_status == "open":
+        return "⟳ EM CURSO"
+    label = raw_result or raw_status.upper() or "—"
+    upper = label.upper()
+    if upper in {"PASS", "COMPLETED", "DONE", "SUCCESS"}:
+        return f"✓ {upper}"
+    if upper in {"FAIL", "FAILED", "BLOCK", "BLOCKED", "ERROR", "CANCELLED"}:
+        return f"✗ {upper}"
+    if upper in {"AWAITING_HUMAN", "AWAITING_APPROVAL"}:
+        return f"⏸ {upper}"
+    if upper == "ROUTED":
+        return "→ ROUTED"
+    return label
+
+
+def _span_tokens(spans: list[dict]) -> int | None:
+    total = 0
+    measured = False
+    for span in spans:
+        metrics = span.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        for key in _STEP_TOKEN_KEYS:
+            value = _token_count(metrics.get(key))
+            if value is not None:
+                total += value
+                measured = True
+    return total if measured else None
+
+
+def _span_models(spans: list[dict]) -> str:
+    """Modelos efetivos somente quando todos os spans têm telemetria confiável."""
+    if not spans:
+        return "—"
+    models: list[str] = []
+    for span in spans:
+        attributes = span.get("attributes")
+        if not isinstance(attributes, dict):
+            return "—"
+        model = attributes.get("model")
+        if not isinstance(model, str) or not model.strip():
+            return "—"
+        normalized = model.strip()
+        if normalized not in models:
+            models.append(normalized)
+    return ", ".join(models)
+
+
+def _trace_step_rows(report: dict, *, source: str) -> list[_CycleStepRow]:
+    spans = report.get("spans")
+    if not isinstance(spans, list):
+        return []
+    typed_spans = [span for span in spans if isinstance(span, dict)]
+    nodes = [
+        span
+        for span in typed_spans
+        if span.get("category") == "node"
+        and isinstance(span.get("node_id"), str)
+        and str(span.get("node_id")).strip()
+    ]
+    if not nodes:
+        return []
+
+    # Relatórios preservam a ordem dos eventos, mas o sort torna explícito o
+    # contrato cronológico sem perder estabilidade quando dois nodes começam
+    # no mesmo instante (por exemplo, lanes paralelas).
+    nodes = sorted(
+        enumerate(nodes),
+        key=lambda item: (
+            _cycle_datetime_order(item[1].get("started_at")),
+            item[0],
+        ),
+    )
+    llm_spans = [span for span in typed_spans if span.get("category") == "llm"]
+    generated_at = _cycle_datetime(report.get("generated_at"))
+    rows: list[_CycleStepRow] = []
+    for order, (_original_index, node) in enumerate(nodes, start=1):
+        node_id = str(node["node_id"]).strip()
+        span_id = node.get("span_id")
+        attempt_id = node.get("attempt_id")
+        delegated = [
+            span for span in llm_spans if span.get("parent_span_id") == span_id
+        ]
+        if not delegated and attempt_id:
+            delegated = [
+                span for span in llm_spans if span.get("attempt_id") == attempt_id
+            ]
+        token_count = _span_tokens(delegated) if delegated else 0
+
+        started = _cycle_datetime(node.get("started_at"))
+        ended = _cycle_datetime(node.get("ended_at"))
+        last_activity = (
+            (ended or generated_at) if node.get("status") == "open" else ended
+        )
+        duration_seconds = _llm_spans_duration_seconds(delegated)
+        duration = (
+            _fmt_duration(duration_seconds) if duration_seconds is not None else "—"
+        )
+
+        rows.append(
+            _CycleStepRow(
+                order=order,
+                node_id=node_id,
+                attempt=_step_attempt(node_id, attempt_id),
+                started_at=(started.strftime("%Y-%m-%d %H:%M:%S") if started else "—"),
+                duration=duration,
+                duration_seconds=duration_seconds,
+                tokens=f"{token_count:,}" if token_count is not None else "—",
+                token_count=token_count,
+                model=_span_models(delegated),
+                last_activity=(
+                    last_activity.strftime("%H:%M:%S") if last_activity else "—"
+                ),
+                status=_step_status(node.get("status"), node.get("result")),
+                source=source,
+            )
+        )
+    return rows
+
+
+def _log_step_rows(root: Path) -> list[_CycleStepRow]:
+    """Fallback honesto para ciclos anteriores ao tracing estruturado."""
+    log_path = _run_log_path_for(root)
+    if not log_path or not log_path.is_file():
+        return []
+    rows: list[_CycleStepRow] = []
+    for line in log_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not re.match(r"^\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s*\|", line):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        try:
+            ended = datetime.strptime(cells[0], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        node_id = cells[1].strip("`").strip()
+        node_type = cells[4].lower() if len(cells) > 4 else ""
+        if not node_id or node_type == "system" or node_id.lower() in {"init", "end"}:
+            continue
+        attempt = cells[5] if len(cells) > 5 and cells[5] else "—"
+        # O log Markdown histórico mede o node inteiro e não permite separar
+        # execução LLM de espera humana/validação. Exibir esse valor como LLM
+        # seria uma precisão falsa.
+        node_duration_seconds: float | None = None
+        if len(cells) > 6 and cells[6]:
+            try:
+                node_duration_seconds = max(0.0, float(cells[6]))
+            except ValueError:
+                pass
+        duration_seconds: float | None = None
+        started = ended - timedelta(seconds=node_duration_seconds or 0)
+        result = cells[7] if len(cells) > 7 else ""
+        rows.append(
+            _CycleStepRow(
+                order=len(rows) + 1,
+                node_id=node_id,
+                attempt=attempt,
+                started_at=started.strftime("%Y-%m-%d %H:%M:%S"),
+                duration=(
+                    _fmt_duration(duration_seconds)
+                    if duration_seconds is not None
+                    else "—"
+                ),
+                duration_seconds=duration_seconds,
+                tokens="—",
+                token_count=None,
+                model="—",
+                last_activity=ended.strftime("%H:%M:%S"),
+                status=_step_status("", result),
+                source="log",
+            )
+        )
+    return rows
+
+
+def _cycle_step_rows(root: Path, report: dict | None = None) -> list[_CycleStepRow]:
+    """Execuções cronológicas por trace/report, com fallback para Markdown."""
+    report = _cycle_run_report(root) if report is None else report
+    rows = _trace_step_rows(report, source="report")
+    if rows:
+        return rows
+
+    live_report = _cycle_live_run_report(root)
+    if live_report is not None:
+        rows = _trace_step_rows(live_report, source="trace")
+        if rows:
+            return rows
+    return _log_step_rows(root)
+
+
+def _print_cycle_step_details(
+    cycles: list[tuple[str, Path, dict]],
+) -> None:
+    """Renderiza detalhes por ciclo e um consolidado final de execuções reais."""
+
+    def _width(header: str, values: list[str]) -> int:
+        return max(len(header), max((len(value) for value in values), default=0))
+
+    def _totals(rows: list[_CycleStepRow]) -> tuple[str, str, str, str]:
+        # Cada linha é uma tentativa executada. Somar os ordinais exibidos em
+        # TENT. (por exemplo, 1 + 2) não teria significado; o total correto é a
+        # quantidade de execuções/tentativas registradas.
+        execution_total = str(len(rows))
+        attempt_total = str(len(rows))
+        measured_duration = bool(rows) and all(
+            row.duration_seconds is not None for row in rows
+        )
+        duration_total = (
+            _fmt_duration(sum(row.duration_seconds or 0 for row in rows))
+            if measured_duration
+            else "—"
+        )
+        measured_tokens = bool(rows) and all(row.token_count is not None for row in rows)
+        token_total = (
+            f"{sum(row.token_count or 0 for row in rows):,}"
+            if measured_tokens
+            else "—"
+        )
+        return execution_total, attempt_total, duration_total, token_total
+
+    def _render_table(
+        rows: list[_CycleStepRow],
+        *,
+        total_label: str,
+        include_rows: bool,
+    ) -> None:
+        execution_total, attempt_total, duration_total, token_total = _totals(rows)
+        width_rows = rows if include_rows else []
+
+        w_order = _width(
+            "#", [*[str(row.order) for row in width_rows], execution_total]
+        )
+        w_node = _width("STEP", [*[row.node_id for row in width_rows], total_label])
+        w_attempt = _width(
+            "TENT.", [*[row.attempt for row in width_rows], attempt_total]
+        )
+        w_started = _width(
+            "INICIADO EM", [*[row.started_at for row in width_rows], "—"]
+        )
+        w_duration = _width(
+            "DURAÇÃO LLM", [*[row.duration for row in width_rows], duration_total]
+        )
+        w_tokens = _width(
+            "TOKENS", [*[row.tokens for row in width_rows], token_total]
+        )
+        w_model = _width("MODELO", [*[row.model for row in width_rows], "—"])
+        w_last = _width(
+            "ÚLT.", [*[row.last_activity for row in width_rows], "—"]
+        )
+        w_status = _width("STATUS", [*[row.status for row in width_rows], "—"])
+        w_source = _width("FONTE", [*[row.source for row in width_rows], "—"])
+        print(
+            f"  {'#':>{w_order}}  {'STEP':<{w_node}}  {'TENT.':>{w_attempt}}  "
+            f"{'INICIADO EM':<{w_started}}  {'DURAÇÃO LLM':>{w_duration}}  "
+            f"{'TOKENS':>{w_tokens}}  {'MODELO':<{w_model}}  {'ÚLT.':>{w_last}}  "
+            f"{'STATUS':<{w_status}}  {'FONTE':<{w_source}}"
+        )
+        print(
+            f"  {'─' * w_order}  {'─' * w_node}  {'─' * w_attempt}  "
+            f"{'─' * w_started}  {'─' * w_duration}  {'─' * w_tokens}  "
+            f"{'─' * w_model}  {'─' * w_last}  {'─' * w_status}  {'─' * w_source}"
+        )
+        if include_rows:
+            for row in rows:
+                print(
+                    f"  {row.order:>{w_order}}  {row.node_id:<{w_node}}  "
+                    f"{row.attempt:>{w_attempt}}  {row.started_at:<{w_started}}  "
+                    f"{row.duration:>{w_duration}}  {row.tokens:>{w_tokens}}  "
+                    f"{row.model:<{w_model}}  {row.last_activity:>{w_last}}  "
+                    f"{row.status:<{w_status}}  "
+                    f"{row.source:<{w_source}}"
+                )
+            print(
+                f"  {'─' * w_order}  {'─' * w_node}  {'─' * w_attempt}  "
+                f"{'─' * w_started}  {'─' * w_duration}  {'─' * w_tokens}  "
+                f"{'─' * w_model}  {'─' * w_last}  {'─' * w_status}  {'─' * w_source}"
+            )
+        print(
+            f"  {execution_total:>{w_order}}  {total_label:<{w_node}}  "
+            f"{attempt_total:>{w_attempt}}  {'—':<{w_started}}  "
+            f"{duration_total:>{w_duration}}  {token_total:>{w_tokens}}  "
+            f"{'—':<{w_model}}  {'—':>{w_last}}  {'—':<{w_status}}  "
+            f"{'—':<{w_source}}"
+        )
+
+    all_rows: list[_CycleStepRow] = []
+    for cycle_name, root, report in cycles:
+        rows = _cycle_step_rows(root, report)
+        print(f"  STEPS · {cycle_name}")
+        if not rows:
+            print("  Nenhuma execução de step registrada neste histórico.\n")
+            continue
+        all_rows.extend(rows)
+        _render_table(rows, total_label="TOTAL", include_rows=True)
+        print()
+
+    print("  CONSOLIDADO · TODOS OS CICLOS")
+    _render_table(all_rows, total_label="TOTAL GERAL", include_rows=False)
+
+
 def _file_exists_mark(root: Path, relative_path: str) -> str:
     return "✓" if (root / relative_path).exists() else "✗"
 
@@ -1633,10 +2219,16 @@ def _backlog_report_line(root: Path) -> str:
         return "—"
     summary = project_backlog_summary(project_root=str(root))
     total = int(summary.get("total") or 0)
-    by_status = summary.get("by_status") if isinstance(summary.get("by_status"), dict) else {}
+    by_status = (
+        summary.get("by_status") if isinstance(summary.get("by_status"), dict) else {}
+    )
     done = int(by_status.get("done", 0) or 0) + int(by_status.get("accepted", 0) or 0)
     undecided = summary.get("undecided_p0_p1") or []
-    pending_txt = f"; P0/P1 sem decisão: {len(undecided)}" if undecided else "; P0/P1 sem decisão: 0"
+    pending_txt = (
+        f"; P0/P1 sem decisão: {len(undecided)}"
+        if undecided
+        else "; P0/P1 sem decisão: 0"
+    )
     return f"{done}/{total} done{pending_txt}"
 
 
@@ -1646,7 +2238,9 @@ def _features_report_line(root: Path) -> str:
         return "—"
     summary = features_summary(project_root=str(root))
     total = int(summary.get("total") or 0)
-    by_status = summary.get("by_status") if isinstance(summary.get("by_status"), dict) else {}
+    by_status = (
+        summary.get("by_status") if isinstance(summary.get("by_status"), dict) else {}
+    )
     active = int(by_status.get("active", 0) or 0)
     deprecated = int(by_status.get("deprecated", 0) or 0)
     removed = int(by_status.get("removed", 0) or 0)
@@ -1667,7 +2261,9 @@ def _cycle_completion_report(runner) -> list[str]:
         url = serve_file.read_text(encoding="utf-8", errors="ignore").strip() or "—"
     duration = _fmt_duration(_run_log_duration_seconds(root))
     engine = state.llm_engine or "?"
-    model = state.llm_model or ("pgx/zai-org_glm-4.7-flash" if engine == "opencode" else "default")
+    model = state.llm_model or (
+        "pgx/zai-org_glm-4.7-flash" if engine == "opencode" else "default"
+    )
     llm_calls = metrics.get("llm_calls", "?")
     session_count = sum(
         1
@@ -1676,23 +2272,25 @@ def _cycle_completion_report(runner) -> list[str]:
     )
     session_resumes = metrics.get("llm_session_resumes", 0)
     session_recoveries = metrics.get("llm_session_recoveries", 0)
-    usage_summary = metrics.get("llm_usage") if isinstance(metrics.get("llm_usage"), dict) else None
+    usage_summary = (
+        metrics.get("llm_usage") if isinstance(metrics.get("llm_usage"), dict) else None
+    )
     if not usage_summary:
         usage_summary = summarize_llm_usage(
             runner.state_mgr.path.parent / "llm_logs",
             default_engine=engine,
             default_model=state.llm_model,
         )
-    usage_lines = format_llm_usage_lines(
-        usage_summary
-    )
+    usage_lines = format_llm_usage_lines(usage_summary)
     tests = [
         ("Acceptance", "docs/acceptance-result.json"),
         ("E2E report", "docs/e2e-report.md"),
         ("Visual check", "docs/visual-check-report.md"),
         ("Handoff", "docs/handoff.md"),
     ]
-    artifacts = ", ".join(f"{_file_exists_mark(root, path)} {label}" for label, path in tests)
+    artifacts = ", ".join(
+        f"{_file_exists_mark(root, path)} {label}" for label, path in tests
+    )
     backlog_line = _backlog_report_line(root)
     features_line = _features_report_line(root)
 
@@ -1736,6 +2334,7 @@ def _log_mtime(path) -> float:
     """mtime do log (última escrita) — âncora do contador de silêncio. Assim
     reabrir `ft log -f` continua do silêncio real, em vez de zerar o relógio."""
     import time as _t
+
     try:
         return path.stat().st_mtime
     except OSError:
@@ -1823,7 +2422,7 @@ def cmd_log(args):
         if not _md:
             return
         if _needs_block_blank(_prev_bash[0], is_bash):
-            print(flush=True)      # borda do bloco bash (abre ou fecha)
+            print(flush=True)  # borda do bloco bash (abre ou fecha)
         _prev_bash[0] = is_bash
 
     def _emit(out_plain: str) -> None:
@@ -1846,7 +2445,9 @@ def cmd_log(args):
 
     log_path = _current_log()
     if log_path is None:
-        print(_ui.warn("Nenhum log LLM encontrado para o ciclo selecionado"), flush=True)
+        print(
+            _ui.warn("Nenhum log LLM encontrado para o ciclo selecionado"), flush=True
+        )
         return
 
     if args.path:
@@ -1856,7 +2457,11 @@ def cmd_log(args):
     print(_ui.dim(f"── {log_path.name} ──"), flush=True)
     with log_path.open(errors="replace") as f:
         raw_lines = f.readlines()
-    shown = [x for x in (line.rstrip() if args.raw else _fmt(line) for line in raw_lines) if x]
+    shown = [
+        x
+        for x in (line.rstrip() if args.raw else _fmt(line) for line in raw_lines)
+        if x
+    ]
     for out in shown[-lines:]:
         if args.raw:
             print(out, flush=True)
@@ -1867,7 +2472,11 @@ def cmd_log(args):
         selected_state = runner.state_mgr.load()
     except Exception:
         selected_state = None
-    if selected_state and selected_state.node_status in ("done", "completed") and not args.raw:
+    if (
+        selected_state
+        and selected_state.node_status in ("done", "completed")
+        and not args.raw
+    ):
         for line in _cycle_completion_report(runner):
             print(line, flush=True)
         if args.follow:
@@ -1899,9 +2508,13 @@ def cmd_log(args):
                 try:
                     st = runner.state_mgr.load()
                     node = st.current_node or _node_from_log_name(log_path.name)
-                    kind, text = _wait_reason(st.node_status, st.pending_approval,
-                                              st.blocked_reason, node,
-                                              _orchestrator_alive(runner.state_mgr, st))
+                    kind, text = _wait_reason(
+                        st.node_status,
+                        st.pending_approval,
+                        st.blocked_reason,
+                        node,
+                        _orchestrator_alive(runner.state_mgr, st),
+                    )
                 except Exception:
                     pass
                 if kind == "done":
@@ -1916,10 +2529,14 @@ def cmd_log(args):
                     model_txt = f"[{hb.get('model')}] " if hb.get("model") else ""
                     line = _ui.dim(f"  ⋯ {model_txt}{hb['desc']} · {elapsed}")
                 else:
-                    node = (st.current_node if st else None) or _node_from_log_name(log_path.name)
+                    node = (st.current_node if st else None) or _node_from_log_name(
+                        log_path.name
+                    )
                     node_ctx = f" ({node})" if node else ""
                     model_txt = f"[{hb.get('model')}] " if hb.get("model") else ""
-                    line = _ui.dim(f"  ⋯ {model_txt}aguardando eventos do LLM{node_ctx} · {elapsed}")
+                    line = _ui.dim(
+                        f"  ⋯ {model_txt}aguardando eventos do LLM{node_ctx} · {elapsed}"
+                    )
                 # Cinto de segurança: um heartbeat é SEMPRE uma linha. Qualquer
                 # \n vindo de texto do estado quebraria o overwrite com \r e
                 # vazaria a cor para o resto do log.
@@ -1929,6 +2546,7 @@ def cmd_log(args):
                     # faz o overwrite com \r empilhar (o \r\033[K limpa só a
                     # última). Uma linha só = overwrite limpo.
                     import shutil as _shutil
+
                     cols = _shutil.get_terminal_size((80, 24)).columns
                     line = _truncate_visible(line, cols - 1, _ui.RESET)
                     # Sobrescreve a mesma linha (\r + limpa até o fim), sem newline:
@@ -1966,7 +2584,9 @@ def cmd_log(args):
             line = f.readline()
             if line:
                 idle = 0.0
-                hb["t"] = _time.time()  # marca atividade — silêncio conta a partir daqui
+                hb["t"] = (
+                    _time.time()
+                )  # marca atividade — silêncio conta a partir daqui
                 frag = _track(line.strip(), hb)
                 if hb.get("model"):
                     _model_ctx["model"] = hb.get("model")
@@ -2045,14 +2665,19 @@ def cmd_runs(args):
 
     import yaml as _yaml
 
-    show_done_details = bool(getattr(args, "done", False))
+    show_step_details = bool(getattr(args, "done_detailed", False))
+    show_done_details = bool(getattr(args, "done", False) or show_step_details)
     total_duration_seconds = 0.0
     measured_durations = 0
+    expected_durations = 0
     total_tokens = 0
     measured_token_counts = 0
     creation_dates: list[date] = []
+    detailed_cycles: list[tuple[str, Path, dict]] = []
     rows = []
-    for cycle, archived in sorted(cycles.values(), key=lambda item: _cycle_num(item[0])):
+    for cycle, archived in sorted(
+        cycles.values(), key=lambda item: _cycle_num(item[0])
+    ):
         state_data = {}
         state_path = cycle / ("cycle.yml" if archived else "state/engine_state.yml")
         if state_path.exists():
@@ -2068,7 +2693,9 @@ def cmd_runs(args):
             steps_done = progress.get("completed", 0)
             steps_total = progress.get("total", "?")
         else:
-            steps_done = state_data.get("metrics", {}).get("steps_completed", len(state_data.get("completed_nodes", [])))
+            steps_done = state_data.get("metrics", {}).get(
+                "steps_completed", len(state_data.get("completed_nodes", []))
+            )
             steps_total = state_data.get("metrics", {}).get("steps_total", "?")
         current_node = state_data.get("current_node") or ""
         node_status = state_data.get("status" if archived else "node_status", "")
@@ -2102,26 +2729,25 @@ def cmd_runs(args):
         tokens = ""
         if show_done_details:
             report = _cycle_run_report(cycle)
+            if not archived:
+                # O relatório persistido pode estar defasado enquanto o runner
+                # trabalha. O trace é append-only e permite somar tanto spans
+                # concluídos quanto o trecho já transcorrido do span LLM aberto.
+                live_report = _cycle_live_run_report(cycle)
+                if live_report is not None:
+                    report = live_report
             created_date = _cycle_created_date(cycle, report, log_timestamps)
             created = created_date.isoformat() if created_date is not None else "—"
             if created_date is not None:
                 creation_dates.append(created_date)
-            if archived or node_status in ("done", "completed"):
-                duration_seconds = _cycle_duration_seconds(
-                    cycle,
-                    report,
-                    log_timestamps,
-                )
-                duration = (
-                    _fmt_duration(duration_seconds)
-                    if duration_seconds is not None
-                    else "—"
-                )
-                if duration_seconds is not None:
-                    total_duration_seconds += duration_seconds
-                    measured_durations += 1
-            else:
-                duration = "em curso"
+            expected_durations += 1
+            duration_seconds = _cycle_llm_duration_seconds(cycle, report)
+            duration = (
+                _fmt_duration(duration_seconds) if duration_seconds is not None else "—"
+            )
+            if duration_seconds is not None:
+                total_duration_seconds += duration_seconds
+                measured_durations += 1
             cycle_tokens = _cycle_tokens(
                 cycle,
                 state_data,
@@ -2135,7 +2761,7 @@ def cmd_runs(args):
         # Só o histórico arquivado sai do default: um ciclo done ainda no
         # runtime tem worktree aberto e precisa de ft close — continua visível.
         finished = archived and node_status in ("done", "completed")
-        if finished and not getattr(args, "done", False):
+        if finished and not show_done_details:
             continue
         rows.append(
             (
@@ -2149,6 +2775,8 @@ def cmd_runs(args):
                 source,
             )
         )
+        if show_step_details:
+            detailed_cycles.append((cycle.name, cycle, report))
 
     # Tabela com larguras dinâmicas; o STATUS carrega cores ANSI, então o
     # padding usa a largura visível (códigos de escape não contam coluna).
@@ -2162,7 +2790,11 @@ def cmd_runs(args):
         return max(len(header), max((measure(v) for v in values), default=0))
 
     if not rows:
-        print(_ui.info("Nenhum ciclo ativo. Use ft runs --done para incluir os concluídos."))
+        print(
+            _ui.info(
+                "Nenhum ciclo ativo. Use ft runs --done para incluir os concluídos."
+            )
+        )
         return
 
     w_name = _col("CICLO", (r[0] for r in rows))
@@ -2177,12 +2809,14 @@ def cmd_runs(args):
     w_created = _col("CRIADO EM", creation_values) if show_done_details else 0
     w_steps = _col("STEPS", (r[2] for r in rows))
     total_duration = (
-        _fmt_duration(total_duration_seconds) if measured_durations else "—"
+        _fmt_duration(total_duration_seconds)
+        if expected_durations > 0 and measured_durations == expected_durations
+        else "—"
     )
     duration_values = [r[3] for r in rows]
     if show_done_details:
         duration_values.append(total_duration)
-    w_duration = _col("DURAÇÃO", duration_values) if show_done_details else 0
+    w_duration = _col("DURAÇÃO LLM", duration_values) if show_done_details else 0
     total_tokens_label = f"{total_tokens:,}" if measured_token_counts else "—"
     token_values = [r[4] for r in rows]
     if show_done_details:
@@ -2193,9 +2827,7 @@ def cmd_runs(args):
     w_source = _col("FONTE", (r[7] for r in rows))
     created_header = f"  {'CRIADO EM':>{w_created}}" if show_done_details else ""
     created_rule = f"  {'─' * w_created}" if show_done_details else ""
-    duration_header = (
-        f"  {'DURAÇÃO':>{w_duration}}" if show_done_details else ""
-    )
+    duration_header = f"  {'DURAÇÃO LLM':>{w_duration}}" if show_done_details else ""
     duration_rule = f"  {'─' * w_duration}" if show_done_details else ""
     tokens_header = f"  {'TOKENS':>{w_tokens}}" if show_done_details else ""
     tokens_rule = f"  {'─' * w_tokens}" if show_done_details else ""
@@ -2216,9 +2848,7 @@ def cmd_runs(args):
     )
     for name, created, steps, duration, tokens, ts, node_str, source in rows:
         created_cell = f"  {created:>{w_created}}" if show_done_details else ""
-        duration_cell = (
-            f"  {duration:>{w_duration}}" if show_done_details else ""
-        )
+        duration_cell = f"  {duration:>{w_duration}}" if show_done_details else ""
         tokens_cell = f"  {tokens:>{w_tokens}}" if show_done_details else ""
         print(
             f"  {name:<{w_name}}{created_cell}  "
@@ -2238,10 +2868,18 @@ def cmd_runs(args):
             f"{total_duration:>{w_duration}}  {total_tokens_label:>{w_tokens}}"
         )
     print()
+    if show_step_details:
+        _print_cycle_step_details(detailed_cycles)
 
 
 def cmd_approve(args):
-    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     if not _ensure_runtime_selected(args, runner):
         return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -2254,7 +2892,13 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
-    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     if not _ensure_runtime_selected(args, runner):
         return
     if getattr(args, "audit_origin", False) and args.no_retry:
@@ -2267,9 +2911,7 @@ def cmd_reject(args):
             gate = runner.graph.get_node(state.pending_approval)
             if gate.reject_next:
                 if runner.reject_with_origin_audit(args.reason):
-                    runner.run(
-                        mode="mvp" if getattr(args, "auto", False) else "step"
-                    )
+                    runner.run(mode="mvp" if getattr(args, "auto", False) else "step")
                 return
     runner.reject(args.reason, retry=retry)
     correction_policy = runner.graph.meta.get("correction_policy", {})
@@ -2391,16 +3033,30 @@ def cmd_explore(args):
     if getattr(args, "finish", False) or getattr(args, "skip", False):
         message = "--finish/--skip exigem um node exploration ativo"
         if stream_json:
-            _print_explore_json({"type": "error", "code": "legacy_node_required", "message": message, "exit_code": 2})
+            _print_explore_json(
+                {
+                    "type": "error",
+                    "code": "legacy_node_required",
+                    "message": message,
+                    "exit_code": 2,
+                }
+            )
         else:
             print(_ui.fail(message), file=sys.stderr)
         raise SystemExit(2)
 
     request = str(getattr(args, "request", None) or "").strip()
     if not request:
-        message = "Informe um prompt: ft explore \"sua pergunta\""
+        message = 'Informe um prompt: ft explore "sua pergunta"'
         if stream_json:
-            _print_explore_json({"type": "error", "code": "prompt_required", "message": message, "exit_code": 2})
+            _print_explore_json(
+                {
+                    "type": "error",
+                    "code": "prompt_required",
+                    "message": message,
+                    "exit_code": 2,
+                }
+            )
         else:
             print(_ui.fail(message), file=sys.stderr)
         raise SystemExit(2)
@@ -2413,14 +3069,16 @@ def cmd_explore(args):
     try:
         agent, model, effort = _standalone_explore_selection(args, root)
         if stream_json:
-            _print_explore_json({
-                "type": "start",
-                "agent": agent,
-                "model": model,
-                "effort": effort,
-                "mode": "standalone",
-                "read_only": True,
-            })
+            _print_explore_json(
+                {
+                    "type": "start",
+                    "agent": agent,
+                    "model": model,
+                    "effort": effort,
+                    "mode": "standalone",
+                    "read_only": True,
+                }
+            )
 
         sequence = 0
 
@@ -2442,37 +3100,43 @@ def cmd_explore(args):
         )
     except (ExploreConfigurationError, ValueError) as exc:
         if stream_json:
-            _print_explore_json({
-                "type": "error",
-                "code": "invalid_configuration",
-                "message": str(exc),
-                "exit_code": 2,
-            })
+            _print_explore_json(
+                {
+                    "type": "error",
+                    "code": "invalid_configuration",
+                    "message": str(exc),
+                    "exit_code": 2,
+                }
+            )
         else:
             print(_ui.fail(str(exc)), file=sys.stderr)
         raise SystemExit(2)
 
     if result.returncode == 0:
         if stream_json:
-            _print_explore_json({
-                "type": "result",
-                "ok": True,
-                "text": result.text,
-                "exit_code": 0,
-            })
+            _print_explore_json(
+                {
+                    "type": "result",
+                    "ok": True,
+                    "text": result.text,
+                    "exit_code": 0,
+                }
+            )
         elif result.text and not result.text.endswith("\n"):
             print()
         return
 
     message = result.error or f"executor saiu com código {result.returncode}"
     if stream_json:
-        _print_explore_json({
-            "type": "error",
-            "code": "executor_failed",
-            "message": message,
-            "text": result.text,
-            "exit_code": result.returncode,
-        })
+        _print_explore_json(
+            {
+                "type": "error",
+                "code": "executor_failed",
+                "message": message,
+                "text": result.text,
+                "exit_code": result.returncode,
+            }
+        )
     else:
         if result.text and not result.text.endswith("\n"):
             print()
@@ -2510,20 +3174,24 @@ def cmd_evolve(args):
     # Mudanças globais ficam uncommitted no checkout do engine para revisão —
     # sem git não há revisão possível (ex.: instalação de wheel).
     if include_global and not (engine_root() / ".git").exists():
-        print(_ui.fail(
-            "--global exige um checkout git do engine; "
-            f"{engine_root()} não é um repositório"
-        ))
+        print(
+            _ui.fail(
+                "--global exige um checkout git do engine; "
+                f"{engine_root()} não é um repositório"
+            )
+        )
         sys.exit(1)
 
     template = str(getattr(args, "template", None) or "evolve_process")
     available = available_templates("evolve")
     if template not in available:
         choices = ", ".join(available) if available else "nenhum"
-        print(_ui.fail(
-            f"template '{template}' não pertence ao entrypoint evolve. "
-            f"Templates disponíveis: {choices}"
-        ))
+        print(
+            _ui.fail(
+                f"template '{template}' não pertence ao entrypoint evolve. "
+                f"Templates disponíveis: {choices}"
+            )
+        )
         sys.exit(1)
 
     try:
@@ -2559,9 +3227,11 @@ def cmd_evolve(args):
 
     state = runner.state_mgr.load()
     if not _cycle_complete(state):
-        print(_ui.fail(
-            f"Evolução não concluiu ({state.current_node} — {state.node_status})."
-        ))
+        print(
+            _ui.fail(
+                f"Evolução não concluiu ({state.current_node} — {state.node_status})."
+            )
+        )
         print(_ui.info(f"Workspace preservado para inspeção: {workspace.root}"))
         sys.exit(1)
 
@@ -2600,10 +3270,12 @@ def cmd_evolve(args):
         except (EOFError, KeyboardInterrupt, OSError):
             answer = ""
         if answer not in {"s", "sim", "y", "yes"}:
-            print(_ui.warn(
-                "Não aplicado. Workspace preservado — rode novamente com --yes "
-                "para aplicar sem prompt."
-            ))
+            print(
+                _ui.warn(
+                    "Não aplicado. Workspace preservado — rode novamente com --yes "
+                    "para aplicar sem prompt."
+                )
+            )
             return
 
     if include_project:
@@ -2619,10 +3291,12 @@ def cmd_evolve(args):
             if final_errors or (
                 _evolve.change_fingerprint(final_changes) != expected_changes
             ):
-                print(_ui.fail(
-                    "Alvos ou staging mudaram durante a revisão; nada foi "
-                    "aplicado. Revise o diff novamente."
-                ))
+                print(
+                    _ui.fail(
+                        "Alvos ou staging mudaram durante a revisão; nada foi "
+                        "aplicado. Revise o diff novamente."
+                    )
+                )
                 sys.exit(1)
             applied = _evolve.apply_staged(workspace, final_changes)
     else:
@@ -2701,13 +3375,21 @@ def cmd_process_candidates(args):
     status = getattr(args, "status", None)
 
     if bool(candidate_id) != bool(status):
-        print(_ui.fail("Informe candidate_id e --status juntos para resolver um candidato."))
+        print(
+            _ui.fail(
+                "Informe candidate_id e --status juntos para resolver um candidato."
+            )
+        )
         return
 
     if candidate_id:
         if not current_review.is_file():
             print(_ui.fail("docs/process-improvements.yml não existe no ciclo aberto."))
-            print(_ui.info("Ciclos arquivados são imutáveis; resolva candidatos antes de ft close."))
+            print(
+                _ui.info(
+                    "Ciclos arquivados são imutáveis; resolva candidatos antes de ft close."
+                )
+            )
             return
         try:
             review = resolve_global_process_candidate(
@@ -2721,7 +3403,9 @@ def cmd_process_candidates(args):
             print(_ui.fail(f"Não foi possível resolver {candidate_id}: {exc}"))
             return
         resolved = next(
-            item for item in review.global_candidates if item.improvement_id == candidate_id
+            item
+            for item in review.global_candidates
+            if item.improvement_id == candidate_id
         )
         print(_ui.success(f"{candidate_id}: {resolved.status}"))
         print(_ui.dim(f"  {resolved.reason}"))
@@ -2756,7 +3440,9 @@ def cmd_process_candidates(args):
         return
     for item in review.global_candidates:
         marker = "!" if item.status == "pending" else "✓"
-        print(f"  {marker} {item.improvement_id} [{item.target}] {item.status} — {item.title}")
+        print(
+            f"  {marker} {item.improvement_id} [{item.target}] {item.status} — {item.title}"
+        )
         if item.reason:
             print(_ui.dim(f"      {item.reason}"))
         if item.reference:
@@ -2795,11 +3481,13 @@ def _warn_process_drift(root: Path, process_name: str) -> None:
 
         for state in _drift_scan(root, process_name):
             if state.state in pu.ACTIONABLE_STATES:
-                print(_ui.info(
-                    f"template global '{state.template_id}' evoluiu desde a "
-                    f"materialização ({_DRIFT_STATE_LABELS[state.state]}). "
-                    f"Sincronize com: ft process update {state.name}"
-                ))
+                print(
+                    _ui.info(
+                        f"template global '{state.template_id}' evoluiu desde a "
+                        f"materialização ({_DRIFT_STATE_LABELS[state.state]}). "
+                        f"Sincronize com: ft process update {state.name}"
+                    )
+                )
     except Exception:
         pass
 
@@ -2837,8 +3525,12 @@ def _print_staged_diff(local_dir: Path, staging_dir: Path, changed: list[str]) -
         sys.stdout.flush()
         _sp.run(
             [
-                "git", "diff", "--no-index", "--color",
-                str(local_dir / relative), str(staging_dir / relative),
+                "git",
+                "diff",
+                "--no-index",
+                "--color",
+                str(local_dir / relative),
+                str(staging_dir / relative),
             ],
             check=False,
         )
@@ -2885,9 +3577,7 @@ def _process_update_runtime_guard(
                 f"'{active.process_name}'"
             )
         else:
-            disjoint.append(
-                f"{active.description} usa '{active.process_name}'"
-            )
+            disjoint.append(f"{active.description} usa '{active.process_name}'")
 
     if blockers:
         details = "\n".join(f"  - {item}" for item in blockers)
@@ -2992,27 +3682,33 @@ def cmd_process_update(args):
     mutating_names = {state.name for state in (*fast_forwards, *diverged)}
     disjoint_runtimes = _process_update_runtime_guard(root, mutating_names)
     if disjoint_runtimes:
-        print(_ui.info(
-            "runtime(s) ativo(s) em processos disjuntos; update seletivo permitido"
-        ))
+        print(
+            _ui.info(
+                "runtime(s) ativo(s) em processos disjuntos; update seletivo permitido"
+            )
+        )
         for runtime in disjoint_runtimes:
             print(_ui.dim(f"    {runtime}"))
     pending = 0
 
     for state in orphaned:
         pending += 1
-        print(_ui.fail(
-            f"{state.name}: local e global divergem e o ancestral se perdeu "
-            "(materializado antes do snapshot base). Porte o diff manualmente "
-            "ou remova o fork e rematerialize."
-        ))
+        print(
+            _ui.fail(
+                f"{state.name}: local e global divergem e o ancestral se perdeu "
+                "(materializado antes do snapshot base). Porte o diff manualmente "
+                "ou remova o fork e rematerialize."
+            )
+        )
 
     if fast_forwards:
         print()
-        print(_ui.info(
-            f"{len(fast_forwards)} fast-forward(s) seguro(s): "
-            + ", ".join(s.name for s in fast_forwards)
-        ))
+        print(
+            _ui.info(
+                f"{len(fast_forwards)} fast-forward(s) seguro(s): "
+                + ", ".join(s.name for s in fast_forwards)
+            )
+        )
         if getattr(args, "yes", False) or _confirm("Aplicar fast-forward(s)?"):
             for state in fast_forwards:
                 with _manifest_write_lock(root):
@@ -3021,16 +3717,20 @@ def cmd_process_update(args):
                     ok, why = _validate_staged_process(staging)
                     if not ok:
                         pending += 1
-                        print(_ui.fail(
-                            f"{state.name}: template global inválido — {why}"
-                        ))
+                        print(
+                            _ui.fail(f"{state.name}: template global inválido — {why}")
+                        )
                         shutil.rmtree(staging, ignore_errors=True)
                         continue
                     backup = _apply_staged_process_update(root, state, staging)
-                print(_ui.success(f"{state.name}: atualizado ({len(changed)} arquivo(s))"))
+                print(
+                    _ui.success(f"{state.name}: atualizado ({len(changed)} arquivo(s))")
+                )
                 for entry in changed:
                     print(_ui.dim(f"    {entry}"))
-                print(_ui.dim(f"    backup do fork anterior: {backup.relative_to(root)}"))
+                print(
+                    _ui.dim(f"    backup do fork anterior: {backup.relative_to(root)}")
+                )
         else:
             pending += len(fast_forwards)
             print(_ui.info("fast-forwards não aplicados"))
@@ -3044,41 +3744,41 @@ def cmd_process_update(args):
         from uuid import uuid4
 
         staging_root = pu.staging_dir_for(root, state.name)
-        staging = staging_root.parent / (
-            f"{state.name}-{os.getpid()}-{uuid4().hex}"
-        )
+        staging = staging_root.parent / (f"{state.name}-{os.getpid()}-{uuid4().hex}")
         with _manifest_write_lock(root):
             _assert_no_exclusive_startup(root)
             pu.ensure_base_snapshot(state)
             result = pu.build_merge_staging(state, staging)
 
-            ok, why = (
-                _validate_staged_process(staging)
-                if result.clean
-                else (False, "")
-            )
+            ok, why = _validate_staged_process(staging) if result.clean else (False, "")
 
         # Nunca mantenha o lock compartilhado durante output volumoso ou
         # input humano: states e batches de processos disjuntos precisam
         # continuar progredindo enquanto este update aguarda confirmação.
         if not result.clean:
             pending += 1
-            print(_ui.fail(
-                f"{state.name}: {len(result.conflicts)} conflito(s) — "
-                + ", ".join(result.conflicts)
-            ))
-            print(_ui.info(
-                "staging preservado com marcadores diff3 em "
-                f"{staging.relative_to(root)} — resolva manualmente e copie "
-                "para o fork, ou descarte o diretório"
-            ))
+            print(
+                _ui.fail(
+                    f"{state.name}: {len(result.conflicts)} conflito(s) — "
+                    + ", ".join(result.conflicts)
+                )
+            )
+            print(
+                _ui.info(
+                    "staging preservado com marcadores diff3 em "
+                    f"{staging.relative_to(root)} — resolva manualmente e copie "
+                    "para o fork, ou descarte o diretório"
+                )
+            )
             continue
 
         if not ok:
             pending += 1
-            print(_ui.fail(
-                f"{state.name}: merge textualmente limpo, mas inválido — {why}"
-            ))
+            print(
+                _ui.fail(
+                    f"{state.name}: merge textualmente limpo, mas inválido — {why}"
+                )
+            )
             shutil.rmtree(staging, ignore_errors=True)
             continue
 
@@ -3087,9 +3787,7 @@ def cmd_process_update(args):
         if _confirm(f"Aplicar update em '{state.name}'?"):
             backup = _apply_staged_process_update(root, state, staging)
             print(_ui.success(f"{state.name}: atualizado"))
-            print(_ui.dim(
-                f"    backup do fork anterior: {backup.relative_to(root)}"
-            ))
+            print(_ui.dim(f"    backup do fork anterior: {backup.relative_to(root)}"))
         else:
             pending += 1
             shutil.rmtree(staging, ignore_errors=True)
@@ -3104,7 +3802,13 @@ def _cmd_close_locked_body(args, merge_lock):
     import subprocess as _sp
     from ft.engine import ui as _ui
 
-    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     if not _ensure_runtime_selected(args, runner):
         return
     state = runner.state_mgr.load()
@@ -3119,8 +3823,14 @@ def _cmd_close_locked_body(args, merge_lock):
     # Verificar se o ciclo terminou
     terminal = {"done", "completed"}
     if state.node_status not in terminal and not getattr(args, "force", False):
-        print(_ui.fail(f"Ciclo ainda ativo: {state.current_node} ({state.node_status})"))
-        print(_ui.warn("Use --force para encerrar mesmo assim, ou ft approve/continue para finalizar"))
+        print(
+            _ui.fail(f"Ciclo ainda ativo: {state.current_node} ({state.node_status})")
+        )
+        print(
+            _ui.warn(
+                "Use --force para encerrar mesmo assim, ou ft approve/continue para finalizar"
+            )
+        )
         return
 
     # 1. Determinar estratégia de merge
@@ -3132,11 +3842,21 @@ def _cmd_close_locked_body(args, merge_lock):
         if declared_merge not in {"full", "docs", "selective", "none"}:
             print(_ui.fail(f"close_policy.merge inválido: {declared_merge}"))
             return
-        if merge_strategy and merge_strategy != declared_merge and not getattr(args, "force", False):
-            print(_ui.fail(
-                f"Este processo exige merge '{declared_merge}', recebido '{merge_strategy}'."
-            ))
-            print(_ui.info("Use a estratégia declarada ou --force para sobrescrever conscientemente."))
+        if (
+            merge_strategy
+            and merge_strategy != declared_merge
+            and not getattr(args, "force", False)
+        ):
+            print(
+                _ui.fail(
+                    f"Este processo exige merge '{declared_merge}', recebido '{merge_strategy}'."
+                )
+            )
+            print(
+                _ui.info(
+                    "Use a estratégia declarada ou --force para sobrescrever conscientemente."
+                )
+            )
             return
         if merge_strategy is None:
             merge_strategy = declared_merge
@@ -3161,10 +3881,10 @@ def _cmd_close_locked_body(args, merge_lock):
             "referenced",
             "none",
         }:
-            print(_ui.fail("Backlog do produto não está pronto para fechar este ciclo."))
-            print(_ui.warn(
-                f"close_policy.backlog.mode desconhecido: {backlog_mode}"
-            ))
+            print(
+                _ui.fail("Backlog do produto não está pronto para fechar este ciclo.")
+            )
+            print(_ui.warn(f"close_policy.backlog.mode desconhecido: {backlog_mode}"))
             return
         if backlog_mode != "none" and (
             backlog_mode == "referenced" or backlog_file.exists()
@@ -3172,14 +3892,19 @@ def _cmd_close_locked_body(args, merge_lock):
             if backlog_mode == "referenced":
                 references_path = backlog_policy.get("references_path")
                 if not references_path:
-                    backlog_ok, backlog_detail = False, (
-                        "close_policy.backlog.references_path é obrigatório no modo referenced"
+                    backlog_ok, backlog_detail = (
+                        False,
+                        (
+                            "close_policy.backlog.references_path é obrigatório no modo referenced"
+                        ),
                     )
                 else:
                     backlog_ok, backlog_detail = backlog_referenced_decisions(
                         references_path=str(references_path),
                         backlog_path=str(
-                            backlog_policy.get("backlog_path", "docs/PROJECT_BACKLOG.md")
+                            backlog_policy.get(
+                                "backlog_path", "docs/PROJECT_BACKLOG.md"
+                            )
                         ),
                         reference_field=(
                             str(backlog_policy["reference_field"])
@@ -3199,13 +3924,29 @@ def _cmd_close_locked_body(args, merge_lock):
                     project_root=str(work)
                 )
             if not backlog_ok:
-                print(_ui.fail("Backlog do produto não está pronto para fechar este ciclo."))
+                print(
+                    _ui.fail(
+                        "Backlog do produto não está pronto para fechar este ciclo."
+                    )
+                )
                 print(_ui.warn(backlog_detail))
-                print(_ui.info("Atualize docs/PROJECT_BACKLOG.md ou use ft close --force para encerrar conscientemente."))
+                print(
+                    _ui.info(
+                        "Atualize docs/PROJECT_BACKLOG.md ou use ft close --force para encerrar conscientemente."
+                    )
+                )
                 return
 
-        artifact_policy = graph_meta.get("artifact_policy", {}) if isinstance(graph_meta, dict) else {}
-        canonical = artifact_policy.get("canonical", []) if isinstance(artifact_policy, dict) else []
+        artifact_policy = (
+            graph_meta.get("artifact_policy", {})
+            if isinstance(graph_meta, dict)
+            else {}
+        )
+        canonical = (
+            artifact_policy.get("canonical", [])
+            if isinstance(artifact_policy, dict)
+            else []
+        )
         requires_features = "docs/FEATURES.md" in {str(item) for item in canonical}
         if requires_features:
             catalog_ok, catalog_detail = features_catalog_valid(project_root=str(work))
@@ -3213,27 +3954,41 @@ def _cmd_close_locked_body(args, merge_lock):
                 project_root=str(work)
             )
             if not catalog_ok or not coverage_ok:
-                print(_ui.fail("Catálogo de features está ausente ou inconsistente com o backlog entregue."))
+                print(
+                    _ui.fail(
+                        "Catálogo de features está ausente ou inconsistente com o backlog entregue."
+                    )
+                )
                 if not catalog_ok:
                     print(_ui.warn(catalog_detail))
                 if not coverage_ok:
                     print(_ui.warn(coverage_detail))
-                print(_ui.info(
-                    "Atualize docs/FEATURES.md ou use ft close --force para encerrar conscientemente."
-                ))
+                print(
+                    _ui.info(
+                        "Atualize docs/FEATURES.md ou use ft close --force para encerrar conscientemente."
+                    )
+                )
                 return
 
         process_ok, process_detail = process_improvement_close_readiness(work)
         if not process_ok:
-            print(_ui.fail("Há candidatos de melhoria global sem disposição explícita."))
+            print(
+                _ui.fail("Há candidatos de melhoria global sem disposição explícita.")
+            )
             print(_ui.warn(process_detail))
             print(_ui.info("Liste com: ft process-candidates"))
-            print(_ui.info(
-                "Depois de revisar o global, resolva com: "
-                "ft process-candidates PI-NNN --status promoted|deferred|rejected "
-                "--reason \"...\" [--reference \"commit/path\"]"
-            ))
-            print(_ui.info("Use ft close --force apenas para ignorar conscientemente esta governança."))
+            print(
+                _ui.info(
+                    "Depois de revisar o global, resolva com: "
+                    "ft process-candidates PI-NNN --status promoted|deferred|rejected "
+                    '--reason "..." [--reference "commit/path"]'
+                )
+            )
+            print(
+                _ui.info(
+                    "Use ft close --force apenas para ignorar conscientemente esta governança."
+                )
+            )
             return
 
     merge_ok = True
@@ -3255,7 +4010,9 @@ def _cmd_close_locked_body(args, merge_lock):
         # só existem lá. (Lição vibeos cycle-02: close removeu branch com
         # conflitos abertos; recuperação exigiu resgate via SHA solto.)
         print(_ui.fail("Merge falhou — worktree e branch PRESERVADOS."))
-        print(_ui.warn("Resolva o merge (ou use --merge none) e rode ft close novamente."))
+        print(
+            _ui.warn("Resolva o merge (ou use --merge none) e rode ft close novamente.")
+        )
         return
 
     # 2. Descobrir se estamos num worktree
@@ -3270,13 +4027,17 @@ def _cmd_close_locked_body(args, merge_lock):
 
             branch = _sp.run(
                 ["git", "branch", "--show-current"],
-                cwd=work, capture_output=True, text=True,
+                cwd=work,
+                capture_output=True,
+                text=True,
             ).stdout.strip()
 
             # Remover worktree
             result = _sp.run(
                 ["git", "worktree", "remove", str(work), "--force"],
-                cwd=original_root, capture_output=True, text=True,
+                cwd=original_root,
+                capture_output=True,
+                text=True,
             )
             if result.returncode == 0:
                 print(_ui.success(f"Worktree removido: {work.name}"))
@@ -3287,12 +4048,18 @@ def _cmd_close_locked_body(args, merge_lock):
             if branch:
                 result = _sp.run(
                     ["git", "branch", "-D", branch],
-                    cwd=original_root, capture_output=True, text=True,
+                    cwd=original_root,
+                    capture_output=True,
+                    text=True,
                 )
                 if result.returncode == 0:
                     print(_ui.success(f"Branch removida: {branch}"))
                 else:
-                    print(_ui.dim(f"Branch {branch} não removida: {result.stderr.strip()[:100]}"))
+                    print(
+                        _ui.dim(
+                            f"Branch {branch} não removida: {result.stderr.strip()[:100]}"
+                        )
+                    )
     elif is_worktree:
         print(_ui.dim("Worktree preservado (--keep-worktree)"))
 
@@ -3316,10 +4083,35 @@ def _cmd_close_locked_body(args, merge_lock):
     except Exception as exc:
         print(_ui.warn(f"Prontidão do projeto não pôde ser avaliada: {exc}"))
     print(_ui.warn("Verificação pós-close antes de entregar ao stakeholder:"))
-    print("    1. Reinstale dependências (npm install / poetry install) — o ciclo pode ter adicionado novas")
-    print("    2. Limpe caches de build antigos (ex.: .next/) e reinicie os servidores do checkout promovido")
-    print("    3. Confirme HTTP 200 em TODAS as rotas principais (não só / e /health)")
-    print("    4. Exercite o fluxo novo do ciclo de verdade — 'passou no worktree' não implica 'funciona no projeto'")
+    for instruction in _post_close_validation_instructions(owner_root):
+        print(instruction)
+
+
+def _post_close_validation_instructions(project_root: str | Path) -> tuple[str, ...]:
+    """Return surface-aware checks instead of assuming every project serves UI."""
+
+    headless = False
+    contract_path = paths.project_contract(project_root)
+    try:
+        payload = yaml.safe_load(contract_path.read_text(encoding="utf-8")) or {}
+        validation = payload.get("validation", {}) if isinstance(payload, dict) else {}
+        headless = isinstance(validation, dict) and validation.get("mode") == "disabled"
+    except (OSError, UnicodeError, yaml.YAMLError):
+        pass
+
+    if headless:
+        return (
+            "    1. Reinstale as dependências e extras exigidos pelos gates do projeto",
+            "    2. Execute os gates headless do checkout promovido (por exemplo, make ci)",
+            "    3. Construa e instale o pacote em um ambiente limpo",
+            "    4. Exercite a API pública e o quickstart reais; não crie UI, browser ou servidor suplementar",
+        )
+    return (
+        "    1. Reinstale dependências (npm install / poetry install) — o ciclo pode ter adicionado novas",
+        "    2. Limpe caches de build antigos (ex.: .next/) e reinicie os servidores do checkout promovido",
+        "    3. Confirme HTTP 200 em TODAS as rotas principais (não só / e /health)",
+        "    4. Exercite o fluxo novo do ciclo de verdade — 'passou no worktree' não implica 'funciona no projeto'",
+    )
 
 
 def cmd_close(args):
@@ -3359,11 +4151,7 @@ def _print_project_readiness(readiness, *, as_json: bool = False) -> None:
     print(f"  Revisão: {readiness.evaluated_revision or '—'}")
     print(f"  Bloqueios: {len(readiness.blockers)}")
     for blocker in readiness.blockers:
-        references = (
-            f" [{', '.join(blocker.references)}]"
-            if blocker.references
-            else ""
-        )
+        references = f" [{', '.join(blocker.references)}]" if blocker.references else ""
         print(f"    - {blocker.code}: {blocker.message}{references}")
 
 
@@ -3450,7 +4238,13 @@ def cmd_project_reopen(args) -> int:
 def cmd_graph(args):
     if not _ensure_runtime_selected(args):
         return
-    runner = get_runner(llm_engine=resolve_llm_engine(args), llm_model=resolve_llm_model(args), llm_effort=resolve_llm_effort(args), verbose=getattr(args, "verbose", False), cycle=getattr(args, "cycle", None))
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     runner.status(full=True)
 
 
@@ -3500,7 +4294,9 @@ def cmd_validate(args):
         print(f"  \u26a0\ufe0f  {w}")
     warn_note = f" ({len(struct_warnings)} warnings)" if struct_warnings else ""
     err_note = f" ({len(struct_errors)} erros)" if struct_errors else ""
-    print(f"\n  Estrutura: {'PASS' if structure_passed else 'FAIL'}{err_note}{warn_note}")
+    print(
+        f"\n  Estrutura: {'PASS' if structure_passed else 'FAIL'}{err_note}{warn_note}"
+    )
 
     # --- Validação do YAML ---
     print()
@@ -3538,7 +4334,11 @@ def cmd_validate(args):
             )
             sys.exit(1)
 
-    rel = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
+    rel = (
+        process_path.relative_to(root)
+        if process_path.is_relative_to(root)
+        else process_path
+    )
     print(f"Validando {rel}...\n")
 
     try:
@@ -3570,7 +4370,11 @@ def cmd_lint_process(args):
         sys.exit(1)
 
     yaml_content = process_path.read_text()
-    rel_path = process_path.relative_to(root) if process_path.is_relative_to(root) else process_path
+    rel_path = (
+        process_path.relative_to(root)
+        if process_path.is_relative_to(root)
+        else process_path
+    )
 
     print(f"\nLint semântico: {rel_path}\n")
 
@@ -3593,6 +4397,9 @@ def cmd_lint_process(args):
         "- IDs de nodes, títulos descritivos genéricos, nomes de sprints\n"
         "- Comandos de build genéricos (npm run build, npm install, npx serve)\n"
         "- Referências a ferramentas genéricas (Playwright, curl)\n"
+        "- Perfis globais de validação e seus targets (Android, iOS, web, desktop, "
+        "simulador, dispositivo físico, browser e sistemas operacionais)\n"
+        "- Checks provenientes do registry global de validation_profiles\n"
         "- Instruções genéricas ('Leia docs/ui_guidelines.md e siga')\n\n"
         "YAML DO PROCESSO:\n"
         "---\n"
@@ -3603,7 +4410,7 @@ def cmd_lint_process(args):
         '  {"level": "error"|"warning", "node_id": "...", "excerpt": "trecho curto", '
         '"reason": "motivo", "suggestion": "como corrigir"}\n'
         '], "verdict": "PASS"|"FAIL"}\n\n'
-        "Se não houver violações: {\"violations\": [], \"verdict\": \"PASS\"}\n"
+        'Se não houver violações: {"violations": [], "verdict": "PASS"}\n'
         "verdict=FAIL se houver pelo menos 1 error. Warnings sozinhos = PASS."
     )
 
@@ -3621,6 +4428,7 @@ def cmd_lint_process(args):
         llm_engine=engine,
         llm_model=model,
         llm_effort=effort,
+        workflow_id=str(args.template),
     )
 
     output = result.output.strip()
@@ -3653,7 +4461,7 @@ def cmd_lint_process(args):
         excerpt = v.get("excerpt", "")
         reason = v.get("reason", "")
         suggestion = v.get("suggestion", "")
-        print(f"  {icon} {node}: \"{excerpt}\"")
+        print(f'  {icon} {node}: "{excerpt}"')
         print(f"     \u2192 {reason}")
         if suggestion:
             print(f"     Sugestão: {suggestion}")
@@ -3675,11 +4483,13 @@ def cmd_retry(args):
     """Reseta o estado blocked do node atual e retenta sem aplicar correção."""
     from ft.engine import ui as _ui
 
-    runner = get_runner(llm_engine=resolve_llm_engine(args),
-                        llm_model=resolve_llm_model(args),
-                        llm_effort=resolve_llm_effort(args),
-                        verbose=getattr(args, "verbose", False),
-                        cycle=getattr(args, "cycle", None))
+    runner = get_runner(
+        llm_engine=resolve_llm_engine(args),
+        llm_model=resolve_llm_model(args),
+        llm_effort=resolve_llm_effort(args),
+        verbose=getattr(args, "verbose", False),
+        cycle=getattr(args, "cycle", None),
+    )
     if not _ensure_runtime_selected(args, runner):
         return
     runner._bypass_human_gates = resolve_bypass_human_gates(args)
@@ -3694,22 +4504,25 @@ def cmd_retry(args):
         from ft.engine.state import lock_owner_is_alive
 
         orphaned_delegation = (
-            state.node_status == "delegated"
-            and not lock_owner_is_alive(state._lock)
+            state.node_status == "delegated" and not lock_owner_is_alive(state._lock)
         )
         if orphaned_delegation:
             print(_ui.warn("Delegação órfã detectada — limpando estado antes do retry"))
             state.active_llm_log = None
         else:
-            print(_ui.warn(f"Node atual não está bloqueado (status: {state.node_status})"))
+            print(
+                _ui.warn(f"Node atual não está bloqueado (status: {state.node_status})")
+            )
             return
 
     node_id = state.current_node
     if retrying_pending_review:
-        print(_ui.warn(
-            "Descartando o encaminhamento de correção pendente e repetindo "
-            "somente o review atual"
-        ))
+        print(
+            _ui.warn(
+                "Descartando o encaminhamento de correção pendente e repetindo "
+                "somente o review atual"
+            )
+        )
         state.pending_fix = None
     print(_ui.info(f"Retentando node: {node_id}"))
     mode = "mvp" if getattr(args, "auto", False) else "step"
@@ -3721,14 +4534,11 @@ def cmd_retry(args):
     )
     if callable(retry_validation) and retry_validation(mode=mode):
         resumed = runner.state_mgr.load()
-        if (
-            mode == "mvp"
-            and resumed.node_status not in {
-                "blocked",
-                "awaiting_approval",
-                "pending_fix",
-            }
-        ):
+        if mode == "mvp" and resumed.node_status not in {
+            "blocked",
+            "awaiting_approval",
+            "pending_fix",
+        }:
             runner.run(mode=mode)
         return
 
@@ -3755,8 +4565,6 @@ def cmd_fix(args):
     execute_fix(args, runner)
 
 
-
-
 def _abort_zombie_cycle(args, root: Path, cycle, work: Path) -> None:
     """Descarta um ciclo sem worktree Git válida (preparing/crash/corrompido)."""
     import shutil as _shutil
@@ -3764,10 +4572,12 @@ def _abort_zombie_cycle(args, root: Path, cycle, work: Path) -> None:
     from ft.engine import ui as _ui
 
     print()
-    print(_ui.warn(
-        f"ABORT (zumbi): ciclo {cycle.name} sem worktree Git válida "
-        f"(status {cycle.status}) — vai remover diretório e registro"
-    ))
+    print(
+        _ui.warn(
+            f"ABORT (zumbi): ciclo {cycle.name} sem worktree Git válida "
+            f"(status {cycle.status}) — vai remover diretório e registro"
+        )
+    )
     print(_ui.dim(f"  Diretório: {work}"))
     print()
     if not getattr(args, "force", False):
@@ -3780,7 +4590,9 @@ def _abort_zombie_cycle(args, root: Path, cycle, work: Path) -> None:
     if work.exists():
         _sp.run(
             ["git", "worktree", "remove", str(work), "--force"],
-            cwd=owner, capture_output=True, text=True,
+            cwd=owner,
+            capture_output=True,
+            text=True,
         )
         if work.exists():
             try:
@@ -3791,12 +4603,16 @@ def _abort_zombie_cycle(args, root: Path, cycle, work: Path) -> None:
     _sp.run(["git", "worktree", "prune"], cwd=owner, capture_output=True, text=True)
     branch_check = _sp.run(
         ["git", "branch", "--list", cycle.name],
-        cwd=owner, capture_output=True, text=True,
+        cwd=owner,
+        capture_output=True,
+        text=True,
     )
     if branch_check.stdout.strip():
         _sp.run(
             ["git", "branch", "-D", cycle.name],
-            cwd=owner, capture_output=True, text=True,
+            cwd=owner,
+            capture_output=True,
+            text=True,
         )
         print(_ui.success(f"Branch removida: {cycle.name}"))
     print(_ui.success(f"Ciclo zumbi removido: {cycle.name}"))
@@ -3833,7 +4649,9 @@ def _cmd_abort_locked_body(args):
 
         branch = _sp.run(
             ["git", "branch", "--show-current"],
-            cwd=work, capture_output=True, text=True,
+            cwd=work,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
 
     # Confirmação
@@ -3863,7 +4681,9 @@ def _cmd_abort_locked_body(args):
     if is_git_worktree and original_root is not None:
         result = _sp.run(
             ["git", "worktree", "remove", str(work), "--force"],
-            cwd=original_root, capture_output=True, text=True,
+            cwd=original_root,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             print(_ui.success(f"Worktree removido: {work.name}"))
@@ -3874,7 +4694,9 @@ def _cmd_abort_locked_body(args):
     if branch and original_root is not None:
         result = _sp.run(
             ["git", "branch", "-D", branch],
-            cwd=original_root, capture_output=True, text=True,
+            cwd=original_root,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             print(_ui.success(f"Branch removida: {branch}"))
@@ -4040,6 +4862,7 @@ def cmd_cancel(args):
     # Análise LLM do cancelamento
     print(_ui.info("Gerando análise do cancelamento..."))
     from ft.engine.delegate import delegate_to_llm
+
     llm_engine = resolve_llm_engine(args) or data.get("llm_engine") or "claude"
     llm_model = resolve_llm_model(args) or data.get("llm_model")
     llm_effort = resolve_llm_effort(args) or data.get("llm_effort")
@@ -4072,6 +4895,7 @@ def cmd_cancel(args):
         llm_engine=llm_engine,
         llm_model=llm_model,
         llm_effort=llm_effort,
+        workflow_id=data.get("template_id"),
     )
 
     if result.success:
@@ -4092,10 +4916,12 @@ def cmd_setup_env(args):
         InitScriptError,
     )
 
-    print(_ui.warn(
-        "ft setup-env está deprecado; use ft init --template <T> "
-        "(ou ft init --fix --template <T> para re-executar)."
-    ))
+    print(
+        _ui.warn(
+            "ft setup-env está deprecado; use ft init --template <T> "
+            "(ou ft init --fix --template <T> para re-executar)."
+        )
+    )
     project_root = Path(args.project).resolve() if args.project else find_project_root()
     try:
         descriptor = load_init_descriptor(str(args.template))
@@ -4132,10 +4958,7 @@ def cmd_migrate_layout(args):
         has_legacy_layout_keys = any(
             key in manifest for key in ("process", "template", "origin_template")
         )
-        if (
-            manifest.get("schema_version") == 2
-            and not has_legacy_layout_keys
-        ):
+        if manifest.get("schema_version") == 2 and not has_legacy_layout_keys:
             result = migrate_v2_manifest(project_root, dry_run=args.dry_run)
             prefix = "Planejado" if args.dry_run else "Migrado"
             print(_ui.success(f"{prefix}: {project_root}"))
@@ -4165,6 +4988,7 @@ def _normalize_hipotese(
     llm_engine: str = "claude",
     llm_model: str | None = None,
     llm_effort: str | None = None,
+    workflow_id: str | None = None,
 ) -> None:
     """Verifica se hipotese.md está no formato correto; corrige via LLM se não estiver.
 
@@ -4180,7 +5004,9 @@ def _normalize_hipotese(
 
     ok_exists, _ = file_exists(rel, project_root=str(project_root))
     ok_lines, _ = min_lines(rel, 10, project_root=str(project_root))
-    ok_sections, _ = has_sections(rel, ["Problema", "Oportunidade"], project_root=str(project_root))
+    ok_sections, _ = has_sections(
+        rel, ["Problema", "Oportunidade"], project_root=str(project_root)
+    )
 
     if ok_exists and ok_lines and ok_sections:
         print("  hipotese.md validada — formato OK")
@@ -4190,9 +5016,13 @@ def _normalize_hipotese(
     if not ok_lines:
         missing.append("menos de 10 linhas")
     if not ok_sections:
-        missing.append("seções obrigatórias ausentes (## Problema e/ou ## Oportunidade)")
+        missing.append(
+            "seções obrigatórias ausentes (## Problema e/ou ## Oportunidade)"
+        )
 
-    print(f"  hipotese.md fora do formato ({', '.join(missing)}) — corrigindo via LLM...")
+    print(
+        f"  hipotese.md fora do formato ({', '.join(missing)}) — corrigindo via LLM..."
+    )
 
     conteudo = hipotese_path.read_text()
     prompt = f"""O usuário forneceu uma hipótese de produto em formato livre.
@@ -4212,23 +5042,34 @@ Formato obrigatório:
 Escreva o arquivo corrigido em: docs/hipotese.md
 Ao final diga DONE."""
 
-    result = delegate_to_llm(task=prompt, project_root=str(project_root),
-                             allowed_paths=["docs/"], max_turns=5,
-                             llm_engine=llm_engine,
-                             llm_model=llm_model,
-                             llm_effort=llm_effort)
+    result = delegate_to_llm(
+        task=prompt,
+        project_root=str(project_root),
+        allowed_paths=["docs/"],
+        max_turns=5,
+        llm_engine=llm_engine,
+        llm_model=llm_model,
+        llm_effort=llm_effort,
+        workflow_id=workflow_id,
+    )
 
     if not result.success:
-        print("  AVISO: LLM não conseguiu corrigir hipotese.md — o processo vai solicitar reescrita")
+        print(
+            "  AVISO: LLM não conseguiu corrigir hipotese.md — o processo vai solicitar reescrita"
+        )
         return
 
     # Re-validar após correção
     ok_lines2, _ = min_lines(rel, 10, project_root=str(project_root))
-    ok_sections2, _ = has_sections(rel, ["Problema", "Oportunidade"], project_root=str(project_root))
+    ok_sections2, _ = has_sections(
+        rel, ["Problema", "Oportunidade"], project_root=str(project_root)
+    )
     if ok_lines2 and ok_sections2:
         print("  hipotese.md corrigida e validada")
     else:
-        print("  AVISO: hipotese.md ainda fora do formato após correção — o processo vai solicitar reescrita")
+        print(
+            "  AVISO: hipotese.md ainda fora do formato após correção — o processo vai solicitar reescrita"
+        )
 
 
 def _resolve_run_mode(
@@ -4237,6 +5078,7 @@ def _resolve_run_mode(
 ) -> str:
     """Lê run_mode de environment.yml. Default: isolated."""
     from ft.engine.hooks import load_environment
+
     env = load_environment(str(project_root), process_path=process_path)
     return env.get("run_mode", "isolated")
 
@@ -4511,29 +5353,35 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
         try:
             loaded = yaml.safe_load(state_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, yaml.YAMLError):
-            records.append(_ActiveRunRecord(
-                description=f"{cycle_name} (estado inválido)",
-                state_path=state_path,
-                process_name=None,
-                isolated=isolated,
-            ))
+            records.append(
+                _ActiveRunRecord(
+                    description=f"{cycle_name} (estado inválido)",
+                    state_path=state_path,
+                    process_name=None,
+                    isolated=isolated,
+                )
+            )
             return
         if loaded in (None, {}):
             if isolated:
-                records.append(_ActiveRunRecord(
-                    description=f"{cycle_name} (estado vazio)",
-                    state_path=state_path,
-                    process_name=None,
-                    isolated=True,
-                ))
+                records.append(
+                    _ActiveRunRecord(
+                        description=f"{cycle_name} (estado vazio)",
+                        state_path=state_path,
+                        process_name=None,
+                        isolated=True,
+                    )
+                )
             return
         if not isinstance(loaded, dict):
-            records.append(_ActiveRunRecord(
-                description=f"{cycle_name} (estado inválido)",
-                state_path=state_path,
-                process_name=None,
-                isolated=isolated,
-            ))
+            records.append(
+                _ActiveRunRecord(
+                    description=f"{cycle_name} (estado inválido)",
+                    state_path=state_path,
+                    process_name=None,
+                    isolated=isolated,
+                )
+            )
             return
         if (
             loaded.get("node_status") == "preparing"
@@ -4546,12 +5394,14 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
             except (TypeError, ValueError):
                 parsed_pid = 0
             if parsed_pid <= 0:
-                records.append(_ActiveRunRecord(
-                    description=f"{cycle_name} (reserva de state inválida)",
-                    state_path=state_path,
-                    process_name=None,
-                    isolated=isolated,
-                ))
+                records.append(
+                    _ActiveRunRecord(
+                        description=f"{cycle_name} (reserva de state inválida)",
+                        state_path=state_path,
+                        process_name=None,
+                        isolated=isolated,
+                    )
+                )
                 return
             if not _runtime_lock_owner_is_alive(raw_lock):
                 return
@@ -4559,12 +5409,14 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
             return
         node = loaded.get("current_node", "?")
         status = loaded.get("node_status", "?")
-        records.append(_ActiveRunRecord(
-            description=f"{cycle_name} ({node} — {status})",
-            state_path=state_path,
-            process_name=_state_process_name(loaded),
-            isolated=isolated,
-        ))
+        records.append(
+            _ActiveRunRecord(
+                description=f"{cycle_name} ({node} — {status})",
+                state_path=state_path,
+                process_name=_state_process_name(loaded),
+                isolated=isolated,
+            )
+        )
 
     collect(
         paths.continuous_state_path(project_root),
@@ -4589,43 +5441,49 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
             except (TypeError, ValueError):
                 parsed_pid = 0
             if parsed_pid <= 0:
-                records.append(_ActiveRunRecord(
+                records.append(
+                    _ActiveRunRecord(
+                        description="modo continuous (reserva inválida)",
+                        state_path=startup,
+                        process_name=None,
+                        isolated=False,
+                    )
+                )
+            elif _runtime_lock_owner_is_alive(raw_lock):
+                records.append(
+                    _ActiveRunRecord(
+                        description="modo continuous (preparando state)",
+                        state_path=startup,
+                        process_name=_state_process_name(payload),
+                        isolated=False,
+                    )
+                )
+        else:
+            records.append(
+                _ActiveRunRecord(
                     description="modo continuous (reserva inválida)",
                     state_path=startup,
                     process_name=None,
                     isolated=False,
-                ))
-            elif _runtime_lock_owner_is_alive(raw_lock):
-                records.append(_ActiveRunRecord(
-                    description="modo continuous (preparando state)",
-                    state_path=startup,
-                    process_name=_state_process_name(payload),
-                    isolated=False,
-                ))
-        else:
-            records.append(_ActiveRunRecord(
-                description="modo continuous (reserva inválida)",
-                state_path=startup,
-                process_name=None,
-                isolated=False,
-            ))
+                )
+            )
 
     startup_home = paths.startup_reservations_home(project_root)
     if startup_home.is_dir():
         for reservation in sorted(startup_home.glob("*.yml")):
             try:
-                payload = yaml.safe_load(
-                    reservation.read_text(encoding="utf-8")
-                ) or {}
+                payload = yaml.safe_load(reservation.read_text(encoding="utf-8")) or {}
             except (OSError, UnicodeError, yaml.YAMLError):
                 payload = None
             if not isinstance(payload, dict):
-                records.append(_ActiveRunRecord(
-                    description="startup de ciclo (reserva inválida)",
-                    state_path=reservation,
-                    process_name=None,
-                    isolated=True,
-                ))
+                records.append(
+                    _ActiveRunRecord(
+                        description="startup de ciclo (reserva inválida)",
+                        state_path=reservation,
+                        process_name=None,
+                        isolated=True,
+                    )
+                )
                 continue
             raw_lock = payload.get("_lock", {})
             raw_pid = raw_lock.get("pid") if isinstance(raw_lock, dict) else None
@@ -4634,19 +5492,23 @@ def _active_run_records(project_root: Path) -> list[_ActiveRunRecord]:
             except (TypeError, ValueError):
                 parsed_pid = 0
             if parsed_pid <= 0 or payload.get("isolated") is not True:
-                records.append(_ActiveRunRecord(
-                    description="startup de ciclo (reserva inválida)",
-                    state_path=reservation,
-                    process_name=None,
-                    isolated=True,
-                ))
+                records.append(
+                    _ActiveRunRecord(
+                        description="startup de ciclo (reserva inválida)",
+                        state_path=reservation,
+                        process_name=None,
+                        isolated=True,
+                    )
+                )
             elif _runtime_lock_owner_is_alive(raw_lock):
-                records.append(_ActiveRunRecord(
-                    description=f"startup de ciclo (PID {parsed_pid} — preparando snapshot)",
-                    state_path=reservation,
-                    process_name=_state_process_name(payload),
-                    isolated=True,
-                ))
+                records.append(
+                    _ActiveRunRecord(
+                        description=f"startup de ciclo (PID {parsed_pid} — preparando snapshot)",
+                        state_path=reservation,
+                        process_name=_state_process_name(payload),
+                        isolated=True,
+                    )
+                )
 
     wt_home = paths.worktrees_home(project_root)
     if wt_home.is_dir():
@@ -4765,6 +5627,7 @@ def _prepare_run_runtime(
 def cmd_run(args):
     """Materialize one template and execute it in a new isolated cycle."""
     import sys
+
     sys.stdout.reconfigure(line_buffering=True)
 
     source_project_root = Path(args.project).resolve()
@@ -4816,9 +5679,9 @@ def cmd_run(args):
             args,
             source_project_root,
         )
-        process_payload = yaml.safe_load(
-            process_path_at_root.read_text(encoding="utf-8")
-        ) or {}
+        process_payload = (
+            yaml.safe_load(process_path_at_root.read_text(encoding="utf-8")) or {}
+        )
         if not isinstance(process_payload, dict):
             raise ValueError(f"template inválido: {process_path_at_root}")
         validate_run_route(
@@ -4863,6 +5726,7 @@ def cmd_run(args):
         explicit_cycle_name = _validate_cycle_name(getattr(args, "cycle_name", None))
     except ValueError as e:
         from ft.engine import ui as _ui
+
         print(_ui.fail(f"--cycle-name inválido: {e}"))
         sys.exit(1)
 
@@ -4908,8 +5772,11 @@ def cmd_run(args):
             target = docs_dir / filename
             if source and not target.exists():
                 import shutil as _shutil
+
                 _shutil.copy2(source, target)
-                print(f"  Contexto anterior: {source.relative_to(project_root)} → docs/{filename}")
+                print(
+                    f"  Contexto anterior: {source.relative_to(project_root)} → docs/{filename}"
+                )
 
     llm_model = resolve_llm_model(args) or manifest_model
     llm_effort = resolve_llm_effort(args) or manifest_effort
@@ -4931,6 +5798,7 @@ def cmd_run(args):
 
     # Disparar hooks on_env_setup se definidos no environment.yml
     from ft.engine.hooks import run_hooks
+
     run_hooks(
         "on_env_setup",
         str(project_root),
@@ -4954,7 +5822,9 @@ def cmd_run(args):
                 shutil.copy(src, dst)
                 print(f"  plano_de_voo.md copiado de {args.from_project}")
         else:
-            print(f"  AVISO: --from-project sem plano_de_voo.md em {paths.project_cycles_dir(source_project)}")
+            print(
+                f"  AVISO: --from-project sem plano_de_voo.md em {paths.project_cycles_dir(source_project)}"
+            )
 
     # Copiar e normalizar hipótese inicial se fornecida (pre-seed de ft.mdd.01.hipotese)
     if args.hipotese:
@@ -4973,6 +5843,7 @@ def cmd_run(args):
             llm_engine=_effective_engine,
             llm_model=llm_model,
             llm_effort=llm_effort,
+            workflow_id=str(args.template),
         )
 
     # Health check da API antes de começar
@@ -5009,16 +5880,19 @@ def main():
     from ft import __version__
 
     parser = argparse.ArgumentParser(
-        prog="ft",
-        description="ft engine — motor deterministico de processos"
+        prog="ft", description="ft engine — motor deterministico de processos"
     )
     parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Modo verboso: mostra output do LLM no terminal")
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Modo verboso: mostra output do LLM no terminal",
+    )
     sub = parser.add_subparsers(dest="command")
 
     # init
@@ -5064,45 +5938,132 @@ def main():
     # resume (alias: continue para backward compat)
     cont = sub.add_parser("resume", aliases=["continue"], help="Retomar o processo")
     add_llm_engine_flags(cont)
-    cont.add_argument("--step", action="store_true", default=True, help="Avancar 1 step (default)")
+    cont.add_argument(
+        "--step", action="store_true", default=True, help="Avancar 1 step (default)"
+    )
     cont.add_argument("--sprint", action="store_true", help="Avancar ate fim da sprint")
-    cont.add_argument("--auto", action="store_true", help="Avancar ate MVP (modo autonomo; PARA em human_gates)")
-    cont.add_argument("--no-auto", action="store_true", dest="no_auto",
-                      help="Não herdar o modo autônomo do run original (avança um passo)")
-    cont.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
-                      help="Pular human_gates automaticamente (LLM decide)")
-    cont.add_argument("--no-bypass-human-gates", action="store_true", dest="no_bypass_human_gates",
-                      help="Não herdar --bypass-human-gates do run original")
+    cont.add_argument(
+        "--auto",
+        action="store_true",
+        help="Avancar ate MVP (modo autonomo; PARA em human_gates)",
+    )
+    cont.add_argument(
+        "--no-auto",
+        action="store_true",
+        dest="no_auto",
+        help="Não herdar o modo autônomo do run original (avança um passo)",
+    )
+    cont.add_argument(
+        "--bypass-human-gates",
+        action="store_true",
+        dest="bypass_human_gates",
+        help="Pular human_gates automaticamente (LLM decide)",
+    )
+    cont.add_argument(
+        "--no-bypass-human-gates",
+        action="store_true",
+        dest="no_bypass_human_gates",
+        help="Não herdar --bypass-human-gates do run original",
+    )
     cont.add_argument("--cycle", help="Ciclo específico a retomar (ex: cycle-07)")
-    cont.add_argument("--parallel", action="store_true",
-                      help="Habilitar lanes/fan-out intra-processo (persiste no run)")
-    cont.add_argument("--no-parallel", action="store_true", dest="no_parallel",
-                      help="Desabilitar paralelismo intra-processo num run já iniciado")
-    cont.add_argument("--max-parallel", dest="max_parallel", type=int, metavar="N",
-                      help="Teto de worktrees simultâneos no processo (default: 2)")
+    cont.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Habilitar lanes/fan-out intra-processo (persiste no run)",
+    )
+    cont.add_argument(
+        "--no-parallel",
+        action="store_true",
+        dest="no_parallel",
+        help="Desabilitar paralelismo intra-processo num run já iniciado",
+    )
+    cont.add_argument(
+        "--max-parallel",
+        dest="max_parallel",
+        type=int,
+        metavar="N",
+        help="Teto de worktrees simultâneos no processo (default: 2)",
+    )
 
     # status
     st = sub.add_parser("status", help="Estado atual")
     add_llm_engine_flags(st)
-    st.add_argument("--full", "-f", action="store_true", help="Mostrar grafo e artefatos")
-    st.add_argument("--report", "-r", action="store_true", help="Relatório de tempo e tokens por node")
-    st.add_argument("--cycle", help="Ciclo específico a consultar (ex: cycle-10-opencode)")
+    st.add_argument(
+        "--full", "-f", action="store_true", help="Mostrar grafo e artefatos"
+    )
+    st.add_argument(
+        "--report",
+        "-r",
+        action="store_true",
+        help="Relatório de tempo e tokens por node",
+    )
+    st.add_argument(
+        "--cycle", help="Ciclo específico a consultar (ex: cycle-10-opencode)"
+    )
+    st.add_argument(
+        "--watch",
+        nargs="?",
+        const=60,
+        default=None,
+        type=_positive_interval_seconds,
+        metavar="SEGUNDOS",
+        help=(
+            "Atualizar o status na mesma tela a cada N segundos "
+            "(default: 60)"
+        ),
+    )
 
     # log — acompanhar o log LLM do ciclo ativo
     lg = sub.add_parser("log", help="Mostrar/acompanhar o log LLM do ciclo ativo")
     add_llm_engine_flags(lg)
-    lg.add_argument("--follow", "-f", "--tail", action="store_true", dest="follow", help="Acompanhar em tempo real (troca de log sozinho quando o node muda)")
-    lg.add_argument("--lines", "-n", type=int, default=None, help="Quantas linhas mostrar inicialmente (default: 30)")
+    lg.add_argument(
+        "--follow",
+        "-f",
+        "--tail",
+        action="store_true",
+        dest="follow",
+        help="Acompanhar em tempo real (troca de log sozinho quando o node muda)",
+    )
+    lg.add_argument(
+        "--lines",
+        "-n",
+        type=int,
+        default=None,
+        help="Quantas linhas mostrar inicialmente (default: 30)",
+    )
     lg.set_defaults(_parser=lg)
     lg.add_argument("--raw", action="store_true", help="NDJSON cru, sem formatação")
-    lg.add_argument("--markdown", "-m", action="store_true", help="Realça a saída por cor/ênfase: comandos bash, ferramentas, resposta e raciocínio")
-    lg.add_argument("--path", action="store_true", help="Só imprimir o caminho do log ativo")
-    lg.add_argument("--cycle", help="Ciclo específico a acompanhar (ex: cycle-10-opencode)")
+    lg.add_argument(
+        "--markdown",
+        "-m",
+        action="store_true",
+        help="Realça a saída por cor/ênfase: comandos bash, ferramentas, resposta e raciocínio",
+    )
+    lg.add_argument(
+        "--path", action="store_true", help="Só imprimir o caminho do log ativo"
+    )
+    lg.add_argument(
+        "--cycle", help="Ciclo específico a acompanhar (ex: cycle-10-opencode)"
+    )
 
     # runs — tabela comparativa de todos os ciclos
-    ru2 = sub.add_parser("runs", help="Ciclos ativos no runtime e fechados em .ft/cycles/")
-    ru2.add_argument("--done", action="store_true",
-                     help="Incluir também os ciclos concluídos (default: só ativos)")
+    ru2 = sub.add_parser(
+        "runs", help="Ciclos ativos no runtime e fechados em .ft/cycles/"
+    )
+    ru2.add_argument(
+        "--done",
+        action="store_true",
+        help="Incluir também os ciclos concluídos (default: só ativos)",
+    )
+    ru2.add_argument(
+        "--done-detailed",
+        action="store_true",
+        dest="done_detailed",
+        help=(
+            "Incluir ciclos concluídos e listar cada execução de step em ordem "
+            "cronológica, com retries, duração ativa de LLM e tokens"
+        ),
+    )
     ru2.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
 
     project_status = sub.add_parser(
@@ -5172,6 +6133,32 @@ def main():
         help="Emitir JSON compacto para integração",
     )
 
+    validation_profiles = sub.add_parser(
+        "validation-profiles",
+        help="Listar perfis globais Android, iOS, web e desktop",
+    )
+    validation_profiles.add_argument(
+        "--json",
+        action="store_true",
+        help="Emitir o catálogo em JSON",
+    )
+
+    validation_matrix = sub.add_parser(
+        "validation-matrix",
+        help="Resolver e materializar a matriz de validação do projeto",
+    )
+    validation_matrix.add_argument(
+        "project",
+        nargs="?",
+        default=".",
+        help="Diretório do projeto",
+    )
+    validation_matrix.add_argument(
+        "--json",
+        action="store_true",
+        help="Emitir a matriz materializada em JSON",
+    )
+
     llm_defaults = sub.add_parser(
         "llm-defaults",
         help="Validar e persistir os defaults LLM do projeto",
@@ -5202,19 +6189,39 @@ def main():
     # approve
     ap = sub.add_parser("approve", help="Aprovar artefato pendente")
     add_llm_engine_flags(ap)
-    ap.add_argument("message", nargs="?", default=None,
-                    help="Nota opcional registrada no log (ex: 'Aprovado após revisão')")
-    ap.add_argument("--no-continue", action="store_true", help="Nao continuar automaticamente")
-    ap.add_argument("--auto", action="store_true", help="Após aprovar, avança sozinho até o próximo human gate (modo autônomo)")
-    ap.add_argument("--sprint", action="store_true", help="Após aprovar, avança até o fim da sprint")
-    ap.add_argument("--bypass-human-gates", action="store_true", help="Pular human_gates automaticamente (LLM decide)")
-    ap.add_argument("--cycle", help="Ciclo específico a aprovar (ex: cycle-12-f01-busca)")
+    ap.add_argument(
+        "message",
+        nargs="?",
+        default=None,
+        help="Nota opcional registrada no log (ex: 'Aprovado após revisão')",
+    )
+    ap.add_argument(
+        "--no-continue", action="store_true", help="Nao continuar automaticamente"
+    )
+    ap.add_argument(
+        "--auto",
+        action="store_true",
+        help="Após aprovar, avança sozinho até o próximo human gate (modo autônomo)",
+    )
+    ap.add_argument(
+        "--sprint", action="store_true", help="Após aprovar, avança até o fim da sprint"
+    )
+    ap.add_argument(
+        "--bypass-human-gates",
+        action="store_true",
+        help="Pular human_gates automaticamente (LLM decide)",
+    )
+    ap.add_argument(
+        "--cycle", help="Ciclo específico a aprovar (ex: cycle-12-f01-busca)"
+    )
 
     # reject
     rj = sub.add_parser("reject", help="Rejeitar artefato pendente")
     add_llm_engine_flags(rj)
     rj.add_argument("reason", help="Motivo da rejeicao")
-    rj.add_argument("--no-retry", action="store_true", help="Nao reenviar ao LLM apos rejeicao")
+    rj.add_argument(
+        "--no-retry", action="store_true", help="Nao reenviar ao LLM apos rejeicao"
+    )
     rj.add_argument(
         "--audit-origin",
         action="store_true",
@@ -5228,7 +6235,9 @@ def main():
         action="store_true",
         help="Continuar até o próximo gate após a correção focal",
     )
-    rj.add_argument("--cycle", help="Ciclo específico a rejeitar (ex: cycle-12-f01-busca)")
+    rj.add_argument(
+        "--cycle", help="Ciclo específico a rejeitar (ex: cycle-12-f01-busca)"
+    )
 
     # graph
     graph = sub.add_parser("graph", help="Mostrar grafo com status")
@@ -5245,14 +6254,14 @@ def main():
         "-t",
         required=True,
         metavar="TEMPLATE_OR_PATH",
-        help=(
-            "Nome registrado ou path canônico "
-            ".ft/process/<nome>/process.yml"
-        ),
+        help=("Nome registrado ou path canônico .ft/process/<nome>/process.yml"),
     )
 
     # lint-process
-    lp = sub.add_parser("lint-process", help="Lint semântico — detecta especificidades de projeto no YAML")
+    lp = sub.add_parser(
+        "lint-process",
+        help="Lint semântico — detecta especificidades de projeto no YAML",
+    )
     add_llm_engine_flags(lp)
     lp.add_argument("--template", "-t", required=True, metavar="TEMPLATE")
 
@@ -5283,8 +6292,14 @@ def main():
         action="store_true",
         help="Forçar consulta read-only independente, mesmo com node exploration ativo",
     )
-    ex.add_argument("--finish", action="store_true", help="Encerrar exploração e gerar relatório")
-    ex.add_argument("--skip", action="store_true", help="Pular o node de exploração sem gerar relatório")
+    ex.add_argument(
+        "--finish", action="store_true", help="Encerrar exploração e gerar relatório"
+    )
+    ex.add_argument(
+        "--skip",
+        action="store_true",
+        help="Pular o node de exploração sem gerar relatório",
+    )
     ex.add_argument("--cycle", help="Ciclo específico para exploração ligada ao grafo")
 
     # evolve
@@ -5293,34 +6308,70 @@ def main():
         help="Evoluir o processo em paralelo ao ciclo (não avança steps)",
     )
     add_llm_engine_flags(ev)
-    ev.add_argument("directive", nargs="?",
-                    help="Diretriz para orientar a evolução (entre aspas; opcional)")
-    ev.add_argument("--template", "-t", default="evolve_process", metavar="TEMPLATE",
-                    help="Playbook de evolução com entrypoint evolve (default: evolve_process)")
-    ev.add_argument("--project", dest="project_target", action="store_true",
-                    help="Aplicar melhorias no fork local .ft/process/ do projeto")
-    ev.add_argument("--global", dest="global_target", action="store_true",
-                    help="Aplicar melhorias no template global do engine")
-    ev.add_argument("--cycle", metavar="NAME",
-                    help="Ciclo de onde derivar contexto (omitido somente se houver exatamente um)")
-    ev.add_argument("--dry-run", dest="dry_run", action="store_true",
-                    help="Derivar e validar melhorias sem aplicar nos alvos")
-    ev.add_argument("--yes", "-y", action="store_true",
-                    help="Aplicar sem confirmação interativa")
+    ev.add_argument(
+        "directive",
+        nargs="?",
+        help="Diretriz para orientar a evolução (entre aspas; opcional)",
+    )
+    ev.add_argument(
+        "--template",
+        "-t",
+        default="evolve_process",
+        metavar="TEMPLATE",
+        help="Playbook de evolução com entrypoint evolve (default: evolve_process)",
+    )
+    ev.add_argument(
+        "--project",
+        dest="project_target",
+        action="store_true",
+        help="Aplicar melhorias no fork local .ft/process/ do projeto",
+    )
+    ev.add_argument(
+        "--global",
+        dest="global_target",
+        action="store_true",
+        help="Aplicar melhorias no template global do engine",
+    )
+    ev.add_argument(
+        "--cycle",
+        metavar="NAME",
+        help="Ciclo de onde derivar contexto (omitido somente se houver exatamente um)",
+    )
+    ev.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Derivar e validar melhorias sem aplicar nos alvos",
+    )
+    ev.add_argument(
+        "--yes", "-y", action="store_true", help="Aplicar sem confirmação interativa"
+    )
 
     # retry
-    rt = sub.add_parser("retry", help="Retenta o node atual bloqueado sem aplicar correção")
+    rt = sub.add_parser(
+        "retry", help="Retenta o node atual bloqueado sem aplicar correção"
+    )
     add_llm_engine_flags(rt)
-    rt.add_argument("--auto", action="store_true", help="Continuar em modo MVP após retry")
-    rt.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
-                    help="Pular human_gates automaticamente após retry (LLM decide)")
-    rt.add_argument("--cycle", help="Ciclo específico a retentar (ex: cycle-12-f01-busca)")
+    rt.add_argument(
+        "--auto", action="store_true", help="Continuar em modo MVP após retry"
+    )
+    rt.add_argument(
+        "--bypass-human-gates",
+        action="store_true",
+        dest="bypass_human_gates",
+        help="Pular human_gates automaticamente após retry (LLM decide)",
+    )
+    rt.add_argument(
+        "--cycle", help="Ciclo específico a retentar (ex: cycle-12-f01-busca)"
+    )
 
     # fix
     fx = sub.add_parser("fix", help="Corrigir problema e desbloquear o ciclo")
     add_llm_engine_flags(fx)
     fx.add_argument("instruction", help="Descrição do que corrigir (entre aspas)")
-    fx.add_argument("--auto", action="store_true", help="Continuar em modo MVP após correção")
+    fx.add_argument(
+        "--auto", action="store_true", help="Continuar em modo MVP após correção"
+    )
     fx.add_argument(
         "--audit-origin",
         action="store_true",
@@ -5332,17 +6383,32 @@ def main():
     fx.add_argument("--cycle", help="Ciclo específico a corrigir")
 
     # close
-    cl = sub.add_parser("close", help="Encerrar ciclo: merge artefatos, remover worktree")
+    cl = sub.add_parser(
+        "close", help="Encerrar ciclo: merge artefatos, remover worktree"
+    )
     add_llm_engine_flags(cl)
-    cl.add_argument("--keep-worktree", action="store_true", dest="keep_worktree",
-                     help="Preservar o worktree no disco (não remover)")
-    cl.add_argument("--force", action="store_true",
-                     help="Encerrar mesmo se o ciclo não terminou")
-    cl.add_argument("--merge", choices=["full", "docs", "selective", "none"],
-                     help="Estratégia de merge (sem prompt interativo)")
-    cl.add_argument("--merge-paths", dest="merge_paths",
-                     help="Paths para merge selective (separados por espaço, entre aspas)")
-    cl.add_argument("--cycle", help="Ciclo específico a encerrar (ex: cycle-12-f01-busca)")
+    cl.add_argument(
+        "--keep-worktree",
+        action="store_true",
+        dest="keep_worktree",
+        help="Preservar o worktree no disco (não remover)",
+    )
+    cl.add_argument(
+        "--force", action="store_true", help="Encerrar mesmo se o ciclo não terminou"
+    )
+    cl.add_argument(
+        "--merge",
+        choices=["full", "docs", "selective", "none"],
+        help="Estratégia de merge (sem prompt interativo)",
+    )
+    cl.add_argument(
+        "--merge-paths",
+        dest="merge_paths",
+        help="Paths para merge selective (separados por espaço, entre aspas)",
+    )
+    cl.add_argument(
+        "--cycle", help="Ciclo específico a encerrar (ex: cycle-12-f01-busca)"
+    )
 
     # process-candidates
     pc = sub.add_parser(
@@ -5387,7 +6453,8 @@ def main():
         help="Só relatório, sem escrever nada (exit 1 se houver drift acionável)",
     )
     proc_update.add_argument(
-        "--yes", "-y",
+        "--yes",
+        "-y",
         action="store_true",
         help="Aplicar fast-forwards sem confirmação (merges sempre confirmam)",
     )
@@ -5401,16 +6468,26 @@ def main():
             "'divergiu do digest fixado'."
         ),
     )
-    proc_repin.add_argument("--cycle", help="Ciclo alvo (obrigatório se houver mais de um)")
+    proc_repin.add_argument(
+        "--cycle", help="Ciclo alvo (obrigatório se houver mais de um)"
+    )
     proc_repin.add_argument(
         "--yes", "-y", action="store_true", help="Re-fixar sem confirmação"
     )
 
     # abort
-    ab = sub.add_parser("abort", help="Abortar ciclo: descarta worktree e branch sem merge")
+    ab = sub.add_parser(
+        "abort", help="Abortar ciclo: descarta worktree e branch sem merge"
+    )
     add_llm_engine_flags(ab)
-    ab.add_argument("--force", "--yes", "-y", action="store_true", dest="force",
-                    help="Abortar sem prompt de confirmação (aceita ciclos zumbis/preparing)")
+    ab.add_argument(
+        "--force",
+        "--yes",
+        "-y",
+        action="store_true",
+        dest="force",
+        help="Abortar sem prompt de confirmação (aceita ciclos zumbis/preparing)",
+    )
     ab.add_argument("--cycle", help="Ciclo específico a abortar")
 
     # cancel
@@ -5424,7 +6501,9 @@ def main():
         "setup-env",
         help="[deprecado] Executar um template de init; use ft init --template",
     )
-    se.add_argument("--project", help="Diretório do projeto (default: CWD ou raiz detectada)")
+    se.add_argument(
+        "--project", help="Diretório do projeto (default: CWD ou raiz detectada)"
+    )
     se.add_argument("--template", "-t", required=True, metavar="TEMPLATE")
 
     migrate = sub.add_parser(
@@ -5432,7 +6511,9 @@ def main():
         help="Migrar layout v1 para .ft/process/<template>/",
     )
     migrate.add_argument("project", nargs="?", default=".", help="Diretório do projeto")
-    migrate.add_argument("--dry-run", action="store_true", help="Mostrar mudanças sem mover arquivos")
+    migrate.add_argument(
+        "--dry-run", action="store_true", help="Mostrar mudanças sem mover arquivos"
+    )
     migrate.add_argument(
         "--cycle-id",
         default="legacy-unscoped",
@@ -5443,36 +6524,72 @@ def main():
     ru = sub.add_parser("run", help="Executar um template em um novo ciclo isolado")
     add_llm_engine_flags(ru)
     ru.add_argument("project", help="Diretório de um projeto já inicializado")
-    ru.add_argument("--from-project", metavar="PATH",
-                    help="Copiar plano_de_voo.md do ciclo anterior (para retomada de ciclo)")
-    ru.add_argument("--hipotese", metavar="FILE",
-                    help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)")
-    ru.add_argument("--input", metavar="FILE", dest="demand_input",
-                    help="Arquivo de entrada aceito pelo template selecionado")
-    ru.add_argument("--request", metavar="TEXT",
-                    help="Demanda em texto livre aceita pelo template selecionado")
-    ru.add_argument("--bypass-human-gates", action="store_true", dest="bypass_human_gates",
-                    help="Pular human_gates automaticamente (LLM decide)")
-    ru.add_argument("--cycle-name", metavar="NAME",
-                    help="Nome explícito do ciclo isolado (ex: cycle-11-opencode). "
-                         "Falha se o diretório já existir.")
-    ru.add_argument("--template", "-t", required=True, metavar="TEMPLATE",
-                    help="Template local ou global a executar")
+    ru.add_argument(
+        "--from-project",
+        metavar="PATH",
+        help="Copiar plano_de_voo.md do ciclo anterior (para retomada de ciclo)",
+    )
+    ru.add_argument(
+        "--hipotese",
+        metavar="FILE",
+        help="Arquivo hipotese.md pré-escrito (pula ft.mdd.01.hipotese)",
+    )
+    ru.add_argument(
+        "--input",
+        metavar="FILE",
+        dest="demand_input",
+        help="Arquivo de entrada aceito pelo template selecionado",
+    )
+    ru.add_argument(
+        "--request",
+        metavar="TEXT",
+        help="Demanda em texto livre aceita pelo template selecionado",
+    )
+    ru.add_argument(
+        "--bypass-human-gates",
+        action="store_true",
+        dest="bypass_human_gates",
+        help="Pular human_gates automaticamente (LLM decide)",
+    )
+    ru.add_argument(
+        "--cycle-name",
+        metavar="NAME",
+        help="Nome explícito do ciclo isolado (ex: cycle-11-opencode). "
+        "Falha se o diretório já existir.",
+    )
+    ru.add_argument(
+        "--template",
+        "-t",
+        required=True,
+        metavar="TEMPLATE",
+        help="Template local ou global a executar",
+    )
     ru.add_argument(
         "--route",
         dest="run_route",
         metavar="NAME",
         help="Selecionar uma rota semântica declarada pelo template "
-             "(ex.: validation); independente de --parallel",
+        "(ex.: validation); independente de --parallel",
     )
-    ru.add_argument("--auto", action="store_true",
-                    help="Avançar em modo autônomo até MVP (PARA em human_gates; "
-                         "para pular use --bypass-human-gates)")
-    ru.add_argument("--parallel", action="store_true",
-                    help="Habilitar batch/lanes ou parallel_group do processo "
-                         "(worktrees isolados com fan-out/fan-in)")
-    ru.add_argument("--max-parallel", dest="max_parallel", type=int, metavar="N",
-                    help="Teto de worktrees simultâneos no processo (default: 2)")
+    ru.add_argument(
+        "--auto",
+        action="store_true",
+        help="Avançar em modo autônomo até MVP (PARA em human_gates; "
+        "para pular use --bypass-human-gates)",
+    )
+    ru.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Habilitar batch/lanes ou parallel_group do processo "
+        "(worktrees isolados com fan-out/fan-in)",
+    )
+    ru.add_argument(
+        "--max-parallel",
+        dest="max_parallel",
+        type=int,
+        metavar="N",
+        help="Teto de worktrees simultâneos no processo (default: 2)",
+    )
 
     args = parser.parse_args()
 
@@ -5488,6 +6605,8 @@ def main():
         "project-status",
         "project-close",
         "project-reopen",
+        "validation-profiles",
+        "validation-matrix",
     ):
         _guard_engine_repo(find_project_root())
 
@@ -5549,6 +6668,10 @@ def main():
             cmd_llm_capabilities(args)
         elif args.command == "llm-defaults":
             cmd_llm_defaults(args)
+        elif args.command == "validation-profiles":
+            cmd_validation_profiles(args)
+        elif args.command == "validation-matrix":
+            cmd_validation_matrix(args)
         else:
             parser.print_help()
     except KeyboardInterrupt:
@@ -5570,7 +6693,9 @@ def _print_crash(exc: Exception) -> None:
     tb = traceback.extract_tb(exc.__traceback__)
 
     print(f"\n{BOLD_RED}{'━' * 54}{RESET}")
-    print(f"  {BOLD_RED}Erro inesperado{RESET}: {BOLD_WHITE}{type(exc).__name__}{RESET}")
+    print(
+        f"  {BOLD_RED}Erro inesperado{RESET}: {BOLD_WHITE}{type(exc).__name__}{RESET}"
+    )
     print(f"  {RED}{exc}{RESET}")
     print(f"{BOLD_RED}{'━' * 54}{RESET}")
 
@@ -5585,9 +6710,11 @@ def _print_crash(exc: Exception) -> None:
             for prefix in ("/ft/", "/tests/"):
                 idx = path.find(prefix)
                 if idx >= 0:
-                    path = path[idx + 1:]
+                    path = path[idx + 1 :]
                     break
-            print(f"    {DIM}•{RESET} {path}:{frame.lineno} → {DIM}{frame.name}(){RESET}")
+            print(
+                f"    {DIM}•{RESET} {path}:{frame.lineno} → {DIM}{frame.name}(){RESET}"
+            )
             if frame.line:
                 print(f"      {DIM}{frame.line.strip()}{RESET}")
 

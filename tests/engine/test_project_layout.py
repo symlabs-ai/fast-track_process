@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -323,7 +324,7 @@ def test_explicit_migration_moves_process_history_runtime_and_loose_cycle_artifa
     )
     (scripts / "serve.sh").write_text(
         'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"\n'
-        'mkdir -p process/scripts\n',
+        "mkdir -p process/scripts\n",
     )
     docs = project / "docs"
     docs.mkdir()
@@ -359,9 +360,10 @@ def test_explicit_migration_moves_process_history_runtime_and_loose_cycle_artifa
     assert actions
     assert not process.exists()
     assert (project / ".ft" / "process" / "test" / "process.yml").exists()
-    assert ".ft/process/test/scripts/serve.sh" in (
-        project / ".ft" / "process" / "test" / "process.yml"
-    ).read_text()
+    assert (
+        ".ft/process/test/scripts/serve.sh"
+        in (project / ".ft" / "process" / "test" / "process.yml").read_text()
+    )
     migrated_script = (
         project / ".ft" / "process" / "test" / "scripts" / "serve.sh"
     ).read_text()
@@ -379,18 +381,25 @@ def test_explicit_migration_moves_process_history_runtime_and_loose_cycle_artifa
     assert (docs / "PRD.md").exists()
     assert ".ft/process/test/process.yml" in (docs / "PRD.md").read_text()
     assert ".ft/process/test/process.yml" in (source / "app.py").read_text()
-    assert 'root / ".ft" / "process" / "test" / "process.yml"' in (source / "app.py").read_text()
-    assert '(root / ".ft" / "process").mkdir(parents=True)' in (
-        source / "app.py"
-    ).read_text()
+    assert (
+        'root / ".ft" / "process" / "test" / "process.yml"'
+        in (source / "app.py").read_text()
+    )
+    assert (
+        '(root / ".ft" / "process").mkdir(parents=True)'
+        in (source / "app.py").read_text()
+    )
     assert "['docs', '.ft', 'src']" in (source / "app.py").read_text()
     assert "prefix === '.ft/process/'" in (source / "app.py").read_text()
     assert "../.ft/process/test/scripts/serve.sh" in (source / "Makefile").read_text()
-    assert "process/process.yml" in (
-        project / ".ft" / "cycles" / "cycle-08-claude" / "task_list.md"
-    ).read_text()
+    assert (
+        "process/process.yml"
+        in (project / ".ft" / "cycles" / "cycle-08-claude" / "task_list.md").read_text()
+    )
     assert not (project / "state").exists()
-    backups = list((ft_home / "migrations" / project.name).glob("*/state/engine_state.yml"))
+    backups = list(
+        (ft_home / "migrations" / project.name).glob("*/state/engine_state.yml")
+    )
     assert len(backups) == 1
     assert backups[0].read_text() == "must leave repo"
 
@@ -489,7 +498,9 @@ def test_migration_refuses_while_external_cycle_state_exists(tmp_path, monkeypat
     flat = project / ".ft" / "process" / "process.yml"
     flat.parent.mkdir(parents=True)
     flat.write_text(MINIMAL_PROCESS)
-    state = ft_home / "worktrees" / project.name / "cycle-01" / "state" / "engine_state.yml"
+    state = (
+        ft_home / "worktrees" / project.name / "cycle-01" / "state" / "engine_state.yml"
+    )
     state.parent.mkdir(parents=True)
     state.write_text("node_status: running\n")
 
@@ -771,9 +782,7 @@ def test_migration_validates_candidate_and_future_schema_before_mutation(tmp_pat
     flat.write_text(MINIMAL_PROCESS)
     manifest = invalid / ".ft/manifest.yml"
     manifest.write_text(
-        "schema_version: 1\n"
-        "process: .ft/process/process.yml\n"
-        "defaults: [bad]\n"
+        "schema_version: 1\nprocess: .ft/process/process.yml\ndefaults: [bad]\n"
     )
     with pytest.raises(ManifestError, match="defaults deve ser mapping"):
         migrate_legacy_layout(invalid)
@@ -940,7 +949,7 @@ metrics:
     assert "runtime" not in output
 
 
-def test_runs_done_shows_duration_tokens_totals_and_legacy_fallback(
+def test_runs_done_shows_llm_duration_without_human_wait_or_legacy_guess(
     tmp_path, monkeypatch, capsys
 ):
     ft_home = tmp_path / "ft-home"
@@ -965,6 +974,7 @@ progress:
                     "started_at": "2026-07-28T10:00:00",
                     "duration_ms": 7_384_000,
                 },
+                "active_time_ms": {"llm": 1_100_000},
                 "llm": {
                     "input_tokens": 1_000,
                     "cache_write_tokens": 400,
@@ -1010,12 +1020,13 @@ progress:
 
     output = capsys.readouterr().out
     assert "CRIADO EM" in output
-    assert "DURAÇÃO" in output
+    assert "DURAÇÃO LLM" in output
     assert "TOKENS" in output
     assert "URL" not in output
     assert "http://127.0.0.1:8787" not in output
-    assert "2h 03min 04s" in output
-    assert "1h 30min 05s" in output
+    assert "18min 20s" in output
+    assert "2h 03min 04s" not in output
+    assert "1h 30min 05s" not in output
     assert "2026-07-28" in output
     assert "2026-07-30" in output
     assert "1,900" in output
@@ -1023,8 +1034,411 @@ progress:
     output_lines = [line for line in output.splitlines() if line.strip()]
     assert "TOTAL" in output_lines[-1]
     assert "2 dias" in output_lines[-1]
-    assert "3h 33min 09s" in output_lines[-1]
+    assert "—" in output_lines[-1]
     assert "4,000" in output_lines[-1]
+
+
+def test_runs_done_shows_live_llm_duration_for_active_cycle(
+    tmp_path, monkeypatch, capsys
+):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    clock = iter(
+        (
+            datetime(2026, 8, 1, 10, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 1, 10, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 1, 10, 1, 5, tzinfo=timezone.utc),
+        )
+    )
+    monkeypatch.setattr(
+        "ft.engine.trace._utc_now",
+        lambda: next(clock),
+    )
+    project = tmp_path / "project"
+    cycle = ft_home / "worktrees" / project.name / "cycle-03-active"
+    state = cycle / "state"
+    state.mkdir(parents=True)
+    (state / "engine_state.yml").write_text(
+        """process_id: test
+version: '1.0'
+current_node: build.app
+node_status: delegated
+completed_nodes: [plan]
+gate_log: {}
+artifacts: {}
+metrics:
+  steps_completed: 1
+  steps_total: 3
+  llm_calls: 1
+""",
+    )
+    trace = state / "trace" / "events.jsonl"
+    from ft.engine.trace import TraceRecorder
+
+    recorder = TraceRecorder(trace, "cycle-03-active")
+    node = recorder.begin_span(
+        category="node",
+        name="Build app",
+        node_id="build.app",
+        attempt_id="build.app:1",
+    )
+    recorder.begin_span(
+        category="llm",
+        name="codex",
+        node_id="build.app",
+        attempt_id="build.app:1",
+        parent_span_id=node.span_id,
+    )
+    # Um report persistido antigo não pode vencer a leitura corrente do trace.
+    (cycle / "run-report.json").write_text(
+        json.dumps({"active_time_ms": {"llm": 5_000}}),
+    )
+
+    cmd_runs(SimpleNamespace(project=str(project), done=True))
+
+    output = capsys.readouterr().out
+    active_line = next(line for line in output.splitlines() if "cycle-03-active" in line)
+    total_line = next(line for line in output.splitlines() if "TOTAL" in line)
+    assert "1min 05s" in active_line
+    assert "em curso" not in active_line
+    assert "⟳ build.app" in active_line
+    assert "1min 05s" in total_line
+
+
+def test_runs_done_detailed_lists_real_step_executions_in_chronological_order(
+    tmp_path, monkeypatch, capsys
+):
+    """O detalhe preserva retries e atribui tokens ao span LLM do node."""
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+    cycle = project / ".ft" / "cycles" / "cycle-01"
+    cycle.mkdir(parents=True)
+    (cycle / "cycle.yml").write_text(
+        """schema_version: 1
+id: cycle-01
+status: done
+progress:
+  completed: 2
+  total: 2
+""",
+    )
+    spans = [
+        {
+            "span_id": "node-api-1",
+            "parent_span_id": "run-1",
+            "category": "node",
+            "node_id": "build.api",
+            "attempt_id": "build.api:1",
+            "started_at": "2026-07-31T13:02:00+00:00",
+            "ended_at": "2026-07-31T13:02:30+00:00",
+            "duration_ms": 30_000,
+            "status": "ok",
+            "result": "PASS",
+            "metrics": {},
+        },
+        {
+            "span_id": "llm-api-1",
+            "parent_span_id": "node-api-1",
+            "category": "llm",
+            "node_id": "build.api",
+            "attempt_id": "build.api:1",
+            "started_at": "2026-07-31T13:02:00+00:00",
+            "ended_at": "2026-07-31T13:02:30+00:00",
+            "duration_ms": 30_000,
+            "status": "returned",
+            "result": None,
+            "attributes": {"model": "gpt-5.6-sol"},
+            "metrics": {"input_tokens": 1_000, "output_tokens": 234},
+        },
+        {
+            "span_id": "node-ui-2",
+            "parent_span_id": "run-1",
+            "category": "node",
+            "node_id": "build.ui",
+            "attempt_id": "build.ui:2",
+            "started_at": "2026-07-31T13:03:00+00:00",
+            "ended_at": "2026-07-31T13:04:05+00:00",
+            "duration_ms": 65_000,
+            "status": "failed",
+            "result": "BLOCKED",
+            "metrics": {},
+        },
+        {
+            "span_id": "llm-ui-2",
+            "parent_span_id": "node-ui-2",
+            "category": "llm",
+            "node_id": "build.ui",
+            "attempt_id": "build.ui:2",
+            "started_at": "2026-07-31T13:03:00+00:00",
+            "ended_at": "2026-07-31T13:04:05+00:00",
+            "duration_ms": 65_000,
+            "status": "returned",
+            "result": None,
+            "attributes": {"model": "gpt-5.6-sol"},
+            "metrics": {"input_tokens": 70, "output_tokens": 30},
+        },
+        {
+            "span_id": "node-ui-1",
+            "parent_span_id": "run-1",
+            "category": "node",
+            "node_id": "build.ui",
+            "attempt_id": "build.ui:1",
+            "started_at": "2026-07-31T13:00:00+00:00",
+            "ended_at": "2026-07-31T13:01:00+00:00",
+            "duration_ms": 60_000,
+            "status": "ok",
+            "result": "PASS",
+            "metrics": {},
+        },
+    ]
+    (cycle / "run-report.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-07-31T13:04:05+00:00",
+                "wall": {
+                    "started_at": "2026-07-31T13:00:00+00:00",
+                    "duration_ms": 245_000,
+                },
+                "llm": {
+                    "input_tokens": 1_070,
+                    "output_tokens": 264,
+                    "cache_read_tokens": None,
+                    "cache_write_tokens": None,
+                },
+                "spans": spans,
+            }
+        ),
+    )
+
+    # --done-detailed implica --done; o ciclo arquivado não pode desaparecer.
+    cmd_runs(
+        SimpleNamespace(
+            project=str(project),
+            done=False,
+            done_detailed=True,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert "STEPS · cycle-01" in output
+    assert "TENT." in output
+    assert "DURAÇÃO LLM" in output
+    assert "MODELO" in output
+    assert output.count("gpt-5.6-sol") == 2
+    assert output.count("build.ui") == 2
+    assert (
+        output.index("build.ui") < output.index("build.api") < output.rindex("build.ui")
+    )
+    assert "1min 05s" in output
+    assert "1,234" in output
+    assert "✗ BLOCKED" in output
+    assert "report" in output
+    detail_output = output.split("STEPS · cycle-01", 1)[1]
+    total_line = next(line for line in detail_output.splitlines() if "TOTAL" in line)
+    assert total_line.split() == [
+        "3",
+        "TOTAL",
+        "3",
+        "—",
+        "1min",
+        "35s",
+        "1,334",
+        "—",
+        "—",
+        "—",
+        "—",
+    ]
+    assert [line for line in output.splitlines() if line.strip()][-1].split() == [
+        "3",
+        "TOTAL",
+        "GERAL",
+        "3",
+        "—",
+        "1min",
+        "35s",
+        "1,334",
+        "—",
+        "—",
+        "—",
+        "—",
+    ]
+
+
+def test_runs_done_detailed_falls_back_to_cycle_log_without_inventing_tokens(
+    tmp_path, monkeypatch, capsys
+):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+    cycle = project / ".ft" / "cycles" / "cycle-01"
+    cycle.mkdir(parents=True)
+    (cycle / "cycle.yml").write_text(
+        """schema_version: 1
+id: cycle-01
+status: done
+progress:
+  completed: 1
+  total: 1
+""",
+    )
+    (cycle / "cycle-log.md").write_text(
+        """| timestamp | node_id | title | sprint | type | attempt | duration_s | result | summary |
+|-----------|---------|-------|--------|------|---------|------------|--------|---------|
+| 2026-07-31 10:00:00 | `INIT` | Init | | system | | | PASS | init |
+| 2026-07-31 10:01:05 | `legacy.step` | Legacy | sprint | document | 1 | 65.0 | PASS | ok |
+""",
+    )
+
+    cmd_runs(SimpleNamespace(project=str(project), done_detailed=True))
+
+    output = capsys.readouterr().out
+    assert "legacy.step" in output
+    assert "2026-07-31 10:00:00" in output
+    assert "1min 05s" not in output
+    assert "✓ PASS" in output
+    assert "log" in output
+    detail_line = next(line for line in output.splitlines() if "legacy.step" in line)
+    assert "—" in detail_line
+    assert "MODELO" in output
+    detail_output = output.split("STEPS · cycle-01", 1)[1]
+    total_line = next(line for line in detail_output.splitlines() if "TOTAL" in line)
+    assert total_line.split() == [
+        "1",
+        "TOTAL",
+        "1",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+    ]
+    assert [line for line in output.splitlines() if line.strip()][-1].split() == [
+        "1",
+        "TOTAL",
+        "GERAL",
+        "1",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+    ]
+
+
+def test_runs_done_detailed_total_geral_aggregates_cycles_and_rejects_partial_metrics(
+    tmp_path, monkeypatch, capsys
+):
+    ft_home = tmp_path / "ft-home"
+    monkeypatch.setenv("FT_HOME", str(ft_home))
+    project = tmp_path / "project"
+
+    def write_report_cycle(name: str, duration_seconds: int, tokens: int) -> None:
+        cycle = project / ".ft" / "cycles" / name
+        cycle.mkdir(parents=True)
+        (cycle / "cycle.yml").write_text(
+            f"""schema_version: 1
+id: {name}
+status: done
+progress:
+  completed: 1
+  total: 1
+""",
+        )
+        node_id = f"{name}.step"
+        duration_ms = duration_seconds * 1_000
+        (cycle / "run-report.json").write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-07-31T10:02:00+00:00",
+                    "spans": [
+                        {
+                            "span_id": f"{name}-node",
+                            "category": "node",
+                            "node_id": node_id,
+                            "attempt_id": f"{node_id}:1",
+                            "started_at": "2026-07-31T10:00:00+00:00",
+                            "ended_at": "2026-07-31T10:02:00+00:00",
+                            "duration_ms": duration_ms,
+                            "status": "ok",
+                            "result": "PASS",
+                        },
+                        {
+                            "span_id": f"{name}-llm",
+                            "parent_span_id": f"{name}-node",
+                            "category": "llm",
+                            "node_id": node_id,
+                            "attempt_id": f"{node_id}:1",
+                            "duration_ms": duration_ms,
+                            "metrics": {"input_tokens": tokens},
+                        },
+                    ],
+                }
+            ),
+        )
+
+    write_report_cycle("cycle-01", 30, 100)
+    write_report_cycle("cycle-02", 65, 200)
+
+    cmd_runs(SimpleNamespace(project=str(project), done_detailed=True))
+    complete_output = capsys.readouterr().out
+    assert [line for line in complete_output.splitlines() if line.strip()][
+        -1
+    ].split() == [
+        "2",
+        "TOTAL",
+        "GERAL",
+        "2",
+        "—",
+        "1min",
+        "35s",
+        "300",
+        "—",
+        "—",
+        "—",
+        "—",
+    ]
+
+    legacy = project / ".ft" / "cycles" / "cycle-03"
+    legacy.mkdir(parents=True)
+    (legacy / "cycle.yml").write_text(
+        """schema_version: 1
+id: cycle-03
+status: done
+progress:
+  completed: 1
+  total: 1
+""",
+    )
+    (legacy / "cycle-log.md").write_text(
+        """| timestamp | node_id | title | sprint | type | attempt | duration_s | result | summary |
+|-----------|---------|-------|--------|------|---------|------------|--------|---------|
+| 2026-07-31 10:03:00 | `legacy.unknown` | Legacy | sprint | document | 1 | | PASS | ok |
+""",
+    )
+
+    cmd_runs(SimpleNamespace(project=str(project), done_detailed=True))
+    incomplete_output = capsys.readouterr().out
+    assert "legacy.unknown" in incomplete_output
+    assert [line for line in incomplete_output.splitlines() if line.strip()][
+        -1
+    ].split() == [
+        "3",
+        "TOTAL",
+        "GERAL",
+        "3",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+        "—",
+    ]
 
 
 def test_runs_table_columns_stay_aligned_with_long_names_and_ansi(
@@ -1124,7 +1538,9 @@ progress:
     assert "--done" in out
 
 
-def test_runs_default_keeps_finished_runtime_cycle_visible(tmp_path, monkeypatch, capsys):
+def test_runs_default_keeps_finished_runtime_cycle_visible(
+    tmp_path, monkeypatch, capsys
+):
     """done ainda no runtime (worktree aberto, sem ft close) continua listado."""
     ft_home = tmp_path / "ft-home"
     monkeypatch.setenv("FT_HOME", str(ft_home))
@@ -1184,7 +1600,9 @@ nodes:
     (repo / "docs").mkdir()
     (repo / "docs" / "PRD.md").write_text("# Product")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=repo, check=True
+    )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
@@ -1287,7 +1705,9 @@ nodes:
     (repo / "docs/PROJECT_BACKLOG.md").write_text(backlog_header + backlog_rows)
     (repo / "docs/FEATURES.md").write_text(features)
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=repo, check=True
+    )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
@@ -1311,7 +1731,9 @@ nodes:
             )
         )
         (worktree / "CHANGELOG.md").write_text(
-            changelog.replace("- base", f"- #FEAT {pb} / FEAT-001: item {index}.\n- base")
+            changelog.replace(
+                "- base", f"- #FEAT {pb} / FEAT-001: item {index}.\n- base"
+            )
         )
         (worktree / "docs/FEATURES.md").write_text(
             features.replace(
@@ -1398,8 +1820,7 @@ def test_docs_copy_merge_preserves_live_main_manifest(tmp_path, monkeypatch):
     )
     worktree_process = worktree / process.relative_to(repo)
     worktree_process.write_text(
-        worktree_process.read_text(encoding="utf-8")
-        + "\n# stale cycle process\n",
+        worktree_process.read_text(encoding="utf-8") + "\n# stale cycle process\n",
         encoding="utf-8",
     )
     external_process = tmp_path / "external-process"
@@ -1494,7 +1915,9 @@ def test_fallback_copy_and_selective_manifest_preserve_live_defaults(
     monkeypatch.chdir(repo)
 
     with pytest.MonkeyPatch.context() as patcher:
-        patcher.setattr("ft.engine.runner.auto_commit", lambda *_args, **_kwargs: (True, "ok"))
+        patcher.setattr(
+            "ft.engine.runner.auto_commit", lambda *_args, **_kwargs: (True, "ok")
+        )
         assert runner.merge_on_close("docs")
 
     live_manifest = (repo / ".ft/manifest.yml").read_text()

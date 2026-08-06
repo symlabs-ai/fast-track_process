@@ -8,6 +8,7 @@ antes de executar.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ft.engine.graph import ProcessGraph, Node
@@ -28,6 +29,22 @@ VALID_EXECUTORS = frozenset({
     "llm_claude", "llm_codex", "llm_gemini", "llm_opencode",
     "llm_coder", "llm_coach",
 })
+
+_DECISION_CONTEXT_TEXT_FIELDS = frozenset(
+    {
+        "approve_effect",
+        "decision",
+        "reject_effect",
+        "why_now",
+    }
+)
+_DECISION_CONTEXT_LIST_FIELDS = frozenset(
+    {
+        "checklist",
+        "limitations",
+        "review_paths",
+    }
+)
 
 
 @dataclass
@@ -311,6 +328,65 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
                 node.id,
                 "preserve_outputs_on_reentry deve ser booleano",
             )
+        if node.decision_context is not None:
+            if node.type != "human_gate":
+                report.add_error(
+                    node.id,
+                    "decision_context só pode ser usado em human_gate",
+                )
+            if not isinstance(node.decision_context, dict):
+                report.add_error(
+                    node.id,
+                    "decision_context deve ser um mapping",
+                )
+            else:
+                allowed = (
+                    _DECISION_CONTEXT_TEXT_FIELDS
+                    | _DECISION_CONTEXT_LIST_FIELDS
+                )
+                unknown = sorted(set(node.decision_context) - allowed)
+                if unknown:
+                    report.add_error(
+                        node.id,
+                        "decision_context contém campos desconhecidos: "
+                        + ", ".join(unknown),
+                    )
+                for field_name in _DECISION_CONTEXT_TEXT_FIELDS:
+                    if field_name not in node.decision_context:
+                        continue
+                    value = node.decision_context[field_name]
+                    if not isinstance(value, str) or not value.strip():
+                        report.add_error(
+                            node.id,
+                            f"decision_context.{field_name} deve ser texto não vazio",
+                        )
+                for field_name in _DECISION_CONTEXT_LIST_FIELDS:
+                    if field_name not in node.decision_context:
+                        continue
+                    value = node.decision_context[field_name]
+                    if (
+                        not isinstance(value, list)
+                        or not value
+                        or any(
+                            not isinstance(item, str) or not item.strip()
+                            for item in value
+                        )
+                    ):
+                        report.add_error(
+                            node.id,
+                            f"decision_context.{field_name} deve ser lista "
+                            "não vazia de textos",
+                        )
+                for raw_path in node.decision_context.get("review_paths", []):
+                    if not isinstance(raw_path, str):
+                        continue
+                    path = Path(raw_path)
+                    if path.is_absolute() or ".." in path.parts:
+                        report.add_error(
+                            node.id,
+                            "decision_context.review_paths deve conter paths "
+                            "relativos e seguros",
+                        )
         if node.llm_timeout_seconds is not None and (
             isinstance(node.llm_timeout_seconds, bool)
             or not isinstance(node.llm_timeout_seconds, int)

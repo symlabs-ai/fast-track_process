@@ -33,6 +33,7 @@ from ft.engine.delegate import (
     _stop_process_tree,
     _stream_process_output,
     _supervised_command,
+    _symgateway_workflow_url,
     _wait_for_process,
     _wrap_opencode_sandbox_command,
     DEFAULT_OPENCODE_CONTEXT_LIMIT,
@@ -47,6 +48,21 @@ from ft.engine.delegate import (
 
 
 class TestBuildExecutorCommand:
+    def test_symgateway_workflow_url_inserts_or_replaces_label(self):
+        assert _symgateway_workflow_url(
+            "https://symgateway.symlabs.ai/p/openai/v1", "innovation"
+        ) == "https://symgateway.symlabs.ai/p/openai/w/innovation/v1"
+        assert _symgateway_workflow_url(
+            "https://symgateway.symlabs.ai/p/anthropic-max/s/ragent/w/old",
+            "orchestration",
+        ) == (
+            "https://symgateway.symlabs.ai/p/anthropic-max/s/ragent/"
+            "w/orchestration"
+        )
+        assert _symgateway_workflow_url(
+            "https://api.openai.com/v1", "innovation"
+        ) is None
+
     def test_env_nonnegative_int_accepts_zero(self, monkeypatch):
         monkeypatch.setenv("FT_OPENCODE_IDLE_RETRIES", "0")
 
@@ -173,6 +189,71 @@ class TestBuildExecutorCommand:
         assert "-C" in cmd
         assert "/tmp/proj" in cmd
         assert "faça algo" == cmd[-1]
+
+    def test_builds_codex_command_with_profile(self, monkeypatch):
+        monkeypatch.setenv("FT_CODEX_PROFILE", "symgateway-dev")
+
+        fresh = _build_executor_command("codex", "faça algo", "/tmp/proj", 7)
+        resumed = _build_executor_command(
+            "codex",
+            "continue",
+            "/tmp/proj",
+            7,
+            session_id="019bf8f4-0f2c-7a73-b616-d4163299012b",
+            resume_session=True,
+        )
+
+        assert fresh[:4] == ["codex", "--profile", "symgateway-dev", "exec"]
+        assert resumed[:5] == [
+            "codex",
+            "--profile",
+            "symgateway-dev",
+            "exec",
+            "resume",
+        ]
+
+    def test_builds_codex_workflow_override_before_exec(self, tmp_path, monkeypatch):
+        config_home = tmp_path / "codex"
+        config_home.mkdir()
+        (config_home / "symgateway-dev.config.toml").write_text(
+            'model_provider = "symgateway_openai_dev"\n'
+            '[model_providers.symgateway_openai_dev]\n'
+            'base_url = "https://symgateway.symlabs.ai/p/openai/v1"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CODEX_HOME", str(config_home))
+        monkeypatch.setenv("FT_CODEX_PROFILE", "symgateway-dev")
+
+        fresh = _build_executor_command(
+            "codex", "faça algo", "/tmp/proj", 7, workflow_id="innovation"
+        )
+        resumed = _build_executor_command(
+            "codex",
+            "continue",
+            "/tmp/proj",
+            7,
+            session_id="thread-123",
+            resume_session=True,
+            workflow_id="innovation",
+        )
+
+        override = (
+            'model_providers.symgateway_openai_dev.base_url='
+            '"https://symgateway.symlabs.ai/p/openai/w/innovation/v1"'
+        )
+        assert fresh[:6] == [
+            "codex", "--profile", "symgateway-dev", "-c", override, "exec"
+        ]
+        assert resumed[:7] == [
+            "codex", "--profile", "symgateway-dev", "-c", override, "exec", "resume"
+        ]
+
+    @pytest.mark.parametrize("workflow", ["bad/workflow", "x" * 65])
+    def test_rejects_invalid_workflow(self, workflow):
+        with pytest.raises(ValueError, match="workflow_id"):
+            _build_executor_command(
+                "codex", "faça algo", "/tmp/proj", 7, workflow_id=workflow
+            )
 
     def test_builds_codex_command_with_explicit_reasoning_effort(self, monkeypatch):
         monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", "ultra")
@@ -485,6 +566,13 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("FT_CODEX_REASONING_EFFORT", 'ultra" --sandbox read-only')
 
         with pytest.raises(ValueError, match="FT_CODEX_REASONING_EFFORT"):
+            _build_executor_command("codex", "faça algo", "/tmp/proj", 7)
+
+    @pytest.mark.parametrize("profile", ["symgateway-dev --yolo", "--yolo"])
+    def test_rejects_invalid_codex_profile(self, monkeypatch, profile):
+        monkeypatch.setenv("FT_CODEX_PROFILE", profile)
+
+        with pytest.raises(ValueError, match="FT_CODEX_PROFILE"):
             _build_executor_command("codex", "faça algo", "/tmp/proj", 7)
 
     def test_builds_opencode_command_with_default_model(self):
@@ -820,6 +908,58 @@ class TestBuildExecutorCommand:
     def test_non_opencode_env_is_unchanged(self):
         env = _executor_env("claude", {"OPENCODE_CONFIG_CONTENT": "{}"})
         assert env["OPENCODE_CONFIG_CONTENT"] == "{}"
+
+    def test_claude_env_routes_gateway_and_loads_main_worktree_settings(self, tmp_path):
+        main = tmp_path / "main"
+        linked = tmp_path / "linked"
+        main.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=main, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "tests@example.test"],
+            cwd=main,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Tests"], cwd=main, check=True
+        )
+        (main / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=main, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=main, check=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "-b", "cycle", str(linked)],
+            cwd=main,
+            check=True,
+        )
+        settings_dir = main / ".claude"
+        settings_dir.mkdir()
+        (settings_dir / "settings.local.json").write_text(
+            json.dumps({
+                "env": {
+                    "ANTHROPIC_BASE_URL": (
+                        "https://symgateway.symlabs.ai/p/anthropic-max/s/test"
+                    ),
+                    "ANTHROPIC_API_KEY": "local-test-key",
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        env = _executor_env(
+            "claude", {}, project_root=str(linked), workflow_id="innovation"
+        )
+
+        assert env["ANTHROPIC_BASE_URL"] == (
+            "https://symgateway.symlabs.ai/p/anthropic-max/s/test/w/innovation"
+        )
+        assert env["ANTHROPIC_API_KEY"] == "local-test-key"
+
+    def test_claude_env_does_not_reroute_another_provider(self):
+        env = _executor_env(
+            "claude",
+            {"ANTHROPIC_BASE_URL": "https://api.anthropic.com"},
+            workflow_id="innovation",
+        )
+        assert env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
 
     def test_opencode_sandbox_prepares_exact_file_and_dir_mounts(self, tmp_path):
         mounts = _prepare_opencode_sandbox_mounts(
@@ -1567,6 +1707,7 @@ class TestDelegateWithFeedback:
                 llm_timeout_seconds=77,
                 llm_session_id="thread-123",
                 llm_session_resume=True,
+                workflow_id="feature",
             )
 
         assert result is expected
@@ -1583,6 +1724,7 @@ class TestDelegateWithFeedback:
         assert kwargs["llm_timeout_seconds"] == 77
         assert kwargs["llm_session_id"] == "thread-123"
         assert kwargs["llm_session_resume"] is True
+        assert kwargs["workflow_id"] == "feature"
 
     def test_forwards_opencode_read_denies_to_delegate(self):
         expected = DelegateResult(

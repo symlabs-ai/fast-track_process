@@ -14,6 +14,8 @@ import shutil
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from ft.engine.delegate import DelegateResult
 from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner
@@ -79,11 +81,23 @@ Cobertura nacional e apps nativos.
 
 HANDOFF = """---
 next_process: mvp-builder-fast
+delivery_readiness: planning_required
+implementation_authorized: false
 ---
 # Handoff — Fixture
 
 Seed: PRD, restrições e test data. SC-01/SC-02 são os critérios do piloto.
 Pesquisa de 2026-07-29; re-checar mercado se o delivery começar após 8 semanas.
+
+## Estado para o delivery
+O projeto permanece building e BLOCKED. O mvp-builder-fast deve criar
+docs/PROJECT_BACKLOG.md, reconciliar .ft/project.yml e materializar a matriz de
+validação antes de construir.
+
+## Inventário durável
+PRD, business case e handoff são canônicos. O dossiê fica em
+.ft/cycles/<cycle-id>/ e as pesquisas em
+.ft/cycles/<cycle-id>/research/market.md.
 """
 
 POST_MORTEM = """# Post-mortem — Fixture
@@ -122,6 +136,48 @@ overall_verdict: supported
 |---|---|---|---|
 | H-01 | supported | EV-M01 | evidência de exemplo |
 """
+
+
+def test_reentry_persists_stakeholder_answers_and_forbids_same_question_loop() -> None:
+    process = yaml.safe_load(
+        (TEMPLATE_DIR / "process.yml").read_text(encoding="utf-8")
+    )
+    nodes = {node["id"]: node for node in process["nodes"]}
+    market = nodes["innovation.research_market"]
+    validation = nodes["innovation.validation"]
+    market_prompt = " ".join(market["prompt"].split())
+    validation_prompt = " ".join(validation["prompt"].split())
+
+    assert "docs/research-questions.md" in market["write_scope"]
+    assert "**Resposta do stakeholder:**" in market_prompt
+    assert "persista" in market_prompt.casefold()
+    assert "não entra nos evidence.yml" in market_prompt
+    assert "STAKEHOLDER" in validation_prompt
+    assert "não podem ser generalizadas" in validation_prompt
+    assert "É proibido emitir inconclusive novamente" in validation_prompt
+    assert "ausência de disposição a usar" in validation_prompt
+
+
+def test_go_handoff_declares_delivery_boundary_and_durable_paths() -> None:
+    process = yaml.safe_load(
+        (TEMPLATE_DIR / "process.yml").read_text(encoding="utf-8")
+    )
+    nodes = {node["id"]: node for node in process["nodes"]}
+    go_nogo = nodes["innovation.go_nogo"]
+    prd = nodes["innovation.prd"]
+    prompt = " ".join(prd["prompt"].split())
+    validator_contract = " ".join(map(str, prd["validators"]))
+
+    assert process["close_policy"]["backlog"]["mode"] == "none"
+    assert "não executa o builder" in go_nogo["decision_context"]["limitations"][0]
+    assert "delivery_readiness: planning_required" in prompt
+    assert "implementation_authorized: true|false" in prompt
+    assert "docs/PROJECT_BACKLOG.md" in prompt
+    assert ".ft/project.yml" in prompt
+    assert ".ft/cycles/<cycle-id>/research/" in prompt
+    assert "Não publique `docs/research/...`" in prd["prompt"]
+    assert "delivery_readiness" in validator_contract
+    assert "implementation_authorized" in validator_contract
 
 
 def _fake_delegate(scenario: str):

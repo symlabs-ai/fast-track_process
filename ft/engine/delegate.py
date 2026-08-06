@@ -16,9 +16,11 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from ft.engine.llm_activity import (
     activity_log_path,
@@ -185,6 +187,124 @@ def _normalize_executor_effort(value: str | None, *, source: str = "llm_effort")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", normalized):
         raise ValueError(f"{source} contém valor inválido")
     return normalized
+
+
+def _normalize_codex_profile(value: str | None) -> str | None:
+    """Return a CLI-safe Codex profile name without allowing option injection."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", normalized):
+        raise ValueError("FT_CODEX_PROFILE contém valor inválido")
+    return normalized
+
+
+def _normalize_workflow_id(value: str | None) -> str | None:
+    """Return a SymGateway-safe workflow label."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", normalized):
+        raise ValueError("workflow_id contém valor inválido")
+    return normalized
+
+
+def _symgateway_workflow_url(base_url: str, workflow_id: str) -> str | None:
+    """Add or replace the workflow segment of a SymGateway base URL."""
+    parsed = urlsplit(str(base_url).strip())
+    if parsed.scheme not in {"http", "https"} or parsed.hostname != "symgateway.symlabs.ai":
+        return None
+
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if "w" in segments:
+        workflow_index = segments.index("w")
+        if workflow_index + 1 < len(segments):
+            segments[workflow_index + 1] = workflow_id
+        else:
+            segments.append(workflow_id)
+    elif segments and segments[-1] == "v1":
+        segments[-1:-1] = ["w", workflow_id]
+    else:
+        segments.extend(["w", workflow_id])
+
+    return urlunsplit(parsed._replace(path="/" + "/".join(segments)))
+
+
+def _codex_workflow_override(profile: str | None, workflow_id: str | None) -> tuple[str, str] | None:
+    """Resolve the profile provider and its workflow-scoped SymGateway URL."""
+    if not profile or not workflow_id:
+        return None
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    candidates = [codex_home / f"{profile}.config.toml", codex_home / "config.toml"]
+    for config_path in candidates:
+        try:
+            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        profile_config = config
+        profiles = config.get("profiles")
+        if isinstance(profiles, dict) and isinstance(profiles.get(profile), dict):
+            profile_config = {**config, **profiles[profile]}
+        provider_id = profile_config.get("model_provider")
+        providers = profile_config.get("model_providers") or config.get("model_providers")
+        if (
+            not isinstance(provider_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", provider_id)
+            or not isinstance(providers, dict)
+            or not isinstance(providers.get(provider_id), dict)
+        ):
+            continue
+        base_url = providers[provider_id].get("base_url")
+        if not isinstance(base_url, str):
+            continue
+        routed_url = _symgateway_workflow_url(base_url, workflow_id)
+        if routed_url:
+            return provider_id, routed_url
+    return None
+
+
+def _claude_project_settings(project_root: str | None) -> dict[str, str]:
+    """Read only Claude env settings, including from a linked worktree's main checkout."""
+    if not project_root:
+        return {}
+    roots = [Path(project_root).resolve()]
+    try:
+        worktrees = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        worktrees = None
+    if worktrees is not None and worktrees.returncode == 0:
+        for line in worktrees.stdout.splitlines():
+            if line.startswith("worktree "):
+                candidate = Path(line.removeprefix("worktree ")).resolve()
+                if candidate not in roots:
+                    roots.append(candidate)
+
+    for root in roots:
+        settings_path = root / ".claude" / "settings.local.json"
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        settings_env = settings.get("env")
+        if not isinstance(settings_env, dict):
+            continue
+        return {
+            name: value
+            for name in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY")
+            if isinstance((value := settings_env.get(name)), str) and value
+        }
+    return {}
 
 
 def _executor_timeout_seconds(llm_engine: str, llm_effort: str | None = None) -> int:
@@ -1027,10 +1147,21 @@ def _executor_env(
     opencode_model: str | None = None,
     opencode_deny_edit_tools: bool = False,
     opencode_text_only: bool = False,
+    workflow_id: str | None = None,
 ) -> dict[str, str]:
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
-    if llm_engine.lower().strip() == "opencode":
+    engine = llm_engine.lower().strip()
+    normalized_workflow = _normalize_workflow_id(workflow_id)
+    if engine == "claude" and normalized_workflow:
+        for name, value in _claude_project_settings(project_root).items():
+            env[name] = value
+        base_url = env.get("ANTHROPIC_BASE_URL")
+        if base_url:
+            routed_url = _symgateway_workflow_url(base_url, normalized_workflow)
+            if routed_url:
+                env["ANTHROPIC_BASE_URL"] = routed_url
+    if engine == "opencode":
         env.setdefault("CI", "1")
         env.setdefault("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
         env.setdefault("npm_config_yes", "true")
@@ -1109,10 +1240,12 @@ def _build_executor_command(
     effort: str | None = None,
     session_id: str | None = None,
     resume_session: bool = False,
+    workflow_id: str | None = None,
 ) -> list[str]:
     """Monta o comando do executor não-interativo com bypass habilitado."""
     engine = llm_engine.lower().strip()
     normalized_effort = _normalize_executor_effort(effort)
+    normalized_workflow = _normalize_workflow_id(workflow_id)
 
     if engine == "claude":
         cmd = [
@@ -1132,10 +1265,18 @@ def _build_executor_command(
         return cmd
 
     if engine == "codex":
-        cmd = [
-            "codex",
-            "exec",
-        ]
+        cmd = ["codex"]
+        profile = _normalize_codex_profile(os.environ.get("FT_CODEX_PROFILE"))
+        if profile:
+            cmd += ["--profile", profile]
+        workflow_override = _codex_workflow_override(profile, normalized_workflow)
+        if workflow_override:
+            provider_id, routed_url = workflow_override
+            cmd += [
+                "-c",
+                f"model_providers.{provider_id}.base_url={json.dumps(routed_url)}",
+            ]
+        cmd.append("exec")
         if session_id and resume_session:
             cmd.append("resume")
         reasoning_effort = (
@@ -2189,6 +2330,7 @@ def delegate_to_llm(
     llm_timeout_seconds: int | None = None,
     llm_session_id: str | None = None,
     llm_session_resume: bool = False,
+    workflow_id: str | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -2407,6 +2549,7 @@ REGRAS:
         effort=llm_effort,
         session_id=llm_session_id,
         resume_session=llm_session_resume,
+        workflow_id=workflow_id,
     )
     if opencode_capture_mode or opencode_bundle_mode or opencode_script_mode:
         cmd = _opencode_capture_command(cmd)
@@ -2440,6 +2583,7 @@ REGRAS:
         opencode_model=llm_model or DEFAULT_OPENCODE_MODEL,
         opencode_deny_edit_tools=opencode_deny_edit_tools,
         opencode_text_only=opencode_capture_mode or opencode_bundle_mode or opencode_script_mode,
+        workflow_id=workflow_id,
     )
     sandbox_tmp: tempfile.TemporaryDirectory | None = None
     sandbox_mounts: list[_SandboxMount] = []
@@ -3049,6 +3193,7 @@ def delegate_with_feedback(
     llm_timeout_seconds: int | None = None,
     llm_session_id: str | None = None,
     llm_session_resume: bool = False,
+    workflow_id: str | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -3079,4 +3224,5 @@ Nao modifique o que ja esta funcionando."""
         llm_timeout_seconds=llm_timeout_seconds,
         llm_session_id=llm_session_id,
         llm_session_resume=llm_session_resume,
+        workflow_id=workflow_id,
     )

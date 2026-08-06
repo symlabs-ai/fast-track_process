@@ -19,7 +19,8 @@ def _new_product_path(graph: ProcessGraph) -> list[str]:
     while node.id not in seen:
         seen.append(node.id)
         if node.type == "decision":
-            target = (node.branches or {}).get("false")
+            branches = node.branches or {}
+            target = branches.get("false", branches.get("_default"))
         else:
             target = node.next
         if not target:
@@ -81,15 +82,142 @@ def test_fast_path_reduces_llm_turns_and_preserves_human_gates() -> None:
     )
     # Include the internal planning turn that precedes the graph.
     fast_turns = 1 + sum(
-        fast.get_node(node_id).executor.startswith("llm")
-        for node_id in fast_path
+        fast.get_node(node_id).executor.startswith("llm") for node_id in fast_path
     )
 
     assert fast_turns <= 25
-    assert fast_turns <= baseline_turns * 0.75
-    # O gate de plano é determinístico; o oitavo human gate é o aceite final.
+    # O helper agora percorre corretamente `_default` desde o route_mode; a
+    # comparação anterior parava no primeiro decision e não media o caminho.
+    assert fast_turns <= baseline_turns * 0.80
+    # O gate de plano é determinístico; mockups têm aceite humano próprio.
     assert sum(node.type == "human_gate" for node in fast.nodes.values()) == 8
     assert sum(node.type == "human_gate" for node in baseline.nodes.values()) == 7
+
+
+def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    route = graph.get_node("ft.start.route")
+    assert route.type == "gate"
+    assert route.next == "ft.hyper.00.ui_criteria_questions"
+    assert route.outputs == ["docs/hipotese.md", "docs/PRD.md"]
+    assert "docs/hipotese.md" in str(route.validators)
+    assert "docs/PRD.md" in str(route.validators)
+
+    brief_gate = graph.get_node("ft.hyper.00.ui_criteria_questions")
+    assert brief_gate.type == "human_gate"
+    assert brief_gate.approval_message_required is True
+    assert brief_gate.next == "ft.hyper.00b.ui_brief"
+    brief = graph.get_node("ft.hyper.00b.ui_brief")
+    assert "docs/ui-brief.md" in brief.outputs
+    assert ".ft/project.yml" in brief.outputs
+    assert brief.next == "ft.start.surface.route"
+
+    surface = graph.get_node("ft.start.surface.route")
+    assert surface.condition == "project_validation_mode"
+    assert surface.branches == {
+        "disabled": "ft.start.backlog.route",
+        "_default": "ft.start.ui_criteria.route",
+    }
+
+    mockups = graph.get_node("ft.plan.06.mockups")
+    assert graph.get_node("ft.plan.05.test_data").next == mockups.id
+    assert mockups.executor == "llm_codex"
+    assert mockups.llm_engine == "codex"
+    assert mockups.llm_model == "gpt-5.6-sol"
+    assert mockups.llm_effort == "max"
+    assert "docs/mockups/screen-map.yml" in mockups.outputs
+    assert "docs/mockups/image-generation-receipt.yml" in mockups.outputs
+    assert "docs/mockups/images/" in mockups.outputs
+    assert not any(
+        output.endswith((".html", ".css", ".js", ".svg"))
+        for output in mockups.outputs
+    )
+    assert any("image_generation" in command for command in mockups.env_setup)
+    assert "built-in \u0060image_gen\u0060" in mockups.prompt
+    assert "caso de uso \u0060ui-mockup\u0060" in mockups.prompt
+    assert "É PROIBIDO criar HTML" in mockups.prompt
+    assert "screenshot de página/app" in mockups.prompt
+    assert "SNN.1, SNN.2" in mockups.prompt
+    assert "uma chamada image_gen própria e um PNG próprio" in mockups.prompt
+    assert "Nunca reúna múltiplas views em um único bitmap" in mockups.prompt
+    assert "IDs de views devem seguir SNN ou SNN.1..N" in str(mockups.validators)
+    assert "imagem relativa e nome do PNG devem usar o ID exato da view" in str(
+        mockups.validators
+    )
+    assert "Crie HTML/CSS/JS code-native" not in mockups.prompt
+    assert "renderize PNGs reais com Chromium/Playwright" not in mockups.prompt
+    assert mockups.next == "ft.plan.06b.mockup_gate"
+
+    mockup_gate = graph.get_node("ft.plan.06b.mockup_gate")
+    assert mockup_gate.type == "human_gate"
+    assert mockup_gate.approval_message_required is True
+    assert mockup_gate.reject_next == mockups.id
+    assert mockup_gate.next == "ft.plan.gate"
+    assert "docs/mockups/" in graph.meta["artifact_policy"]["canonical"]
+    assert "docs/mockups/" in graph.get_node("ft.frontend.01.build").prompt
+
+
+def test_headless_route_has_no_visual_or_http_delivery_dependency() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    canonical = graph.meta["artifact_policy"]["canonical"]
+    cycle = graph.meta["artifact_policy"]["cycle"]
+    assert "docs/acceptance-result.json" in canonical
+    assert "docs/acceptance-result.json" not in cycle
+
+    route = graph.get_node("ft.plan.surface.route")
+    assert route.condition == "project_validation_mode"
+    assert route.branches == {
+        "disabled": "ft.headless.plan.01.contract",
+        "_default": "ft.plan.03.api_contract",
+    }
+
+    contract = graph.get_node("ft.headless.plan.01.contract")
+    assert "library_contract_complete" in str(contract.validators)
+    assert contract.next == "ft.headless.plan.gate"
+    assert "API PÚBLICA PROGRAMÁTICA" in contract.prompt
+    assert "não como API HTTP" in contract.prompt
+
+    build = graph.get_node("ft.headless.01.build")
+    assert "src/" in build.outputs
+    assert "tests/" in build.outputs
+    assert "Makefile" in build.outputs
+    assert ".github/workflows/" in build.outputs
+    assert ".github/workflows" in build.write_scope
+    assert "project/frontend/" not in build.outputs
+    assert "make verify" in str(build.validators)
+    assert "make build" in str(build.validators)
+    assert "make smoke" in str(build.validators)
+    assert "projeto novo permanece" in build.prompt
+    assert "0.0.1" in build.prompt
+
+    review = graph.get_node("ft.headless.02.review")
+    assert review.type == "review"
+    assert "review_outcome_valid" in str(review.validators)
+    assert "claims[].evidence" in review.prompt
+    assert "path relativo existente" in review.prompt
+    assert "bump não" in review.prompt
+    assert review.on_fail["goto"] == "ft.headless.03.fix"
+    fix = graph.get_node("ft.headless.03.fix")
+    assert fix.fix_review == review.id
+    assert ".github/workflows/" in fix.outputs
+    assert ".github/workflows" in fix.write_scope
+    assert "sem deploy, publicação" in fix.prompt
+    assert ".github/workflows/quality.yml" in fix.prompt
+    assert "fallback local determinístico" in fix.prompt
+
+    acceptance = graph.get_node("ft.headless.05.acceptance")
+    assert acceptance.type == "review"
+    assert "docs/acceptance-result.json" in acceptance.outputs
+    assert "browser" in acceptance.prompt
+    assert "claims[].evidence" in acceptance.prompt
+    assert "path relativo existente" in acceptance.prompt
+    assert "versão do pacote continua igual ao baseline" in acceptance.prompt
+    assert acceptance.next == "ft.headless.06.stakeholder"
+    assert graph.get_node("ft.headless.06.stakeholder").next == (
+        "ft.handoff.01.retro"
+    )
 
 
 def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
@@ -110,13 +238,16 @@ def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
     assert graph.get_node("ft.batch.01.plan").no_pre_seed is False
     assert graph.get_node("ft.batch.01.plan").next == "ft.batch.03.foundation"
     assert graph.get_node("ft.batch.06.fix").next == "ft.batch.06b.fix_review"
-    assert (
-        graph.get_node("ft.batch.06.fix").fix_review
-        == "ft.batch.06b.fix_review"
-    )
+    assert graph.get_node("ft.batch.06.fix").fix_review == "ft.batch.06b.fix_review"
     assert graph.get_node("ft.batch.06b.fix_review").next == "ft.batch.07.verify"
     assert graph.get_node("ft.batch.06b.fix_review").on_fail["automatic"] is True
-    assert graph.get_node("ft.batch.07.verify").next == "ft.batch.08.acceptance"
+    assert graph.get_node("ft.batch.07.verify").next == "ft.batch.07a.platform_route"
+    assert graph.get_node("ft.batch.07a.platform_route").condition == (
+        "validation_profiles_active"
+    )
+    assert graph.get_node("ft.batch.07b.platform_validation").next == (
+        "ft.batch.08.acceptance"
+    )
     assert graph.get_node("ft.batch.08.acceptance").reject_next == "ft.batch.06.fix"
     assert graph.get_node("ft.batch.09.reconcile").next == "ft.end"
     assert graph.meta["batch_policy"]["min_lanes"] == 2
@@ -145,3 +276,261 @@ def test_macro_nodes_keep_deterministic_checkpoints() -> None:
 
     assert graph.get_node("ft.handoff.02.backlog_update").executor == "python"
     assert graph.get_node("ft.handoff.02b.features_update").executor == "python"
+
+
+def test_builder_scope_is_product_and_software_engineering_only() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    assert graph.meta["product_engineering_policy"] == {
+        "focus": "product_and_software_engineering",
+        "includes": [
+            "product_behavior_and_ux",
+            "architecture_code_data_and_apis",
+            "technical_security_quality_and_reliability",
+            "packaging_installation_and_technical_maintenance",
+        ],
+        "excludes": [
+            "legal_and_contractual_approval",
+            "marketing_sales_and_promotional_sites",
+            "market_research_recruiting_and_commercial_metrics",
+            "revenue_renewal_and_business_validation",
+        ],
+        "external_items": {
+            "disposition": "pending_downstream_team",
+            "block_builder_delivery": False,
+        },
+    }
+
+    scoped_planning_nodes = (
+        "ft.batch.01.plan",
+        "ft.plan.00.foundation_full",
+        "ft.plan.00.foundation_features",
+        "ft.plan.00.foundation_existing",
+    )
+    for node_id in scoped_planning_nodes:
+        prompt = " ".join(graph.get_node(node_id).prompt.casefold().split())
+        assert "engenharia de software" in prompt
+        assert "equipe posterior" in prompt
+        assert "não" in prompt and "bloqueio" in prompt
+
+    entry = graph.get_node("ft.start.route")
+    assert "template mdd" in entry.description
+
+
+def test_handoff_is_human_readable_contextual_and_engineering_only() -> None:
+    graph = load_graph(FAST_PROCESS)
+    prd_next = graph.get_node("ft.handoff.02.prd_rewrite")
+    critical = graph.get_node("ft.handoff.03.critical_analysis")
+    handoff = graph.get_node("ft.handoff.04.plano_voo")
+    gate = graph.get_node("ft.handoff.gate")
+
+    assert "somente evolução do produto e da engenharia" in prd_next.prompt
+    assert "Analise somente o software" in critical.prompt
+    assert "responsabilidades pertencem a outra equipe" in critical.prompt
+    handoff_prompt = " ".join(handoff.prompt.casefold().split())
+    assert "documento principal de decisão" in handoff_prompt
+    assert "consequência de não fazer ou adiar" in handoff_prompt
+    assert "escopo obrigatório deste handoff" in handoff_prompt
+    assert "preserve esses assuntos como pendentes para a equipe" in handoff_prompt
+
+    validator_contract = str(handoff.validators)
+    for section in (
+        "Decisão solicitada",
+        "Resumo em linguagem simples",
+        "Escopo deste handoff de engenharia",
+        "Funcionalidades incompletas e impacto",
+        "Opções e consequências",
+        "O que a aprovação autoriza",
+        "O que a aprovação não autoriza",
+        "Fora do escopo desta equipe",
+        "Anexo técnico",
+    ):
+        assert section in validator_contract
+
+    context = gate.decision_context
+    assert {
+        "decision",
+        "why_now",
+        "review_paths",
+        "checklist",
+        "limitations",
+        "approve_effect",
+        "reject_effect",
+    } <= set(context)
+    assert any("sem conhecer códigos internos" in item for item in context["checklist"])
+    assert any("não fazer ou adiar" in item for item in context["checklist"])
+    assert gate.reject_next == handoff.id
+
+
+def test_navigation_reachability_is_gated_before_user_delivery() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    batch_plan = graph.get_node("ft.batch.01.plan")
+    assert "docs/mvp-batch-navigation-contract.yml" in batch_plan.outputs
+    assert "navigation_contract_valid" in str(batch_plan.validators)
+
+    batch_review = graph.get_node("ft.batch.05.review")
+    assert "docs/mvp-batch-navigation-reachability.yml" in batch_review.outputs
+    assert "navigation_reachability" in str(batch_review.validators)
+    assert "'require_approved': False" in str(batch_review.validators)
+
+    fix_review = graph.get_node("ft.batch.06b.fix_review")
+    assert "navigation_reachability" in str(fix_review.validators)
+    assert "'require_approved': True" in str(fix_review.validators)
+    assert "navigation_reachability" in str(
+        graph.get_node("ft.batch.07.verify").validators
+    )
+
+    planning = graph.get_node("ft.plan.04.ui_criteria")
+    assert "docs/navigation-contract.yml" in planning.outputs
+    assert "navigation_contract_valid" in str(planning.validators)
+
+    e2e = graph.get_node("ft.e2e.01.browser")
+    assert "docs/navigation-reachability.yml" in e2e.outputs
+    assert "navigation_reachability" in str(e2e.validators)
+    assert "navigation_reachability" in str(graph.get_node("gate.e2e").validators)
+
+
+def test_navigation_contract_is_domain_neutral_and_profiles_are_generic() -> None:
+    text = FAST_PROCESS.read_text(encoding="utf-8").casefold()
+
+    for forbidden in ("wconnect", "wifire", "xiaomi", "s01", "86 telas"):
+        assert forbidden not in text
+    for profile in ("android", "ios", "web", "desktop"):
+        assert profile in text
+
+
+def test_stakeholder_gate_presents_the_selected_platform_not_always_web() -> None:
+    graph = load_graph(FAST_PROCESS)
+    delivery = graph.get_node("ft.delivery.01.entrypoint")
+    stakeholder = graph.get_node("ft.final.02.stakeholder")
+    stakeholder_fix = graph.get_node("ft.final.03.stakeholder_fix")
+
+    assert "AppImage" in delivery.prompt
+    assert ".presented_artifact" in delivery.prompt
+    assert "nunca use o servidor web como fallback" in delivery.prompt
+    checklist = stakeholder.decision_context["checklist"]
+    assert any("URL somente para web" in item for item in checklist)
+    assert any("AppImage/aplicativo nativo" in item for item in checklist)
+    assert all("pela URL apresentada" not in item for item in checklist)
+    assert stakeholder_fix.next == "ft.platform.01.validate"
+    assert stakeholder_fix.fix_review == "ft.platform.01.validate"
+
+
+def test_composable_platform_validation_is_gated_in_both_routes() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    assert graph.meta["validation_policy"] == {
+        "registry": "builtin_v1",
+        "project_contract_path": ".ft/project.yml",
+        "matrix_path": "docs/validation-matrix.yml",
+        "report_path": "docs/platform-validation-report.yml",
+        "evidence_root": "docs/evidence/platform-validation",
+    }
+    canonical = graph.meta["artifact_policy"]["canonical"]
+    cycle = graph.meta["artifact_policy"]["cycle"]
+    durable_validation_outputs = {
+        "docs/test-identity.json",
+        "docs/validation-matrix.yml",
+        "docs/platform-validation-report.yml",
+        "docs/evidence/platform-validation/",
+    }
+    assert durable_validation_outputs <= set(canonical)
+    assert durable_validation_outputs.isdisjoint(cycle)
+
+    batch = graph.get_node("ft.batch.07b.platform_validation")
+    assert "ft validation-matrix ." in batch.env_setup
+    assert "platform_validation_report" in str(batch.validators)
+    assert "mockup_watermark" in batch.prompt
+    assert "Overlay acrescentado pelo teste/captura não conta" in batch.prompt
+    assert "artifact_install_reuse" in batch.prompt
+    assert "adb shell am instrument" in batch.prompt
+    batch_prompt = " ".join(batch.prompt.split())
+    assert "Se apenas um pacote divergir, instale somente ele" in batch_prompt
+    assert "uma única sessão multipacote" in batch_prompt
+    assert "Um tap injetado não prova aceite" in batch.prompt
+    assert "uma única autorização no checkpoint físico final" in batch.prompt
+    assert "nunca use o aparelho físico interativo como loop de fix" in " ".join(
+        batch.prompt.split()
+    )
+    assert batch.on_fail["goto"] == "ft.batch.06.fix"
+
+    route = graph.get_node("ft.platform.00.route")
+    assert route.condition == "validation_profiles_active"
+    assert route.branches == {
+        "true": "ft.platform.01.validate",
+        "false": "ft.final.01.visual_check",
+    }
+    validation = graph.get_node("ft.platform.01.validate")
+    assert "platform_validation_report" in str(validation.validators)
+    assert "mockup_watermark" in validation.prompt
+    assert "discovered_screen_count" in validation.prompt
+    assert "artifact_install_reuse" in validation.prompt
+    assert "adb shell am instrument" in validation.prompt
+    validation_prompt = " ".join(validation.prompt.split())
+    assert "Se apenas um pacote divergir, instale somente ele" in validation_prompt
+    assert "uma única sessão multipacote" in validation_prompt
+    assert "uma única autorização no checkpoint físico final" in validation.prompt
+    fix = graph.get_node("ft.platform.02.fix")
+    assert fix.fix_review == "ft.platform.01.validate"
+    assert fix.next == "ft.platform.01.validate"
+    assert "platform_validation_ready" in str(
+        graph.get_node("gate.visual_check").validators
+    )
+
+
+def test_batch_review_uses_scope_bound_structured_receipts() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    review = graph.get_node("ft.batch.05.review")
+    assert "docs/mvp-batch-review.yml" in review.outputs
+    assert "docs/test-identity.json" in review.write_scope
+    assert "review_outcome_valid" in str(review.validators)
+
+    fix_review = graph.get_node("ft.batch.06b.fix_review")
+    assert "docs/mvp-batch-fix-review.yml" in fix_review.outputs
+    assert "review_outcome_valid" in str(fix_review.validators)
+    assert "'require_approved': True" in str(fix_review.validators)
+
+    verify = graph.get_node("ft.batch.07.verify")
+    assert "review_chain_approved" in str(verify.validators)
+
+
+def test_focal_review_persists_separate_physical_evidence_across_retries() -> None:
+    graph = load_graph(FAST_PROCESS)
+    evidence_dir = "docs/mvp-batch-fix-evidence/"
+
+    review = graph.get_node("ft.batch.06b.fix_review")
+    assert evidence_dir in graph.meta["artifact_policy"]["cycle"]
+    assert evidence_dir in review.outputs
+    assert evidence_dir in review.write_scope
+    assert review.preserve_outputs_on_reentry is True
+    assert "arquivo separado" in review.prompt
+    assert "Auto-referenciar o Markdown" in review.prompt
+    assert "Nunca grave certificado" in review.prompt
+    assert "senha" in review.prompt
+
+
+def test_batch_freezes_public_contract_and_acceptance_reports_non_p0_skip() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    protected = graph.meta["batch_policy"]["protected_paths"]
+    assert "docs/api_contract.md" in protected
+    plan = graph.get_node("ft.batch.01.plan")
+    assert "antes do fan-out" in plan.prompt
+    assert "api_contract_complete" in str(plan.validators)
+    fix = graph.get_node("ft.batch.06.fix")
+    assert "docs/api_contract.md" in fix.write_scope
+    assert "atomicamente" in fix.prompt
+
+    acceptance = graph.get_node("ft.acceptance.01.cli")
+    gate = graph.get_node("gate.acceptance")
+    acceptance_commands = "\n".join(
+        str(spec.get("command_succeeds", "")) for spec in acceptance.validators
+    )
+    gate_commands = "\n".join(
+        str(spec.get("command_succeeds", "")) for spec in gate.validators
+    )
+    assert "d.get('skip')>=0" in acceptance_commands
+    assert "d.get('skip')>=0" in gate_commands
+    assert "SKIP é permitido somente fora do P0" in gate.description

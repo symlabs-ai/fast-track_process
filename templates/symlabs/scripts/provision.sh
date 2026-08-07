@@ -572,30 +572,35 @@ if [ "$agents_start_count" = 0 ] && [ "$agents_end_count" = 0 ]; then
   cat >> AGENTS.md <<'EOF'
 
 <!-- symlabs-symgateway:start -->
-## Symlabs — LLMs obrigatoriamente via SymGateway
+## Symlabs — LLMs via SymGateway por default
 
 Todo uso de OpenAI ou Anthropic neste repositório deve atravessar o
-SymGateway. Não use autenticação, endpoint ou fallback direto dos providers.
+SymGateway, salvo a exceção FT explícita abaixo. Não crie bypass ad hoc.
 
 - **Codex/OpenAI:** use o profile `symgateway-dev`, com
   `SYMGATEWAY_API_KEY` e `SYMGATEWAY_PROJECT_SLUG` carregados pelo ambiente do
-  projeto. Não autentique o Codex diretamente na OpenAI.
+  projeto.
+- **Exceção de imagem built-in:** somente um node de processo Fast Track que
+  declare `codex_auth: chatgpt` pode usar o provider OpenAI direto. A exceção
+  cobre o node inteiro, deve exigir login ChatGPT e existe apenas para uma
+  capability built-in requerida, como `$imagegen`/`image_gen`, indisponível em
+  custom providers. Sem login ou capability, bloqueie; não improvise fallback.
 - **Claude/Anthropic:** use `ANTHROPIC_BASE_URL` e `ANTHROPIC_API_KEY` definidos
   em `.claude/settings.local.json`. Não execute `claude auth login` e não use
   credencial ou endpoint direto da Anthropic.
 - Segredos permanecem apenas em `.envrc.private` e
   `.claude/settings.local.json`, ambos ignorados pelo Git. Nunca copie chaves
   para arquivos versionados, argumentos de processo, logs ou documentação.
-- Se o roteamento do SymGateway estiver ausente ou indisponível, interrompa a
-  execução e corrija a configuração; não faça bypass para o provider direto.
+- Fora da exceção declarativa acima, se o roteamento do SymGateway estiver
+  ausente ou indisponível, interrompa a execução e corrija a configuração.
 <!-- symlabs-symgateway:end -->
 EOF
-  echo "  ✓ AGENTS.md atualizado (LLMs obrigatoriamente via SymGateway)"
+  echo "  ✓ AGENTS.md atualizado (SymGateway por default)"
 elif [ "$agents_start_count" != 1 ] || [ "$agents_end_count" != 1 ]; then
   echo "  ✗ Bloco Symlabs/SymGateway inválido ou duplicado em AGENTS.md" >&2
   exit 1
 else
-  echo "  → AGENTS.md já exige SymGateway — ok"
+  echo "  → AGENTS.md já contém a política SymGateway — ok"
 fi
 
 echo "  → Projeto ${PROJECT_NAME} pronto: Codex/OpenAI + Claude/Anthropic via SymGateway."

@@ -335,6 +335,7 @@ impede que um revisor "conserte" o produto em vez de reportar.
 | `expert` | id de um perfil em `experts/<id>.md`; somente em executor LLM |
 | `max_turns` | teto de turnos. Sem ele, o default por tipo é aplicado (30 na maioria, 12 em `retro`) |
 | `llm_engine` / `llm_model` / `llm_effort` | override por node do provider global do run |
+| `codex_auth` | exceção explícita por node; único valor aceito: `chatgpt` |
 | `llm_timeout_seconds` | janela de **inatividade** (não deadline) que dispara sonda |
 | `llm_episode` | nome de uma sequência semanticamente relacionada |
 | `llm_episode_budget_seconds` | meta de telemetria — não interrompe trabalho |
@@ -348,6 +349,42 @@ os dois no mesmo node é erro de validação. Perfis são registrados no engine
 processo precisa de um perfil novo, ele é uma mudança de engine, não de YAML.
 
 Orçamento de episódio só é válido com `llm_episode` declarado.
+
+#### Exceção Codex para ferramentas built-in do ChatGPT
+
+Por default, nodes Codex herdam `FT_CODEX_PROFILE`. Quando uma capability
+built-in só existe no provider OpenAI autenticado pelo ChatGPT, o processo pode
+declarar a exceção estreita:
+
+```yaml
+- id: visual.mockups
+  type: build
+  executor: codex
+  llm_engine: codex
+  llm_model: gpt-5.6-sol
+  llm_effort: max
+  codex_auth: chatgpt
+  env_setup:
+    - >-
+        python3 -c "import subprocess;
+        status=subprocess.check_output(['codex','login','status'],text=True,stderr=subprocess.STDOUT);
+        assert 'Logged in using ChatGPT' in status;
+        features=subprocess.check_output(['codex','features','list'],text=True);
+        assert any(line.split()[:1]==['image_generation'] and line.split()[-1:] == ['true'] for line in features.splitlines())"
+  prompt: |
+    Invoque `$imagegen` e use sua ferramenta built-in `image_gen`.
+```
+
+O FT ignora `FT_CODEX_PROFILE` somente nessa delegação e fixa
+`model_provider="openai"` com `forced_login_method="chatgpt"`. A exceção cobre
+o node inteiro — raciocínio textual, tools e pixels — portanto essa execução
+não atravessa nem recebe a auditoria do SymGateway. Retries preservam a mesma
+rota; uma sessão criada no gateway nunca é retomada no modo direto.
+
+Use o campo apenas quando a ferramenta built-in for requisito do artefato.
+Ausência do login ou da capability deve bloquear o node, sem fallback por API,
+renderer ou bypass ad hoc. Experts podem pedir `$imagegen`, mas não concedem a
+capability; a rota é responsabilidade explícita do processo.
 
 #### Experts — especialização reutilizável
 

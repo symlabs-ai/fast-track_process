@@ -102,10 +102,14 @@ def test_stream_retry_attaches_template_as_workflow():
 
     runner = object.__new__(StepRunner)
     runner.state_mgr = SimpleNamespace(
-        state=SimpleNamespace(template_id="innovation")
+        state=SimpleNamespace(
+            template_id="mdd",
+            current_cycle="cycle-02-mdd",
+        )
     )
     with patch("ft.engine.runner.delegate_to_llm", side_effect=fake_delegate):
         final = StepRunner._delegate_with_stream_retry(runner, task="t")
 
     assert final.success is True
-    assert calls[0]["workflow_id"] == "innovation"
+    assert calls[0]["workflow_id"] == "mdd"
+    assert calls[0]["ft_cycle"] == "cycle-02-mdd"

@@ -889,6 +889,19 @@ class TestRetry:
                 "goto": "product.fix",
                 "feedback": "precondição externa indisponível",
             },
+            active_fix_return={
+                "fix_node": "product.fix",
+                "review_node": "physical.review",
+                "review_mode": "origin_fallback",
+                "review_context": "auditoria focal antiga",
+            },
+            last_approval_message="auditoria focal antiga",
+            metrics={
+                "focal_evidence_retries": {
+                    "physical.review": 1,
+                    "other.review": 2,
+                }
+            },
         )
 
         class StateMgr:
@@ -908,6 +921,11 @@ class TestRetry:
             def run(self, mode="step"):
                 self.run_mode = mode
 
+            def retry_blocked_validation_without_llm(self, *, mode):
+                raise AssertionError(
+                    "pending review retry must not use blocked validation recovery"
+                )
+
         runner = Runner()
         args = Namespace(
             process=None,
@@ -926,6 +944,9 @@ class TestRetry:
         assert state.current_node == "physical.review"
         assert state.node_status == "ready"
         assert state.pending_fix is None
+        assert state.active_fix_return is None
+        assert state.last_approval_message is None
+        assert state.metrics["focal_evidence_retries"] == {"other.review": 2}
         assert runner._auto_fix_counts == {}
         assert runner.run_mode == "mvp"
 

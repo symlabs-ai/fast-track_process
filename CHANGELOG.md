@@ -6,6 +6,58 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### `mvp-builder-fast` separa revisão visual de validação integrada
+
+- A superfície recebe um checkpoint visual e de acessibilidade antes do TDD,
+  sem exigir backend inexistente nem aceitar fixture como prova de integração.
+- Depois do backend GREEN, uma revisão integrada percorre interface pública,
+  API e persistência reais antes de liberar o delivery.
+- A cobertura integral de `docs/ui_criteria.md` permanece obrigatória no gate
+  pós-backend, eliminando a dependência circular sem reduzir a fidelidade.
+
+### Nodes Codex podem declarar autenticação ChatGPT para imagem built-in
+
+- O novo campo `codex_auth: chatgpt` ignora `FT_CODEX_PROFILE` somente no node
+  declarado e fixa o provider OpenAI built-in com login ChatGPT; todos os
+  demais nodes continuam no SymGateway.
+- A troca de rota invalida afinidade de sessão, impedindo retomar no provider
+  direto uma conversa criada no gateway. Retries permanecem na rota do node.
+- Os nodes de imagem de `mdd` e `mvp-builder-fast` usam a exceção, validam login
+  e `image_generation` no preflight e bloqueiam sem fallback quando ausentes.
+
+### `mvp-builder-fast` respeita a plataforma selecionada
+
+- A construção da superfície passa a usar o contrato comum
+  `src/Makefile: surface-build` e preserva Android/Compose, iOS/SwiftUI, web ou
+  desktop conforme `.ft/project.yml.validation`, sem exigir npm, HTML ou
+  `<form>` de aplicações nativas.
+- Smoke, acceptance e E2E usam targets comuns da stack; Playwright só é
+  recomendado para web, enquanto Android, iOS e desktop usam seus runners
+  nativos. Evidência E2E deixa de impor nome de teste e cota fixa de screenshots.
+- Delivery exige recibo E2E estruturado e o launcher falha fechado quando uma
+  superfície nativa não fornece apresentador próprio, impedindo fallback
+  silencioso para URL web.
+
+### `mvp-builder-fast` usa `src/` como raiz de produto
+
+- Código, testes, Makefile, artefatos e validações do builder rápido passam a
+  viver sob `src/`, eliminando o contêiner intermediário `project/`.
+- O launcher e os contratos de batch, frontend, backend, delivery, E2E e fix
+  foram alinhados à mesma raiz canônica.
+- Rejeições no gate de arquitetura agora reexecutam a definição de stack mesmo
+  quando o documento anterior já satisfazia apenas o schema estrutural.
+
+### Innovation distingue discovery de delivery
+
+- O handoff de um GO agora declara `delivery_readiness: planning_required` e
+  registra separadamente se o stakeholder autorizou iniciar a implementação.
+- O template explicita que backlog, contrato global e matriz de validação são
+  reconciliados pelo builder; encerrar discovery não torna o projeto READY.
+- Produto novo recebe a sequência executável `mdd → mvp-builder-fast`; o
+  validador recusa handoff que pule o contrato MDD exigido pelo builder.
+- Referências duráveis ao dossiê usam `.ft/cycles/<cycle-id>/research/`, e o
+  gate determinístico rejeita o antigo path transitório `docs/research/`.
+
 ### MDD completo e independente do builder rápido
 
 - O novo template `mdd` conduz demanda → hipótese aprovada → visão aprovada →

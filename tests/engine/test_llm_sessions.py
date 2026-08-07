@@ -63,6 +63,10 @@ def _selection(model: str = "sonnet") -> LLMSelection:
     )
 
 
+def _codex_selection() -> LLMSelection:
+    return LLMSelection(engine="codex", model="gpt-5.6-sol", effort="max")
+
+
 def test_session_policy_validates(tmp_path: Path) -> None:
     process = tmp_path / "process.yml"
     process.write_text(PROCESS, encoding="utf-8")
@@ -154,6 +158,32 @@ def test_model_change_supersedes_session(tmp_path: Path) -> None:
     assert changed["llm_session_id"] != old_id
     assert record["model"] == "opus"
     assert record["history"][-1]["session_id"] == old_id
+
+
+def test_codex_auth_route_supersedes_gateway_session(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    node = runner.graph.get_node("build")
+    node.executor = "llm_codex"
+    selection = _codex_selection()
+
+    gateway: dict = {}
+    runner._attach_llm_session(gateway, node=node, selection=selection)
+    gateway_context = gateway.pop("_ft_session_context")
+    runner._record_llm_session_result(
+        gateway_context,
+        DelegateResult(True, "DONE", [], [], session_id="gateway-thread"),
+    )
+
+    node.codex_auth = "chatgpt"
+    direct: dict = {}
+    runner._attach_llm_session(direct, node=node, selection=selection)
+
+    record = runner.state_mgr.state.llm_sessions["sprint:sprint-01"]
+    assert direct["codex_auth"] == "chatgpt"
+    assert "llm_session_id" not in direct
+    assert record["codex_auth"] == "chatgpt"
+    assert record["history"][-1]["session_id"] == "gateway-thread"
+    assert record["history"][-1]["codex_auth"] is None
 
 
 def test_resume_error_rehydrates_once(tmp_path: Path) -> None:

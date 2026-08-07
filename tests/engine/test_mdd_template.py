@@ -25,7 +25,7 @@ def test_mdd_graph_is_complete_and_valid() -> None:
     report = validate_process(graph)
 
     assert report.passed, [issue.message for issue in report.errors]
-    assert graph.meta["version"] == "2.3.0"
+    assert graph.meta["version"] == "2.4.0"
     assert graph.first_node().id == "mdd.01.hipotese"
     assert list(graph.nodes) == [
         "mdd.01.hipotese",
@@ -172,10 +172,14 @@ def test_approved_package_generates_visual_assets_with_sol_max() -> None:
     assert pitch.llm_engine == "codex"
     assert pitch.llm_model == "gpt-5.6-sol"
     assert pitch.llm_effort == "max"
+    assert pitch.codex_auth == "chatgpt"
+    assert any("Logged in using ChatGPT" in command for command in pitch.env_setup)
     assert any("image_generation" in command for command in pitch.env_setup)
     assert "EXATAMENTE uma chamada de geração por slide" in pitch.prompt
     assert "12 chamadas independentes" in pitch.prompt
     assert "built-in `image_gen`" in pitch.prompt
+    assert "$imagegen" in pitch.prompt
+    assert "modelo de geração" in pitch.prompt
     assert "productivity-visual" in pitch.prompt
     assert "slide-01.png" in pitch.prompt
     assert "slide-12.png" in pitch.prompt
@@ -184,14 +188,19 @@ def test_approved_package_generates_visual_assets_with_sol_max() -> None:
     assert "institucional pode aparecer sem explicação" in pitch.prompt
     assert "termo por extenso seguido da sigla" in pitch.prompt
     assert "cada slide exige bitmap próprio" in str(pitch.validators)
+    assert "imagegen" in str(pitch.validators)
 
     site = graph.get_node("mdd.11.site_prototype")
     assert site.executor == "llm_codex"
     assert site.llm_engine == "codex"
     assert site.llm_model == "gpt-5.6-sol"
     assert site.llm_effort == "max"
+    assert site.codex_auth == "chatgpt"
+    assert any("Logged in using ChatGPT" in command for command in site.env_setup)
     assert any("image_generation" in command for command in site.env_setup)
     assert "built-in `image_gen`" in site.prompt
+    assert "$imagegen" in site.prompt
+    assert "modelo de geração" in site.prompt
     assert "ui-mockup" in site.prompt
     assert "uma única imagem PNG vertical e comprida" in site.prompt
     assert "docs/site-prototype/home-full-page.png" in site.prompt
@@ -203,6 +212,14 @@ def test_approved_package_generates_visual_assets_with_sol_max() -> None:
     assert "institucional pode aparecer sem explicação" in site.prompt
     assert "termo por extenso seguido da sigla" in site.prompt
     assert "protótipo deve ser PNG vertical e comprido" in str(site.validators)
+    assert "imagegen" in str(site.validators)
+
+    revision = graph.get_node("mdd.13b.visual_revision")
+    assert revision.codex_auth == "chatgpt"
+    assert any("Logged in using ChatGPT" in command for command in revision.env_setup)
+    assert "$imagegen" in revision.prompt
+    assert "generation.skill: imagegen" in revision.prompt
+    assert "imagegen" in str(revision.validators)
 
     review = graph.get_node("mdd.13.visual_review")
     assert review.type == "human_gate"

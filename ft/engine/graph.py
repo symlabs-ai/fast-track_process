@@ -47,6 +47,9 @@ class Node:
     # Override de engine/modelo/effort por node (substitui o global do run)
     llm_engine: str | None = None
     llm_model: str | None = None
+    # Excecao explicita de autenticacao do Codex por node. ``chatgpt`` executa
+    # o node inteiro no provider OpenAI built-in, fora de FT_CODEX_PROFILE.
+    codex_auth: str | None = None
     # Desabilita o pre-seed check — node sempre roda mesmo se outputs já existem
     no_pre_seed: bool = False
     # Permite, de forma explícita, reaproveitar checkpoint válido até em node
@@ -128,6 +131,17 @@ class ProcessGraph:
         ids = set(self.nodes.keys())
 
         for node in self.nodes.values():
+            if node.codex_auth not in {None, "chatgpt"}:
+                raise ValueError(
+                    f"Node '{node.id}' possui codex_auth invalido: "
+                    f"{node.codex_auth!r}"
+                )
+            if node.codex_auth is not None and not (
+                node.executor == "llm_codex" or node.llm_engine == "codex"
+            ):
+                raise ValueError(
+                    f"Node '{node.id}' usa codex_auth mas não possui executor Codex"
+                )
             if node.expert is not None and not node.executor.startswith("llm"):
                 raise ValueError(
                     f"Node '{node.id}' usa expert mas não possui executor LLM"
@@ -397,6 +411,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
             env_teardown=node_raw.get("env_teardown", []),
             llm_engine=node_raw.get("llm_engine"),
             llm_model=node_raw.get("llm_model"),
+            codex_auth=node_raw.get("codex_auth"),
             llm_effort=node_raw.get("llm_effort"),
             approval_message_required=node_raw.get(
                 "approval_message_required", False

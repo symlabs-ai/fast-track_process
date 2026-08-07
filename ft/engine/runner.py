@@ -208,6 +208,25 @@ def _canonical_review_verdict(value: str) -> str | None:
     return None
 
 
+def _exact_review_verdict(value: str) -> str | None:
+    """Return a verdict only when a table cell contains just the verdict.
+
+    Table cells frequently describe product/runtime status (for example,
+    ``failed com texto, ícone e nome acessível``).  Those are evidence values,
+    not review decisions, so the prefix-friendly parser used for labeled
+    verdict lines must not classify them as a canonical rejection.
+    """
+
+    import unicodedata
+
+    upper = unicodedata.normalize("NFKD", value.strip().upper())
+    upper = "".join(
+        character for character in upper if not unicodedata.combining(character)
+    )
+    upper = re.sub(r"\s+", " ", upper)
+    return _REVIEW_VERDICT_ALIASES.get(upper)
+
+
 def _line_review_verdict(line: str) -> str | None:
     clean = _normalize_review_line(line)
     if not clean:
@@ -216,7 +235,7 @@ def _line_review_verdict(line: str) -> str | None:
     if "|" in clean:
         cells = [cell.strip() for cell in clean.strip("|").split("|")]
         for cell in cells:
-            verdict = _canonical_review_verdict(cell)
+            verdict = _exact_review_verdict(cell)
             if verdict:
                 return verdict
 
@@ -501,8 +520,13 @@ def _llm_progress_snapshot(log_path: str | Path) -> _LLMProgressSnapshot | None:
                 or str(event.get("subtype") or "").casefold() in {"error", "failed"}
                 else "completed"
             )
-        elif event_type in {"turn.failed", "turn.cancelled", "error"}:
+        elif event_type in {"turn.failed", "turn.cancelled"}:
             terminal_status = "failed"
+        elif event_type == "error":
+            # Codex emits top-level ``error`` events while reconnecting a
+            # recoverable stream, then continues the same turn over HTTPS.
+            # Only an explicit terminal event may end the progress snapshot.
+            last_signal = "stream LLM reportou erro; aguardando resultado terminal"
         item = event.get("item")
         if not isinstance(item, dict):
             # Claude stream-json carries text/tool activity inside assistant.
@@ -1698,11 +1722,15 @@ class StepRunner:
         return base, None
 
     @staticmethod
-    def _session_signature(selection: LLMSelection) -> dict[str, str | None]:
+    def _session_signature(
+        selection: LLMSelection,
+        codex_auth: str | None = None,
+    ) -> dict[str, str | None]:
         return {
             "engine": selection.engine,
             "model": selection.model,
             "effort": selection.effort,
+            "codex_auth": codex_auth,
         }
 
     def _new_session_record(
@@ -1712,6 +1740,7 @@ class StepRunner:
         parent: str | None,
         selection: LLMSelection,
         node: Node | None,
+        codex_auth: str | None = None,
         previous: dict[str, Any] | None = None,
         reason: str = "created",
     ) -> dict[str, Any]:
@@ -1722,13 +1751,14 @@ class StepRunner:
                 "engine": previous.get("engine"),
                 "model": previous.get("model"),
                 "effort": previous.get("effort"),
+                "codex_auth": previous.get("codex_auth"),
                 "turns": previous.get("turns", 0),
                 "status": "superseded",
                 "reason": reason,
             })
             history = history[-20:]
         record: dict[str, Any] = {
-            **self._session_signature(selection),
+            **self._session_signature(selection, codex_auth),
             "session_id": (
                 str(uuid.uuid4()) if selection.engine == "claude" else None
             ),
@@ -1752,10 +1782,13 @@ class StepRunner:
         lane: str | None = None,
     ) -> None:
         """Anexa afinidade de sessão sem afetar processos stateless."""
+        codex_auth = node.codex_auth if node is not None else None
+        if codex_auth is not None:
+            delegate_kwargs["codex_auth"] = codex_auth
         if not self._session_enabled_for(selection.engine):
             return
         key, parent = self._llm_session_key(node, lane=lane)
-        signature = self._session_signature(selection)
+        signature = self._session_signature(selection, codex_auth)
         with self._llm_session_lock:
             state = self.state_mgr.state
             record = state.llm_sessions.get(key)
@@ -1767,8 +1800,9 @@ class StepRunner:
                     parent=parent,
                     selection=selection,
                     node=node,
+                    codex_auth=codex_auth,
                     previous=record if isinstance(record, dict) else None,
-                    reason="provider/model/effort changed",
+                    reason="provider/model/effort/auth route changed",
                 )
                 self.state_mgr.save()
             if (
@@ -1857,6 +1891,7 @@ class StepRunner:
                     if context.get("node_id")
                     else None
                 ),
+                codex_auth=context.get("codex_auth"),
                 previous=previous if isinstance(previous, dict) else None,
                 reason="provider resume failed; rehydrated from engine state",
             )
@@ -4678,12 +4713,15 @@ class StepRunner:
     _MAX_STREAM_RETRIES = 2
 
     def _attach_template_workflow(self, delegate_kwargs: dict[str, Any]) -> None:
-        """Route every cycle delegation under its selected template name."""
+        """Route every delegation under its selected template and cycle."""
         state_mgr = getattr(self, "state_mgr", None)
         state = getattr(state_mgr, "state", None)
         workflow_id = getattr(state, "template_id", None)
         if workflow_id:
             delegate_kwargs.setdefault("workflow_id", str(workflow_id))
+        cycle_id = getattr(state, "current_cycle", None)
+        if cycle_id:
+            delegate_kwargs.setdefault("ft_cycle", str(cycle_id))
 
     def _delegate_once_with_attached_session(
         self,
@@ -6206,8 +6244,6 @@ class StepRunner:
             "blank": "evidencia visual indica tela em branco",
             "white-screen": "evidencia visual indica tela em branco",
             "tela-branca": "evidencia visual indica tela em branco",
-            "error": "evidencia visual indica erro renderizado",
-            "fail": "evidencia visual indica falha",
         }
         source_mtime = self._review_source_mtime(node) if require_fresh else 0.0
         for output_path in node.outputs:
@@ -6547,6 +6583,23 @@ class StepRunner:
         runtime_focal_report_before = (
             self._review_outputs_snapshot(node) if runtime_focal_review else ""
         )
+
+        def run_review_validators() -> ValidationResult:
+            # An origin-fallback review deliberately suspends the broad review
+            # contract and audits only the finding returned from the fix.  Its
+            # approval is enforced below by validate_focal_approval(), the
+            # canonical-output freshness check and the explicit verdict.  The
+            # original node validators may require global coverage (for
+            # example C01-C58) and must not turn a truthful focal receipt into
+            # a retry request to fabricate unrelated PASS entries.
+            if runtime_focal_review:
+                return ValidationResult(
+                    passed=True,
+                    retryable=False,
+                    feedback=None,
+                )
+            return self._run_validators(node)
+
         allowed = self._resolve_allowed_paths(node)
         llm_selection = self._capture_delegation_llm_selection(state, node=node)
         effective_engine = llm_selection.engine
@@ -6561,7 +6614,7 @@ class StepRunner:
         )
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
-        early_check = self._run_validators(node)
+        early_check = run_review_validators()
         correction_policy = self.graph.meta.get("correction_policy", {})
         mandatory_reviews = (
             correction_policy.get("mandatory_after_implementation", [])
@@ -6665,7 +6718,7 @@ class StepRunner:
         if not result.success:
             # Mesmo com falha do LLM (ex: max-turns atingido), verificar se os artefatos
             # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
-            pre_check = self._run_validators(node)
+            pre_check = run_review_validators()
             if pre_check.passed:
                 print("  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
                 result.success = True  # tratamos como sucesso
@@ -6765,7 +6818,7 @@ class StepRunner:
                         f"após todo o backoff) no recovery do review {node.id}"
                     )
                     return
-                recovery_check = self._run_validators(node)
+                recovery_check = run_review_validators()
                 if recovery_result.success or recovery_check.passed:
                     result.success = True
                     post_delegation_validation = recovery_check
@@ -6798,7 +6851,7 @@ class StepRunner:
         validation = (
             post_delegation_validation
             if post_delegation_validation is not None
-            else self._run_validators(node)
+            else run_review_validators()
         )
         self._print_validation(validation)
 
@@ -6867,7 +6920,7 @@ class StepRunner:
                 finally:
                     self._clear_active_llm_log(state)
                 state.metrics["llm_calls"] = state.metrics.get("llm_calls", 0) + 1
-                validation = self._run_validators(node)
+                validation = run_review_validators()
                 self._print_validation(validation)
 
             if not validation.passed:
@@ -6974,6 +7027,26 @@ class StepRunner:
                     self._handle_on_fail(node, reason)
                 else:
                     self.state_mgr.block(reason)
+                return
+
+            # The focal receipt may be truthful while the original broad
+            # review is still incomplete. Re-evaluate the suspended node
+            # contract only after focal approval. If global coverage remains
+            # missing, schedule a normal broad review instead of asking an LLM
+            # or a downstream gate to invent unrelated PASS entries.
+            broad_validation = self._run_validators(node)
+            if not broad_validation.passed:
+                state.active_fix_return = None
+                state.current_node = node.id
+                state.node_status = "ready"
+                state.pending_fix = None
+                state.blocked_reason = None
+                state.last_approval_message = None
+                self.state_mgr.save()
+                print(ui.info(
+                    "↪ Auditoria focal aprovada; cobertura ampla ainda "
+                    "pendente — reabrindo o review completo"
+                ))
                 return
             next_id = self.graph.resolve_next(node.id)
             self._advance_state(node.id, next_id, focal_verdict)
@@ -9163,6 +9236,8 @@ próprias sob o namespace permitido acima. Encerre DONE.
         print(ui.header(title))
         # Preserve the public text consumed by existing status parsers; model
         # and effort are additive lines instead of a breaking replacement.
+        repository_name = paths.project_runtime_key(self.project_root)
+        print(ui.info(f"Repositório: {repository_name}"))
         if state.current_cycle:
             print(ui.info(f"Ciclo: {state.current_cycle}"))
         print(ui.info(f"Worktree: {Path(self.project_root).resolve()}"))
@@ -9221,11 +9296,24 @@ próprias sob o namespace permitido acima. Encerre DONE.
         def _print_delegation_banner() -> None:
             secs = int(recent[0])
             when = f"há {secs}s" if secs < 60 else f"há {secs // 60}min{secs % 60:02d}s"
-            if progress_snapshot is not None and progress_snapshot.terminal:
+            if (
+                progress_snapshot is not None
+                and progress_snapshot.terminal_status == "completed"
+            ):
                 print(
                     ui.success(
                         "✓ DELEGAÇÃO LLM CONCLUÍDA — o runner processa validação/"
                         "integração; não há chamada ativa neste log."
+                    )
+                )
+                if progress_snapshot.evolution:
+                    print(ui.dim(f"  Evolução: {progress_snapshot.evolution}"))
+                print(ui.dim(f"  Sinal terminal: {progress_snapshot.signal}"))
+            elif progress_snapshot is not None and progress_snapshot.terminal:
+                print(
+                    ui.fail(
+                        "✗ DELEGAÇÃO LLM ENCERRADA COM FALHA — o runner processa "
+                        "o resultado; não há chamada ativa neste log."
                     )
                 )
                 if progress_snapshot.evolution:

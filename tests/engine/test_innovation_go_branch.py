@@ -11,6 +11,8 @@ real vai passar".
 from __future__ import annotations
 
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -80,12 +82,15 @@ Cobertura nacional e apps nativos.
 """
 
 HANDOFF = """---
-next_process: mvp-builder-fast
+next_process: mdd
+delivery_process: mvp-builder-fast
+process_sequence: [mdd, mvp-builder-fast]
 delivery_readiness: planning_required
 implementation_authorized: false
 ---
 # Handoff — Fixture
 
+Produto novo: executar e fechar mdd antes do mvp-builder-fast.
 Seed: PRD, restrições e test data. SC-01/SC-02 são os critérios do piloto.
 Pesquisa de 2026-07-29; re-checar mercado se o delivery começar após 8 semanas.
 
@@ -172,12 +177,15 @@ def test_go_handoff_declares_delivery_boundary_and_durable_paths() -> None:
     assert "não executa o builder" in go_nogo["decision_context"]["limitations"][0]
     assert "delivery_readiness: planning_required" in prompt
     assert "implementation_authorized: true|false" in prompt
+    assert "process_sequence: [mdd, mvp-builder-fast]" in prompt
+    assert "Nunca encaminhe produto novo" in prd["prompt"]
     assert "docs/PROJECT_BACKLOG.md" in prompt
     assert ".ft/project.yml" in prompt
     assert ".ft/cycles/<cycle-id>/research/" in prompt
     assert "Não publique `docs/research/...`" in prd["prompt"]
     assert "delivery_readiness" in validator_contract
     assert "implementation_authorized" in validator_contract
+    assert "delivery_process" in validator_contract
 
 
 def _fake_delegate(scenario: str):
@@ -305,6 +313,34 @@ def test_go_branch_reaches_end_with_prd_and_handoff(tmp_path: Path) -> None:
     assert (root / "docs/PRD.md").is_file()
     assert (root / "docs/handoff.md").is_file()
     assert "SC-01" in (root / "docs/PRD.md").read_text(encoding="utf-8")
+
+
+def test_prd_gate_rejects_transient_research_path_in_handoff(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    with patch("ft.engine.runner.delegate_to_llm", _fake_delegate("go")):
+        _drive(runner)
+
+    root = Path(runner.project_root)
+    handoff_path = root / "docs" / "handoff.md"
+    handoff_path.write_text(
+        handoff_path.read_text(encoding="utf-8")
+        + "\nFonte incorreta: docs/research/market.md\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / ".ft/process/innovation/scripts/validate_innovation.py"),
+            "prd",
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "não publique docs/research/ como path durável" in result.stdout
 
 
 def test_no_go_recommendation_routes_bypass_to_post_mortem(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-# Fluxograma — MVP Builder Fast (process.yml v1.11.0)
+# Fluxograma — MVP Builder Fast (process.yml v1.16.0)
 
 Fluxo principal do template `mvp-builder-fast`. Uma sessão LLM é mantida por
 sprint; `⑂` indica lanes paralelas e `R` indica a lane independente de review.
@@ -24,6 +24,9 @@ flowchart TD
         API["⑂ Contrato API"]
         UIC["⑂ Critérios UI"]
         DATA["⑂ Massa de dados"]
+        MOCKUPS["Gerar mockups P0<br/>Codex ChatGPT + $imagegen"]
+        MOCKREVIEW["R Coerência PRD–mockups"]
+        MOCKG{{"Revisão humana dos mockups"}}
         PG[["Gate Planning"]]
 
         UI -- não --> UIQ --> UICREATE --> UIG --> BACKLOG
@@ -37,15 +40,17 @@ flowchart TD
         TECHG --> API
         TECHG --> UIC
         TECHG --> DATA
-        API --> PG
-        UIC --> PG
-        DATA --> PG
+        API --> MOCKUPS
+        UIC --> MOCKUPS
+        DATA --> MOCKUPS
+        MOCKUPS --> MOCKREVIEW --> MOCKG --> PG
+        MOCKG -. reject .-> MOCKUPS
     end
 
-    subgraph S3["Sprint 03 — Frontend · sessão s3 + review R"]
+    subgraph S3["Sprint 03 — Superfície · sessão s3 + review R"]
         FRONT["Construir frontend P0"]
-        REVIEW["R Revisão independente + screenshots"]
-        FG[["Gate Frontend"]]
+        REVIEW["R Revisão visual + acessibilidade"]
+        FG[["Gate visual pré-backend"]]
         FIXFRONT["Correção focal do frontend"]
         FRONT --> REVIEW --> FG
         REVIEW -. on_fail .-> FIXFRONT --> REVIEW
@@ -58,7 +63,11 @@ flowchart TD
         GREEN["GREEN"]
         REFACTOR["Refactor"]
         TG[["Gate TDD"]]
+        INTEGRATED["R Revisão integrada<br/>UI → API → persistência → UI"]
+        IG[["Gate integrado"]]
         RED --> GREEN --> REFACTOR --> TG
+        TG --> INTEGRATED --> IG
+        INTEGRATED -. on_fail .-> FIXFRONT
     end
     FG --> RED
 
@@ -67,7 +76,7 @@ flowchart TD
         DG[["Gate Delivery"]]
         DELIVERY --> DG
     end
-    TG --> DELIVERY
+    IG --> DELIVERY
 
     subgraph S6["Sprint 06 — Smoke · sessão s6"]
         SMOKE["Smoke real"]
@@ -126,7 +135,7 @@ flowchart TD
     classDef gate fill:#d1ecf1,stroke:#0c5460,color:#000
     classDef work fill:#e2e3f5,stroke:#4a4a8a,color:#000
     class PRD,UI,BACKLOG,FEATURES decision
-    class HIPG,PRDG,UIQ,UIG,TECHG,STAKE,HG human
+    class HIPG,PRDG,UIQ,UIG,TECHG,MOCKG,STAKE,HG human
     class MDD,PG,FG,TG,DG,SG,AG,EG,VG,BG,FCG gate
 ```
 

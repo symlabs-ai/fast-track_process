@@ -1,4 +1,4 @@
-# Innovation — Fluxo do Processo (v0.2.0)
+# Innovation — Fluxo do Processo (v0.3.3)
 
 Grafo executável de `process.yml`: 14 nodes, dois desfechos legítimos
 (handoff/go e post-mortem/no-go) num único `end`. LLM executa pesquisa e
@@ -53,7 +53,7 @@ flowchart TD
     PRDG --> |PASS| END_GO
     PM --> |"gate: seções + EV-* reais"| END_NOGO
 
-    END_GO(["✅ GO — handoff.md indica o delivery<br/>(mvp-builder-fast | feature-fast),<br/>o que copiar para o seed e os SC-*<br/>como critérios do futuro piloto"])
+    END_GO(["✅ GO — handoff.md indica a sequência<br/>(mdd → mvp-builder-fast | feature-fast),<br/>o que copiar para o seed e os SC-*<br/>como critérios do futuro piloto"])
     END_NOGO(["🗄️ NO-GO — ideia investigada e morta<br/>barata, com dossiê auditável e<br/>condições de reativação observáveis.<br/>Fim legítimo do processo"])
 
     style INTAKE fill:#e8f0fe,stroke:#4285f4
@@ -103,3 +103,9 @@ flowchart TD
 - **Ciclo descartável**: cada run é uma worktree isolada; `ft close --merge full`
   leva só os artefatos canônicos ao checkout; o dossiê completo fica em
   `.ft/cycles/<cycle>/`.
+- **Boundary de delivery explícito**: um GO gera discovery e handoff, mas o
+  projeto permanece `building`. Para produto novo, `mdd` precede e deve ser
+  encerrado antes de `mvp-builder-fast`. O builder cria/reconcilia
+  `docs/PROJECT_BACKLOG.md`, `.ft/project.yml` e a matriz de validação. O
+  handoff registra separadamente se a implementação foi autorizada e nunca
+  anuncia `docs/research/` como path durável após o close.

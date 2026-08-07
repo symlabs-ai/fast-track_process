@@ -59,8 +59,7 @@ produto/
 │       │   ├── handoff.md
 │       │   └── retro.md
 │       └── cycle-02/
-├── project/                            # opcional; definido pelo produto
-└── src/                                # opcional; definido pelo produto
+└── src/                                # código do produto; definido pelo processo
 ```
 
 `ft init` cria somente a base comum (`.ft/`, manifesto, contrato conservador do
@@ -109,6 +108,14 @@ Rejeição de validação nunca
 reinicia o ciclo MDD independente, planejamento global, delivery ou handoff. O plano interno e as
 métricas são projeções da branch efetivamente escolhida, não do catálogo inteiro
 de nodes.
+
+No fluxo integral visual, `src/frontend/` é o contêiner lógico da superfície,
+não um sinônimo de aplicação web. O processo lê a matriz do projeto e preserva
+Android/Compose, iOS/SwiftUI, web ou desktop. `src/Makefile` fornece a interface
+estável `surface-build`, `smoke`, `acceptance`, `e2e` e `run`; cada target delega
+ao toolchain real da stack. `url` existe somente para web. Launchers nativos
+devem apresentar o artefato/aplicação correspondente e nunca cair no servidor
+HTTP genérico como fallback.
 
 ### `.ft/process/<template>/`: forks locais
 

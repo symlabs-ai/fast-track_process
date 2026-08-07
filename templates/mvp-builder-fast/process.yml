@@ -5,14 +5,14 @@
 #   docs/        — fontes de verdade humanas (PRD, tech stack, UI, backlog e features)
 #   .ft/process/ — orquestração versionada (process.yml, scripts/, environment.yml)
 #   .ft/cycles/  — histórico durável criado por ft close
-#   project/  — todo código-fonte (frontend/, backend/, tests/, Makefile, etc.)
+#   src/      — todo código-fonte (frontend/, backend/, tests/, Makefile, etc.)
 #
-# REGRA: produtos com interface/serviço seguem o layout project/. Bibliotecas
+# REGRA: produtos com interface/serviço seguem o layout src/. Bibliotecas
 #        headless preservam o layout canônico declarado em docs/TECH_STACK.md
 #        (por exemplo src/, tests/ e examples/ na raiz), sem inventar frontend.
 
 id: mvp_builder_fast
-version: "1.11.0"
+version: "1.16.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -125,6 +125,7 @@ artifact_policy:
     - docs/smoke-report.md
     - docs/acceptance-report.md
     - docs/e2e-report.md
+    - docs/e2e-result.json
     - docs/navigation-reachability.yml
     - docs/evidence/navigation/
     - docs/platform-fix-report.md
@@ -339,10 +340,10 @@ nodes:
     preserve_outputs_on_reentry: true
     max_turns: 100
     outputs:
-      - project/
+      - src/
       - docs/mvp-batch-foundation.md
     write_scope:
-      - project
+      - src
       - docs/mvp-batch-foundation.md
     prompt: |
       Leia docs/mvp-batch-plan.yml e implemente SOMENTE `foundation`: scaffold,
@@ -503,11 +504,11 @@ nodes:
     no_pre_seed: true
     max_turns: 80
     outputs:
-      - project/
+      - src/
       - docs/api_contract.md
       - docs/mvp-batch-fix-report.md
     write_scope:
-      - project
+      - src
       - docs/api_contract.md
       - docs/mvp-batch-fix-report.md
     prompt: |
@@ -625,7 +626,7 @@ nodes:
     executor: python
     validation_mode: fail_fast
     validators:
-      - command_succeeds: "make -C project verify"
+      - command_succeeds: "make -C src verify"
       - review_chain_approved:
           review_path: docs/mvp-batch-review.yml
           review_markdown_path: docs/mvp-batch-review.md
@@ -1326,6 +1327,7 @@ nodes:
 
   - id: ft.plan.02.tech_stack
     type: document
+    no_pre_seed: true
     title: "Definir Tech Stack"
     description: "Documentar a stack técnica completa e reconciliar o contrato global do projeto. Incluir decisões de arquitetura com justificativa; preservar o owner de .ft/project.yml e manter o projeto em building."
     sprint: sprint-02-planning
@@ -1376,7 +1378,7 @@ nodes:
   - id: ft.plan.surface.route
     type: decision
     title: "Selecionar Entrega Visual ou Headless"
-    description: "Produtos sem superfície visual seguem contratos, build, testes e aceite de biblioteca; produtos visuais preservam o lifecycle de frontend/browser."
+    description: "Produtos sem superfície visual seguem contratos, build, testes e aceite de biblioteca; produtos visuais preservam o lifecycle da plataforma nativa, web ou desktop selecionada."
     sprint: sprint-02-planning
     executor: python
     condition: project_validation_mode
@@ -1516,7 +1518,7 @@ nodes:
       estritamente `docs/api_contract.md`, `docs/TECH_STACK.md` e o PRD.
 
       Preserve o layout canônico de biblioteca declarado na stack; não crie
-      `project/frontend`, aplicação web, servidor HTTP, dashboard, browser,
+      `src/frontend`, aplicação web, servidor HTTP, dashboard, browser,
       mockup, screenshot ou watermark. Para Python use sempre Poetry e a venv do
       projeto, nunca pip global. O pacote público, modelos, protocolos, adapters,
       políticas, persistência e testes devem permanecer desacoplados conforme a
@@ -1861,18 +1863,20 @@ nodes:
     description: "Gerar, antes do frontend, imagens raster reais e revisáveis para todas as telas e estados P0. HTML, CSS, JavaScript, SVG, canvas e screenshots de navegador são entregas proibidas neste step."
     sprint: sprint-02-planning
     executor: codex
+    expert: prototype_png_designer
     llm_engine: codex
     llm_model: gpt-5.6-sol
     llm_effort: max
+    codex_auth: chatgpt
     max_turns: 100
     no_pre_seed: true
     preserve_outputs_on_reentry: true
     env_setup:
       - >-
-          python3 -c "import os,subprocess;
-          p=os.environ.get('FT_CODEX_PROFILE','').strip();
-          cmd=['codex']+(['--profile',p] if p else [])+['features','list'];
-          out=subprocess.check_output(cmd,text=True);
+          python3 -c "import subprocess;
+          status=subprocess.check_output(['codex','login','status'],text=True,stderr=subprocess.STDOUT);
+          assert 'Logged in using ChatGPT' in status, 'Codex sem login ChatGPT direto';
+          out=subprocess.check_output(['codex','features','list'],text=True);
           rows=[line.split() for line in out.splitlines()];
           assert any(row and row[0]=='image_generation' and row[-1]=='true' for row in rows),
           'Codex image_generation indisponível ou desabilitado'"
@@ -1888,17 +1892,20 @@ nodes:
       produto. Este node está fixado em gpt-5.6-sol com reasoning effort max; não
       troque modelo nem reduza o esforço. O Sol/Max é a autoridade de direção
       visual, composição dos prompts, seleção, inspeção e iteração dos assets.
+      A skill de imagem escolhe internamente seu modelo de geração; não tente
+      passá-lo pelo campo llm_model nem alterar o executor textual do node.
 
       Leia integralmente docs/PRD.md, docs/TECH_STACK.md, docs/ui_criteria.md,
       docs/ui-brief.md quando existir, docs/api_contract.md e
       docs/navigation-contract.yml. O brief do stakeholder é autoritativo para
       estética; PRD e critérios são autoritativos para escopo e estados.
 
-      Carregue e siga integralmente a skill `imagegen`. Use obrigatoriamente a
-      ferramenta built-in `image_gen`, no caso de uso `ui-mockup`, uma chamada
-      por tela/estado distinto. Não use fallback CLI/API. Se a ferramenta
-      built-in não estiver disponível, responda BLOCKED: não improvise outro
-      renderer. Depois de cada geração, copie ou mova o PNG escolhido de
+      Invoque explicitamente `$imagegen` e siga integralmente a skill. Use
+      obrigatoriamente sua ferramenta built-in `image_gen`, no caso de uso
+      `ui-mockup`, uma chamada por tela/estado distinto. Não use fallback
+      CLI/API. Se a skill ou a ferramenta built-in não estiver disponível,
+      responda BLOCKED: não improvise outro renderer. Depois de cada geração,
+      copie ou mova o PNG escolhido de
       `$CODEX_HOME/generated_images/` para docs/mockups/images/, abra-o com
       `view_image`, inspecione composição, hierarquia, legibilidade, texto e
       aderência ao brief e itere com uma mudança focal quando necessário.
@@ -1933,7 +1940,7 @@ nodes:
 
       Produza docs/mockups/image-generation-receipt.yml com schema_version: 1,
       `executor: {engine: codex, model: gpt-5.6-sol, effort: max}`,
-      `generation: {tool: image_gen, mode: builtin, use_case: ui-mockup}`,
+      `generation: {skill: imagegen, tool: image_gen, mode: builtin, use_case: ui-mockup}`,
       `code_native_sources: false`, `browser_capture: false` e `assets`. Cada
       asset contém `id`, `screen`, `state`, `image`, `prompt`, `inspected: true`
       e `revisions: {count: <inteiro não negativo>, notes: [<ajustes>]}`. Produza
@@ -1977,7 +1984,7 @@ nodes:
           r=yaml.safe_load(Path('docs/mockups/image-generation-receipt.yml').read_text(encoding='utf-8'));
           assert r.get('schema_version')==1;
           assert r.get('executor')=={'engine':'codex','model':'gpt-5.6-sol','effort':'max'};
-          assert r.get('generation')=={'tool':'image_gen','mode':'builtin','use_case':'ui-mockup'};
+          assert r.get('generation')=={'skill':'imagegen','tool':'image_gen','mode':'builtin','use_case':'ui-mockup'};
           assert r.get('code_native_sources') is False and r.get('browser_capture') is False;
           assets=r.get('assets'); assert isinstance(assets,list) and assets;
           mapped=yaml.safe_load(Path('docs/mockups/screen-map.yml').read_text(encoding='utf-8'))['screens'];
@@ -1992,17 +1999,146 @@ nodes:
           assert not bad, 'fontes code-native proibidas: '+', '.join(bad);
           assert all(p.suffix.lower() in {'.png','.md','.yml','.yaml'} for p in files), 'tipo de artefato não permitido'"
       - command_succeeds: "git diff --check"
+    next: ft.plan.06a.mockup_prd_review
+
+  - id: ft.plan.06a.mockup_prd_review
+    type: review
+    title: "Analisar Mockups Slide a Slide contra o PRD"
+    description: "Revisar de forma independente cada state do screen-map contra PRD e contratos de planejamento, sem alterar imagens ou fontes canônicas."
+    sprint: sprint-02-planning
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-sol
+    llm_effort: max
+    max_turns: 100
+    no_pre_seed: true
+    outputs:
+      - docs/mockups/prd-coherence-review.md
+      - docs/mockups/prd-coherence-review.yml
+    write_scope:
+      - docs/mockups/prd-coherence-review.md
+      - docs/mockups/prd-coherence-review.yml
+    prompt: |
+      Faça uma revisão independente, exaustiva e somente de leitura dos mockups.
+      Leia integralmente docs/PRD.md, docs/ui_criteria.md, docs/ui-brief.md quando
+      existir, docs/navigation-contract.yml, docs/test_data.md,
+      docs/mockups/screen-map.yml e
+      docs/mockups/image-generation-receipt.yml. Para cada state, na ordem exata
+      do screen-map, abra o PNG declarado com `view_image` em resolução original
+      e compare individualmente conteúdo, estado, hierarquia, navegação, dados,
+      critérios e requisitos. Leia `acceptance_criteria` do screen pai como
+      prosa livre; não o converta em CSV e não trate vírgulas ou ponto e vírgula
+      como separadores estruturais.
+
+      Não altere PNGs, screen-map, receipt, PRD, critérios, brief, contrato de
+      navegação nem massa de dados. Escreva SOMENTE os dois relatórios declarados
+      em outputs. Não corrija automaticamente os mockups e não crie outra rota
+      de orquestração.
+
+      Escreva docs/mockups/prd-coherence-review.yml com este contrato:
+        schema_version: 1
+        prd_sha256: <sha256 dos bytes correntes de docs/PRD.md>
+        ui_criteria_sha256: <sha256 dos bytes correntes de docs/ui_criteria.md>
+        screen_map_sha256: <sha256 dos bytes correntes do screen-map>
+        verdict: APPROVED | REJECTED
+        summary:
+          total_views: <inteiro>
+          coherent: <inteiro>
+          coherent_with_reservation: <inteiro>
+          incoherent: <inteiro>
+        views:
+          - state_id: <screens[].states[].id exato>
+            screen_id: <screens[].id exato>
+            prd_screen_id: <screens[].prd_screen_id TNN exato, ou N/A se ausente>
+            requirements: [<referências que existem literalmente no PRD>]
+            criteria: [<CIDs exatos do screen pai, na mesma ordem>]
+            result: COHERENT | COHERENT_WITH_RESERVATION | INCOHERENT
+            blocking: <true somente para INCOHERENT; false nos demais casos>
+            observation: <conclusão específica e verificável>
+            image: <screens[].states[].image exata>
+        findings:
+          - id: F-001
+            state_id: <state incoerente>
+            expected: <comportamento ou conteúdo exigido>
+            observed: <divergência observada>
+            evidence: [<image PNG exata do state>]
+            blocking: true
+
+      Preserve exatamente a cobertura e a ordem de screens/states do inventário.
+      Nunca infira TNN a partir de SNN: copie `prd_screen_id` quando presente e
+      use o literal `N/A` para superfície auxiliar sem esse campo. Cada
+      requirement deve ser uma referência real presente no PRD e cada CID deve
+      ser copiado do screen pai e existir em ui_criteria. Use somente paths PNG
+      relativos e seguros sob docs/mockups/images/.
+
+      APPROVED exige zero INCOHERENT e `findings: []`; reservas são permitidas,
+      mas COHERENT_WITH_RESERVATION sempre usa `blocking: false`. REJECTED exige
+      ao menos um INCOHERENT e um ou mais findings acionáveis que cubram todos e
+      somente os states incoerentes, cada qual com expected, observed e evidence
+      contendo o PNG exato. Um relatório REJECTED também segue ao human gate.
+
+      Escreva docs/mockups/prd-coherence-review.md com exatamente uma linha
+      `VERDICT: APPROVED` ou `VERDICT: REJECTED`, seguida das seções `## Resumo`,
+      `## Achados Transversais` e `## Revisão por State`. Em Resumo use uma linha
+      para cada contador no formato `- TOTAL_VIEWS: N`, `- COHERENT: N`,
+      `- COHERENT_WITH_RESERVATION: N` e `- INCOHERENT: N`. Em Revisão por State
+      escreva exatamente uma linha por view, na ordem do YAML:
+      `- STATE: <id> | SCREEN: <id> | PRD_SCREEN: <id ou N/A> | RESULT: <enum> | IMAGE: <path>`.
+      Em Achados Transversais, use `- Nenhum finding transversal.` quando vazio;
+      caso contrário, uma linha por finding:
+      `- FINDING: <id> | STATE: <id> | EVIDENCE: <PNG exato>`.
+      Markdown e YAML devem ter veredito, contagens, ordem, resultados, imagens e
+      findings idênticos.
+
+      Antes de DONE, execute
+      `python3 .ft/process/mvp-builder-fast/scripts/validate_mockup_prd_review.py`.
+      Corrija somente os dois relatórios se a validação falhar.
+    validators:
+      - file_exists: docs/mockups/prd-coherence-review.md
+      - file_exists: docs/mockups/prd-coherence-review.yml
+      - command_succeeds: "python3 .ft/process/mvp-builder-fast/scripts/validate_mockup_prd_review.py"
     next: ft.plan.06b.mockup_gate
 
   - id: ft.plan.06b.mockup_gate
     type: human_gate
     title: "Revisão das Imagens de Mockup P0"
-    description: "Abra docs/mockups/README.md e os PNGs em docs/mockups/images/. Confirme estética, hierarquia, acessibilidade, cobertura de telas/estados e aderência ao brief. Verifique que são imagens geradas, não screenshots de HTML. O frontend não começa sem aprovação explícita e textual; rejeite descrevendo tela, estado e ajuste visual."
+    description: "Revise os relatórios de coerência e abra os PNGs em resolução original. Confirme estética, hierarquia, acessibilidade, cobertura e aderência ao PRD e ao brief. O frontend não começa sem aprovação explícita e textual; rejeite descrevendo tela, state e ajuste visual."
     sprint: sprint-02-planning
     executor: python
     approval_message_required: true
+    decision_context:
+      decision: >-
+        Decidir se o pacote de mockups P0 está coerente com o PRD e os contratos
+        visuais e pode se tornar o contrato visual da implementação.
+      why_now: >-
+        Cada state acabou de ser regenerado ou confirmado e recebeu uma revisão
+        independente com hashes das fontes correntes antes desta decisão humana.
+      review_paths:
+        - docs/mockups/prd-coherence-review.md
+        - docs/mockups/prd-coherence-review.yml
+        - docs/mockups/screen-map.yml
+        - docs/mockups/README.md
+        - docs/mockups/images/
+        - docs/PRD.md
+        - docs/ui_criteria.md
+      checklist:
+        - Confirme que os hashes e as contagens do relatório estruturado são correntes e que Markdown e YAML apresentam o mesmo veredito.
+        - Percorra cada linha de state na ordem do screen-map e abra o PNG correspondente em resolução original.
+        - Compare requisitos, CIDs, navegação, dados, estados e observações com PRD, critérios visuais e brief, sem inferir mapeamentos TNN→SNN.
+        - Rejeite qualquer INCOHERENT, finding sem evidência acionável, state ausente, imagem inacessível ou desvio visual relevante, mesmo que o relatório diga APPROVED.
+      limitations:
+        - A aprovação cobre somente os mockups e states inventariados para este P0; não amplia PRD, critérios ou escopo de implementação.
+        - O relatório independente apoia a decisão, mas não substitui a inspeção humana dos PNGs em resolução original.
+      approve_effect: >-
+        Registra os mockups como contrato visual aprovado e avança ao gate de
+        planejamento.
+      reject_effect: >-
+        Retorna à geração focal dos mockups; toda regeneração passa novamente
+        pela revisão independente antes de reapresentar este gate.
     outputs:
       - docs/mockups/
+      - docs/mockups/prd-coherence-review.md
+      - docs/mockups/prd-coherence-review.yml
     reject_next: ft.plan.06.mockups
     next: ft.plan.gate
 
@@ -2062,57 +2198,67 @@ nodes:
 
   - id: ft.frontend.01.build
     type: build
-    title: "Construir Frontend P0"
-    description: "Em um único turn, criar o scaffold e implementar todas as telas e fluxos P0 dentro de project/frontend/, seguindo PRD, critérios visuais e contrato de API."
+    title: "Construir Superfície P0"
+    description: "Em um único turn, criar e implementar a superfície visual nativa ou web selecionada pelo contrato do projeto dentro de src/frontend/, seguindo PRD, critérios visuais e contrato de integração."
     sprint: sprint-03-frontend
     executor: claude
     outputs:
-      - project/frontend/
-      - project/frontend/src/
+      - src/frontend/
+      - src/Makefile
       - .build_ok
     write_scope:
-      - project/frontend
+      - src/frontend
+      - src/Makefile
       - .build_ok
     no_pre_seed: true
     prompt: |
-      Construa o frontend completo desta sprint em um único turn:
-      1. Crie o scaffold em project/frontend/ usando a stack aprovada.
-      2. Configure roteamento, layout, navegação e proxy/rewrites de /api.
+      Construa a superfície visual completa desta sprint em um único turn:
+      1. Leia `.ft/project.yml.validation` e docs/TECH_STACK.md e implemente em
+         src/frontend/ a plataforma realmente selecionada: Android nativo,
+         iOS nativo, web ou desktop. Não substitua aplicação nativa por página web.
+      2. Configure o mecanismo nativo da stack para layout, navegação e integração
+         com o backend/API quando o contrato exigir. Proxy/rewrites existem apenas
+         para stacks web; Compose, SwiftUI e toolkits desktop usam seus mecanismos.
       3. Implemente todas as telas e funcionalidades P0 do PRD.
       4. Use os mockups aprovados em docs/mockups/ como contrato visual e cubra
          docs/ui_criteria.md, inclusive estados vazio, loading e erro.
-      5. Se o contrato possuir criação/cadastro, entregue um fluxo de formulário
-         acessível pela UI e conectado ao endpoint correspondente.
+      5. Se o contrato possuir criação/cadastro, entregue o fluxo por controles
+         de produção acessíveis na UI e conectado à operação correspondente;
+         não presuma HTML, `<form>` ou um framework JavaScript.
       6. Em cada tela, página ou janela renderize no próprio produto a marca
          d'água com o identificador exato do mockup definido nos critérios.
-      7. Instale dependências e execute o build antes de encerrar.
-      Todo código de produto deve permanecer abaixo de project/.
+      7. Crie src/Makefile com o target `surface-build`, instale dependências pelo
+         gerenciador da stack e execute `make -C src surface-build` antes de encerrar.
+      Todo código de produto deve permanecer abaixo de src/.
     validators:
-      - file_exists: project/frontend/package.json
-      - command_succeeds: "cd project/frontend && npm install --silent && npm run build --silent"
-      - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
+      - file_exists: src/frontend/
+      - file_exists: src/Makefile
+      - command_succeeds: "make -C src surface-build"
     next: ft.frontend.03.prd_review
 
   - id: ft.frontend.02.implement
     type: build
-    title: "Implementar Frontend"
-    description: "Implementar todas as telas e funcionalidades P0 do PRD seguindo os critérios visuais de docs/ui_criteria.md e o contrato de API de docs/api_contract.md. O proxy de /api → backend deve seguir o mecanismo da stack escolhida em docs/TECH_STACK.md (ex.: rewrites do Next, server.proxy do Vite) — não assuma um bundler/framework específico."
+    title: "Corrigir Superfície e Integração"
+    description: "Corrigir somente os findings da revisão visual ou integrada na plataforma selecionada, incluindo a integração com backend/API/persistência quando já existirem, seguindo docs/ui_criteria.md, docs/api_contract.md e docs/TECH_STACK.md sem presumir browser, HTML, npm ou framework JavaScript."
     sprint: sprint-03-frontend
     executor: claude
     outputs:
-      - project/frontend/src/
+      - src/frontend/
+      - src/Makefile
     write_scope:
-      - project/frontend
+      - src
+      - src/Makefile
     no_pre_seed: true
     validators:
-      - command_succeeds: "cd project/frontend && npm run build --silent"
-      - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
+      - file_exists: src/frontend/
+      - file_exists: src/Makefile
+      - command_succeeds: "make -C src surface-build"
     next: ft.frontend.03.prd_review
 
   - id: ft.frontend.03.prd_review
     type: review
-    title: "Revisão Independente do Frontend"
-    description: "Em uma lane separada da sessão de construção, auditar conformidade com PRD e critérios visuais, capturar evidências e produzir o screenshot review."
+    title: "Revisão Visual Independente da Superfície"
+    description: "Em uma lane separada da sessão de construção, auditar build, navegação visual, mockups, semântica, acessibilidade e watermarks antes do backend. Este checkpoint não exige nem aceita fixtures como prova de integração real."
     sprint: sprint-03-frontend
     executor: claude
     max_turns: 60
@@ -2120,26 +2266,27 @@ nodes:
       - docs/screenshots/
       - docs/screenshot-review.md
     prompt: |
-      Faça uma revisão independente do frontend entregue nesta sprint:
-      1. Audite rotas, navegação, ações e fluxos P0 contra docs/PRD.md.
-      2. Execute o frontend e capture evidências das telas principais quando o
-         ambiente permitir.
-      3. Verifique cada ID de docs/ui_criteria.md, incluindo responsividade,
-         estados vazio/loading/erro e ações de criação.
+      Faça a revisão visual independente da superfície entregue nesta sprint:
+      1. Audite o build, as rotas e a navegação visual disponível contra os
+         mockups e os requisitos de interface do PRD.
+      2. Execute a aplicação com o runner apropriado à plataforma selecionada
+         (instrumentação Android, XCUITest, browser ou automação desktop) e
+         capture evidências reais das telas principais.
+      3. Verifique adaptação à tela, estados renderizáveis, semântica,
+         acessibilidade e a marca d'água exata de cada mockup.
       4. Compare cada tela/estado com a imagem de mockup aprovada correspondente em
          docs/mockups/screen-map.yml e registre divergências verificáveis.
-      5. Escreva docs/screenshot-review.md com cobertura rastreável e veredito.
-      6. Use REJECTED somente para falha bloqueante verificável; nesse caso,
+      5. Escreva docs/screenshot-review.md identificando explicitamente esta
+         evidência como VISUAL_ONLY e sem declarar cobertura integrada.
+      6. Não exija backend, API ou persistência reais neste checkpoint. Dados
+         locais determinísticos podem viabilizar a inspeção visual, mas nunca
+         contam como prova de integração ou fidelidade de dados.
+      7. Use REJECTED somente para falha visual ou de acessibilidade bloqueante;
+         nesse caso,
          registre a evidência e pare.
     validators:
-      - command_succeeds: "cd project/frontend && npm run build --silent"
-      - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
+      - command_succeeds: "make -C src surface-build"
       - file_exists: docs/screenshot-review.md
-      - ui_criteria_coverage:
-          criteria_path: docs/ui_criteria.md
-          report_path: docs/screenshot-review.md
-          source_dir: project/frontend/src
-          evidence: any
     on_fail:
       human_gate: "Revisão PRD encontrou não-conformidades no frontend. Corrija antes de continuar."
       goto: ft.frontend.02.implement
@@ -2147,19 +2294,13 @@ nodes:
 
   - id: gate.frontend
     type: gate
-    title: "Gate Frontend"
-    description: "Verificação determinística: build do frontend passa e screenshot review existe."
+    title: "Gate Visual da Superfície"
+    description: "Verificação determinística pré-backend: o build da plataforma passa e a revisão visual existe, sem exigir cobertura de integração."
     sprint: sprint-03-frontend
     executor: python
     validators:
       - file_exists: docs/screenshot-review.md
-      - command_succeeds: "cd project/frontend && npm run build --silent"
-      - command_succeeds: "python -c \"from pathlib import Path; src=Path('project/frontend/src'); text='\\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in src.rglob('*') if p.is_file()).lower(); api_path=Path('docs/api_contract.md'); api=api_path.read_text(encoding='utf-8', errors='ignore').lower() if api_path.exists() else ''; requires_create=any(x in api for x in ['post ', 'post /', 'criar', 'cadastrar']); actions=['criar','cadastrar','adicionar','novo','nova','create','add']; assert (not requires_create) or (text.count('<form') >= 1 and 'submit' in text and any(x in text for x in actions)), 'frontend sem fluxo de criacao via UI'\""
-      - ui_criteria_coverage:
-          criteria_path: docs/ui_criteria.md
-          report_path: docs/screenshot-review.md
-          source_dir: project/frontend/src
-          evidence: any
+      - command_succeeds: "make -C src surface-build"
     next: ft.tdd.01.red
 
   # ================================================================
@@ -2173,10 +2314,10 @@ nodes:
     sprint: sprint-04-tdd
     executor: claude
     outputs:
-      - project/tests/
+      - src/tests/
     validators:
-      - file_exists: project/tests/
-      - command_succeeds: "cd project && python -c \"from pathlib import Path; import py_compile; files=list(Path('tests').rglob('test_*.py')); assert files, 'nenhum test_*.py encontrado'; [py_compile.compile(str(p), doraise=True) for p in files]\""
+      - file_exists: src/tests/
+      - command_succeeds: "cd src && python -c \"from pathlib import Path; import py_compile; files=list(Path('tests').rglob('test_*.py')); assert files, 'nenhum test_*.py encontrado'; [py_compile.compile(str(p), doraise=True) for p in files]\""
       - command_succeeds: |
           python3 - <<'PY'
           import subprocess
@@ -2184,7 +2325,7 @@ nodes:
 
           result = subprocess.run(
               [sys.executable, "-m", "pytest", "tests", "-q"],
-              cwd="project",
+              cwd="src",
               text=True,
               stdout=subprocess.PIPE,
               stderr=subprocess.STDOUT,
@@ -2195,7 +2336,7 @@ nodes:
           )
           PY
       - pytest_red_quality:
-          tests_dir: project/tests
+          tests_dir: src/tests
           min_test_files: 1
           min_tests: 3
           min_assertions: 3
@@ -2204,16 +2345,16 @@ nodes:
   - id: ft.tdd.02.green
     type: test_green
     title: "Green — Implementar Backend"
-    description: "Implementar o backend (API + banco) para fazer os testes passarem. Seguir estritamente o contrato de docs/api_contract.md. Entry point em project/backend/main.py. /health sem prefixo /api. Todo código vai em project/ — nunca na raiz."
+    description: "Implementar o backend (API + banco) para fazer os testes passarem. Seguir estritamente o contrato de docs/api_contract.md. Entry point em src/backend/main.py. /health sem prefixo /api. Todo código vai em src/ — nunca na raiz."
     sprint: sprint-04-tdd
     executor: claude
     max_turns: 80
     outputs:
-      - project/backend/
+      - src/backend/
     validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -x -q"
+      - command_succeeds: "cd src && python -m pytest tests/ -x -q"
       - pytest_red_quality:
-          tests_dir: project/tests
+          tests_dir: src/tests
           min_test_files: 1
           min_tests: 3
           min_assertions: 3
@@ -2226,9 +2367,9 @@ nodes:
     sprint: sprint-04-tdd
     executor: claude
     validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -x -q"
+      - command_succeeds: "cd src && python -m pytest tests/ -x -q"
       - pytest_red_quality:
-          tests_dir: project/tests
+          tests_dir: src/tests
           min_test_files: 1
           min_tests: 3
           min_assertions: 3
@@ -2241,12 +2382,72 @@ nodes:
     sprint: sprint-04-tdd
     executor: python
     validators:
-      - command_succeeds: "cd project && python -m pytest tests/ -q"
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
       - pytest_red_quality:
-          tests_dir: project/tests
+          tests_dir: src/tests
           min_test_files: 1
           min_tests: 3
           min_assertions: 3
+    next: ft.frontend.04.integrated_review
+
+  - id: ft.frontend.04.integrated_review
+    type: review
+    title: "Revisão Integrada da Superfície"
+    description: "Após o TDD do backend, auditar de ponta a ponta a superfície contra PRD e critérios de UI usando API, persistência e dados reais do produto."
+    sprint: sprint-04-tdd
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/screenshots/
+      - docs/screenshot-review.md
+    prompt: |
+      Faça a revisão integrada independente do produto após o backend estar GREEN:
+      1. Inicie backend e superfície pelos entrypoints da stack e audite rotas,
+         navegação, ações e fluxos P0 contra docs/PRD.md.
+      2. Percorra a interface pública até a API e a persistência reais e de volta
+         à tela. Para todo dado visível, compare os campos ponta a ponta e registre
+         a origem; mocks, fixtures, previews e servidores isolados não aprovam a
+         fidelidade da integração.
+      3. Execute a aplicação com o runner apropriado à plataforma selecionada
+         (instrumentação Android, XCUITest, browser ou automação desktop) e
+         capture evidências reais de cada tela e estado exigido.
+      4. Verifique cada ID de docs/ui_criteria.md, incluindo adaptação à tela,
+         vazio/loading/erro, acessibilidade, ações P0 e watermarks.
+      5. Compare cada tela/estado com o mockup aprovado correspondente em
+         docs/mockups/screen-map.yml e registre divergências verificáveis.
+      6. Substitua o relatório VISUAL_ONLY por docs/screenshot-review.md com
+         cobertura integrada rastreável e veredito final.
+      7. Use REJECTED somente para falha bloqueante verificável; nesse caso,
+         registre evidência acionável e pare.
+    validators:
+      - command_succeeds: "make -C src surface-build"
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - file_exists: docs/screenshot-review.md
+      - ui_criteria_coverage:
+          criteria_path: docs/ui_criteria.md
+          report_path: docs/screenshot-review.md
+          source_dir: src/frontend
+          evidence: any
+    on_fail:
+      human_gate: "Revisão integrada encontrou não-conformidades. Corrija somente os findings antes de continuar."
+      goto: ft.frontend.02.implement
+    next: gate.frontend_integrated
+
+  - id: gate.frontend_integrated
+    type: gate
+    title: "Gate Integrado da Superfície"
+    description: "Verificação determinística pós-backend: build, testes e cobertura integral do screenshot review passam com evidência da integração real."
+    sprint: sprint-04-tdd
+    executor: python
+    validators:
+      - file_exists: docs/screenshot-review.md
+      - command_succeeds: "make -C src surface-build"
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - ui_criteria_coverage:
+          criteria_path: docs/ui_criteria.md
+          report_path: docs/screenshot-review.md
+          source_dir: src/frontend
+          evidence: any
     next: ft.delivery.01.entrypoint
 
   # ================================================================
@@ -2260,11 +2461,11 @@ nodes:
     sprint: sprint-05-delivery
     executor: claude
     outputs:
-      - project/backend/main.py
-      - project/Makefile
+      - src/backend/main.py
+      - src/Makefile
       - .ft/process/scripts/serve.sh
     write_scope:
-      - project
+      - src
       - .ft/process/scripts/serve.sh
     prompt: |
       Prepare o produto para execução e entrega no mesmo turn:
@@ -2275,7 +2476,9 @@ nodes:
          exigido pelo target, sem substituir a aplicação nativa por uma URL.
       2. Faça self-review de segurança, performance, imports e código morto e
          aplique as correções encontradas.
-      3. Crie project/Makefile com dev, test, build, run e url. Leia
+      3. Complete src/Makefile com `surface-build`, `smoke`, `acceptance`, `e2e`,
+         `run`, `dev`, `test` e `build`. O target `url` é obrigatório somente
+         quando houver superfície web selecionada. Leia
          `.ft/project.yml.validation`: para cada target selecionado, implemente
          também o `make_target` anunciado por `ft validation-profiles`
          (`validate-android-emulator`, `validate-ios-physical`,
@@ -2285,21 +2488,21 @@ nodes:
       4. Crie .ft/process/scripts/serve.sh como apresentador da plataforma
          selecionada e mantenha somente processos iniciados por ele. Para web,
          abra/suba o produto e grave `.serve_url`. Para desktop Linux, exija
-         exatamente um AppImage executável corrente em `project/dist`, abra o
+         exatamente um AppImage executável corrente em `src/dist`, abra o
          próprio AppImage e grave seu path relativo em `.presented_artifact`;
          remova `.serve_url` e nunca use o servidor web como fallback. Outros
          targets devem apresentar a aplicação instalada e uma evidência de
          entrada correspondente, sem inventar uma URL.
       5. Rode testes, build, bash -n e dry-runs do Makefile.
     validators:
-      - file_exists: project/backend/main.py
-      - file_exists: project/Makefile
+      - file_exists: src/backend/main.py
+      - file_exists: src/Makefile
       - file_exists: .ft/process/scripts/serve.sh
       - command_succeeds: "bash -n .ft/process/scripts/serve.sh"
-      - command_succeeds: "cd project && make --dry-run dev >/dev/null"
-      - command_succeeds: "cd project && make --dry-run run >/dev/null && test -n \"$(make -s url)\""
+      - command_succeeds: "cd src && make --dry-run dev >/dev/null"
+      - command_succeeds: "cd src && make --dry-run surface-build smoke acceptance e2e run >/dev/null"
       - validation_profile_hooks:
-          path: project/Makefile
+          path: src/Makefile
     next: gate.delivery
 
   - id: gate.delivery
@@ -2309,13 +2512,13 @@ nodes:
     sprint: sprint-05-delivery
     executor: python
     validators:
-      - file_exists: project/Makefile
-      - file_exists: project/backend/main.py
+      - file_exists: src/Makefile
+      - file_exists: src/backend/main.py
       - file_exists: .ft/process/scripts/serve.sh
       - validation_profile_hooks:
-          path: project/Makefile
+          path: src/Makefile
       - command_succeeds: "bash -n .ft/process/scripts/serve.sh"
-      - command_succeeds: "cd project && python -m pytest tests/ -q"
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
     next: ft.smoke.01.run
 
   # ================================================================
@@ -2325,91 +2528,36 @@ nodes:
   - id: ft.smoke.01.run
     no_pre_seed: true
     type: build
-    title: "Smoke Test"
-    description: "Subir o servidor real via make run em porta livre isolada, persistir a URL em .smoke_url e verificar /health e o HTML raiz com diagnóstico de transporte/status/body. O hook registra ownership do PID/process group e encerra somente o processo iniciado por este node; nunca mata ou reutiliza listener externo."
+    title: "Smoke da Superfície Selecionada"
+    description: "Executar o smoke real da plataforma selecionada pelo target comum `make -C src smoke`, sem substituir aplicação nativa por servidor web."
     sprint: sprint-06-smoke
     executor: claude
-    env_setup:
-      - 'rm -f .smoke_started_process .smoke_url .smoke_server.log'
-      - |
-          set -eu
-          port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
-          url="http://127.0.0.1:$port"
-          printf '%s\n' "$url" > .smoke_url
-          if command -v setsid >/dev/null 2>&1; then
-            (cd project && exec setsid env PORT="$port" make run) > .smoke_server.log 2>&1 &
-            printf 'group:%s\n' "$!" > .smoke_started_process
-          else
-            (cd project && exec env PORT="$port" make run) > .smoke_server.log 2>&1 &
-            printf 'pid:%s\n' "$!" > .smoke_started_process
-          fi
-          ready=0
-          for _ in $(seq 1 80); do
-            if curl -sf "$url/health" >/dev/null 2>&1; then ready=1; break; fi
-            token="$(cat .smoke_started_process)"
-            pid="${token#*:}"
-            if ! kill -0 "$pid" 2>/dev/null; then break; fi
-            sleep 0.25
-          done
-          [ "$ready" -eq 1 ] || { cat .smoke_server.log 2>/dev/null || true; exit 1; }
     outputs:
       - docs/smoke-report.md
-    env_teardown:
-      - |
-          if test -f .smoke_started_process; then
-            token="$(cat .smoke_started_process)"
-            mode="${token%%:*}"
-            pid="${token#*:}"
-            if test "$mode" = group; then
-              kill -TERM -- "-$pid" 2>/dev/null || true
-            else
-              kill -TERM "$pid" 2>/dev/null || true
-            fi
-          fi
-          rm -f .smoke_started_process .smoke_url .smoke_server.log
+    prompt: |
+      Execute `make -C src smoke` contra a superfície real selecionada em
+      `.ft/project.yml.validation` e documente em docs/smoke-report.md o runner,
+      ambiente, entrypoint, verificações e resultado. Android usa build/launch e
+      instrumentação apropriada; iOS usa build/launch e XCUITest; web pode usar
+      porta isolada, health check e browser; desktop abre o executável nativo.
+      Não use URL, HTML ou curl como substituto para uma plataforma nativa e não
+      registre placeholder ou teste não executado como PASS.
     validators:
-      - command_succeeds: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          from urllib.request import urlopen
-
-          base = Path(".smoke_url").read_text(encoding="utf-8").strip().rstrip("/")
-
-          def fetch(path):
-              url = f"{base}{path}"
-              try:
-                  with urlopen(url, timeout=5) as response:
-                      status = response.status
-                      raw = response.read()
-              except Exception as exc:
-                  raise AssertionError(f"GET {url}: falha de transporte: {exc}") from exc
-              assert 200 <= status < 300, f"GET {url}: HTTP {status}"
-              assert raw, f"GET {url}: resposta vazia"
-              return raw
-
-          health_raw = fetch("/health")
-          try:
-              health = json.loads(health_raw)
-          except json.JSONDecodeError as exc:
-              preview = health_raw[:200].decode("utf-8", errors="replace")
-              raise AssertionError(f"GET {base}/health: JSON invalido: {preview!r}") from exc
-          assert health.get("status") == "ok", health
-
-          html = fetch("/").decode("utf-8", errors="replace").lower()
-          assert "<html" in html or "<!doctype html" in html, html[:200]
-          PY
+      - command_succeeds: "make -C src smoke"
       - file_exists: docs/smoke-report.md
+      - command_succeeds: "python -c \"text=open('docs/smoke-report.md', encoding='utf-8').read().lower(); assert 'pass' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.smoke
 
   - id: gate.smoke
     type: gate
     title: "Gate Smoke"
-    description: "Verificação determinística: smoke report existe e /health respondeu."
+    description: "Verificação determinística: o smoke da superfície selecionada passa e o relatório não mascara execução ausente."
     sprint: sprint-06-smoke
     executor: python
     validators:
       - file_exists: docs/smoke-report.md
+      - command_succeeds: "make -C src smoke"
+      - command_succeeds: "python -c \"text=open('docs/smoke-report.md', encoding='utf-8').read().lower(); assert 'pass' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.acceptance.01.cli
 
   # ================================================================
@@ -2418,10 +2566,11 @@ nodes:
 
   - id: ft.acceptance.01.cli
     type: build
-    title: "Acceptance Test CLI"
+    title: "Acceptance Test do Produto"
     description: |
-      Executar a massa de dados de docs/test_data.md contra a API via curl/httpx.
-      Verificar cada endpoint P0: criar, listar, editar, excluir.
+      Executar a massa de dados de docs/test_data.md pela interface pública real
+      apropriada à stack: UI/instrumentação nativa, API/CLI ou browser. Cobrir
+      cada cenário P0 do PRD e do backlog sem presumir CRUD, curl ou HTTP.
       Produzir DOIS artefatos:
         1. docs/acceptance-report.md — relatório legível para o stakeholder (Markdown com tabelas PASS/FAIL)
         2. docs/acceptance-result.json — resultado estruturado para o validator:
@@ -2440,8 +2589,9 @@ nodes:
       - docs/acceptance-result.json
     validators:
       - file_exists: docs/acceptance-result.json
+      - command_succeeds: "make -C src acceptance"
       - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and isinstance(d.get('skip'),int) and d.get('skip')>=0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
-      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text\""
+      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: gate.acceptance
 
   - id: gate.acceptance
@@ -2453,8 +2603,9 @@ nodes:
     validators:
       - file_exists: docs/acceptance-report.md
       - file_exists: docs/acceptance-result.json
+      - command_succeeds: "make -C src acceptance"
       - command_succeeds: "python -c \"import json; d=json.load(open('docs/acceptance-result.json')); blockers=d.get('p0_blockers'); assert d.get('fail')==0 and isinstance(d.get('skip'),int) and d.get('skip')>=0 and d.get('pass',0)>0 and isinstance(blockers,list) and not blockers, d\""
-      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'create' in text and 'placeholder' not in text\""
+      - command_succeeds: "python -c \"text=open('docs/acceptance-report.md', encoding='utf-8').read().lower(); assert 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
     next: ft.e2e.01.browser
 
   # ================================================================
@@ -2463,30 +2614,37 @@ nodes:
 
   - id: ft.e2e.01.browser
     type: build
-    title: "E2E Browser — Configurar, Executar e Evidenciar"
-    description: "Em um único turn, configurar a suíte E2E, executar fluxos P0, capturar screenshots e produzir o relatório."
+    title: "E2E da Superfície — Configurar, Executar e Evidenciar"
+    description: "Em um único turn, configurar o runner da plataforma selecionada, executar fluxos P0 reais, capturar screenshots e produzir recibos rastreáveis. O id histórico do node é preservado apenas por compatibilidade."
     sprint: sprint-08-e2e
     executor: claude
-    env_setup:
-      - pip install -q pytest-playwright && playwright install chromium --with-deps 2>/dev/null || true
     outputs:
-      - project/tests/e2e/
+      - src/tests/e2e/
       - docs/screenshots/e2e/
       - docs/e2e-report.md
+      - docs/e2e-result.json
       - docs/test-identity.json
       - docs/navigation-reachability.yml
       - docs/evidence/navigation/
     max_turns: 60
     prompt: |
       Entregue toda a etapa E2E no mesmo turn:
-      1. Configure Playwright/pytest para o servidor local.
+      1. Leia `.ft/project.yml.validation` e docs/TECH_STACK.md. Configure o runner
+         real da plataforma selecionada: instrumentação/UIAutomator no Android,
+         XCUITest no iOS, Playwright no web ou automação nativa no desktop. Não
+         instale nem use Playwright quando a superfície não for web.
       2. Provisione um usuário exclusivo do agente por seed idempotente,
          isolado e resetável. Leia credenciais de armazenamento protegido e
          gere docs/test-identity.json sanitizado, sem PII ou segredo.
-      3. Implemente fluxos P0 reais de criação, listagem, edição e exclusão.
+      3. Implemente todos os fluxos P0 reais descritos no PRD, backlog e contrato
+         de navegação, sem presumir CRUD ou controles HTML.
       4. Execute a suíte e corrija falhas de produto ou teste dentro do escopo.
-      5. Capture screenshots de cada fluxo em docs/screenshots/e2e/.
-      6. Gere docs/e2e-report.md com resultado por cenário e paths das evidências.
+      5. Capture screenshots reais suficientes para provar cada tela/estado
+         exercitado em docs/screenshots/e2e/; não complete uma cota artificial.
+      6. Gere docs/e2e-report.md com resultado por cenário e paths das evidências,
+         e docs/e2e-result.json com `platform`, `runner`, `pass`, `fail`, `skip`,
+         `p0_blockers` e `evidence`. APPROVED exige pass > 0, fail = 0,
+         p0_blockers vazio e ao menos uma evidência repo-local existente.
       7. Para cada target de docs/navigation-contract.yml, parta da primeira
          abertura ou de uma superfície principal e use somente controles
          visíveis da UI de produção. Rota/URL interna direta, deep link/debug,
@@ -2501,18 +2659,19 @@ nodes:
          arquivo de evidência novo sob docs/evidence/navigation/, `shortcuts: []`
          e access_context. Entitled exige setup sanitizado e resultados positivo
          e negativo; contextual exige context_setup e entry_result.
+      9. Exponha a execução repetível no target `make -C src e2e`.
       Não use placeholders nem declare cenário não executado como PASS.
     validators:
-      - file_exists: project/tests/e2e/
-      - file_exists: project/tests/e2e/test_navigation.py
-      - command_succeeds: "python -c \"from pathlib import Path; text=Path('project/tests/e2e/test_navigation.py').read_text(encoding='utf-8', errors='ignore').lower(); assert 'placeholder' not in text and any(x in text for x in ['fill(', 'type(']) and any(x in text for x in ['create', 'criar', 'cadastrar', 'registrar']), 'e2e sem fluxo de criacao via ui'\""
+      - file_exists: src/tests/e2e/
       - file_exists: docs/e2e-report.md
+      - file_exists: docs/e2e-result.json
       - file_exists: docs/navigation-reachability.yml
       - test_identity_ready:
           path: docs/test-identity.json
-      - command_succeeds: "cd project && python -m pytest tests/e2e -q"
-      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
-      - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "make -C src e2e"
+      - command_succeeds: "python -c \"import json; from pathlib import Path; d=json.load(open('docs/e2e-result.json')); blockers=d.get('p0_blockers'); evidence=d.get('evidence'); assert isinstance(d.get('platform'),str) and d['platform'].strip() and isinstance(d.get('runner'),str) and d['runner'].strip() and d.get('pass',0)>0 and d.get('fail')==0 and isinstance(d.get('skip'),int) and d['skip']>=0 and isinstance(blockers,list) and not blockers and isinstance(evidence,list) and evidence and all((Path(p).is_file() and Path(p).stat().st_size>0) for p in evidence), d\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').rglob('*.png')); assert shots and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
       - navigation_reachability:
           contract_path: docs/navigation-contract.yml
           report_path: docs/navigation-reachability.yml
@@ -2531,13 +2690,15 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/e2e-report.md
+      - file_exists: docs/e2e-result.json
       - file_exists: docs/navigation-reachability.yml
       - test_identity_ready:
           path: docs/test-identity.json
       - file_exists: docs/screenshots/e2e/
-      - command_succeeds: "cd project && python -m pytest tests/e2e -q"
-      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
-      - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'resultado: pass' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "make -C src e2e"
+      - command_succeeds: "python -c \"import json; from pathlib import Path; d=json.load(open('docs/e2e-result.json')); blockers=d.get('p0_blockers'); evidence=d.get('evidence'); assert isinstance(d.get('platform'),str) and d['platform'].strip() and isinstance(d.get('runner'),str) and d['runner'].strip() and d.get('pass',0)>0 and d.get('fail')==0 and isinstance(d.get('skip'),int) and d['skip']>=0 and isinstance(blockers,list) and not blockers and isinstance(evidence,list) and evidence and all((Path(p).is_file() and Path(p).stat().st_size>0) for p in evidence), d\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').rglob('*.png')); assert shots and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/e2e-report.md', encoding='utf-8').read().lower(); assert 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
       - navigation_reachability:
           contract_path: docs/navigation-contract.yml
           report_path: docs/navigation-reachability.yml
@@ -2681,10 +2842,10 @@ nodes:
     max_turns: 80
     fix_review: ft.platform.01.validate
     outputs:
-      - project/
+      - src/
       - docs/platform-fix-report.md
     write_scope:
-      - project
+      - src
       - docs/platform-fix-report.md
     prompt: |
       Leia somente os findings PV-F-* correntes de
@@ -2716,16 +2877,24 @@ nodes:
     max_turns: 40
     outputs:
       - docs/visual-check-report.md
+    prompt: |
+      Compare as screenshots E2E reais da plataforma selecionada com todos os
+      mockups aprovados e critérios de docs/ui_criteria.md. Verifique cada fluxo
+      P0 e a navegação pela UI de produção, cite os paths exatos das evidências e
+      produza exatamente um veredito `P0_ACCEPTANCE: PASS|FAIL`. Considere o
+      receipt multiplataforma corrente quando existir. Não presuma browser,
+      HTML, formulário ou operação CRUD; não aceite placeholder, preview,
+      captura sintética ou cenário não executado como prova.
     validators:
       - file_exists: docs/visual-check-report.md
-      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
-      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').rglob('*.png')); assert shots and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
       - visual_p0_acceptance:
           path: docs/visual-check-report.md
       - ui_criteria_coverage:
           criteria_path: docs/ui_criteria.md
           report_path: docs/visual-check-report.md
-          source_dir: project/frontend/src
+          source_dir: src/frontend
           evidence: any
       - platform_validation_ready:
           matrix_path: docs/validation-matrix.yml
@@ -2742,14 +2911,14 @@ nodes:
     executor: python
     validators:
       - file_exists: docs/visual-check-report.md
-      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').glob('*.png')); assert len(shots) >= 9 and all(p.stat().st_size > 1000 for p in shots)\""
-      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'screenshots e2e reais' in text and 'create' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+      - command_succeeds: "python -c \"from pathlib import Path; shots=list(Path('docs/screenshots/e2e').rglob('*.png')); assert shots and all(p.stat().st_size > 1000 for p in shots)\""
+      - command_succeeds: "python -c \"text=open('docs/visual-check-report.md', encoding='utf-8').read().lower(); assert 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
       - visual_p0_acceptance:
           path: docs/visual-check-report.md
       - ui_criteria_coverage:
           criteria_path: docs/ui_criteria.md
           report_path: docs/visual-check-report.md
-          source_dir: project/frontend/src
+          source_dir: src/frontend
           evidence: any
       - platform_validation_ready:
           matrix_path: docs/validation-matrix.yml
@@ -2808,7 +2977,7 @@ nodes:
     executor: claude
     max_turns: 60
     outputs:
-      - project/
+      - src/
     fix_review: ft.platform.01.validate
     next: ft.platform.01.validate
 

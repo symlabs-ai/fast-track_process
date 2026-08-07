@@ -123,9 +123,21 @@ def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
     mockups = graph.get_node("ft.plan.06.mockups")
     assert graph.get_node("ft.plan.05.test_data").next == mockups.id
     assert mockups.executor == "llm_codex"
+    assert mockups.expert == "prototype_png_designer"
+    assert mockups.expert_definition is not None
+    assert mockups.expert_definition.version == "1"
+    assert "Material Design 3" in mockups.expert_definition.prompt
+    assert "M3 Expressive" in mockups.expert_definition.prompt
+    assert "SwiftUI" in mockups.expert_definition.prompt
+    assert "Liquid Glass" in mockups.expert_definition.prompt
+    assert "Web" in mockups.expert_definition.prompt
+    assert "$imagegen" in mockups.expert_definition.prompt
+    assert "gpt-image-2" not in mockups.expert_definition.prompt
     assert mockups.llm_engine == "codex"
     assert mockups.llm_model == "gpt-5.6-sol"
     assert mockups.llm_effort == "max"
+    assert mockups.codex_auth == "chatgpt"
+    assert any("Logged in using ChatGPT" in command for command in mockups.env_setup)
     assert "docs/mockups/screen-map.yml" in mockups.outputs
     assert "docs/mockups/image-generation-receipt.yml" in mockups.outputs
     assert "docs/mockups/images/" in mockups.outputs
@@ -135,7 +147,11 @@ def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
     )
     assert any("image_generation" in command for command in mockups.env_setup)
     assert "built-in \u0060image_gen\u0060" in mockups.prompt
-    assert "caso de uso \u0060ui-mockup\u0060" in mockups.prompt
+    assert "Invoque explicitamente \u0060$imagegen\u0060" in mockups.prompt
+    assert "gpt-image-2" not in mockups.prompt
+    assert "imagegen" in str(mockups.validators)
+    assert "gpt-image-2" not in str(mockups.validators)
+    assert "\u0060ui-mockup\u0060" in mockups.prompt
     assert "É PROIBIDO criar HTML" in mockups.prompt
     assert "screenshot de página/app" in mockups.prompt
     assert "SNN.1, SNN.2" in mockups.prompt
@@ -147,11 +163,28 @@ def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
     )
     assert "Crie HTML/CSS/JS code-native" not in mockups.prompt
     assert "renderize PNGs reais com Chromium/Playwright" not in mockups.prompt
-    assert mockups.next == "ft.plan.06b.mockup_gate"
+    assert mockups.next == "ft.plan.06a.mockup_prd_review"
+
+    review = graph.get_node("ft.plan.06a.mockup_prd_review")
+    assert review.type == "review"
+    assert review.llm_engine == "codex"
+    assert review.llm_model == "gpt-5.6-sol"
+    assert review.llm_effort == "max"
+    assert review.write_scope == [
+        "docs/mockups/prd-coherence-review.md",
+        "docs/mockups/prd-coherence-review.yml",
+    ]
+    assert "abra o PNG declarado com `view_image` em resolução original" in review.prompt
+    assert "Nunca infira TNN a partir de SNN" in review.prompt
+    assert "Um relatório REJECTED também segue ao human gate" in review.prompt
+    assert "validate_mockup_prd_review.py" in str(review.validators)
+    assert review.next == "ft.plan.06b.mockup_gate"
 
     mockup_gate = graph.get_node("ft.plan.06b.mockup_gate")
     assert mockup_gate.type == "human_gate"
     assert mockup_gate.approval_message_required is True
+    assert "docs/mockups/prd-coherence-review.md" in mockup_gate.decision_context["review_paths"]
+    assert "docs/mockups/prd-coherence-review.yml" in mockup_gate.decision_context["review_paths"]
     assert mockup_gate.reject_next == mockups.id
     assert mockup_gate.next == "ft.plan.gate"
     assert "docs/mockups/" in graph.meta["artifact_policy"]["canonical"]
@@ -185,7 +218,7 @@ def test_headless_route_has_no_visual_or_http_delivery_dependency() -> None:
     assert "Makefile" in build.outputs
     assert ".github/workflows/" in build.outputs
     assert ".github/workflows" in build.write_scope
-    assert "project/frontend/" not in build.outputs
+    assert "src/frontend/" not in build.outputs
     assert "make verify" in str(build.validators)
     assert "make build" in str(build.validators)
     assert "make smoke" in str(build.validators)
@@ -266,13 +299,30 @@ def test_macro_nodes_keep_deterministic_checkpoints() -> None:
     }
     assert foundation.next == "ft.plan.02b.tech_gate"
 
+    tech_stack = graph.get_node("ft.plan.02.tech_stack")
+    assert tech_stack.no_pre_seed is True
+
     frontend = graph.get_node("ft.frontend.01.build")
+    assert "src/frontend/" in frontend.outputs
+    assert "project/" not in FAST_PROCESS.read_text(encoding="utf-8")
     assert frontend.next == "ft.frontend.03.prd_review"
-    assert graph.get_node("ft.frontend.03.prd_review").type == "review"
+    visual_review = graph.get_node("ft.frontend.03.prd_review")
+    visual_gate = graph.get_node("gate.frontend")
+    assert visual_review.type == "review"
+    assert visual_review.next == "gate.frontend"
+    assert visual_gate.next == "ft.tdd.01.red"
+    assert "ui_criteria_coverage" not in str(visual_review.validators)
+    assert "ui_criteria_coverage" not in str(visual_gate.validators)
 
     assert graph.get_node("ft.tdd.01.red").next == "ft.tdd.02.green"
     assert graph.get_node("ft.tdd.02.green").next == "ft.tdd.03.refactor"
     assert graph.get_node("ft.tdd.03.refactor").next == "gate.tdd"
+    assert graph.get_node("gate.tdd").next == "ft.frontend.04.integrated_review"
+    assert (
+        graph.get_node("ft.frontend.04.integrated_review").next
+        == "gate.frontend_integrated"
+    )
+    assert graph.get_node("gate.frontend_integrated").next == "ft.delivery.01.entrypoint"
 
     assert graph.get_node("ft.handoff.02.backlog_update").executor == "python"
     assert graph.get_node("ft.handoff.02b.features_update").executor == "python"
@@ -389,6 +439,64 @@ def test_navigation_reachability_is_gated_before_user_delivery() -> None:
     assert "docs/navigation-reachability.yml" in e2e.outputs
     assert "navigation_reachability" in str(e2e.validators)
     assert "navigation_reachability" in str(graph.get_node("gate.e2e").validators)
+
+
+def test_visual_delivery_contract_is_platform_aware() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    route = graph.get_node("ft.plan.surface.route")
+    assert "plataforma nativa, web ou desktop" in route.description
+    assert "frontend/browser" not in route.description
+
+    surface = graph.get_node("ft.frontend.01.build")
+    surface_contract = f"{surface.prompt}\n{surface.validators}"
+    assert "src/Makefile" in surface.outputs
+    assert "make -C src surface-build" in surface_contract
+    assert "Android nativo" in surface.prompt
+    assert "src/frontend/package.json" not in surface_contract
+    assert "npm " not in surface_contract
+    assert "<form" in surface.prompt and "não presuma" in surface.prompt
+
+    review = graph.get_node("ft.frontend.04.integrated_review")
+    gate = graph.get_node("gate.frontend_integrated")
+    assert "source_dir': 'src/frontend'" in str(review.validators)
+    assert "source_dir': 'src/frontend'" in str(gate.validators)
+    assert "src/frontend/src" not in str(review.validators)
+    assert "API e a persistência reais" in review.prompt
+
+    delivery = graph.get_node("ft.delivery.01.entrypoint")
+    delivery_contract = f"{delivery.prompt}\n{delivery.validators}"
+    for target in ("surface-build", "smoke", "acceptance", "e2e", "run"):
+        assert target in delivery_contract
+    assert "make -s url" not in delivery_contract
+    assert "somente" in delivery.prompt and "superfície web" in delivery.prompt
+
+    smoke = graph.get_node("ft.smoke.01.run")
+    assert "make -C src smoke" in f"{smoke.prompt}\n{smoke.validators}"
+    assert "urlopen" not in str(smoke.validators)
+    assert ".smoke_url" not in str(smoke.env_setup)
+
+    acceptance = graph.get_node("ft.acceptance.01.cli")
+    assert "make -C src acceptance" in str(acceptance.validators)
+    assert "'create'" not in str(acceptance.validators)
+
+    e2e = graph.get_node("ft.e2e.01.browser")
+    e2e_contract = f"{e2e.prompt}\n{e2e.validators}"
+    assert "instrumentação/UIAutomator" in e2e.prompt
+    assert "XCUITest" in e2e.prompt
+    assert "Playwright no web" in e2e.prompt
+    assert "make -C src e2e" in e2e_contract
+    assert "docs/e2e-result.json" in e2e.outputs
+    assert "docs/e2e-result.json" in graph.meta["artifact_policy"]["cycle"]
+    assert "test_navigation.py" not in e2e_contract
+    assert "len(shots) >= 9" not in e2e_contract
+    assert not e2e.env_setup
+
+    visual = graph.get_node("ft.final.01.visual_check")
+    visual_contract = f"{visual.prompt}\n{visual.validators}"
+    assert "source_dir': 'src/frontend'" in str(visual.validators)
+    assert "len(shots) >= 9" not in visual_contract
+    assert "'create'" not in str(visual.validators)
 
 
 def test_navigation_contract_is_domain_neutral_and_profiles_are_generic() -> None:

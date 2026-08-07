@@ -248,8 +248,25 @@ def stage_prd() -> list[str]:
 
     handoff_path = DOCS / "handoff.md"
     handoff_fm, handoff = read_frontmatter(handoff_path)
-    if handoff_fm.get("next_process") not in {"mvp-builder-fast", "feature-fast"}:
-        errors.append("docs/handoff.md: next_process deve ser mvp-builder-fast|feature-fast")
+    next_process = handoff_fm.get("next_process")
+    delivery_process = handoff_fm.get("delivery_process")
+    process_sequence = handoff_fm.get("process_sequence")
+    valid_sequences = {
+        ("mdd", "mvp-builder-fast"): ["mdd", "mvp-builder-fast"],
+        ("feature-fast", "feature-fast"): ["feature-fast"],
+    }
+    expected_sequence = valid_sequences.get((next_process, delivery_process))
+    if expected_sequence is None:
+        errors.append(
+            "docs/handoff.md: use next_process/delivery_process "
+            "mdd→mvp-builder-fast para produto novo ou feature-fast→feature-fast "
+            "para produto entregue"
+        )
+    elif process_sequence != expected_sequence:
+        errors.append(
+            "docs/handoff.md: process_sequence deve ser "
+            + str(expected_sequence)
+        )
     if handoff_fm.get("delivery_readiness") != "planning_required":
         errors.append("docs/handoff.md: delivery_readiness deve ser planning_required")
     if not isinstance(handoff_fm.get("implementation_authorized"), bool):
@@ -263,6 +280,7 @@ def stage_prd() -> list[str]:
         ".ft/cycles/<cycle-id>/",
         "building",
         "BLOCKED",
+        "process_sequence",
     ):
         if required not in handoff:
             errors.append(f"docs/handoff.md: Estado/Inventário deve citar '{required}'")

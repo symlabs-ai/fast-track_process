@@ -48,6 +48,10 @@ from ft.engine.delegate import (
 
 
 class TestBuildExecutorCommand:
+    @pytest.fixture(autouse=True)
+    def _isolate_codex_profile(self, monkeypatch):
+        monkeypatch.delenv("FT_CODEX_PROFILE", raising=False)
+
     def test_symgateway_workflow_url_inserts_or_replaces_label(self):
         assert _symgateway_workflow_url(
             "https://symgateway.symlabs.ai/p/openai/v1", "innovation"
@@ -212,7 +216,43 @@ class TestBuildExecutorCommand:
             "resume",
         ]
 
-    def test_builds_codex_workflow_override_before_exec(self, tmp_path, monkeypatch):
+    def test_chatgpt_auth_bypasses_profile_and_forces_builtin_provider(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("FT_CODEX_PROFILE", "symgateway-dev")
+
+        cmd = _build_executor_command(
+            "codex",
+            "gere a imagem",
+            "/tmp/proj",
+            7,
+            codex_auth="chatgpt",
+            workflow_id="mvp-builder-fast",
+            ft_cycle="cycle-03-mvp-builder-fast",
+        )
+
+        assert cmd[:2] == ["codex", "exec"]
+        assert "--profile" not in cmd
+        assert 'model_provider="openai"' in cmd
+        assert 'forced_login_method="chatgpt"' in cmd
+        assert not any("symgateway.symlabs.ai" in item for item in cmd)
+
+    @pytest.mark.parametrize("auth", ["api", "symgateway", "chatgpt --yolo"])
+    def test_rejects_unknown_codex_auth(self, auth):
+        with pytest.raises(ValueError, match="codex_auth"):
+            _build_executor_command(
+                "codex", "faça algo", "/tmp/proj", 7, codex_auth=auth
+            )
+
+    def test_rejects_codex_auth_for_other_executor(self):
+        with pytest.raises(ValueError, match="executor Codex"):
+            _build_executor_command(
+                "claude", "faça algo", "/tmp/proj", 7, codex_auth="chatgpt"
+            )
+
+    def test_builds_codex_workflow_override_in_deepest_command_scope(
+        self, tmp_path, monkeypatch
+    ):
         config_home = tmp_path / "codex"
         config_home.mkdir()
         (config_home / "symgateway-dev.config.toml").write_text(
@@ -225,7 +265,12 @@ class TestBuildExecutorCommand:
         monkeypatch.setenv("FT_CODEX_PROFILE", "symgateway-dev")
 
         fresh = _build_executor_command(
-            "codex", "faça algo", "/tmp/proj", 7, workflow_id="innovation"
+            "codex",
+            "faça algo",
+            "/tmp/proj",
+            7,
+            workflow_id="mdd",
+            ft_cycle="cycle-02-mdd",
         )
         resumed = _build_executor_command(
             "codex",
@@ -234,18 +279,19 @@ class TestBuildExecutorCommand:
             7,
             session_id="thread-123",
             resume_session=True,
-            workflow_id="innovation",
+            workflow_id="mdd",
+            ft_cycle="cycle-02-mdd",
         )
 
         override = (
             'model_providers.symgateway_openai_dev.base_url='
-            '"https://symgateway.symlabs.ai/p/openai/w/innovation/v1"'
+            '"https://symgateway.symlabs.ai/p/openai/w/mdd/t/mdd/c/cycle-02-mdd/v1"'
         )
         assert fresh[:6] == [
-            "codex", "--profile", "symgateway-dev", "-c", override, "exec"
+            "codex", "--profile", "symgateway-dev", "exec", "-c", override
         ]
         assert resumed[:7] == [
-            "codex", "--profile", "symgateway-dev", "-c", override, "exec", "resume"
+            "codex", "--profile", "symgateway-dev", "exec", "resume", "-c", override
         ]
 
     @pytest.mark.parametrize("workflow", ["bad/workflow", "x" * 65])
@@ -253,6 +299,18 @@ class TestBuildExecutorCommand:
         with pytest.raises(ValueError, match="workflow_id"):
             _build_executor_command(
                 "codex", "faça algo", "/tmp/proj", 7, workflow_id=workflow
+            )
+
+    @pytest.mark.parametrize("cycle", ["bad/cycle", "x" * 129])
+    def test_rejects_invalid_ft_cycle(self, cycle):
+        with pytest.raises(ValueError, match="ft_cycle"):
+            _build_executor_command(
+                "codex",
+                "faça algo",
+                "/tmp/proj",
+                7,
+                workflow_id="mdd",
+                ft_cycle=cycle,
             )
 
     def test_builds_codex_command_with_explicit_reasoning_effort(self, monkeypatch):

@@ -27,8 +27,8 @@ ft init . --fix --template symlabs       # valida e repara a configuração
 7. Configura o Claude em `.claude/settings.local.json` com a mesma caller
    dedicada no header e a rota `anthropic-max`, sem login OAuth local.
 8. Cria ou complementa o `AGENTS.md` com a regra obrigatória: Codex/OpenAI e
-   Claude/Anthropic só podem ser usados por meio do SymGateway, sem fallback
-   direto para os providers.
+   Claude/Anthropic usam o SymGateway por default. A única exceção é um node FT
+   que declare `codex_auth: chatgpt` para uma ferramenta built-in exigida.
 
 O profile global não contém chave nem projeto. O header `X-Project-Slug` e a
 caller são resolvidos pelas variáveis carregadas em cada repositório.
@@ -56,6 +56,13 @@ O FT lê `FT_CODEX_PROFILE` e executa internamente o equivalente a:
 ```bash
 codex --profile symgateway-dev exec ...
 ```
+
+Nodes que declaram `codex_auth: chatgpt` são uma exceção deliberada: o FT omite
+o profile e fixa o provider OpenAI built-in e o login ChatGPT. Isso é necessário
+para capabilities como `image_gen`, que não são expostas por custom providers.
+A execução textual inteira desse node também fica fora do SymGateway; não é
+somente a geração dos pixels. Sem login ChatGPT ou sem a feature exigida, o node
+deve bloquear, nunca improvisar fallback.
 
 ## Configuração criada no repositório
 
@@ -155,8 +162,9 @@ mais necessárias para novos projetos.
   ou arquivos versionados.
 - `.envrc.private`, `.claude/settings.local.json`, `CLAUDE.md` e `.env` são
   gitignored; os dois arquivos que contêm a caller usam mode `0600`.
-- O `AGENTS.md` versionável exige SymGateway para ambos os agentes e proíbe
-  autenticação ou fallback direto na OpenAI e na Anthropic.
+- O `AGENTS.md` versionável exige SymGateway por default e limita o acesso
+  direto OpenAI aos nodes FT declarados com `codex_auth: chatgpt`; Anthropic
+  continua sem exceção direta.
 - Caller key e `X-Project-Slug` devem apontar para o mesmo projeto, senão o
   gateway retorna `403`.
 - A Provider Account OpenAI API e sua credencial OAuth pertencem ao workspace

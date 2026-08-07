@@ -110,7 +110,7 @@ def test_global_serve_script_isolates_occupied_port_and_preserves_listener(tmp_p
 
 def test_fast_serve_script_redeploys_the_owned_candidate(tmp_path):
     root = tmp_path / "sample"
-    project = root / "project"
+    project = root / "src"
     scripts = root / ".ft" / "process" / "scripts"
     project.mkdir(parents=True)
     scripts.mkdir(parents=True)
@@ -168,7 +168,7 @@ def test_fast_serve_script_redeploys_the_owned_candidate(tmp_path):
 
 def test_fast_serve_script_presents_desktop_appimage_instead_of_web(tmp_path):
     root = tmp_path / "sample"
-    project = root / "project"
+    project = root / "src"
     scripts = root / ".ft" / "process" / "scripts"
     docs = root / "docs"
     dist = project / "dist"
@@ -220,7 +220,7 @@ def test_fast_serve_script_presents_desktop_appimage_instead_of_web(tmp_path):
         assert not (root / ".serve_url").exists()
         assert (root / ".presented_artifact").read_text(
             encoding="utf-8"
-        ).strip() == "project/dist/Product_0.0.1_amd64.AppImage"
+        ).strip() == "src/dist/Product_0.0.1_amd64.AppImage"
         presentation_token = (root / ".presentation.pid").read_text(
             encoding="utf-8"
         ).strip()
@@ -228,3 +228,49 @@ def test_fast_serve_script_presents_desktop_appimage_instead_of_web(tmp_path):
     finally:
         if presentation_token:
             _stop_owned_process(presentation_token)
+
+
+def test_fast_serve_script_refuses_web_fallback_for_native_surface(tmp_path):
+    root = tmp_path / "sample"
+    project = root / "src"
+    scripts = root / ".ft" / "process" / "scripts"
+    docs = root / "docs"
+    project.mkdir(parents=True)
+    scripts.mkdir(parents=True)
+    docs.mkdir()
+    (docs / "validation-matrix.yml").write_text(
+        "profiles:\n"
+        "- id: android\n"
+        "  targets:\n"
+        "  - id: emulator\n"
+        "    execution_surface: android_emulator\n",
+        encoding="utf-8",
+    )
+    (project / "Makefile").write_text(
+        "run:\n\tpython -m http.server 8021 --bind 127.0.0.1\n"
+        "url:\n\t@echo http://127.0.0.1:8021\n",
+        encoding="utf-8",
+    )
+
+    template = (
+        Path(__file__).resolve().parents[2]
+        / "templates"
+        / "mvp-builder-fast"
+        / "scripts"
+        / "serve.sh"
+    )
+    script = scripts / "serve.sh"
+    shutil.copy2(template, script)
+
+    result = subprocess.run(
+        ["bash", str(script)],
+        cwd=root,
+        env=os.environ,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "native presentation requires" in result.stderr
+    assert not (root / ".serve_url").exists()

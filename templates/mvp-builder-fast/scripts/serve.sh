@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-PROJECT_ROOT="$ROOT/project"
+PROJECT_ROOT="$ROOT/src"
 cd "$ROOT"
 
 BASE_PORT="${PORT:-8021}"
@@ -121,6 +121,13 @@ desktop_linux_selected() {
     docs/validation-matrix.yml
 }
 
+native_surface_selected() {
+  test -f docs/validation-matrix.yml || return 1
+  grep -Eq \
+    '^[[:space:]]*execution_surface:[[:space:]]*(android_|ios_|desktop_)[[:alnum:]_]*([[:space:]]*(#.*)?)$' \
+    docs/validation-matrix.yml
+}
+
 present_desktop_linux() {
   local artifact artifact_rel mode pid started
   local -a artifacts
@@ -134,7 +141,7 @@ present_desktop_linux() {
       -perm -u=x -print0 2>/dev/null
   )
   if ((${#artifacts[@]} != 1)); then
-    echo "desktop Linux gate requires exactly one executable AppImage in project/dist; found ${#artifacts[@]}" >&2
+    echo "desktop Linux gate requires exactly one executable AppImage in src/dist; found ${#artifacts[@]}" >&2
     return 1
   fi
   artifact="${artifacts[0]}"
@@ -195,11 +202,19 @@ stop_owned_presentation || {
 }
 rm -f .presented_artifact .presentation.pid .presentation.log
 
-# Quando o produto web entrega um launcher próprio, ele é a fonte de verdade do
-# lifecycle. Superfícies desktop são tratadas acima e nunca caem neste fallback.
+# Quando o produto entrega um launcher próprio, ele é a fonte de verdade do
+# lifecycle e deve apresentar a superfície selecionada no contrato.
 PROJECT_SERVE="$PROJECT_ROOT/scripts/serve.sh"
 if test -x "$PROJECT_SERVE"; then
   PORT="$BASE_PORT" exec "$PROJECT_SERVE"
+fi
+
+# Uma superfície nativa sem launcher explícito deve falhar fechada. Cair no
+# servidor HTTP abaixo apresentaria outro produto e mascararia a ausência do
+# entrypoint Android, iOS ou desktop requerido.
+if native_surface_selected; then
+  echo "native presentation requires executable src/scripts/serve.sh for the selected surface" >&2
+  exit 1
 fi
 
 port_is_free() {
@@ -234,15 +249,15 @@ if test -z "$PORT"; then
 fi
 export PORT
 
-URL="$(cd project && make -s url)"
+URL="$(cd src && make -s url)"
 printf '%s\n' "$URL" > .serve_url
 rm -f .serve.pid .serve.log
 
 if command -v setsid >/dev/null 2>&1; then
-  (cd project && exec setsid env PORT="$PORT" make run) > .serve.log 2>&1 < /dev/null &
+  (cd src && exec setsid env PORT="$PORT" make run) > .serve.log 2>&1 < /dev/null &
   mode=group
 else
-  (cd project && exec env PORT="$PORT" make run) > .serve.log 2>&1 < /dev/null &
+  (cd src && exec env PORT="$PORT" make run) > .serve.log 2>&1 < /dev/null &
   mode=pid
 fi
 server_pid=$!

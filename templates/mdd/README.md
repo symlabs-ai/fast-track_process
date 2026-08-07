@@ -52,8 +52,8 @@ Artefatos canônicos:
    objetiva e dirigida ao usuário final. A home apresenta o produto definido
    como oferta, sem linguagem de projeto, piloto, roadmap ou progresso.
 7. O stakeholder aprova o pacote textual completo.
-8. Dois nodes fixados em `gpt-5.6-sol` com esforço `max` usam a ferramenta
-   built-in `image_gen`: o primeiro gera uma imagem PNG própria para cada um dos
+8. Dois nodes fixados em `gpt-5.6-sol` com esforço `max` e
+   `codex_auth: chatgpt` usam a ferramenta built-in `image_gen`: o primeiro gera uma imagem PNG própria para cada um dos
    12 slides; o segundo gera um PNG vertical comprido do protótipo da home.
 9. Receipts, hashes, dimensões e formatos passam por gate determinístico.
 10. O stakeholder revisa e aprova os 13 bitmaps antes do handoff; rejeições

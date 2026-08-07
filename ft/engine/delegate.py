@@ -201,6 +201,18 @@ def _normalize_codex_profile(value: str | None) -> str | None:
     return normalized
 
 
+def _normalize_codex_auth(value: str | None) -> str | None:
+    """Normalize the optional per-node Codex authentication route."""
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if normalized != "chatgpt":
+        raise ValueError("codex_auth deve ser 'chatgpt' quando definido")
+    return normalized
+
+
 def _normalize_workflow_id(value: str | None) -> str | None:
     """Return a SymGateway-safe workflow label."""
     if value is None:
@@ -213,8 +225,24 @@ def _normalize_workflow_id(value: str | None) -> str | None:
     return normalized
 
 
-def _symgateway_workflow_url(base_url: str, workflow_id: str) -> str | None:
-    """Add or replace the workflow segment of a SymGateway base URL."""
+def _normalize_ft_cycle(value: str | None) -> str | None:
+    """Return a SymGateway-safe Fast Track cycle label."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", normalized):
+        raise ValueError("ft_cycle contém valor inválido")
+    return normalized
+
+
+def _symgateway_workflow_url(
+    base_url: str,
+    workflow_id: str,
+    ft_cycle: str | None = None,
+) -> str | None:
+    """Add or replace the workflow and Fast Track segments of a gateway URL."""
     parsed = urlsplit(str(base_url).strip())
     if parsed.scheme not in {"http", "https"} or parsed.hostname != "symgateway.symlabs.ai":
         return None
@@ -231,10 +259,23 @@ def _symgateway_workflow_url(base_url: str, workflow_id: str) -> str | None:
     else:
         segments.extend(["w", workflow_id])
 
+    if ft_cycle:
+        insertion_index = segments.index("v1") if "v1" in segments else len(segments)
+        segments[insertion_index:insertion_index] = [
+            "t",
+            workflow_id,
+            "c",
+            ft_cycle,
+        ]
+
     return urlunsplit(parsed._replace(path="/" + "/".join(segments)))
 
 
-def _codex_workflow_override(profile: str | None, workflow_id: str | None) -> tuple[str, str] | None:
+def _codex_workflow_override(
+    profile: str | None,
+    workflow_id: str | None,
+    ft_cycle: str | None = None,
+) -> tuple[str, str] | None:
     """Resolve the profile provider and its workflow-scoped SymGateway URL."""
     if not profile or not workflow_id:
         return None
@@ -261,7 +302,7 @@ def _codex_workflow_override(profile: str | None, workflow_id: str | None) -> tu
         base_url = providers[provider_id].get("base_url")
         if not isinstance(base_url, str):
             continue
-        routed_url = _symgateway_workflow_url(base_url, workflow_id)
+        routed_url = _symgateway_workflow_url(base_url, workflow_id, ft_cycle)
         if routed_url:
             return provider_id, routed_url
     return None
@@ -1148,17 +1189,23 @@ def _executor_env(
     opencode_deny_edit_tools: bool = False,
     opencode_text_only: bool = False,
     workflow_id: str | None = None,
+    ft_cycle: str | None = None,
 ) -> dict[str, str]:
     """Monta env do executor, aplicando hardening específico por provider."""
     env = dict(os.environ if base_env is None else base_env)
     engine = llm_engine.lower().strip()
     normalized_workflow = _normalize_workflow_id(workflow_id)
+    normalized_ft_cycle = _normalize_ft_cycle(ft_cycle)
     if engine == "claude" and normalized_workflow:
         for name, value in _claude_project_settings(project_root).items():
             env[name] = value
         base_url = env.get("ANTHROPIC_BASE_URL")
         if base_url:
-            routed_url = _symgateway_workflow_url(base_url, normalized_workflow)
+            routed_url = _symgateway_workflow_url(
+                base_url,
+                normalized_workflow,
+                normalized_ft_cycle,
+            )
             if routed_url:
                 env["ANTHROPIC_BASE_URL"] = routed_url
     if engine == "opencode":
@@ -1241,11 +1288,18 @@ def _build_executor_command(
     session_id: str | None = None,
     resume_session: bool = False,
     workflow_id: str | None = None,
+    ft_cycle: str | None = None,
+    codex_auth: str | None = None,
 ) -> list[str]:
     """Monta o comando do executor não-interativo com bypass habilitado."""
     engine = llm_engine.lower().strip()
     normalized_effort = _normalize_executor_effort(effort)
     normalized_workflow = _normalize_workflow_id(workflow_id)
+    normalized_ft_cycle = _normalize_ft_cycle(ft_cycle)
+    normalized_codex_auth = _normalize_codex_auth(codex_auth)
+
+    if normalized_codex_auth and engine != "codex":
+        raise ValueError("codex_auth só pode ser usado com o executor Codex")
 
     if engine == "claude":
         cmd = [
@@ -1266,19 +1320,40 @@ def _build_executor_command(
 
     if engine == "codex":
         cmd = ["codex"]
-        profile = _normalize_codex_profile(os.environ.get("FT_CODEX_PROFILE"))
+        profile = (
+            None
+            if normalized_codex_auth == "chatgpt"
+            else _normalize_codex_profile(os.environ.get("FT_CODEX_PROFILE"))
+        )
         if profile:
             cmd += ["--profile", profile]
-        workflow_override = _codex_workflow_override(profile, normalized_workflow)
+        cmd.append("exec")
+        if session_id and resume_session:
+            cmd.append("resume")
+        if normalized_codex_auth == "chatgpt":
+            # A excecao inclui todo o node, não apenas a chamada image_gen.
+            # Force the built-in provider and auth so project config cannot
+            # silently route this execution back through a custom provider.
+            cmd += [
+                "-c",
+                'model_provider="openai"',
+                "-c",
+                'forced_login_method="chatgpt"',
+            ]
+        workflow_override = _codex_workflow_override(
+            profile,
+            normalized_workflow,
+            normalized_ft_cycle,
+        )
         if workflow_override:
             provider_id, routed_url = workflow_override
+            # Codex applies profile layers after root-level config overrides.
+            # Keep this override in the deepest subcommand scope so the profile
+            # cannot restore its generic /w/orchestration base URL.
             cmd += [
                 "-c",
                 f"model_providers.{provider_id}.base_url={json.dumps(routed_url)}",
             ]
-        cmd.append("exec")
-        if session_id and resume_session:
-            cmd.append("resume")
         reasoning_effort = (
             _normalize_executor_effort(
                 os.environ.get("FT_CODEX_REASONING_EFFORT"),
@@ -2331,6 +2406,8 @@ def delegate_to_llm(
     llm_session_id: str | None = None,
     llm_session_resume: bool = False,
     workflow_id: str | None = None,
+    ft_cycle: str | None = None,
+    codex_auth: str | None = None,
 ) -> DelegateResult:
     """
     Chama o executor LLM configurado como subprocesso para executar uma tarefa de construcao.
@@ -2550,6 +2627,8 @@ REGRAS:
         session_id=llm_session_id,
         resume_session=llm_session_resume,
         workflow_id=workflow_id,
+        ft_cycle=ft_cycle,
+        codex_auth=codex_auth,
     )
     if opencode_capture_mode or opencode_bundle_mode or opencode_script_mode:
         cmd = _opencode_capture_command(cmd)
@@ -2584,6 +2663,7 @@ REGRAS:
         opencode_deny_edit_tools=opencode_deny_edit_tools,
         opencode_text_only=opencode_capture_mode or opencode_bundle_mode or opencode_script_mode,
         workflow_id=workflow_id,
+        ft_cycle=ft_cycle,
     )
     sandbox_tmp: tempfile.TemporaryDirectory | None = None
     sandbox_mounts: list[_SandboxMount] = []
@@ -3194,6 +3274,8 @@ def delegate_with_feedback(
     llm_session_id: str | None = None,
     llm_session_resume: bool = False,
     workflow_id: str | None = None,
+    ft_cycle: str | None = None,
+    codex_auth: str | None = None,
 ) -> DelegateResult:
     """Re-delega com feedback especifico dos validadores."""
     retry_task = f"""TAREFA ORIGINAL:
@@ -3225,4 +3307,6 @@ Nao modifique o que ja esta funcionando."""
         llm_session_id=llm_session_id,
         llm_session_resume=llm_session_resume,
         workflow_id=workflow_id,
+        ft_cycle=ft_cycle,
+        codex_auth=codex_auth,
     )

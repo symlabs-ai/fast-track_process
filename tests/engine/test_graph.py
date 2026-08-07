@@ -132,6 +132,55 @@ class TestSprintHelpers:
 # ---------------------------------------------------------------------------
 
 class TestGraphValidation:
+    def test_codex_auth_requires_known_route_and_codex_executor(self):
+        graph = ProcessGraph(
+            [
+                Node(
+                    id="image",
+                    type="build",
+                    title="Image",
+                    executor="llm_codex",
+                    codex_auth="chatgpt",
+                    next="done",
+                ),
+                Node(id="done", type="end", title="Done"),
+            ],
+            {"id": "test"},
+        )
+        assert graph.get_node("image").codex_auth == "chatgpt"
+
+        with pytest.raises(ValueError, match="codex_auth invalido"):
+            ProcessGraph(
+                [
+                    Node(
+                        id="image",
+                        type="build",
+                        title="Image",
+                        executor="llm_codex",
+                        codex_auth="api",
+                        next="done",
+                    ),
+                    Node(id="done", type="end", title="Done"),
+                ],
+                {"id": "test"},
+            )
+
+        with pytest.raises(ValueError, match="executor Codex"):
+            ProcessGraph(
+                [
+                    Node(
+                        id="image",
+                        type="build",
+                        title="Image",
+                        executor="llm_claude",
+                        codex_auth="chatgpt",
+                        next="done",
+                    ),
+                    Node(id="done", type="end", title="Done"),
+                ],
+                {"id": "test"},
+            )
+
     def test_missing_next_target_raises(self):
         with pytest.raises(ValueError, match="nao existe"):
             make_graph([
@@ -248,6 +297,17 @@ class TestGraphValidation:
 # ---------------------------------------------------------------------------
 
 class TestLoadGraph:
+    def test_loads_codex_auth(self, tmp_path):
+        p = tmp_path / "process.yml"
+        p.write_text(
+            "id: auth_process\ntitle: Auth\nnodes:\n"
+            "  - {id: image, type: build, title: Image, executor: codex, codex_auth: chatgpt, next: end}\n"
+            "  - {id: end, type: end, title: Done}\n",
+            encoding="utf-8",
+        )
+
+        assert load_graph(p).get_node("image").codex_auth == "chatgpt"
+
     def test_loads_fail_fast_validation_mode(self, tmp_path):
         p = tmp_path / "process.yml"
         p.write_text(

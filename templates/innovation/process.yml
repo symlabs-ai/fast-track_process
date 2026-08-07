@@ -15,7 +15,7 @@
 #   cobertos por AC-* no PRD (validado deterministicamente).
 
 id: innovation
-version: "0.3.2"
+version: "0.3.3"
 title: "Innovation — Discovery, Validação e Business Case Automatizados"
 
 execution_policy:
@@ -586,8 +586,16 @@ nodes:
       - Restrições técnicas herdadas de docs/research/feasibility.md.
 
       docs/handoff.md deve conter:
-      - next_process no frontmatter: mvp-builder-fast (produto novo) ou
-        feature-fast (evolução de produto existente), com justificativa.
+      - Para produto novo, frontmatter com `next_process: mdd`,
+        `delivery_process: mvp-builder-fast` e
+        `process_sequence: [mdd, mvp-builder-fast]`. O mdd é um ciclo
+        independente e deve ser encerrado antes do builder.
+      - Para evolução de produto já entregue, frontmatter com
+        `next_process: feature-fast`, `delivery_process: feature-fast` e
+        `process_sequence: [feature-fast]`.
+      - Justifique a classificação novo|existente. Nunca encaminhe produto novo
+        diretamente ao mvp-builder-fast: seu gate de entrada exige hipótese e
+        PRD no contrato produzido pelo mdd.
       - delivery_readiness: planning_required no frontmatter. Innovation
         entrega definição, não software pronto nem readiness global.
       - implementation_authorized: true|false no frontmatter. Use true SOMENTE
@@ -626,7 +634,11 @@ nodes:
       - read_artifact:
           path: docs/handoff.md
           key: next_process
-          pattern: "next_process:\\s*(mvp-builder-fast|feature-fast)"
+          pattern: "next_process:\\s*(mdd|feature-fast)"
+      - read_artifact:
+          path: docs/handoff.md
+          key: delivery_process
+          pattern: "delivery_process:\\s*(mvp-builder-fast|feature-fast)"
       - read_artifact:
           path: docs/handoff.md
           key: delivery_readiness

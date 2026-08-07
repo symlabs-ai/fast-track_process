@@ -2164,6 +2164,16 @@ nodes:
     def test_review_verdict_parser_recognizes_rejection_variants(self, line):
         assert _parse_review_verdict(line) == "REJECTED"
 
+    def test_review_verdict_parser_ignores_runtime_status_description_in_table(self):
+        report = (
+            "| Campo | Valor observado | 1448x1086 | 1280x800 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| Status | failed com texto, ícone e nome acessível | PASS | PASS |\n"
+            "\nVERDICT: APPROVED\n"
+        )
+
+        assert _parse_review_verdict(report) == "APPROVED"
+
     def test_review_rejection_wins_over_approved_response_and_other_outputs(
         self,
         tmp_path,
@@ -2409,6 +2419,9 @@ nodes:
     outputs: [docs/broad-review.md]
     validators:
       - file_exists: docs/broad-review.md
+      - file_contains:
+          path: docs/global-coverage.md
+          pattern: C58 PASS
     next: acceptance
   - id: acceptance
     type: human_gate
@@ -2484,12 +2497,14 @@ nodes:
         with patch(
             "ft.engine.runner.delegate_to_llm",
             side_effect=focal_review,
-        ):
+        ), patch.object(runner, "_run_validators", wraps=runner._run_validators) as validators:
             runner._run_review(runner.graph.get_node("broad.review"))
 
         reviewed = runner.state_mgr.load()
-        assert reviewed.current_node == "acceptance"
+        assert reviewed.current_node == "broad.review"
+        assert reviewed.node_status == "ready"
         assert reviewed.active_fix_return is None
+        assert validators.call_count == 1
         assert (docs / "broad-review.md").read_text(encoding="utf-8").startswith(
             "VERDICT: APPROVED"
         )
@@ -2634,6 +2649,45 @@ nodes:
         assert before
         assert before != after_report
         assert after_report != after_evidence
+
+    def test_review_blocking_evidence_allows_expected_error_state_name(self, tmp_path):
+        project_root = tmp_path / "project"
+        screenshots = project_root / "docs" / "screenshots"
+        state_dir = project_root / "state"
+        screenshots.mkdir(parents=True)
+        state_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: expected_error_evidence
+title: Expected error evidence
+nodes:
+  - id: review
+    type: review
+    title: Review
+    outputs: [docs/screenshots/]
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        node = runner.graph.get_node("review")
+
+        (screenshots / "T11-error-state.png").write_bytes(b"expected state")
+        assert runner._review_blocking_evidence_reason(node, require_fresh=False) is None
+
+        (screenshots / "T11-white-screen.png").write_bytes(b"broken state")
+        assert "tela em branco" in runner._review_blocking_evidence_reason(
+            node,
+            require_fresh=False,
+        )
 
     def test_runtime_focal_review_refuses_mock_only_ui_data_approval(self, tmp_path):
         project_root = tmp_path / "project"
@@ -4540,6 +4594,93 @@ class TestStatus:
         assert snapshot.terminal_status == "completed"
         assert snapshot.current is None
         assert snapshot.signal == "chamada LLM concluída"
+
+    def test_progress_snapshot_keeps_recoverable_stream_error_active(self, tmp_path):
+        log_path = tmp_path / "recovering.jsonl"
+        events = [
+            {"type": "turn.started"},
+            {
+                "type": "error",
+                "message": (
+                    "Reconnecting... 5/5 (stream disconnected before completion)"
+                ),
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "fallback",
+                    "type": "error",
+                    "message": "Falling back from WebSockets to HTTPS transport",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "continued",
+                    "type": "agent_message",
+                    "text": "A geração continuou após o fallback.",
+                },
+            },
+        ]
+        log_path.write_text(
+            "\n".join(json.dumps(event) for event in events)
+            + "\n[PRODUCTIVITY_RENEWED] source=process cpu_delta_ticks=5\n",
+            encoding="utf-8",
+        )
+
+        snapshot = _llm_progress_snapshot(log_path)
+
+        assert snapshot is not None
+        assert snapshot.terminal is False
+        assert snapshot.terminal_status is None
+        assert snapshot.current == "A geração continuou após o fallback."
+        assert snapshot.signal == "CPU/I/O do processo avançando"
+
+    def test_progress_snapshot_marks_explicit_failed_turn_as_terminal(self, tmp_path):
+        log_path = tmp_path / "failed.jsonl"
+        log_path.write_text(
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {"message": "provider unavailable"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        snapshot = _llm_progress_snapshot(log_path)
+
+        assert snapshot is not None
+        assert snapshot.terminal is True
+        assert snapshot.terminal_status == "failed"
+        assert snapshot.current is None
+        assert snapshot.signal == "chamada LLM encerrada com falha"
+
+    def test_status_renders_explicit_failed_turn_as_failure(
+        self,
+        runner_v2,
+        capsys,
+    ):
+        runner_v2.init_state()
+        log_path = runner_v2.state_mgr.path.parent / "llm_logs" / "failed.jsonl"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text(
+            json.dumps({"type": "turn.failed", "error": {"message": "boom"}})
+            + "\n",
+            encoding="utf-8",
+        )
+        state = runner_v2.state_mgr.load()
+        state.node_status = "delegated"
+        state.active_llm_log = str(log_path)
+        state.last_llm_log = str(log_path)
+        runner_v2.state_mgr.save()
+
+        runner_v2.status()
+
+        out = capsys.readouterr().out
+        assert "✗ DELEGAÇÃO LLM ENCERRADA COM FALHA" in out
+        assert "✓ DELEGAÇÃO LLM CONCLUÍDA" not in out
 
     def test_status_expands_active_banner_with_live_progress(
         self,

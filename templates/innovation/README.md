@@ -16,8 +16,9 @@ Demanda bruta → Intake → Pesquisa (3 lentes, web) → Validação → Busine
                                                                               ou feature-fast)
 ```
 
-O processo **não implementa nada**: termina onde `mvp-builder-fast` (produto
-novo) ou `feature-fast` (evolução) começam. A saída go é `docs/PRD.md` +
+O processo **não implementa nada**: termina encaminhando produto novo para a
+sequência `mdd → mvp-builder-fast`, ou evolução de produto entregue para
+`feature-fast`. A saída go é `docs/PRD.md` +
 `docs/handoff.md`; a saída no-go é `docs/post-mortem.md` — ambos são fins
 legítimos. Matar uma ideia barata, com dossiê, é entrega de valor.
 
@@ -25,8 +26,9 @@ Após um GO, o projeto continua deliberadamente em `building` e pode aparecer
 como `BLOCKED` em `ft project-status`: innovation não cria
 `docs/PROJECT_BACKLOG.md`, não reconcilia `.ft/project.yml` e não seleciona a
 matriz de validação. Essas são responsabilidades do builder indicado no
-handoff, antes da construção. O handoff também distingue o GO de uma autorização
-explícita para iniciar implementação.
+handoff, antes da construção. Para produto novo, o `mdd` materializa primeiro
+o contrato de definição exigido pelo builder. O handoff também distingue o GO
+de uma autorização explícita para iniciar implementação.
 
 ## Uso
 

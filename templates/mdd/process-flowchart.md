@@ -19,8 +19,8 @@ flowchart TD
     PKG --> HR{{Aprovar pacote MDD}}
     HR -. rejeitar .-> REV[Revisão focal dos derivados]
     REV --> PKG
-    HR --> PI[12 PNGs do pitch deck<br/>Sol Max + image_gen]
-    PI --> SI[PNG vertical do protótipo do site<br/>Sol Max + image_gen]
+    HR --> PI[12 PNGs do pitch deck<br/>Sol Max + $imagegen]
+    PI --> SI[PNG vertical do protótipo do site<br/>Sol Max + $imagegen]
     SI --> AIG[[Gate técnico dos assets visuais]]
     AIG --> VR{{Aprovar slides e protótipo}}
     VR -. rejeitar .-> VREV[Revisão focal dos PNGs]
@@ -33,6 +33,8 @@ A definição é aprovada antes da narrativa. O sumário executivo deriva de
 hipótese, visão e PRD; o deck deriva do sumário; a proposta comercial do site
 deriva da narrativa consolidada e fala diretamente ao usuário final. Somente
 após a aprovação textual, nodes fixados em
-`gpt-5.6-sol`/`max` produzem 12 PNGs de slides e um PNG vertical do site. O
+`gpt-5.6-sol`/`max`, com `codex_auth: chatgpt`, dirigem os assets e invocam `$imagegen`, que escolhe
+internamente o modelo de imagem para produzir 12 PNGs de slides e um PNG
+vertical do site. O
 `ft close` promove os documentos, bitmaps e receipts canônicos. O template não
 muda a fase do projeto nem assume o papel de builder.

@@ -4572,23 +4572,39 @@ def cmd_retry(args):
             )
         )
         state.pending_fix = None
+        directed_return = state.active_fix_return
+        if (
+            isinstance(directed_return, dict)
+            and directed_return.get("review_node") == node_id
+        ):
+            state.active_fix_return = None
+            state.last_approval_message = None
+            raw_retries = state.metrics.get("focal_evidence_retries")
+            if isinstance(raw_retries, dict):
+                retries = dict(raw_retries)
+                retries.pop(node_id, None)
+                if retries:
+                    state.metrics["focal_evidence_retries"] = retries
+                else:
+                    state.metrics.pop("focal_evidence_retries", None)
     print(_ui.info(f"Retentando node: {node_id}"))
     mode = "mvp" if getattr(args, "auto", False) else "step"
 
-    retry_validation = getattr(
-        runner,
-        "retry_blocked_validation_without_llm",
-        None,
-    )
-    if callable(retry_validation) and retry_validation(mode=mode):
-        resumed = runner.state_mgr.load()
-        if mode == "mvp" and resumed.node_status not in {
-            "blocked",
-            "awaiting_approval",
-            "pending_fix",
-        }:
-            runner.run(mode=mode)
-        return
+    if not retrying_pending_review:
+        retry_validation = getattr(
+            runner,
+            "retry_blocked_validation_without_llm",
+            None,
+        )
+        if callable(retry_validation) and retry_validation(mode=mode):
+            resumed = runner.state_mgr.load()
+            if mode == "mvp" and resumed.node_status not in {
+                "blocked",
+                "awaiting_approval",
+                "pending_fix",
+            }:
+                runner.run(mode=mode)
+            return
 
     # Limpar estado bloqueado e reset do contador de auto-fix
     state.node_status = "ready"

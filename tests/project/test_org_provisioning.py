@@ -223,9 +223,11 @@ def test_symlabs_template_configures_codex_and_claude_with_dedicated_key(
     agents = (project / "AGENTS.md").read_text(encoding="utf-8")
     assert agents.count("<!-- symlabs-symgateway:start -->") == 1
     assert agents.count("<!-- symlabs-symgateway:end -->") == 1
-    assert "LLMs obrigatoriamente via SymGateway" in agents
+    assert "LLMs via SymGateway por default" in agents
+    assert "`codex_auth: chatgpt`" in agents
+    assert "A exceção cobre o node inteiro" in " ".join(agents.split())
     assert "Não execute `claude auth login`" in agents
-    assert "não faça bypass para o provider direto" in agents
+    assert "Não crie bypass ad hoc" in agents
 
     profile_path = tmp_path / "codex-home" / "symgateway-dev.config.toml"
     with profile_path.open("rb") as source:

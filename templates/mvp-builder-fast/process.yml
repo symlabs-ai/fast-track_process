@@ -2257,6 +2257,7 @@ nodes:
 
   - id: ft.frontend.03.prd_review
     type: review
+    no_pre_seed: true
     title: "Revisão Visual Independente da Superfície"
     description: "Em uma lane separada da sessão de construção, auditar build, navegação visual, mockups, semântica, acessibilidade e watermarks antes do backend. Este checkpoint não exige nem aceita fixtures como prova de integração real."
     sprint: sprint-03-frontend
@@ -2392,6 +2393,7 @@ nodes:
 
   - id: ft.frontend.04.integrated_review
     type: review
+    no_pre_seed: true
     title: "Revisão Integrada da Superfície"
     description: "Após o TDD do backend, auditar de ponta a ponta a superfície contra PRD e critérios de UI usando API, persistência e dados reais do produto."
     sprint: sprint-04-tdd

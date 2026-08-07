@@ -309,6 +309,7 @@ def test_macro_nodes_keep_deterministic_checkpoints() -> None:
     visual_review = graph.get_node("ft.frontend.03.prd_review")
     visual_gate = graph.get_node("gate.frontend")
     assert visual_review.type == "review"
+    assert visual_review.no_pre_seed is True
     assert visual_review.next == "gate.frontend"
     assert visual_gate.next == "ft.tdd.01.red"
     assert "ui_criteria_coverage" not in str(visual_review.validators)
@@ -322,6 +323,7 @@ def test_macro_nodes_keep_deterministic_checkpoints() -> None:
         graph.get_node("ft.frontend.04.integrated_review").next
         == "gate.frontend_integrated"
     )
+    assert graph.get_node("ft.frontend.04.integrated_review").no_pre_seed is True
     assert graph.get_node("gate.frontend_integrated").next == "ft.delivery.01.entrypoint"
 
     assert graph.get_node("ft.handoff.02.backlog_update").executor == "python"

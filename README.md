@@ -237,6 +237,7 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 | `ft-ui-prototype` | Prototipagem rápida de UI |
 | `fastfy` | Adoção de repositório legado na base canônica Fast Track |
 | `material_design_pwa` | Evolução de UI existente para Material Design 3 e PWA |
+| `ios-to-android` | Port de app iOS entregue para Android no mesmo repositório, com paridade e regressão física nos dois alvos |
 
 Templates de inicialização (`kind: init`) — usados por `ft init --template`,
 recusados pelo run:

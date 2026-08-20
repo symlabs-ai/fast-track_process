@@ -6,6 +6,14 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ## [Unreleased]
 
+### Exploração standalone Codex pode preservar sessão e telemetria
+
+- `ft explore --persist-session` cria uma conversa read-only retomável e
+  `--resume-session` continua o mesmo contexto sem vinculá-lo a um ciclo.
+- O protocolo `--stream-json` passa a reportar id opaco da sessão, retomada e
+  uso normalizado do turno; custo permanece nulo quando o provider não o
+  fornece, sem estimativa implícita.
+
 ### `mvp-builder-fast` separa revisão visual de validação integrada
 
 - A superfície recebe um checkpoint visual e de acessibilidade antes do TDD,

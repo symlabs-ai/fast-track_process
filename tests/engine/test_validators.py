@@ -78,6 +78,42 @@ class TestIdentityReady:
 
         assert passed, detail
 
+    def test_accepts_identity_when_journey_explicitly_requires_no_auth(self, tmp_path):
+        receipt = tmp_path / "docs" / "test-identity.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(
+            '{"identity_ref":"agent_local_01","environment":"isolated_test",'
+            '"seed_status":"ready","seeded":true,"idempotent":true,'
+            '"resettable":true,"journey_ready":true,'
+            '"credentials_source":"not_required",'
+            '"authentication":{"required_for_journey":false,'
+            '"status":"not_required",'
+            '"credential_material_observed_or_recorded":false},'
+            '"secret_values_recorded":false}',
+            encoding="utf-8",
+        )
+
+        passed, detail = validate_test_identity_ready(project_root=str(tmp_path))
+
+        assert passed, detail
+
+    def test_rejects_not_required_without_explicit_no_auth_contract(self, tmp_path):
+        receipt = tmp_path / "docs" / "test-identity.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(
+            '{"identity_ref":"agent_local_01","environment":"isolated_test",'
+            '"seed_status":"ready","seeded":true,"idempotent":true,'
+            '"resettable":true,"journey_ready":true,'
+            '"credentials_source":"not_required",'
+            '"secret_values_recorded":false}',
+            encoding="utf-8",
+        )
+
+        passed, detail = validate_test_identity_ready(project_root=str(tmp_path))
+
+        assert not passed
+        assert "explicitamente sem autenticação" in detail
+
     def test_rejects_receipt_with_sensitive_field(self, tmp_path):
         receipt = tmp_path / "docs" / "test-identity.json"
         receipt.parent.mkdir(parents=True)
@@ -346,6 +382,29 @@ class TestReviewOutcome:
         assert "2 refs" in detail
         assert "APPROVED" in detail
 
+    def test_excludes_refs_owned_by_a_later_validation_stage(self, tmp_path):
+        scope, receipt_path, _markdown = self._write_primary(tmp_path)
+        scope.write_text(
+            "requirements:\n"
+            "  - id: R-001 # jornada integrada\n"
+            "  - id: R-002 # exige target físico da matriz aplicável\n",
+            encoding="utf-8",
+        )
+        receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+        receipt["scope_sha256"] = hashlib.sha256(scope.read_bytes()).hexdigest()
+        receipt["results"] = [receipt["results"][0]]
+        receipt_path.write_text(
+            yaml.safe_dump(receipt, sort_keys=False), encoding="utf-8"
+        )
+
+        passed, detail = review_outcome_valid(
+            **self._args(tmp_path),
+            scope_exclude_pattern=r"target físico|matriz aplicável",
+        )
+
+        assert passed, detail
+        assert "1 refs" in detail
+
     def test_accepts_rejected_receipt_before_fix_but_not_at_gate(self, tmp_path):
         self._write_primary(tmp_path, verdict="REJECTED")
 
@@ -357,6 +416,37 @@ class TestReviewOutcome:
         assert passed, detail
         assert not gated
         assert "exige verdict APPROVED" in gated_detail
+
+    def test_rejected_review_can_leave_unexecuted_refs_pending(self, tmp_path):
+        _scope, receipt_path, _markdown = self._write_primary(
+            tmp_path, verdict="REJECTED"
+        )
+        receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+        receipt["results"][1]["result"] = "PENDING"
+        receipt["results"][1]["evidence"] = [
+            "docs/evidence/focal-stop-after-r-001.json"
+        ]
+        receipt_path.write_text(
+            yaml.safe_dump(receipt, sort_keys=False), encoding="utf-8"
+        )
+
+        passed, detail = review_outcome_valid(**self._args(tmp_path))
+
+        assert passed, detail
+        assert "REJECTED" in detail
+
+    def test_approved_review_rejects_pending_refs(self, tmp_path):
+        _scope, receipt_path, _markdown = self._write_primary(tmp_path)
+        receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+        receipt["results"][1]["result"] = "NOT_RUN"
+        receipt_path.write_text(
+            yaml.safe_dump(receipt, sort_keys=False), encoding="utf-8"
+        )
+
+        passed, detail = review_outcome_valid(**self._args(tmp_path))
+
+        assert not passed
+        assert "pendentes" in detail
 
     def test_rejects_markdown_and_structured_verdict_divergence(self, tmp_path):
         self._write_primary(tmp_path)
@@ -1189,6 +1279,27 @@ class TestUICriteriaCoverage:
         passed, detail = ui_criteria_coverage(project_root=str(tmp_path))
 
         assert passed, detail
+
+    def test_excludes_criteria_owned_by_platform_validation(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True)
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C01: A jornada integrada persiste e relê os dados.\n"
+            "- [ ] C02: A matriz aplicável comprova o target físico.\n",
+            encoding="utf-8",
+        )
+        (docs / "screenshot-review.md").write_text(
+            "| C01 | PASS | jornada integrada |\n",
+            encoding="utf-8",
+        )
+
+        passed, detail = ui_criteria_coverage(
+            exclude_pattern=r"target físico|matriz aplicável",
+            project_root=str(tmp_path),
+        )
+
+        assert passed, detail
+        assert "1 criterios" in detail
 
     def test_passes_with_code_evidence_without_visual_report(self, tmp_path):
         docs = tmp_path / "docs"

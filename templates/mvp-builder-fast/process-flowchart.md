@@ -1,4 +1,4 @@
-# Fluxograma — MVP Builder Fast (process.yml v1.16.0)
+# Fluxograma — MVP Builder Fast (process.yml v1.18.0)
 
 Fluxo principal do template `mvp-builder-fast`. Uma sessão LLM é mantida por
 sprint; `⑂` indica lanes paralelas e `R` indica a lane independente de review.
@@ -49,9 +49,9 @@ flowchart TD
 
     subgraph S3["Sprint 03 — Superfície · sessão s3 + review R"]
         FRONT["Construir frontend P0"]
-        REVIEW["R Revisão visual + acessibilidade"]
+        REVIEW["R Revisão visual"]
         FG[["Gate visual pré-backend"]]
-        FIXFRONT["Correção focal do frontend"]
+        FIXFRONT["Correção em lote dos findings visuais"]
         FRONT --> REVIEW --> FG
         REVIEW -. on_fail .-> FIXFRONT --> REVIEW
     end
@@ -64,10 +64,11 @@ flowchart TD
         REFACTOR["Refactor"]
         TG[["Gate TDD"]]
         INTEGRATED["R Revisão integrada<br/>UI → API → persistência → UI"]
+        FIXINTEGRATED["Correção em lote dos findings integrados"]
         IG[["Gate integrado"]]
         RED --> GREEN --> REFACTOR --> TG
         TG --> INTEGRATED --> IG
-        INTEGRATED -. on_fail .-> FIXFRONT
+        INTEGRATED -. on_fail .-> FIXINTEGRATED --> INTEGRATED
     end
     FG --> RED
 
@@ -116,6 +117,9 @@ flowchart TD
         PRDN["⑂ PRD.next"]
         CRIT["⑂ Análise crítica"]
         FLIGHT["Plano de voo + handoff"]
+        OPAUDIT["R Auditoria operacional<br/>dados reais + restart + legibilidade"]
+        OPFIX["Correção focal operacional"]
+        OPG[["Gate operacional"]]
         HG{{"Revisão handoff"}}
         EVOLVE["Melhoria do processo"]
         CONS --> BG --> FCG
@@ -123,7 +127,8 @@ flowchart TD
         FCG --> CRIT
         PRDN --> FLIGHT
         CRIT --> FLIGHT
-        FLIGHT --> HG --> EVOLVE
+        FLIGHT --> OPAUDIT --> OPG --> HG --> EVOLVE
+        OPAUDIT -. on_fail .-> OPFIX --> OPAUDIT
         HG -. reject .-> FLIGHT
     end
     STAKE --> CONS
@@ -136,7 +141,7 @@ flowchart TD
     classDef work fill:#e2e3f5,stroke:#4a4a8a,color:#000
     class PRD,UI,BACKLOG,FEATURES decision
     class HIPG,PRDG,UIQ,UIG,TECHG,MOCKG,STAKE,HG human
-    class MDD,PG,FG,TG,DG,SG,AG,EG,VG,BG,FCG gate
+    class MDD,PG,FG,TG,DG,SG,AG,EG,VG,BG,FCG,OPG gate
 ```
 
 O plano é consultivo. Decisions, validators, retries e human gates continuam

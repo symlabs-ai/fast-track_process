@@ -31,6 +31,9 @@ _RUNTIME_STATE_PATHS = [
     ":(glob)**/.presented_artifact",
     ":(glob)**/.presentation.pid",
     ":(glob)**/.presentation.log",
+    ":(glob)**/.node-runs-tmp/**",
+    ":(glob)**/.process-yaml-tmp/**",
+    ":(glob)**/test-results/**/.tmp/**",
     ":(glob)*_log.md",
     ":(glob)**/*_log.md",
 ]
@@ -93,9 +96,9 @@ def auto_commit(
         for p in paths:
             subprocess.run(["git", "add", p], cwd=cwd, capture_output=True)
     else:
-        # Stage tudo e depois remova artefatos descartáveis do índice.
+        # Stage tudo; artefatos descartáveis são removidos abaixo.
         subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
-        _unstage_runtime_state(cwd)
+    _unstage_runtime_state(cwd)
 
     # Verificar se ha algo staged
     status = subprocess.run(

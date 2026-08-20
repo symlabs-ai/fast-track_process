@@ -22,6 +22,7 @@ from ft.engine.delegate import (
     _extract_codex_output,
     _extract_provider_session_id,
     _extract_opencode_json_text,
+    _has_productive_liveness,
     _is_opencode_internal_log_line,
     _opencode_capture_command,
     _prepare_opencode_sandbox_mounts,
@@ -493,7 +494,7 @@ class TestBuildExecutorCommand:
 
         def progressing(_proc):
             nonlocal ticks
-            ticks += 1
+            ticks += 2
             return _ProcessLiveness(
                 alive=True,
                 process_count=1,
@@ -514,6 +515,49 @@ class TestBuildExecutorCommand:
         assert result.success is True
         assert result.session_id == "thread-process"
         assert result.timings["process_renewals"] >= 2
+
+    def test_char_only_process_heartbeat_is_not_productive_liveness(self):
+        baseline = _ProcessLiveness(
+            alive=True,
+            process_count=1,
+            cpu_ticks=10,
+            read_chars=1_000,
+            write_chars=500,
+        )
+        heartbeat = _ProcessLiveness(
+            alive=True,
+            process_count=1,
+            cpu_ticks=10,
+            read_chars=2_984,
+            write_chars=500,
+        )
+        actual_io = _ProcessLiveness(
+            alive=True,
+            process_count=1,
+            cpu_ticks=10,
+            read_chars=2_984,
+            write_chars=500,
+            read_bytes=4_096,
+        )
+        polling = _ProcessLiveness(
+            alive=True,
+            process_count=1,
+            cpu_ticks=11,
+            read_chars=2_984,
+            write_chars=500,
+        )
+        active_cpu = _ProcessLiveness(
+            alive=True,
+            process_count=1,
+            cpu_ticks=12,
+            read_chars=2_984,
+            write_chars=500,
+        )
+
+        assert _has_productive_liveness(baseline, heartbeat) is False
+        assert _has_productive_liveness(baseline, polling) is False
+        assert _has_productive_liveness(baseline, active_cpu) is True
+        assert _has_productive_liveness(baseline, actual_io) is True
 
     def test_workspace_snapshot_detects_same_size_source_edit(self, tmp_path):
         source = tmp_path / "src" / "feature.py"
@@ -543,6 +587,21 @@ class TestBuildExecutorCommand:
         assert paths == [tmp_path.resolve()]
         assert before.digest != after.digest
         assert after.file_count == before.file_count + 1
+
+    def test_workspace_snapshot_ignores_engine_logs_and_activity_sidecars(self, tmp_path):
+        paths = _workspace_progress_paths(str(tmp_path), ["docs"])
+        before = _workspace_progress_snapshot(paths, str(tmp_path))
+        log_dir = tmp_path / "state" / "llm_logs"
+        log_dir.mkdir(parents=True)
+        (log_dir / "review.jsonl").write_text("stream\n", encoding="utf-8")
+        (log_dir / "review.jsonl.activity").write_text(
+            "heartbeat\n", encoding="utf-8"
+        )
+        (tmp_path / "cycle-01_log.md").write_text("engine\n", encoding="utf-8")
+
+        after = _workspace_progress_snapshot(paths, str(tmp_path))
+
+        assert after == before
 
     def test_opt_in_max_wall_stops_even_a_productive_stream(self, tmp_path, monkeypatch):
         bin_dir = tmp_path / "bin"

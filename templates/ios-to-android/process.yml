@@ -1,0 +1,769 @@
+# iOS to Android — portar um aplicativo entregue sem separar o produto em repos.
+#
+# O catálogo global nunca é executado. `ft run . --template ios-to-android`
+# materializa este bundle em `.ft/process/ios-to-android/` e executa só a cópia.
+
+id: ios_to_android
+version: "1.0.0"
+title: "iOS → Android — Port no Mesmo Repositório"
+
+execution_policy:
+  entrypoint: run
+  template: ios-to-android
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/ios-to-android/process.yml
+  merge_command: ft close --merge full
+  project_role: maintenance
+  allowed_project_phases:
+    - maintenance
+
+input_policy:
+  required: true
+  destination: docs/ios-to-android-request.md
+  prompt: >-
+    Descreva o port desejado, o item PB-* correspondente, restrições de paridade,
+    aparelhos disponíveis e qualquer capacidade que não deva existir no Android.
+
+correction_policy:
+  follow_graph_after_retry: true
+  scope_rejection_restarts_at: port.discovery
+  acceptance_rejection_restarts_at: port.implement
+  mandatory_after_implementation:
+    - port.implementation_gate
+    - port.review
+    - port.platform_validate
+    - port.acceptance
+
+close_policy:
+  backlog:
+    mode: referenced
+    references_path: docs/ios-android-port-plan.yml
+    reference_field: backlog_item
+    required_count: 1
+    accepted_statuses:
+      - done
+      - accepted
+  features_catalog: required
+  merge: full
+
+artifact_policy:
+  canonical:
+    - .ft/project.yml
+    - CHANGELOG.md
+    - Makefile
+    - docs/PRD.md
+    - docs/TECH_STACK.md
+    - docs/PROJECT_BACKLOG.md
+    - docs/FEATURES.md
+    - docs/ui_criteria.md
+    - docs/ios-android-port-plan.yml
+    - docs/ios-android-capabilities.yml
+    - docs/ios-android-port-summary.md
+    - android/
+    - ios/
+    - app/
+    - shared/
+    - project/
+    - src/
+    - tests/
+    - gradle/
+    - gradlew
+    - gradlew.bat
+    - build.gradle
+    - build.gradle.kts
+    - settings.gradle
+    - settings.gradle.kts
+  cycle:
+    - docs/ios-to-android-request.md
+    - docs/ios-android-questions.md
+    - docs/ios-android-implementation.md
+    - docs/ios-android-review.md
+    - docs/ios-android-review.yml
+    - docs/ios-android-platform-fix.md
+    - docs/validation-matrix.yml
+    - docs/platform-validation-report.yml
+    - docs/test-identity.json
+    - docs/evidence/platform-validation/
+    - docs/stakeholder-feedback.md
+
+nodes:
+  - id: port.preflight
+    type: gate
+    title: "Preflight do App iOS Entregue"
+    description: >-
+      Confirma que o produto está em manutenção, possui app iOS identificável,
+      backlog/catálogo e uma demanda versionada antes de qualquer alteração.
+    sprint: port-01-scope
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - project_contract_valid:
+          path: .ft/project.yml
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py preflight"
+          timeout: 60
+    next: port.discovery
+
+  - id: port.discovery
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: discovery
+    title: "Inventariar iOS e Delimitar a Paridade Android"
+    description: >-
+      Levanta telas, capacidades, dados, integrações e diferenças semânticas do
+      iOS; define a fronteira compartilhada e registra somente dúvidas reais.
+    sprint: port-01-scope
+    executor: codex
+    max_turns: 60
+    llm_timeout_seconds: 900
+    outputs:
+      - docs/ios-android-port-plan.yml
+      - docs/ios-android-capabilities.yml
+      - docs/ios-android-questions.md
+    write_scope:
+      - docs/ios-android-port-plan.yml
+      - docs/ios-android-capabilities.yml
+      - docs/ios-android-questions.md
+    prompt: |
+      Faça discovery somente leitura do produto atual a partir de
+      docs/ios-to-android-request.md, docs/PRD.md, docs/TECH_STACK.md,
+      docs/PROJECT_BACKLOG.md, docs/FEATURES.md, código iOS, testes e contratos.
+      Não implemente Android nem altere fontes canônicas neste node.
+
+      Trate o app como um único produto e um único repositório Git. Inventarie:
+      telas e navegação; regras de negócio; modelos/serialização; persistência;
+      rede e autenticação; deep links; push; background; mídia; sensores;
+      acessibilidade; analytics; privacidade; assinatura e distribuição. Para
+      cada item cite evidência iOS repo-local real. Não presuma que APIs ou UX
+      Apple possuam equivalência direta no Android.
+
+      Produza docs/ios-android-port-plan.yml com schema_version: 1,
+      clarification_status: clear|required, backlog_item: PB-NNN já existente,
+      ios_roots: [paths existentes], android_root: <path relativo novo ou atual>,
+      application_id, shared_strategy, shared_contracts: [], out_of_scope: [],
+      architecture_decisions: [], migration_order: [] e risks: []. Preserve o
+      núcleo comum apenas onde a evidência justificar; integrações de SO ficam
+      atrás de adapters finos. Não crie outro Git, outro backend ou duplicação
+      silenciosa de regras compartilháveis.
+
+      Produza docs/ios-android-capabilities.yml com schema_version: 1 e lista
+      capabilities. Cada item contém id CAP-001..., name, ios_evidence com paths
+      existentes, parity exact|adapted|not_applicable, android_strategy,
+      status: planned, acceptance_criteria com IDs PAC-001... globais e assertion
+      observável, android_evidence: [], test_evidence: []. not_applicable exige
+      rationale explícita e visível para o stakeholder.
+
+      Quando faltar decisão que altere contrato, UX, dados, segurança, paridade
+      ou aceite, use clarification_status: required e escreva perguntas
+      numeradas em docs/ios-android-questions.md. Caso contrário use clear e
+      declare que não existem perguntas pendentes. Nunca invente a resposta.
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py discovery"
+          timeout: 60
+    next: port.discovery_state
+
+  - id: port.discovery_state
+    type: gate
+    title: "Registrar Estado do Discovery"
+    description: "Extrai deterministicamente se ainda existem decisões pendentes."
+    sprint: port-01-scope
+    executor: python
+    outputs:
+      - docs/ios-android-port-plan.yml
+    validators:
+      - read_artifact:
+          path: docs/ios-android-port-plan.yml
+          key: clarification_status
+          pattern: "clarification_status:\\s*(required|clear)"
+    next: port.clarity
+
+  - id: port.clarity
+    type: decision
+    title: "Escopo Está Claro?"
+    description: "Encaminha dúvidas ao stakeholder ou apresenta o plano completo."
+    sprint: port-01-scope
+    executor: python
+    condition: clarification_status
+    branches:
+      required: port.questions
+      clear: port.scope_gate
+      _default: port.discovery
+
+  - id: port.questions
+    type: human_gate
+    title: "Decisões de Paridade e Arquitetura"
+    description: >-
+      Responda às perguntas numeradas do discovery; as respostas refinam o mesmo
+      plano sem apagar evidências já levantadas.
+    sprint: port-01-scope
+    executor: python
+    approval_message_required: true
+    outputs:
+      - docs/ios-android-questions.md
+    decision_context:
+      decision: "Responder às decisões que mudam o comportamento do port Android."
+      why_now: "O inventário encontrou lacunas que não podem ser inferidas do código iOS."
+      review_paths:
+        - docs/ios-android-questions.md
+        - docs/ios-android-port-plan.yml
+      checklist:
+        - "Responda cada pergunta numerada sem incluir secrets ou dados pessoais."
+        - "Diferencie paridade exata, adaptação nativa e capacidade fora de escopo."
+      limitations:
+        - "A resposta aprova decisões, mas ainda não aprova implementação."
+      approve_effect: "Volta ao discovery para incorporar e validar as respostas."
+      reject_effect: "Cancela a definição corrente sem implementar o port."
+    reject_next: port.discovery
+    next: port.discovery
+
+  - id: port.scope_gate
+    type: human_gate
+    title: "Aprovação do Plano de Port"
+    description: >-
+      Confirme a matriz completa de capacidades, adaptações Android, arquitetura
+      compartilhada, ordem de migração, riscos e fora de escopo.
+    sprint: port-01-scope
+    executor: python
+    outputs:
+      - docs/ios-android-port-plan.yml
+      - docs/ios-android-capabilities.yml
+    reject_next: port.discovery
+    decision_context:
+      decision: "Aprovar o contrato de paridade iOS → Android antes de escrever código."
+      why_now: "Inventário e critérios PAC-* estão completos e deterministicamente válidos."
+      review_paths:
+        - docs/ios-android-port-plan.yml
+        - docs/ios-android-capabilities.yml
+      checklist:
+        - "Toda capacidade visível do iOS aparece na matriz com evidência real."
+        - "Cada adaptação ou exclusão está explícita e justificada."
+        - "iOS e Android permanecem no mesmo repositório, com adapters por SO."
+        - "Cada PAC-* é observável e tem estratégia de validação."
+      limitations:
+        - "A aprovação não autoriza publicação em loja nem uso de credenciais."
+      approve_effect: "Libera criação da fundação Android e dos hooks de validação."
+      reject_effect: "Volta ao inventário para corrigir escopo, paridade ou arquitetura."
+    next: port.foundation
+
+  - id: port.foundation
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: build
+    title: "Criar Fundação Android no Mesmo Repositório"
+    description: >-
+      Materializa o projeto Android, fronteiras compartilhadas e harness de
+      validação sem alterar o comportamento comprovado do iOS.
+    sprint: port-02-foundation
+    executor: codex
+    max_turns: 80
+    llm_timeout_seconds: 1200
+    llm_episode: ios_android_delivery
+    llm_episode_budget_seconds: 2400
+    llm_episode_max_calls: 3
+    outputs:
+      - android/
+      - app/
+      - shared/
+      - project/
+      - src/
+      - tests/
+      - Makefile
+      - gradle/
+      - gradlew
+      - gradlew.bat
+      - build.gradle
+      - build.gradle.kts
+      - settings.gradle
+      - settings.gradle.kts
+      - docs/TECH_STACK.md
+      - .ft/project.yml
+    write_scope:
+      - android
+      - app
+      - shared
+      - project
+      - src
+      - tests
+      - Makefile
+      - gradle
+      - gradlew
+      - gradlew.bat
+      - build.gradle
+      - build.gradle.kts
+      - settings.gradle
+      - settings.gradle.kts
+      - docs/TECH_STACK.md
+      - .ft/project.yml
+    prompt: |
+      Implemente somente a fundação aprovada em docs/ios-android-port-plan.yml.
+      Preserve o app iOS existente e o histórico Git. O Android deve ficar no
+      android_root aprovado, sem repositório .git aninhado, submodule ou cópia do
+      backend. Use a stack e versões decididas pelas fontes do projeto; não
+      troque arquitetura por preferência.
+
+      Separe contratos/regras compartilháveis de adapters iOS e Android. Não
+      mova código iOS só por estética. Crie identidade Android coerente com
+      application_id, configuração de build reproduzível, lockfiles aplicáveis,
+      Manifest mínimo, armazenamento seguro, política de permissões e estrutura
+      de testes. Nenhum secret, keystore, token ou credencial entra no Git.
+
+      Atualize docs/TECH_STACK.md com os dois alvos e as fronteiras comuns.
+      Reconcile .ft/project.yml.validation em mode: explicit, preservando os
+      demais campos, com android emulator/physical e ios simulator/physical,
+      todos required: true. Preserve test_identity required quando houver fluxo
+      autenticado/personalizado.
+
+      Crie ou atualize um Makefile na raiz com estes targets estáveis, delegando
+      a scripts/comandos reais do projeto: validate-android-emulator,
+      validate-android-physical, validate-ios-simulator e validate-ios-physical.
+      Não use @true, echo de sucesso ou stub. Cada target deve buildar o candidato
+      corrente, instalar quando aplicável, executar os checks da matriz e falhar
+      com exit != 0 diante de desvio ou indisponibilidade obrigatória.
+    validators:
+      - git_diff_not_empty: "."
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py contract"
+          timeout: 60
+    next: port.foundation_gate
+
+  - id: port.foundation_gate
+    type: gate
+    title: "Validar Fundação e Matriz Multiplataforma"
+    description: >-
+      Prova que Android está dentro do mesmo Git e que os quatro targets reais
+      possuem hooks estáveis antes da implementação ampla.
+    sprint: port-02-foundation
+    executor: python
+    env_setup:
+      - ft validation-matrix .
+    outputs:
+      - docs/validation-matrix.yml
+    validation_mode: fail_fast
+    validators:
+      - project_contract_valid:
+          path: .ft/project.yml
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py contract"
+          stop_on_failure: true
+      - validation_matrix_valid:
+          path: docs/validation-matrix.yml
+      - validation_profile_hooks:
+          path: Makefile
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "A fundação Android ou os hooks multiplataforma estão incompletos."
+      goto: port.foundation
+    next: port.implement
+
+  - id: port.implement
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: build
+    title: "Implementar Paridade Android por Capacidade"
+    description: >-
+      Implementa cada CAP/PAC aprovado, com adapters Android finos, testes e
+      evidência, preservando a regressão iOS.
+    sprint: port-03-delivery
+    executor: codex
+    max_turns: 120
+    llm_timeout_seconds: 1200
+    llm_episode: ios_android_delivery
+    llm_episode_budget_seconds: 3600
+    llm_episode_max_calls: 5
+    outputs:
+      - android/
+      - app/
+      - shared/
+      - project/
+      - src/
+      - tests/
+      - docs/ios-android-capabilities.yml
+      - docs/ios-android-implementation.md
+    write_scope:
+      - android
+      - app
+      - shared
+      - project
+      - src
+      - tests
+      - docs/ios-android-capabilities.yml
+      - docs/ios-android-implementation.md
+    prompt: |
+      Implemente todas as capacidades aplicáveis de
+      docs/ios-android-capabilities.yml contra os PAC-* aprovados. Trabalhe na
+      ordem do plano, preserve o comportamento iOS e mantenha diferenças de SO
+      explícitas atrás de adapters. Não duplique regra compartilhável, não
+      invente equivalência para APIs Apple e não amplie o escopo.
+
+      Para cada capacidade aplicável crie testes focais e integração suficiente
+      para falhar diante de divergência. Derive os casos obrigatórios somente dos
+      PAC-*, de docs/ui_criteria.md, docs/TECH_STACK.md e dos checks selecionados
+      em docs/validation-matrix.yml. Capacidades nativas precisam de prova pela
+      superfície real descrita nesses contratos, não só mocks. Preserve os
+      requisitos de segurança e privacidade versionados; nunca grave secrets ou
+      material de assinatura.
+
+      Atualize cada item aplicável para status: implemented (ou validated somente
+      se já houver prova real corrente), preenchendo android_evidence e
+      test_evidence com paths repo-locais existentes. Mantenha not_applicable com
+      rationale aprovada. Gere docs/ios-android-implementation.md com seções
+      Arquitetura, Capacidades, Testes e Riscos Residuais e rastreie
+      CAP → PAC → código → teste. Rode apenas checks focais; a matriz completa é
+      executada depois da auditoria independente.
+    validators:
+      - git_diff_not_empty: "."
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py implementation"
+          timeout: 90
+      - command_succeeds: "git diff --check"
+    next: port.implementation_gate
+
+  - id: port.implementation_gate
+    type: gate
+    title: "Validar Contratos e Evidências da Implementação"
+    description: >-
+      Recusa capacidade sem código/teste verificável e divergência estrutural da
+      matriz antes de gastar aparelhos físicos na validação completa.
+    sprint: port-03-delivery
+    executor: python
+    env_setup:
+      - ft validation-matrix .
+    outputs:
+      - docs/validation-matrix.yml
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py implementation"
+          stop_on_failure: true
+      - validation_matrix_valid:
+          path: docs/validation-matrix.yml
+      - validation_profile_hooks:
+          path: Makefile
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "A implementação ainda possui capacidade sem evidência ou contrato inválido."
+      goto: port.implement
+    next: port.review
+
+  - id: port.review
+    no_pre_seed: true
+    type: review
+    review_route_path: docs/ios-android-review.yml
+    title: "Auditar Paridade e Regressão iOS"
+    description: >-
+      Revisor independente confronta cada capacidade e critério com o diff,
+      testes e arquitetura, sem modificar o produto.
+    sprint: port-03-delivery
+    executor: codex
+    max_turns: 60
+    llm_timeout_seconds: 900
+    outputs:
+      - docs/ios-android-review.md
+      - docs/ios-android-review.yml
+    write_scope:
+      - docs/ios-android-review.md
+      - docs/ios-android-review.yml
+    prompt: |
+      Audite o candidato corrente contra o plano, cada CAP-* e cada PAC-*.
+      Confronte evidências iOS e Android, o diff real, os testes e as restrições
+      versionadas em docs/TECH_STACK.md e docs/ui_criteria.md. Verifique toda a
+      arquitetura e qualidade exclusivamente contra essas fontes, o plano e os
+      PAC-*, incluindo a preservação do comportamento iOS. Use testes focais;
+      não execute a matriz física completa e não altere código, testes ou
+      documentação canônica.
+
+      Gere docs/ios-android-review.md com tabela CAP/PAC/veredito/evidência e
+      achados numerados F-001... Gere docs/ios-android-review.yml com
+      schema_version: 1, verdict: APPROVED|REJECTED,
+      review_route: approved|implementation|scope, summary,
+      capability_results mapeando exatamente todo CAP-* para PASS|FAIL|N/A e
+      findings. Cada finding contém id, capability, criteria, severity, summary,
+      evidence e recommended_route. APPROVED exige zero findings e todos os
+      aplicáveis PASS. Use scope somente se o contrato aprovado estiver errado;
+      use implementation para defeito de código, teste ou evidência.
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py review"
+          timeout: 90
+    next: port.review_state
+
+  - id: port.review_state
+    type: gate
+    title: "Registrar Rota da Auditoria"
+    description: "Extrai a rota estruturada sem deixar o LLM controlar o grafo."
+    sprint: port-03-delivery
+    executor: python
+    outputs:
+      - docs/ios-android-review.yml
+    validators:
+      - read_artifact:
+          path: docs/ios-android-review.yml
+          key: review_route
+          pattern: "review_route:\\s*(approved|implementation|scope)"
+    next: port.review_decision
+
+  - id: port.review_decision
+    type: decision
+    title: "Encaminhar Auditoria"
+    description: "Aprovação avança; defeito volta ao código; erro de contrato volta ao discovery."
+    sprint: port-03-delivery
+    executor: python
+    condition: review_route
+    branches:
+      approved: port.platform_validate
+      implementation: port.implement
+      scope: port.discovery
+      _default: port.review
+
+  - id: port.platform_validate
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: review
+    title: "Executar Matriz iOS + Android em Ambientes Reais"
+    description: >-
+      Executa os quatro targets obrigatórios, instala o mesmo candidato e agrega
+      receipt/evidências sem substituir aparelho físico por simulador.
+    sprint: port-04-platforms
+    executor: codex
+    max_turns: 140
+    llm_timeout_seconds: 1200
+    env_setup:
+      - ft validation-matrix .
+    outputs:
+      - docs/validation-matrix.yml
+      - docs/platform-validation-report.yml
+      - docs/evidence/platform-validation/
+      - docs/test-identity.json
+    write_scope:
+      - docs/validation-matrix.yml
+      - docs/platform-validation-report.yml
+      - docs/evidence/platform-validation
+      - docs/test-identity.json
+    prompt: |
+      Execute exatamente todos os perfis, targets, make_target e checks de
+      docs/validation-matrix.yml. A matriz deve conter Android emulator/physical
+      e iOS simulator/physical; não invente targets nem substitua físico por
+      virtual. Serialize o uso de um mesmo aparelho. Ausência de target obrigatório
+      é BLOCKED; comportamento incorreto é FAIL, nunca SKIP.
+
+      Valide o candidato integrado corrente. Para cada target, use a entrada
+      normal do produto, instale o artefato corrente e compare SHA-256 local e
+      observado. Execute somente os fluxos e critérios requeridos pelos PAC-*,
+      docs/ui_criteria.md e pelos checks materializados na matriz, preservando a
+      fidelidade de evidência exigida por cada um. Preview, mock, componente
+      isolado ou rota interna não encerram check de produto. Não registre
+      identificadores brutos de ambiente, PII, credencial ou secret. Quando a
+      matriz exigir test_identity, produza apenas o receipt sanitizado previsto.
+
+      O check mockup_watermark segue o contrato global do FT: inventarie toda
+      tela alcançável, associe-a ao mockup exato e prove com screenshot real que
+      a marca discreta está renderizada pelo produto. Overlay de captura, tela
+      sem mockup ou inventário incompleto é FAIL.
+
+      Grave evidências novas sob
+      docs/evidence/platform-validation/<run-id>/<perfil>/<target>/, sem apagar
+      histórico ou reutilizar prova entre targets. Gere
+      docs/platform-validation-report.yml schema_version: 1, matrix_sha256 dos
+      bytes atuais, verdict APPROVED|REJECTED, candidate_ref opaco, profiles e
+      findings. Cada target repete id/required, result, observed_candidate_ref,
+      environment (kind, execution_surface, os_name, os_version e device_ref
+      opaco no físico), installation PASS com hashes iguais quando exigido e
+      cada check na ordem da matriz com result PASS|FAIL e evidence não vazia.
+      mockup_watermark inclui inventory_complete, discovered_screen_count,
+      unmapped_screens e screens com id, mockup_ref, watermark_text idêntico,
+      result e screenshots exclusivos. Cada FAIL possui finding PV-F-NNN com
+      profile, target, check e summary. APPROVED exige todos os targets PASS,
+      zero checks FAIL e findings vazio.
+    validation_mode: fail_fast
+    validators:
+      - validation_matrix_valid:
+          path: docs/validation-matrix.yml
+      - platform_validation_report:
+          matrix_path: docs/validation-matrix.yml
+          report_path: docs/platform-validation-report.yml
+          evidence_root: docs/evidence/platform-validation
+          test_identity_path: docs/test-identity.json
+          require_approved: true
+      - command_succeeds: "git diff --check"
+    on_fail:
+      human_gate: "A matriz iOS/Android encontrou um defeito focal ou target obrigatório indisponível."
+      goto: port.platform_fix
+      automatic: true
+    next: port.acceptance
+
+  - id: port.platform_fix
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    type: build
+    title: "Corrigir Achados Focais de Plataforma"
+    description: >-
+      Corrige somente PV-F-* reproduzidos e retorna à mesma matriz completa antes
+      de reapresentar o produto.
+    sprint: port-04-platforms
+    executor: codex
+    max_turns: 80
+    llm_timeout_seconds: 900
+    fix_review: port.platform_validate
+    outputs:
+      - android/
+      - ios/
+      - app/
+      - shared/
+      - project/
+      - src/
+      - tests/
+      - docs/ios-android-platform-fix.md
+    write_scope:
+      - android
+      - ios
+      - app
+      - shared
+      - project
+      - src
+      - tests
+      - docs/ios-android-platform-fix.md
+    prompt: |
+      Leia somente os PV-F-* correntes de docs/platform-validation-report.yml.
+      Corrija o menor delta de código/teste relacionado e preserve targets,
+      capacidades e evidências já aprovados. Não altere a matriz, não rebaixe
+      target obrigatório e não edite receipt/screenshot para mascarar defeito.
+      Finding visual exige corrigir UI de produção. Finding de artefato exige
+      novo build e hash; nunca edite binário pronto.
+
+      Registre docs/ios-android-platform-fix.md com
+      finding→causa→paths→correção→teste focal→resultado. O próximo node repetirá
+      toda a matriz no candidato corrigido.
+    validators:
+      - file_exists: docs/ios-android-platform-fix.md
+      - git_diff_not_empty: "."
+      - command_succeeds: "git diff --check"
+    next: port.platform_validate
+
+  - id: port.acceptance
+    type: human_gate
+    title: "Aceite do Port iOS + Android"
+    description: >-
+      Confirme a experiência Android e a ausência de regressão iOS usando os
+      builds instalados e o receipt aprovado da matriz.
+    sprint: port-05-acceptance
+    executor: python
+    outputs:
+      - docs/stakeholder-feedback.md
+    reject_next: port.implement
+    decision_context:
+      decision: "Aceitar o Android como alvo do mesmo produto sem regressão do iOS."
+      why_now: "Auditoria e os quatro targets obrigatórios terminaram com evidência atual."
+      review_paths:
+        - docs/ios-android-port-plan.yml
+        - docs/ios-android-capabilities.yml
+        - docs/ios-android-review.md
+        - docs/platform-validation-report.yml
+      checklist:
+        - "Instale/abra os candidatos pelas entradas normais em Android e iOS."
+        - "Percorra as capacidades P0 e compare adaptações com o plano aprovado."
+        - "Confirme permissões, back, lifecycle, dados e estados de erro relevantes."
+        - "Rejeite qualquer capacidade órfã, regressão iOS ou evidência inacessível."
+      limitations:
+        - "O aceite não publica em Google Play nem App Store."
+        - "Requisitos mutáveis das lojas devem ser revalidados no ciclo de release."
+      approve_effect: "Consolida backlog, catálogo, changelog e resumo do port."
+      reject_effect: "Volta à implementação com o desvio reproduzível informado."
+    next: port.reconcile
+
+  - id: port.reconcile
+    no_pre_seed: true
+    type: retro
+    title: "Consolidar o Port Aceito"
+    description: >-
+      Atualiza somente o PB/FEAT afetado, changelog, documentação técnica e o
+      resumo durável ligado às evidências aprovadas.
+    sprint: port-05-acceptance
+    executor: codex
+    max_turns: 40
+    llm_timeout_seconds: 600
+    outputs:
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/TECH_STACK.md
+      - CHANGELOG.md
+      - docs/ios-android-capabilities.yml
+      - docs/ios-android-port-summary.md
+    write_scope:
+      - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
+      - docs/TECH_STACK.md
+      - CHANGELOG.md
+      - docs/ios-android-capabilities.yml
+      - docs/ios-android-port-summary.md
+    prompt: |
+      Reconcile somente o backlog_item de docs/ios-android-port-plan.yml e a
+      FEAT-* correspondente. Marque o PB como done/accepted com evidência real,
+      preserve todos os demais itens/IDs e atualize FEATURES sem criar uma
+      feature por plataforma quando Android for apenas novo alvo da capacidade
+      existente. Acrescente entrada #FEAT no CHANGELOG e mantenha TECH_STACK
+      coerente com o layout final.
+
+      Marque capacidades aplicáveis como validated somente quando cobertas pelo
+      receipt aprovado corrente. Gere docs/ios-android-port-summary.md com seções
+      Resultado, Paridade, Evidências e Limitações, ligando commit/candidato,
+      matriz, report, CAP/PAC e artefatos sem copiar secrets ou dados de device.
+      Registre publicação em loja como não executada, salvo evidência externa
+      explicitamente fornecida por outro pedido.
+    validators:
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py reconcile"
+          timeout: 60
+    next: port.final_gate
+
+  - id: port.final_gate
+    type: gate
+    title: "Gate Final do Port Multiplataforma"
+    description: >-
+      Confirma que contratos, catálogos e receipt continuam coerentes depois da
+      reconciliação e antes do merge.
+    sprint: port-05-acceptance
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py implementation"
+          stop_on_failure: true
+      - command_succeeds:
+          command: "python .ft/process/ios-to-android/scripts/validate_ios_to_android.py reconcile"
+          stop_on_failure: true
+      - platform_validation_ready:
+          matrix_path: docs/validation-matrix.yml
+          report_path: docs/platform-validation-report.yml
+          evidence_root: docs/evidence/platform-validation
+          test_identity_path: docs/test-identity.json
+      - command_succeeds: "git diff --check"
+    next: port.end
+
+  - id: port.end
+    type: end
+    title: "Port iOS → Android Pronto para Merge"
+    description: >-
+      Execute `ft close --merge full` para arquivar evidências do ciclo, integrar
+      Android e documentação ao mesmo repositório e remover a worktree. Release
+      nas lojas permanece um pedido separado.

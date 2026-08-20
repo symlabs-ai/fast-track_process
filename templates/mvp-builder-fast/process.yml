@@ -12,7 +12,7 @@
 #        (por exemplo src/, tests/ e examples/ na raiz), sem inventar frontend.
 
 id: mvp_builder_fast
-version: "1.16.0"
+version: "1.18.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -117,11 +117,16 @@ artifact_policy:
     - docs/validation-matrix.yml
     - docs/platform-validation-report.yml
     - docs/evidence/platform-validation/
+    - docs/operational-readiness.md
+    - docs/operational-readiness.yml
   cycle:
     - .build_ok
     - docs/task_list.md
     - docs/screenshots/
+    - docs/surface-visual-review.md
+    - docs/surface-visual-review.yml
     - docs/screenshot-review.md
+    - docs/surface-integrated-review.yml
     - docs/smoke-report.md
     - docs/acceptance-report.md
     - docs/e2e-report.md
@@ -721,8 +726,9 @@ nodes:
       massa controlada, fonte→persistência→UI para dados exibidos, instalação e
       launch reais, CTAs com efeito, navegação por menus/controles de produção,
       permissões refletidas na UI, retorno/back sensível ao contexto,
-      persistência após rotação/reinício, insets/safe areas sem sobreposição,
-      acessibilidade e comparação visual com todas as referências declaradas.
+      persistência após rotação/reinício, insets/safe areas sem sobreposição e
+      comparação visual com todas as referências declaradas. Opere sempre com
+      o perfil padrão do aparelho e não altere configurações do sistema.
       Atalho técnico, rota direta, preview ou componente isolado pode apoiar
       diagnóstico, mas nunca encerrar um check.
 
@@ -861,7 +867,7 @@ nodes:
       - project_contract_valid:
           path: .ft/project.yml
       - command_succeeds: "git diff --check"
-    next: ft.end
+    next: ft.operational.01.audit
 
   # ================================================================
   # Entrada — MDD agora é um template independente
@@ -909,7 +915,7 @@ nodes:
   - id: ft.hyper.00.ui_criteria_questions
     type: human_gate
     title: "Superfície e Direção da Experiência"
-    description: "Brief obrigatório do stakeholder. Declare primeiro se o produto possui superfície visual. Para produto visual, informe plataforma/viewport, estética, referências, marca, acessibilidade, telas, ações e estados P0. Para biblioteca/SDK headless, declare explicitamente que não há UI, browser, telas ou mockups e descreva a experiência programática esperada. Use ft approve \"brief...\"; aprovação sem mensagem é recusada."
+    description: "Brief obrigatório do stakeholder. Declare primeiro se o produto possui superfície visual. Para produto visual, informe plataforma/viewport, estética, referências, marca, telas, ações e estados P0. Requisitos especiais de uso só entram quando solicitados explicitamente. Para biblioteca/SDK headless, declare explicitamente que não há UI, browser, telas ou mockups e descreva a experiência programática esperada. Use ft approve \"brief...\"; aprovação sem mensagem é recusada."
     sprint: sprint-02-planning
     executor: python
     approval_message_required: true
@@ -932,7 +938,7 @@ nodes:
       Use a mensagem CURRENT_FEEDBACK do gate anterior como fonte primária e
       leia somente o necessário de docs/PRD.md. Escreva docs/ui-brief.md com:
       presença ou ausência de superfície visual, plataforma/viewport quando
-      aplicável, personalidade, referências, marca, acessibilidade, ações P0,
+      aplicável, personalidade, referências, marca, ações P0,
       estados exigidos, padrões obrigatórios/proibidos e decisões abertas.
       Preserve literalmente nomes, cores e restrições fornecidos; não invente
       preferência ausente.
@@ -2102,7 +2108,7 @@ nodes:
   - id: ft.plan.06b.mockup_gate
     type: human_gate
     title: "Revisão das Imagens de Mockup P0"
-    description: "Revise os relatórios de coerência e abra os PNGs em resolução original. Confirme estética, hierarquia, acessibilidade, cobertura e aderência ao PRD e ao brief. O frontend não começa sem aprovação explícita e textual; rejeite descrevendo tela, state e ajuste visual."
+    description: "Revise os relatórios de coerência e abra os PNGs em resolução original. Confirme estética, hierarquia, cobertura e aderência ao PRD e ao brief. O frontend não começa sem aprovação explícita e textual; rejeite descrevendo tela, state e ajuste visual."
     sprint: sprint-02-planning
     executor: python
     approval_message_required: true
@@ -2238,8 +2244,9 @@ nodes:
 
   - id: ft.frontend.02.implement
     type: build
-    title: "Corrigir Superfície e Integração"
-    description: "Corrigir somente os findings da revisão visual ou integrada na plataforma selecionada, incluindo a integração com backend/API/persistência quando já existirem, seguindo docs/ui_criteria.md, docs/api_contract.md e docs/TECH_STACK.md sem presumir browser, HTML, npm ou framework JavaScript."
+    title: "Corrigir Superfície Visual"
+    description: "Corrigir em lote somente os findings da revisão visual na plataforma selecionada, seguindo mockups, docs/ui_criteria.md e docs/TECH_STACK.md sem presumir browser, HTML, npm ou framework JavaScript."
+    fix_review: ft.frontend.03.prd_review
     sprint: sprint-03-frontend
     executor: claude
     outputs:
@@ -2258,36 +2265,80 @@ nodes:
   - id: ft.frontend.03.prd_review
     type: review
     no_pre_seed: true
+    preserve_outputs_on_reentry: true
     title: "Revisão Visual Independente da Superfície"
-    description: "Em uma lane separada da sessão de construção, auditar build, navegação visual, mockups, semântica, acessibilidade e watermarks antes do backend. Este checkpoint não exige nem aceita fixtures como prova de integração real."
+    description: "Em uma lane separada da sessão de construção, auditar build, navegação visual, mockups, clareza operacional e watermarks antes do backend. Este checkpoint não exige nem aceita fixtures como prova de integração real."
     sprint: sprint-03-frontend
     executor: claude
     max_turns: 60
     outputs:
-      - docs/screenshots/
-      - docs/screenshot-review.md
+      - docs/screenshots/surface-visual/
+      - docs/surface-visual-review.md
+      - docs/surface-visual-review.yml
+    write_scope:
+      - docs/screenshots/surface-visual
+      - docs/surface-visual-review.md
+      - docs/surface-visual-review.yml
     prompt: |
       Faça a revisão visual independente da superfície entregue nesta sprint:
       1. Audite o build, as rotas e a navegação visual disponível contra os
          mockups e os requisitos de interface do PRD.
       2. Execute a aplicação com o runner apropriado à plataforma selecionada
          (instrumentação Android, XCUITest, browser ou automação desktop) e
-         capture evidências reais das telas principais.
-      3. Verifique adaptação à tela, estados renderizáveis, semântica,
-         acessibilidade e a marca d'água exata de cada mockup.
+         capture evidências reais de cada state inventariado.
+      3. Verifique adaptação à tela, estados renderizáveis, clareza operacional
+         e a marca d'água exata de cada mockup. Use o aparelho em seu perfil
+         padrão e não altere configurações do sistema. Use instrumentação do
+         app, input por coordenadas e screenshots da plataforma.
+         Se a execução corrente já possuir todas as capturas inventariadas, não
+         interaja novamente com o aparelho: consolide por análise offline.
+         Capturas físicas anteriores continuam válidas como evidência dos pixels
+         renderizados. Após fix, recolete apenas refs afetados,
+         ausentes ou com tema divergente usando o método permitido. Antes de
+         rejeitar por falta de evidência corrente, tente essa coleta focal.
+         Em aparelho compartilhado, notificação pode e deve usar recorte
+         sanitizado da superfície do produto com receipt próprio; nunca preserve
+         a cortina completa quando ela contiver notificações pessoais.
       4. Compare cada tela/estado com a imagem de mockup aprovada correspondente em
          docs/mockups/screen-map.yml e registre divergências verificáveis.
-      5. Escreva docs/screenshot-review.md identificando explicitamente esta
-         evidência como VISUAL_ONLY e sem declarar cobertura integrada.
-      6. Não exija backend, API ou persistência reais neste checkpoint. Dados
+      5. Grave cada execução em um subdiretório novo e imutável sob
+         docs/screenshots/surface-visual/; preserve todas as evidências anteriores.
+      6. Escreva docs/surface-visual-review.md com exatamente uma linha global
+         `VERDICT: APPROVED` ou `VERDICT: REJECTED`, identificando explicitamente
+         a evidência como VISUAL_ONLY e sem declarar cobertura integrada.
+      7. Escreva docs/surface-visual-review.yml com o contrato:
+           schema_version: 1
+           scope_sha256: <sha256 dos bytes correntes de docs/mockups/screen-map.yml>
+           verdict: APPROVED | REJECTED
+           evidence_grade: VISUAL_ONLY
+           results:
+             - ref: <cada state SNN.N do screen-map exatamente uma vez>
+               result: PASS | FAIL
+               evidence: [<screenshot físico repo-local desta execução>]
+           findings:
+             - id: FV-001
+               refs: [<states reprovados>]
+               summary: <divergência visual ou operacional>
+               evidence: [<paths repo-local verificáveis>]
+         Markdown e YAML devem ter o mesmo veredito. APPROVED exige todos os
+         states PASS e findings vazio; REJECTED exige findings que cubram
+         exatamente os states FAIL.
+      8. Não exija backend, API ou persistência reais neste checkpoint. Dados
          locais determinísticos podem viabilizar a inspeção visual, mas nunca
          contam como prova de integração ou fidelidade de dados.
-      7. Use REJECTED somente para falha visual ou de acessibilidade bloqueante;
-         nesse caso,
-         registre a evidência e pare.
+      9. Audite todo o inventário em uma única execução e agregue todos os
+         findings bloqueantes; não pare no primeiro defeito.
     validators:
       - command_succeeds: "make -C src surface-build"
-      - file_exists: docs/screenshot-review.md
+      - file_exists: docs/screenshots/surface-visual/
+      - file_exists: docs/surface-visual-review.md
+      - file_exists: docs/surface-visual-review.yml
+      - review_outcome_valid:
+          path: docs/surface-visual-review.yml
+          markdown_path: docs/surface-visual-review.md
+          scope_path: docs/mockups/screen-map.yml
+          scope_pattern: "(?<=\\{id: )S\\d+\\.\\d+\\b"
+          require_approved: false
     on_fail:
       human_gate: "Revisão PRD encontrou não-conformidades no frontend. Corrija antes de continuar."
       goto: ft.frontend.02.implement
@@ -2300,8 +2351,16 @@ nodes:
     sprint: sprint-03-frontend
     executor: python
     validators:
-      - file_exists: docs/screenshot-review.md
+      - file_exists: docs/screenshots/surface-visual/
+      - file_exists: docs/surface-visual-review.md
+      - file_exists: docs/surface-visual-review.yml
       - command_succeeds: "make -C src surface-build"
+      - review_outcome_valid:
+          path: docs/surface-visual-review.yml
+          markdown_path: docs/surface-visual-review.md
+          scope_path: docs/mockups/screen-map.yml
+          scope_pattern: "(?<=\\{id: )S\\d+\\.\\d+\\b"
+          require_approved: true
     next: ft.tdd.01.red
 
   # ================================================================
@@ -2367,6 +2426,9 @@ nodes:
     description: "Refatorar o código para clareza, remover duplicações e garantir que os testes continuam passando. Não adicionar funcionalidades — apenas melhorar qualidade do código existente."
     sprint: sprint-04-tdd
     executor: claude
+    write_scope:
+      - src/backend
+      - src/tests
     validators:
       - command_succeeds: "cd src && python -m pytest tests/ -x -q"
       - pytest_red_quality:
@@ -2394,18 +2456,33 @@ nodes:
   - id: ft.frontend.04.integrated_review
     type: review
     no_pre_seed: true
+    preserve_outputs_on_reentry: true
     title: "Revisão Integrada da Superfície"
     description: "Após o TDD do backend, auditar de ponta a ponta a superfície contra PRD e critérios de UI usando API, persistência e dados reais do produto."
     sprint: sprint-04-tdd
     executor: claude
     max_turns: 60
     outputs:
-      - docs/screenshots/
+      - docs/screenshots/surface-integrated/
       - docs/screenshot-review.md
+      - docs/surface-integrated-review.yml
+    write_scope:
+      - docs/screenshots/surface-integrated
+      - docs/screenshot-review.md
+      - docs/surface-integrated-review.yml
     prompt: |
       Faça a revisão integrada independente do produto após o backend estar GREEN:
+      Em reentrada após fix, preserve todo PASS já comprovado, audite primeiro
+      somente os refs FAIL correntes e, quando eles passarem, retome os refs
+      PENDING/NOT_RUN. Não repita jornadas já aprovadas.
       1. Inicie backend e superfície pelos entrypoints da stack e audite rotas,
          navegação, ações e fluxos P0 contra docs/PRD.md.
+         Em Android, se a porta host contratual `8000` estiver ocupada por
+         processo alheio, não encerre nem reinicie esse listener: inicie o
+         backend numa porta host livre e use
+         `adb -s <serial> reverse tcp:8000 tcp:<porta-livre>`. O app continua
+         usando `127.0.0.1:8000`; registre e remova somente esse reverse criado
+         pela própria delegação ao final.
       2. Percorra a interface pública até a API e a persistência reais e de volta
          à tela. Para todo dado visível, compare os campos ponta a ponta e registre
          a origem; mocks, fixtures, previews e servidores isolados não aprovam a
@@ -2413,27 +2490,91 @@ nodes:
       3. Execute a aplicação com o runner apropriado à plataforma selecionada
          (instrumentação Android, XCUITest, browser ou automação desktop) e
          capture evidências reais de cada tela e estado exigido.
-      4. Verifique cada ID de docs/ui_criteria.md, incluindo adaptação à tela,
-         vazio/loading/erro, acessibilidade, ações P0 e watermarks.
+      4. Verifique cada ID de docs/ui_criteria.md que pertence à integração,
+         incluindo adaptação à tela, vazio/loading/erro, ações P0 e watermarks.
+         Critérios cuja própria redação exige matriz, target físico, simulador,
+         emulador ou validação multiplataforma pertencem exclusivamente a
+         ft.platform.01.validate e não entram neste receipt. Use o aparelho em
+         seu perfil padrão e não altere configurações do sistema.
       5. Compare cada tela/estado com o mockup aprovado correspondente em
          docs/mockups/screen-map.yml e registre divergências verificáveis.
-      6. Substitua o relatório VISUAL_ONLY por docs/screenshot-review.md com
-         cobertura integrada rastreável e veredito final.
-      7. Use REJECTED somente para falha bloqueante verificável; nesse caso,
-         registre evidência acionável e pare.
+      6. Grave cada execução em um subdiretório novo e imutável sob
+         docs/screenshots/surface-integrated/; preserve todas as evidências anteriores.
+      7. Escreva docs/screenshot-review.md com exatamente uma linha global
+         `VERDICT: APPROVED` ou `VERDICT: REJECTED`, cobertura integrada
+         rastreável e veredito final. Não reutilize o relatório VISUAL_ONLY.
+      8. Escreva docs/surface-integrated-review.yml com o contrato:
+           schema_version: 1
+           scope_sha256: <sha256 dos bytes correntes de docs/ui_criteria.md>
+           verdict: APPROVED | REJECTED
+           evidence_grade: INTEGRATED_REAL_DATA
+           results:
+             - ref: <cada C-ID pertencente à integração exatamente uma vez>
+               result: PASS | FAIL | PENDING | NOT_RUN
+               evidence: [<prova repo-local da jornada integrada>]
+           findings:
+             - id: FI-001
+               refs: [<critérios reprovados>]
+               summary: <defeito reproduzível>
+               evidence: [<paths repo-local verificáveis>]
+         Markdown e YAML devem ter o mesmo veredito. APPROVED exige todos os
+         critérios PASS e findings vazio; REJECTED exige findings que cubram
+         exatamente os critérios FAIL observados. Após early-stop, critérios
+         ainda não executados ficam PENDING/NOT_RUN e não originam finding.
+      9. Audite primeiro o finding corrente e depois os critérios PENDING, um
+         por vez. Ao observar o primeiro FAIL, interrompa a auditoria e escreva
+         imediatamente os outputs canônicos; marque como PENDING/NOT_RUN tudo
+         que ainda não foi executado e gere finding somente para o FAIL
+         observado. Somente com 0 FAIL prossiga até esgotar os pendentes.
+      10. Depois de escrever o receipt, valide somente sua integridade YAML com
+          `python -c "import pathlib,yaml; yaml.safe_load(pathlib.Path('docs/surface-integrated-review.yml').read_text())"`.
+          Esse parse é obrigatório mesmo com FAIL; build e testes do produto
+          permanecem exclusivamente no gate alcançado com 0 FAIL.
     validators:
-      - command_succeeds: "make -C src surface-build"
-      - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - file_exists: docs/screenshots/surface-integrated/
       - file_exists: docs/screenshot-review.md
-      - ui_criteria_coverage:
-          criteria_path: docs/ui_criteria.md
-          report_path: docs/screenshot-review.md
-          source_dir: src/frontend
-          evidence: any
+      - file_exists: docs/surface-integrated-review.yml
+      - review_outcome_valid:
+          path: docs/surface-integrated-review.yml
+          markdown_path: docs/screenshot-review.md
+          scope_path: docs/ui_criteria.md
+          scope_pattern: "\\bC\\d+\\b"
+          scope_exclude_pattern: "matriz (?:aplicável|de validação)|target físico|simulador|emulador|receipt de plataforma|validação multiplataforma"
+          require_approved: false
     on_fail:
       human_gate: "Revisão integrada encontrou não-conformidades. Corrija somente os findings antes de continuar."
-      goto: ft.frontend.02.implement
+      goto: ft.frontend.05.integrated_fix
     next: gate.frontend_integrated
+
+  - id: ft.frontend.05.integrated_fix
+    type: build
+    no_pre_seed: true
+    title: "Corrigir Findings da Integração"
+    description: "Corrigir em lote somente os findings da revisão integrada, incluindo superfície, API e persistência, sem reabrir critérios já aprovados."
+    fix_review: ft.frontend.04.integrated_review
+    sprint: sprint-04-tdd
+    executor: claude
+    max_turns: 80
+    outputs:
+      - src/
+      - src/Makefile
+    write_scope:
+      - src
+      - src/Makefile
+    prompt: |
+      Leia docs/screenshot-review.md e docs/surface-integrated-review.yml.
+      Corrija em lote somente os findings FI-* correntes e os testes diretamente
+      relacionados. Preserve critérios e evidências já aprovados. Rode
+      testes focais de frontend com `npx vitest run <arquivo>`; nunca use
+      `npm test -- --run`, pois o script agregado dispara toda a bateria visual.
+      Enquanto existir FAIL, não rode build nem suíte completa: encerre após o
+      teste focal e retorne à revisão integrada. A regressão integral pertence
+      exclusivamente ao gate alcançado com 0 FAIL.
+    validators:
+      - file_exists: src/frontend/
+      - file_exists: src/backend/
+      - file_exists: src/Makefile
+    next: ft.frontend.04.integrated_review
 
   - id: gate.frontend_integrated
     type: gate
@@ -2442,14 +2583,24 @@ nodes:
     sprint: sprint-04-tdd
     executor: python
     validators:
+      - file_exists: docs/screenshots/surface-integrated/
       - file_exists: docs/screenshot-review.md
+      - file_exists: docs/surface-integrated-review.yml
       - command_succeeds: "make -C src surface-build"
       - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - review_outcome_valid:
+          path: docs/surface-integrated-review.yml
+          markdown_path: docs/screenshot-review.md
+          scope_path: docs/ui_criteria.md
+          scope_pattern: "\\bC\\d+\\b"
+          scope_exclude_pattern: "matriz (?:aplicável|de validação)|target físico|simulador|emulador|receipt de plataforma|validação multiplataforma"
+          require_approved: true
       - ui_criteria_coverage:
           criteria_path: docs/ui_criteria.md
           report_path: docs/screenshot-review.md
           source_dir: src/frontend
           evidence: any
+          exclude_pattern: "matriz (?:aplicável|de validação)|target físico|simulador|emulador|receipt de plataforma|validação multiplataforma"
     next: ft.delivery.01.entrypoint
 
   # ================================================================
@@ -2529,7 +2680,7 @@ nodes:
 
   - id: ft.smoke.01.run
     no_pre_seed: true
-    type: build
+    type: review
     title: "Smoke da Superfície Selecionada"
     description: "Executar o smoke real da plataforma selecionada pelo target comum `make -C src smoke`, sem substituir aplicação nativa por servidor web."
     sprint: sprint-06-smoke
@@ -2543,12 +2694,40 @@ nodes:
       instrumentação apropriada; iOS usa build/launch e XCUITest; web pode usar
       porta isolada, health check e browser; desktop abre o executável nativo.
       Não use URL, HTML ou curl como substituto para uma plataforma nativa e não
-      registre placeholder ou teste não executado como PASS.
+      registre placeholder ou teste não executado como PASS. O relatório deve
+      conter exatamente uma linha global `VERDICT: APPROVED` ou
+      `VERDICT: REJECTED`; rejeição descreve um finding reproduzível.
     validators:
       - command_succeeds: "make -C src smoke"
       - file_exists: docs/smoke-report.md
       - command_succeeds: "python -c \"text=open('docs/smoke-report.md', encoding='utf-8').read().lower(); assert 'pass' in text and 'placeholder' not in text and 'não executad' not in text and 'nao executad' not in text\""
+    on_fail:
+      human_gate: "O smoke real encontrou uma falha focal no entrypoint ou na superfície de execução."
+      goto: ft.smoke.02.fix
     next: gate.smoke
+
+  - id: ft.smoke.02.fix
+    type: build
+    no_pre_seed: true
+    title: "Corrigir Somente o Finding do Smoke"
+    description: "Corrigir a causa reproduzível do smoke sem reabrir delivery, build integral ou requisitos já aprovados."
+    fix_review: ft.smoke.01.run
+    sprint: sprint-06-smoke
+    executor: claude
+    outputs:
+      - src/
+    write_scope:
+      - src
+    prompt: |
+      Leia docs/smoke-report.md e corrija somente a causa reproduzível mais
+      recente no entrypoint ou na superfície selecionada. Preserve artefatos,
+      testes e jornadas já aprovados. Execute apenas o teste focal necessário;
+      a nova execução física e o relatório pertencem a ft.smoke.01.run.
+      Não edite o relatório do smoke nem transforme indisponibilidade externa
+      em PASS.
+    validators:
+      - file_exists: src/
+    next: ft.smoke.01.run
 
   - id: gate.smoke
     type: gate
@@ -2632,9 +2811,11 @@ nodes:
     prompt: |
       Entregue toda a etapa E2E no mesmo turn:
       1. Leia `.ft/project.yml.validation` e docs/TECH_STACK.md. Configure o runner
-         real da plataforma selecionada: instrumentação/UIAutomator no Android,
+         real da plataforma selecionada: instrumentação do app no Android,
          XCUITest no iOS, Playwright no web ou automação nativa no desktop. Não
          instale nem use Playwright quando a superfície não for web.
+         No Android, use somente instrumentação do app, input por coordenadas
+         e screenshots/OCR da plataforma.
       2. Provisione um usuário exclusivo do agente por seed idempotente,
          isolado e resetável. Leia credenciais de armazenamento protegido e
          gere docs/test-identity.json sanitizado, sem PII ou segredo.
@@ -2783,8 +2964,20 @@ nodes:
       estados vazios e ausência de seed residual; abra pela entrada normal e
       navegue por menus/controles visíveis; comprove CTAs, permissões refletidas
       na UI, back/retorno contextual, rotação/redimensionamento sem perder
-      estado, insets/safe areas sem sobreposição, acessibilidade e estética
-      contra todas as referências declaradas. Preview, rota direta, deep link
+      estado, insets/safe areas sem sobreposição e estética contra todas as
+      referências declaradas. Use o aparelho em seu perfil padrão e não altere
+      configurações do sistema. No Android, use somente instrumentação do app,
+      input por coordenadas e screenshots/OCR da plataforma.
+      Checks que exigem mudar orientação, fonte, densidade, display ou outro
+      setting rodam somente em emulador/simulador; no target físico, use o
+      estado corrente ou encaminhe um gate humano sem injetar a mudança.
+      No target físico não execute `settings put/delete`, `wm size/density`,
+      `pm clear`, desinstalação ou limpeza de dados; preserve o estado dedicado
+      já provisionado. Em Android, derive coordenadas de `wm size`, use proporções,
+      feche o IME com `KEYCODE_BACK`, espere diálogos visualmente e limite cada
+      assert OCR à região/estado pertinente. Calibre o runner antes da jornada
+      completa e retome do último checkpoint aprovado.
+      Preview, rota direta, deep link
       de debug, montagem isolada ou mock não encerram um check de produto.
 
       No check `mockup_watermark`, inventarie todas as telas, páginas e janelas
@@ -3306,7 +3499,167 @@ nodes:
       - implemented_backlog_covered_by_features:
           features_path: docs/FEATURES.md
           backlog_path: docs/PROJECT_BACKLOG.md
-    next: ft.handoff.gate
+    next: ft.operational.01.audit
+
+  - id: ft.operational.01.audit
+    type: review
+    no_pre_seed: true
+    preserve_outputs_on_reentry: true
+    title: "Auditoria Operacional Final"
+    description: "Provar em ambiente de produção local limpo que todo P0/P1 funciona pela superfície pública, com persistência real, sem seed demonstrativo, dados sintéticos, mocks, fixtures, previews ou estados visuais materializados no runtime."
+    sprint: sprint-10-handoff
+    executor: claude
+    max_turns: 60
+    outputs:
+      - docs/operational-readiness.md
+      - docs/operational-readiness.yml
+      - docs/evidence/operational/
+      - .ft/project.yml
+    write_scope:
+      - docs/operational-readiness.md
+      - docs/operational-readiness.yml
+      - docs/evidence/operational
+      - .ft/project.yml
+    prompt: |
+      Faça uma auditoria nova e independente do candidato que seria apresentado
+      para fechamento do projeto. Esta etapa não corrige produto e não aceita
+      evidência herdada como prova suficiente.
+
+      1. Inicie pelo entrypoint de produção definido em docs/TECH_STACK.md, com
+         armazenamento limpo e sem modo demo/test/preview. Não use servidor de
+         componente, rota debug, deep link, fixture, mock provider, fallback ou
+         banco pré-preenchido como superfície operacional.
+      2. Confirme que a primeira abertura contém somente estado operacional
+         legítimo. Seed é permitido apenas para identidade técnica isolada; ele
+         nunca pode pré-criar Projects, Processes, Cycles ou dados de negócio
+         usados para aprovar requisito.
+      3. Para cada PB P0/P1, crie um canário único pela interface pública normal,
+         confirme a gravação no backend persistente, reinicie de fato o produto,
+         leia novamente pela interface pública e observe o mesmo valor na
+         superfície final. Compare created_value, persisted_value e
+         observed_value literalmente.
+      4. Em produto com UI, navegue somente por controles visíveis, em zoom 100%,
+         e meça o menor texto funcional. Menos de 12 px reprova legibilidade.
+         Confirme também que Project/tenant/workspace da rota, seletor e dados
+         relacionados são o mesmo em todas as telas.
+      5. Audite os paths de produção declarados no relatório. Código de produção
+         não pode carregar default seed sintético, materializador de visual-state
+         nem mock/fake/demo data. Test fixtures devem permanecer fora desses paths.
+      6. Grave evidência nova sob docs/evidence/operational/. Screenshot isolado,
+         teste unitário ou relatório anterior não substitui a jornada completa.
+      7. Atualize .ft/project.yml de forma idempotente para que
+         definition_of_done.required_gates contenha exatamente uma entrada:
+           id: operational-real-data
+           path: docs/operational-readiness.yml
+           field: verdict
+           equals: APPROVED
+      8. Gere docs/operational-readiness.md legível e o YAML abaixo. APPROVED
+         exige todos os resultados e jornadas PASS, findings vazio e nenhuma
+         dependência proibida encontrada. Caso contrário use REJECTED e registre
+         findings acionáveis; nunca maquie o receipt para passar o validator.
+
+      schema_version: 1
+      verdict: APPROVED | REJECTED
+      evidence_grade: OPERATIONAL_REAL_DATA
+      candidate_ref: <hash/revisão imutável>
+      production_entrypoint: <comando/artefato real>
+      scope_path: docs/PROJECT_BACKLOG.md
+      runtime:
+        mode: production
+        clean_start: true | false
+        restart_verified: true | false
+        demo_seed_enabled: false | true
+        synthetic_runtime_records: false | true
+        mock_providers_enabled: false | true
+        persistence: durable | ephemeral
+      ui:
+        applicable: true | false
+        minimum_observed_font_px: <número; ao menos 12 quando aplicável>
+        zoom_percent: 100
+        evidence: [<paths repo-local>]
+      scan:
+        production_paths: [<paths de código realmente empacotado>]
+        prohibited_hits: []
+      results:
+        - ref: PB-001
+          result: PASS | FAIL | NOT_RUN
+          journeys: [OP-001]
+          evidence: [<paths repo-local>]
+      journeys:
+        - id: OP-001
+          refs: [PB-001]
+          result: PASS | FAIL
+          navigation_mode: production_ui | public_api | public_cli | native_ui
+          data_origin: created_via_public_interface
+          canary:
+            created_value: <valor único>
+            persisted_value: <mesmo valor>
+            observed_value: <mesmo valor>
+          persistence_restart_verified: true | false
+          evidence: [<paths repo-local>]
+      findings:
+        - id: OPF-001
+          refs: [PB-001]
+          summary: <falha reproduzível>
+          evidence: [<paths repo-local>]
+    validators:
+      - file_exists: docs/operational-readiness.md
+      - file_exists: docs/operational-readiness.yml
+      - file_exists: docs/evidence/operational/
+      - command_succeeds: "python3 .ft/process/mvp-builder-fast/scripts/validate_operational_readiness.py docs/operational-readiness.yml .ft/project.yml"
+    on_fail:
+      human_gate: "O candidato não está operacional. Use fix focal somente nos findings OPF-*; mocks, seeds demonstrativos e dados sintéticos não podem ser aceitos ou adiados para depois do project-close."
+      goto: ft.operational.02.fix
+    next: gate.operational_readiness
+
+  - id: ft.operational.02.fix
+    type: build
+    no_pre_seed: true
+    title: "Correção Focal da Prontidão Operacional"
+    description: "Corrigir somente os findings OPF-* da auditoria operacional, preservando capacidades já comprovadas."
+    fix_review: ft.operational.01.audit
+    sprint: sprint-10-handoff
+    executor: claude
+    max_turns: 80
+    outputs:
+      - src/
+    write_scope:
+      - src
+    prompt: |
+      Leia docs/operational-readiness.md e docs/operational-readiness.yml.
+      Corrija somente os findings OPF-* correntes no produto de produção.
+      Remova seeds demonstrativos, visual states, mocks, fixtures e fallback de
+      dados do runtime; preserve fixtures exclusivamente em testes. Corrija
+      mistura de Project/tenant/workspace e texto funcional abaixo de 12 px
+      quando encontrados. Rode apenas testes focais do fix. Não edite o receipt
+      da auditoria nem declare PASS; a nova prova pertence ao review focal.
+    validators:
+      - file_exists: src/
+    next: ft.operational.01.audit
+
+  - id: gate.operational_readiness
+    type: gate
+    title: "Gate de Prontidão Operacional"
+    description: "Bloqueia handoff e project-close enquanto qualquer P0/P1 depender de seed demonstrativo, dado sintético, mock, fixture, preview, visual-state, persistência efêmera, atalho técnico ou texto funcional ilegível."
+    sprint: sprint-10-handoff
+    executor: python
+    validators:
+      - file_exists: docs/operational-readiness.md
+      - file_exists: docs/operational-readiness.yml
+      - file_exists: docs/evidence/operational/
+      - command_succeeds: "python3 .ft/process/mvp-builder-fast/scripts/validate_operational_readiness.py docs/operational-readiness.yml .ft/project.yml"
+    next: ft.operational.03.route
+
+  - id: ft.operational.03.route
+    type: decision
+    title: "Retornar à rota solicitada"
+    description: "Após a mesma prova operacional, a rota validation encerra sua continuação terminal; a rota construtora completa apresenta o handoff."
+    sprint: sprint-10-handoff
+    executor: python
+    condition: run_route
+    branches:
+      validation: ft.end
+      _default: ft.handoff.gate
 
   - id: ft.handoff.gate
     type: human_gate
@@ -3326,6 +3679,8 @@ nodes:
         - docs/handoff.md
         - docs/plano_de_voo.md
         - docs/FEATURES.md
+        - docs/operational-readiness.md
+        - docs/operational-readiness.yml
       checklist:
         - Leia apenas o corpo principal de docs/handoff.md e confirme que a decisão solicitada pode ser explicada em uma frase, sem conhecer códigos internos do projeto.
         - Confirme que o documento se limita a produto e engenharia de software; jurídico, marketing, site promocional, recrutamento, pesquisa de mercado, vendas e métricas comerciais não podem aparecer como tarefas ou bloqueios desta equipe.
@@ -3333,6 +3688,7 @@ nodes:
         - Confirme que cada alternativa informa benefício, risco ou custo e as consequências de fazer, não fazer ou adiar.
         - Confirme que fatos comprovados, recomendações e pontos ainda desconhecidos estão separados e não são apresentados como equivalentes.
         - Confirme que o documento diz claramente o que esta aprovação autoriza e o que ela não autoriza.
+        - Confirme que a prontidão operacional está APPROVED com dados criados pela superfície pública, persistência após restart, zero mock/fixture/seed demonstrativo no runtime e texto funcional legível.
         - Consulte docs/plano_de_voo.md e docs/FEATURES.md somente para verificar se o resumo humano não omitiu ou distorceu entregas e pendências.
       limitations:
         - A aprovação cobre somente a clareza e a fidelidade do handoff técnico deste candidato.
@@ -3497,4 +3853,6 @@ nodes:
       O ciclo terminou, mas isso não declara o projeto entregue. Execute
       `ft close`, faça a validação pós-close no checkout promovido e consulte
       `ft project-status`. Somente `ft project-close` com DoD global READY
-      altera o projeto para maintenance.
+      altera o projeto para maintenance. O DoD deve incluir o gate
+      operational-real-data APPROVED; dado sintético, mock, fixture, preview,
+      visual-state ou seed demonstrativo nunca autoriza project-close.

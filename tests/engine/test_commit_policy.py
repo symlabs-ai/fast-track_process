@@ -231,6 +231,7 @@ def test_runner_propagates_policy_to_node_and_post_run_commits(
         build_runner._maybe_auto_commit(build_runner.graph.get_node("build"))
 
     assert auto.call_args.kwargs["verify_hooks"] is expected
+    assert auto.call_args.kwargs["paths"] == ["src/app.py"]
 
     end_root = tmp_path / "end"
     end_root.mkdir()

@@ -85,10 +85,12 @@ def test_fast_path_reduces_llm_turns_and_preserves_human_gates() -> None:
         fast.get_node(node_id).executor.startswith("llm") for node_id in fast_path
     )
 
-    assert fast_turns <= 25
+    # A auditoria operacional final acrescenta um único review independente
+    # para impedir falso aceite baseado em demo seed/mocks.
+    assert fast_turns <= 26
     # O helper agora percorre corretamente `_default` desde o route_mode; a
     # comparação anterior parava no primeiro decision e não media o caminho.
-    assert fast_turns <= baseline_turns * 0.80
+    assert fast_turns <= baseline_turns * 0.82
     # O gate de plano é determinístico; mockups têm aceite humano próprio.
     assert sum(node.type == "human_gate" for node in fast.nodes.values()) == 8
     assert sum(node.type == "human_gate" for node in baseline.nodes.values()) == 7
@@ -282,7 +284,11 @@ def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
         "ft.batch.08.acceptance"
     )
     assert graph.get_node("ft.batch.08.acceptance").reject_next == "ft.batch.06.fix"
-    assert graph.get_node("ft.batch.09.reconcile").next == "ft.end"
+    assert graph.get_node("ft.batch.09.reconcile").next == "ft.operational.01.audit"
+    assert graph.get_node("ft.operational.03.route").branches == {
+        "validation": "ft.end",
+        "_default": "ft.handoff.gate",
+    }
     assert graph.meta["batch_policy"]["min_lanes"] == 2
     assert graph.meta["batch_policy"]["default_max_parallel"] == 2
 
@@ -310,20 +316,40 @@ def test_macro_nodes_keep_deterministic_checkpoints() -> None:
     visual_gate = graph.get_node("gate.frontend")
     assert visual_review.type == "review"
     assert visual_review.no_pre_seed is True
+    assert visual_review.preserve_outputs_on_reentry is True
+    assert visual_review.outputs == [
+        "docs/screenshots/surface-visual/",
+        "docs/surface-visual-review.md",
+        "docs/surface-visual-review.yml",
+    ]
+    assert "não pare no primeiro defeito" in visual_review.prompt
+    assert "review_outcome_valid" in str(visual_review.validators)
+    assert "ui_criteria_coverage" not in str(visual_review.validators)
     assert visual_review.next == "gate.frontend"
     assert visual_gate.next == "ft.tdd.01.red"
-    assert "ui_criteria_coverage" not in str(visual_review.validators)
     assert "ui_criteria_coverage" not in str(visual_gate.validators)
+    assert "require_approved': True" in str(visual_gate.validators)
 
     assert graph.get_node("ft.tdd.01.red").next == "ft.tdd.02.green"
     assert graph.get_node("ft.tdd.02.green").next == "ft.tdd.03.refactor"
     assert graph.get_node("ft.tdd.03.refactor").next == "gate.tdd"
     assert graph.get_node("gate.tdd").next == "ft.frontend.04.integrated_review"
-    assert (
-        graph.get_node("ft.frontend.04.integrated_review").next
-        == "gate.frontend_integrated"
-    )
-    assert graph.get_node("ft.frontend.04.integrated_review").no_pre_seed is True
+    integrated_review = graph.get_node("ft.frontend.04.integrated_review")
+    assert integrated_review.next == "gate.frontend_integrated"
+    assert integrated_review.no_pre_seed is True
+    assert integrated_review.preserve_outputs_on_reentry is True
+    assert integrated_review.on_fail["goto"] == "ft.frontend.05.integrated_fix"
+    assert "primeiro FAIL" in integrated_review.prompt
+    assert "PENDING/NOT_RUN" in integrated_review.prompt
+    assert "yaml.safe_load" in integrated_review.prompt
+    assert "exclusivamente no gate alcançado com 0 FAIL" in integrated_review.prompt
+    assert not any("command_succeeds" in validator for validator in integrated_review.validators)
+    assert "review_outcome_valid" in str(integrated_review.validators)
+    integrated_fix = graph.get_node("ft.frontend.05.integrated_fix")
+    assert integrated_fix.fix_review == integrated_review.id
+    assert integrated_fix.next == integrated_review.id
+    assert "0 FAIL" in integrated_fix.prompt
+    assert not any("command_succeeds" in validator for validator in integrated_fix.validators)
     assert graph.get_node("gate.frontend_integrated").next == "ft.delivery.01.entrypoint"
 
     assert graph.get_node("ft.handoff.02.backlog_update").executor == "python"
@@ -374,6 +400,9 @@ def test_handoff_is_human_readable_contextual_and_engineering_only() -> None:
     prd_next = graph.get_node("ft.handoff.02.prd_rewrite")
     critical = graph.get_node("ft.handoff.03.critical_analysis")
     handoff = graph.get_node("ft.handoff.04.plano_voo")
+    operational = graph.get_node("ft.operational.01.audit")
+    operational_fix = graph.get_node("ft.operational.02.fix")
+    operational_gate = graph.get_node("gate.operational_readiness")
     gate = graph.get_node("ft.handoff.gate")
 
     assert "somente evolução do produto e da engenharia" in prd_next.prompt
@@ -384,6 +413,17 @@ def test_handoff_is_human_readable_contextual_and_engineering_only() -> None:
     assert "consequência de não fazer ou adiar" in handoff_prompt
     assert "escopo obrigatório deste handoff" in handoff_prompt
     assert "preserve esses assuntos como pendentes para a equipe" in handoff_prompt
+    assert handoff.next == operational.id
+    assert operational.type == "review"
+    assert operational.on_fail["goto"] == operational_fix.id
+    assert "OPERATIONAL_REAL_DATA" in operational.prompt
+    assert "created_value" in operational.prompt
+    assert "minimum_observed_font_px" in operational.prompt
+    assert "validate_operational_readiness.py" in str(operational.validators)
+    assert operational_fix.fix_review == operational.id
+    assert operational_fix.next == operational.id
+    assert operational_gate.next == "ft.operational.03.route"
+    assert "validate_operational_readiness.py" in str(operational_gate.validators)
 
     validator_contract = str(handoff.validators)
     for section in (
@@ -411,6 +451,7 @@ def test_handoff_is_human_readable_contextual_and_engineering_only() -> None:
     } <= set(context)
     assert any("sem conhecer códigos internos" in item for item in context["checklist"])
     assert any("não fazer ou adiar" in item for item in context["checklist"])
+    assert any("prontidão operacional" in item for item in context["checklist"])
     assert gate.reject_next == handoff.id
 
 
@@ -461,10 +502,13 @@ def test_visual_delivery_contract_is_platform_aware() -> None:
 
     review = graph.get_node("ft.frontend.04.integrated_review")
     gate = graph.get_node("gate.frontend_integrated")
-    assert "source_dir': 'src/frontend'" in str(review.validators)
+    assert "ui_criteria_coverage" not in str(review.validators)
     assert "source_dir': 'src/frontend'" in str(gate.validators)
     assert "src/frontend/src" not in str(review.validators)
     assert "API e a persistência reais" in review.prompt
+    assert "PENDING | NOT_RUN" in review.prompt
+    assert not any("command_succeeds" in validator for validator in review.validators)
+    assert "command_succeeds" in str(gate.validators)
 
     delivery = graph.get_node("ft.delivery.01.entrypoint")
     delivery_contract = f"{delivery.prompt}\n{delivery.validators}"
@@ -474,9 +518,17 @@ def test_visual_delivery_contract_is_platform_aware() -> None:
     assert "somente" in delivery.prompt and "superfície web" in delivery.prompt
 
     smoke = graph.get_node("ft.smoke.01.run")
+    assert smoke.type == "review"
     assert "make -C src smoke" in f"{smoke.prompt}\n{smoke.validators}"
     assert "urlopen" not in str(smoke.validators)
     assert ".smoke_url" not in str(smoke.env_setup)
+    assert smoke.on_fail["goto"] == "ft.smoke.02.fix"
+    smoke_fix = graph.get_node("ft.smoke.02.fix")
+    assert smoke.next == "gate.smoke"
+    assert smoke_fix.fix_review == smoke.id
+    assert smoke_fix.next == smoke.id
+    assert smoke_fix.write_scope == ["src"]
+    assert "docs/smoke-report.md" in smoke_fix.prompt
 
     acceptance = graph.get_node("ft.acceptance.01.cli")
     assert "make -C src acceptance" in str(acceptance.validators)
@@ -484,7 +536,7 @@ def test_visual_delivery_contract_is_platform_aware() -> None:
 
     e2e = graph.get_node("ft.e2e.01.browser")
     e2e_contract = f"{e2e.prompt}\n{e2e.validators}"
-    assert "instrumentação/UIAutomator" in e2e.prompt
+    assert "instrumentação do app no Android" in e2e.prompt
     assert "XCUITest" in e2e.prompt
     assert "Playwright no web" in e2e.prompt
     assert "make -C src e2e" in e2e_contract
@@ -619,6 +671,40 @@ def test_focal_review_persists_separate_physical_evidence_across_retries() -> No
     assert "Auto-referenciar o Markdown" in review.prompt
     assert "Nunca grave certificado" in review.prompt
     assert "senha" in review.prompt
+
+
+def test_device_reviews_keep_the_standard_device_profile() -> None:
+    graph = load_graph(FAST_PROCESS)
+
+    prompts = [
+        graph.get_node("ft.frontend.03.prd_review").prompt,
+        graph.get_node("ft.frontend.04.integrated_review").prompt,
+        graph.get_node("ft.platform.01.validate").prompt,
+    ]
+    combined = "\n".join(prompts)
+    assert "perfil padrão" in combined
+    assert "não altere configurações do sistema" in combined
+    assert "TalkBack" not in combined
+    assert "UIAutomator" not in combined
+    assert "acessibilidade" not in combined.lower()
+    assert "recolete apenas refs afetados" in combined
+    assert "notificações pessoais" in combined
+    assert "reverse tcp:8000" in combined
+    assert "não encerre nem reinicie esse listener" in combined
+    assert "fonte a 200%" not in combined
+
+    visual = graph.get_node("ft.frontend.03.prd_review")
+    review_spec = visual.validators[-1]["review_outcome_valid"]
+    scope_pattern = review_spec["scope_pattern"].replace("\\\\", "\\")
+    assert r"S\d+\.\d+\b" in scope_pattern
+    assert "(?:" not in scope_pattern
+
+
+def test_refactor_writes_to_src_layout() -> None:
+    graph = load_graph(FAST_PROCESS)
+    refactor = graph.get_node("ft.tdd.03.refactor")
+    assert refactor.write_scope == ["src/backend", "src/tests"]
+    assert all(not path.startswith("project/") for path in refactor.write_scope)
 
 
 def test_batch_freezes_public_contract_and_acceptance_reports_non_p0_skip() -> None:

@@ -30,6 +30,7 @@ from ft.engine.context_profiles import compose_context_profile
 from ft.engine.decision_gates import build_decision_gate_context
 from ft.engine.focal_evidence import (
     FOCAL_EVIDENCE_INSTRUCTIONS,
+    FOCAL_REVIEW_ORDERING_INSTRUCTIONS,
     HEADLESS_FOCAL_EVIDENCE_INSTRUCTIONS,
     validate_focal_approval,
 )
@@ -234,10 +235,15 @@ def _line_review_verdict(line: str) -> str | None:
 
     if "|" in clean:
         cells = [cell.strip() for cell in clean.strip("|").split("|")]
-        for cell in cells:
-            verdict = _exact_review_verdict(cell)
-            if verdict:
-                return verdict
+        # A table may contain dozens of per-criterion PASS/FAIL/REJECTED
+        # values.  Those are evidence, not the document's global verdict.
+        # Accept a table verdict only when the first cell explicitly names the
+        # field and the adjacent cell contains exactly one canonical value.
+        if len(cells) >= 2 and cells[0].strip().casefold() in {
+            label.casefold() for label in _REVIEW_VERDICT_LABELS
+        }:
+            return _exact_review_verdict(cells[1])
+        return None
 
     labels = "|".join(_REVIEW_VERDICT_LABELS)
     labeled = re.match(
@@ -245,6 +251,17 @@ def _line_review_verdict(line: str) -> str | None:
         clean,
     )
     if labeled:
+        # Structured receipts commonly contain nested ``result: PASS`` /
+        # ``resultado: FAIL`` fields for each audited item.  They are not the
+        # document verdict.  Top-level structured receipts have an explicit
+        # ``verdict`` field, while Markdown global result lines are unindented,
+        # so ignore only indented uses of these ambiguous aliases.
+        label = labeled.group(1).casefold()
+        if line[: len(line) - len(line.lstrip())] and label in {
+            "result",
+            "resultado",
+        }:
+            return None
         return _canonical_review_verdict(labeled.group(2))
 
     return _canonical_review_verdict(clean)
@@ -1785,16 +1802,50 @@ class StepRunner:
         codex_auth = node.codex_auth if node is not None else None
         if codex_auth is not None:
             delegate_kwargs["codex_auth"] = codex_auth
-        if not self._session_enabled_for(selection.engine):
-            return
         key, parent = self._llm_session_key(node, lane=lane)
         signature = self._session_signature(selection, codex_auth)
         with self._llm_session_lock:
             state = self.state_mgr.state
             record = state.llm_sessions.get(key)
-            if not isinstance(record, dict) or any(
-                record.get(field) != value for field, value in signature.items()
+            directed = (
+                state.active_fix_return
+                if isinstance(state.active_fix_return, dict)
+                else None
+            )
+            is_directed_fix = bool(
+                directed
+                and node is not None
+                and directed.get("fix_node") == node.id
+                and lane is None
+            )
+            identity_fields = ("engine", "model", "codex_auth")
+            identity_changed = (
+                isinstance(record, dict)
+                and any(
+                    record.get(field) != signature[field]
+                    for field in identity_fields
+                )
+            )
+            if (
+                is_directed_fix
+                and isinstance(record, dict)
+                and record.get("established")
+                and record.get("session_id")
+                and identity_changed
             ):
+                conflict = (
+                    "DIRECTED_FIX_SESSION_AFFINITY_CONFLICT: o fix focal deve "
+                    "retomar a sessão builder existente; provider, modelo ou "
+                    "rota de autenticação mudaram. Retome com a configuração "
+                    "original ou faça uma reidratação explícita."
+                )
+                state.node_status = "blocked"
+                state.blocked_reason = conflict
+                self.state_mgr.save()
+                raise RuntimeError(conflict)
+            if not self._session_enabled_for(selection.engine):
+                return
+            if not isinstance(record, dict) or identity_changed:
                 record = self._new_session_record(
                     key=key,
                     parent=parent,
@@ -1802,8 +1853,15 @@ class StepRunner:
                     node=node,
                     codex_auth=codex_auth,
                     previous=record if isinstance(record, dict) else None,
-                    reason="provider/model/effort/auth route changed",
+                    reason="provider/model/auth route changed",
                 )
+                self.state_mgr.save()
+            elif record.get("effort") != selection.effort:
+                # Effort é configuração do turno, não identidade da conversa.
+                # Alterá-lo pode ajustar custo/profundidade sem descartar o
+                # histórico persistente da sprint.
+                record["effort"] = selection.effort
+                record["updated_at"] = datetime.now(timezone.utc).isoformat()
                 self.state_mgr.save()
             if (
                 selection.engine == "claude"
@@ -3790,6 +3848,61 @@ class StepRunner:
         if isinstance(directed, dict) and directed.get("review_node") == node_id:
             directed.pop("focal_evidence_feedback", None)
 
+    def _structured_review_progress(self, node_id: str | None) -> dict[str, Any] | None:
+        """Resume um receipt YAML de review sem acoplar o status ao template."""
+
+        if not node_id or node_id not in self.graph.nodes:
+            return None
+        node = self.graph.get_node(node_id)
+        for output in node.outputs:
+            if not output.lower().endswith((".yml", ".yaml")):
+                continue
+            path = Path(self._work_dir) / output
+            if not path.is_file():
+                continue
+            try:
+                payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, yaml.YAMLError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+
+            results = payload.get("results")
+            passed = failed = pending = 0
+            if isinstance(results, list):
+                for item in results:
+                    if not isinstance(item, dict):
+                        continue
+                    raw = item.get("result", item.get("status", item.get("verdict")))
+                    verdict = str(raw or "").strip().upper()
+                    if verdict in {"PASS", "PASSED", "APPROVED", "SUCCESS"}:
+                        passed += 1
+                    elif verdict in {
+                        "FAIL",
+                        "FAILED",
+                        "REJECTED",
+                        "BLOCKED",
+                        "ERROR",
+                    }:
+                        failed += 1
+                    elif verdict in {"PENDING", "NOT_RUN", "NOT_EXECUTED"}:
+                        pending += 1
+
+            findings = payload.get("findings")
+            finding_count = len(findings) if isinstance(findings, list) else None
+            if passed == 0 and failed == 0 and finding_count is None:
+                continue
+            return {
+                "output": output,
+                "verdict": str(payload.get("verdict") or "").strip().upper() or None,
+                "passed": passed,
+                "failed": failed,
+                "pending": pending,
+                "total": passed + failed + pending,
+                "findings": finding_count,
+            }
+        return None
+
     def _advance_state(self, completed_node: str, next_node: str | None, gate_result: str = "PASS") -> None:
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
         state = self.state_mgr.state
@@ -5288,6 +5401,62 @@ class StepRunner:
         print(ui.step_pass(next_id, "PASS (retry sem LLM)"))
         return True
 
+    def retry_blocked_focal_evidence_without_llm(
+        self,
+        *,
+        mode: str,
+    ) -> bool:
+        """Revalidate a fresh focal receipt after an engine/policy correction.
+
+        The reviewer already produced the canonical evidence in the attempt
+        that was blocked.  If the only failure was the engine's fidelity
+        classifier, ``ft retry`` can validate that exact receipt again without
+        deleting it through ``no_pre_seed`` or paying for another LLM call.
+        """
+
+        state = self.state_mgr.load()
+        node_id = state.current_node
+        if (
+            state.node_status != "blocked"
+            or not isinstance(state.blocked_reason, str)
+            or "EVIDENCE_FIDELITY_REJECTED" not in state.blocked_reason
+            or not node_id
+            or node_id not in self.graph.nodes
+        ):
+            return False
+        node = self.graph.get_node(node_id)
+        focal_review = self._active_focal_review_context(node)
+        if not focal_review:
+            return False
+
+        canonical_output = self._combined_review_output(node)
+        verdict = _parse_review_verdict(canonical_output)
+        fidelity = validate_focal_approval(
+            review_output=canonical_output,
+            finding_context=self._active_focal_finding_context(
+                node,
+                focal_review[1],
+            ),
+            project_root=self._work_dir,
+            ui_validation_enabled=self._ui_evidence_validation_enabled(),
+        )
+        if (
+            verdict not in _REVIEW_APPROVE_VERDICTS
+            or not fidelity.passed
+            or self._review_rejection_reason(node) is not None
+        ):
+            return False
+
+        self._auto_approve = mode == "mvp"
+        self._clear_focal_evidence_review_retry(node.id)
+        next_id = self.graph.resolve_next(node.id)
+        self._advance_state(node.id, next_id, verdict)
+        print(ui.success(
+            "Recibo focal corrente revalidado após correção da engine — "
+            "nenhuma nova chamada LLM"
+        ))
+        return True
+
     def _run_bypass_prompt(self, node: Node) -> None:
         """Delegação LLM no lugar do humano em um gate bypassado.
 
@@ -5948,6 +6117,7 @@ class StepRunner:
         success, detail = auto_commit(
             message=message,
             project_root=self.project_root,
+            paths=self._resolve_allowed_paths(node),
             verify_hooks=self._verify_commit_hooks(),
         )
         if success:
@@ -6032,6 +6202,20 @@ class StepRunner:
         if documents:
             return documents[0][1]
         return ""
+
+    def _combined_review_output(self, node: Node) -> str:
+        """Combine all declared canonical review documents for focal validation."""
+
+        documents: list[str] = []
+        for source, content in self._review_output_documents(node):
+            suffix = Path(source).suffix.casefold()
+            body = (
+                f"```yaml\n{content.rstrip()}\n```"
+                if suffix in {".yml", ".yaml"}
+                else content
+            )
+            documents.append(f"--- {source} ---\n{body}")
+        return "\n\n".join(documents)
 
     def _review_output_documents(self, node: Node) -> list[tuple[str, str]]:
         """Read declared canonical review files in deterministic order."""
@@ -6303,6 +6487,29 @@ class StepRunner:
             )
         return mode, context.strip()
 
+    def _active_focal_finding_context(
+        self,
+        node: Node,
+        fallback: str,
+    ) -> str:
+        """Return only the stakeholder/finding text used for fidelity classification.
+
+        ``review_context`` also contains generic execution guidance.  In
+        particular, its reminder about physical evidence "when the finding is
+        UI" must not turn an unrelated backend/HTTP finding into a UI-data
+        finding merely because both words occur somewhere in the combined
+        prompt.  New states persist the clean field; the split keeps active
+        cycles created by older engine versions compatible.
+        """
+
+        directed = self.state_mgr.state.active_fix_return
+        if isinstance(directed, dict) and directed.get("review_node") == node.id:
+            finding_context = directed.get("finding_context")
+            if isinstance(finding_context, str) and finding_context.strip():
+                return finding_context.strip()
+        boilerplate = "\n\nConfirme o resultado observável solicitado"
+        return fallback.split(boilerplate, 1)[0].strip()
+
     def _build_review_task_context(
         self,
         node: Node,
@@ -6378,7 +6585,11 @@ class StepRunner:
                 if focal_ui_validation_enabled
                 else HEADLESS_FOCAL_EVIDENCE_INSTRUCTIONS
             )
-            task_prompt = f"{task_prompt}\n\n{evidence_instructions}"
+            task_prompt = (
+                f"{task_prompt}\n\n"
+                f"{FOCAL_REVIEW_ORDERING_INSTRUCTIONS}\n\n"
+                f"{evidence_instructions}"
+            )
             directed = self.state_mgr.state.active_fix_return
             focal_evidence_feedback = (
                 directed.get("focal_evidence_feedback")
@@ -6570,6 +6781,17 @@ class StepRunner:
 
 
     def _run_review(self, node: Node):
+        """Executa reviews com o mesmo lifecycle de ambiente dos demais nodes LLM."""
+        try:
+            if node.env_setup and not self._run_env_setup(node):
+                self.state_mgr.block(f"env_setup falhou no node {node.id}")
+                return
+            return self._run_review_inner(node)
+        finally:
+            if node.env_teardown:
+                self._run_env_teardown(node)
+
+    def _run_review_inner(self, node: Node):
         """
         Sprint Expert Gate — delega ao LLM especialista para revisao.
         Le o relatorio produzido e verifica APPROVED/REJECTED.
@@ -6615,6 +6837,43 @@ class StepRunner:
 
         # Verificar se artefatos já existem e validators já passam (ex: retry após max-turns)
         early_check = run_review_validators()
+        directed_retry = state.active_fix_return
+        focal_evidence_feedback = (
+            directed_retry.get("focal_evidence_feedback")
+            if isinstance(directed_retry, dict)
+            else None
+        )
+        if (
+            focal_review
+            and not runtime_focal_review
+            and early_check.passed
+            and isinstance(focal_evidence_feedback, str)
+            and focal_evidence_feedback.strip()
+        ):
+            canonical_focal_output = self._combined_review_output(node)
+            canonical_verdict = _parse_review_verdict(canonical_focal_output)
+            canonical_fidelity = validate_focal_approval(
+                review_output=canonical_focal_output,
+                finding_context=self._active_focal_finding_context(
+                    node,
+                    focal_review[1],
+                ),
+                project_root=self._work_dir,
+                ui_validation_enabled=self._ui_evidence_validation_enabled(),
+            )
+            if (
+                canonical_verdict in _REVIEW_APPROVE_VERDICTS
+                and canonical_fidelity.passed
+                and self._review_rejection_reason(node) is None
+            ):
+                self._clear_focal_evidence_review_retry(node.id)
+                next_id = self.graph.resolve_next(node.id)
+                self._advance_state(node.id, next_id, canonical_verdict)
+                print(ui.success(
+                    "Recibo canônico focal já válido — retry de formatação "
+                    "encerrado sem nova chamada LLM"
+                ))
+                return
         correction_policy = self.graph.meta.get("correction_policy", {})
         mandatory_reviews = (
             correction_policy.get("mandatory_after_implementation", [])
@@ -6947,16 +7206,38 @@ class StepRunner:
 
         focal_verdict: str | None = None
         if focal_review:
+            canonical_focal_output = self._combined_review_output(node)
             focal_output = (
-                result.output or ""
-                if runtime_focal_review
-                else f"{review_output}\n\n{result.output or ''}"
+                f"{canonical_focal_output}\n\n"
+                f"--- resposta estruturada do reviewer ---\n{result.output or ''}"
             )
-            focal_verdict = _parse_review_verdict(focal_output)
+            # Origin-fallback keeps the rejected broad report as a baseline,
+            # so its verdict cannot decide the focal attempt. Declared focal
+            # reviews, by contrast, reconcile their canonical outputs and may
+            # emit the verdict there instead of repeating it in the summary.
+            focal_verdict = _parse_review_verdict(
+                result.output or "" if runtime_focal_review else focal_output
+            )
             if focal_verdict in _REVIEW_APPROVE_VERDICTS:
+                canonical_has_receipt = bool(
+                    re.search(
+                        r"```(?:yaml|yml)\s*\n(?:(?!```).)*?"
+                        r"^\s*focal_evidence\s*:",
+                        canonical_focal_output,
+                        flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+                    )
+                )
+                fidelity_output = (
+                    canonical_focal_output
+                    if canonical_has_receipt
+                    else result.output or ""
+                )
                 fidelity = validate_focal_approval(
-                    review_output=focal_output,
-                    finding_context=focal_review[1],
+                    review_output=fidelity_output,
+                    finding_context=self._active_focal_finding_context(
+                        node,
+                        focal_review[1],
+                    ),
                     project_root=self._work_dir,
                     ui_validation_enabled=self._ui_evidence_validation_enabled(),
                 )
@@ -8385,6 +8666,12 @@ próprias sob o namespace permitido acima. Encerre DONE.
             if not origin or origin not in self.graph.nodes:
                 print(f"  Erro: review de origem '{origin}' inválido.")
                 return False
+            previous_return = (
+                dict(state.active_fix_return)
+                if isinstance(state.active_fix_return, dict)
+                and state.active_fix_return.get("review_node") == origin
+                else {}
+            )
             audit_entry, review_node, audit_nodes, review_mode = (
                 self._declared_fix_audit(goto, origin)
             )
@@ -8399,12 +8686,40 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 if n not in reopened
             ]
             self._invalidate_focal_evidence(state, reopened_order)
+            try:
+                focal_attempt = int(previous_return.get("attempt", 0)) + 1
+            except (TypeError, ValueError):
+                focal_attempt = 1
+            current_progress = self._structured_review_progress(origin)
+            baseline_progress = previous_return.get("baseline_progress")
+            if not isinstance(baseline_progress, dict):
+                baseline_progress = current_progress
+            raw_history = previous_return.get("progress_history")
+            progress_history = (
+                [dict(item) for item in raw_history if isinstance(item, dict)]
+                if isinstance(raw_history, list)
+                else []
+            )
+            if current_progress and (
+                not progress_history or progress_history[-1] != current_progress
+            ):
+                progress_history.append(current_progress)
+
             state.active_fix_return = {
                 "fix_node": goto,
                 "audit_entry_node": audit_entry,
                 "review_node": review_node,
                 "evidence_origin": origin,
                 "review_mode": review_mode,
+                "attempt": focal_attempt,
+                "baseline_progress": baseline_progress,
+                "latest_progress": current_progress,
+                "progress_history": progress_history,
+                "finding_context": (
+                    f"Pedido de correção:\n{instruction}\n\n"
+                    "Finding que originou a correção:\n"
+                    f"{pending.get('feedback', '')}"
+                ),
                 "review_context": (
                     "REVISÃO FOCAL OBRIGATÓRIA DO FIX\n\n"
                     f"Pedido de correção:\n{instruction}\n\n"
@@ -8449,10 +8764,11 @@ próprias sob o namespace permitido acima. Encerre DONE.
         state.current_sprint = target.sprint
         state.sprint_status = "active" if target.sprint else None
         self.state_mgr.save()
-        self._reset_sprint_sessions(
-            target.sprint,
-            f"directed_fix:{goto}",
-        )
+        # Um fix dirigido continua a mesma conversa builder da sprint. Finding,
+        # evidência e instrução focal entram pelo state/prompt; resetar a sessão
+        # aqui descartaria decisões anteriores e permitiria regressões já
+        # resolvidas. A lane independente de review permanece isolada pela sua
+        # própria chave de sessão.
         print(ui.info(f"↩ Voltando para {goto} com instrução injetada"))
         if audit_origin:
             print(ui.info(
@@ -9283,6 +9599,75 @@ próprias sob o namespace permitido acima. Encerre DONE.
             node_label = f"{node_label} · no node há {node_elapsed}"
         print(ui.highlight(f"Node atual: {node_label}"))
         print(ui.info(f"Status: {state.node_status}"))
+        directed_fix = (
+            state.active_fix_return
+            if isinstance(state.active_fix_return, dict)
+            else None
+        )
+        if directed_fix:
+            fix_node = str(directed_fix.get("fix_node") or "?")
+            review_node = str(directed_fix.get("review_node") or "?")
+            try:
+                focal_attempt = max(1, int(directed_fix.get("attempt", 1)))
+            except (TypeError, ValueError):
+                focal_attempt = 1
+            phase = (
+                "executando correção"
+                if state.current_node == fix_node
+                else "auditando somente o fix"
+                if state.current_node == review_node
+                else "retornando pela cadeia focal"
+            )
+            print(
+                ui.warn(
+                    f"CORREÇÃO DIRIGIDA — tentativa {focal_attempt}: {review_node} "
+                    f"→ {fix_node} → {review_node} · {phase}"
+                )
+            )
+            print(
+                ui.dim(
+                    "  O número do passo pode diminuir durante a correção; "
+                    "isso é retorno dirigido, não regressão do fluxo completo."
+                )
+            )
+
+            baseline = directed_fix.get("baseline_progress")
+            latest = directed_fix.get("latest_progress")
+            current_review = self._structured_review_progress(review_node)
+            if not isinstance(latest, dict):
+                latest = current_review
+            elif isinstance(current_review, dict) and current_review != latest:
+                latest = current_review
+
+            def _review_counts(snapshot: dict[str, Any]) -> str:
+                parts: list[str] = []
+                total = snapshot.get("total")
+                passed = snapshot.get("passed")
+                failed = snapshot.get("failed")
+                pending = snapshot.get("pending")
+                findings = snapshot.get("findings")
+                if isinstance(passed, int) and isinstance(total, int) and total:
+                    parts.append(f"{passed}/{total} PASS")
+                if isinstance(failed, int):
+                    parts.append(f"{failed} FAIL")
+                if isinstance(pending, int) and pending:
+                    parts.append(f"{pending} pendentes")
+                if isinstance(findings, int):
+                    label = "finding" if findings == 1 else "findings"
+                    parts.append(f"{findings} {label}")
+                return " · ".join(parts)
+
+            if isinstance(latest, dict):
+                latest_label = _review_counts(latest)
+                if isinstance(baseline, dict) and baseline != latest:
+                    baseline_label = _review_counts(baseline)
+                    print(
+                        ui.success(
+                            f"  Evolução do review: {baseline_label} → {latest_label}"
+                        )
+                    )
+                elif latest_label:
+                    print(ui.info(f"  Baseline desta tentativa: {latest_label}"))
         recent = self._recent_delegation(state)
         delegation_running = recent is not None and recent[0] < 120
         progress_snapshot = None
@@ -9372,7 +9757,8 @@ próprias sob o namespace permitido acima. Encerre DONE.
             progress_line += f" · {executed_steps} execuções"
             if isinstance(reexecutions, int) and reexecutions > 0:
                 retry_label = "reexecução" if reexecutions == 1 else "reexecuções"
-                progress_line += f" ({reexecutions} {retry_label})"
+                total_label = "total" if reexecutions == 1 else "totais"
+                progress_line += f" ({reexecutions} {retry_label} {total_label})"
         runtime_label, activity_label = self._status_timing_labels()
         if runtime_label:
             progress_line += f" · ciclo rodando há {runtime_label}"

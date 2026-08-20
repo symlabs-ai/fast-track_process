@@ -27,6 +27,8 @@ def _args(**overrides) -> Namespace:
         "skip": False,
         "stream_json": False,
         "standalone": False,
+        "persist_session": False,
+        "resume_session": None,
         "agent": None,
         "model": None,
         "effort": None,
@@ -68,6 +70,38 @@ def test_commands_standalone_sao_read_only(agent, tmp_path):
         assert command[command.index("--format") + 1] == "json"
 
 
+def test_codex_persistent_session_is_read_only_and_resumable(tmp_path):
+    fresh = explore.build_read_only_command(
+        agent="codex", prompt="primeira", project_root=tmp_path,
+        model="gpt-test", effort="low", persist_session=True,
+    )
+    resumed = explore.build_read_only_command(
+        agent="codex", prompt="segunda", project_root=tmp_path,
+        model="gpt-test", effort="low", resume_session="thread-123",
+    )
+
+    assert fresh[:2] == ["codex", "exec"]
+    assert "--ephemeral" not in fresh
+    assert fresh[fresh.index("--sandbox") + 1] == "read-only"
+    assert resumed[:3] == ["codex", "exec", "resume"]
+    assert 'sandbox_mode="read-only"' in resumed
+    assert "-C" not in resumed
+    assert resumed[-2] == "thread-123"
+
+
+def test_persistent_session_rejects_non_codex_and_option_injection(tmp_path):
+    with pytest.raises(explore.ExploreConfigurationError, match="somente para Codex"):
+        explore.build_read_only_command(
+            agent="claude", prompt="x", project_root=tmp_path,
+            persist_session=True,
+        )
+    with pytest.raises(explore.ExploreConfigurationError, match="session id"):
+        explore.build_read_only_command(
+            agent="codex", prompt="x", project_root=tmp_path,
+            resume_session="--last",
+        )
+
+
 def test_normaliza_deltas_claude_sem_duplicar_resultado():
     normalizer = explore.ExploreStreamNormalizer("claude")
     first = json.dumps({
@@ -98,6 +132,23 @@ def test_normaliza_deltas_claude_sem_duplicar_resultado():
     assert normalizer.text == "Olá mundo"
 
 
+def test_normaliza_sessao_e_usage_codex():
+    normalizer = explore.ExploreStreamNormalizer("codex")
+    normalizer.feed('{"type":"thread.started","thread_id":"thread-123"}')
+    normalizer.feed(
+        '{"type":"turn.completed","usage":{"input_tokens":100,'
+        '"output_tokens":12,"input_tokens_details":{"cached_tokens":80},'
+        '"output_tokens_details":{"reasoning_tokens":4}}}'
+    )
+
+    assert normalizer.session_id == "thread-123"
+    assert normalizer.usage == {
+        "input_tokens": 100,
+        "cached_input_tokens": 80,
+        "output_tokens": 12,
+        "reasoning_output_tokens": 4,
+        "total_tokens": 112,
+    }
 @pytest.mark.parametrize(
     ("agent", "event", "expected"),
     [
@@ -155,6 +206,39 @@ def test_runner_entrega_chunks_progressivos_e_exit_code(tmp_path, monkeypatch):
     assert result == explore.ExploreResult(0, "resposta")
     assert chunks == ["resposta"]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_runner_returns_persistent_codex_session_and_current_turn_usage(tmp_path, monkeypatch):
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = io.StringIO("\n".join([
+                '{"type":"thread.started","thread_id":"thread-123"}',
+                '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}',
+            ]) + "\n")
+            self.stderr = io.StringIO("")
+            self.pid = 123
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    result = explore.run_read_only_explore(
+        request="pergunta", project_root=tmp_path, agent="codex",
+        persist_session=True,
+    )
+
+    assert result.session_id == "thread-123"
+    assert result.session_resumed is False
+    assert result.usage == {
+        "input_tokens": 10, "cached_input_tokens": 0,
+        "output_tokens": 2, "reasoning_output_tokens": 0,
+        "total_tokens": 12,
+    }
+    assert result.cost_usd is None
 
 
 def test_explore_herda_supervisao_global_sem_teto_wall_clock(
@@ -410,7 +494,37 @@ def test_cmd_standalone_stream_json_emite_protocolo(tmp_path, monkeypatch, capsy
     assert [event["type"] for event in events] == ["start", "chunk", "chunk", "result"]
     assert [event.get("seq") for event in events[1:3]] == [1, 2]
     assert events[0]["read_only"] is True
-    assert events[-1] == {"type": "result", "ok": True, "text": "um dois", "exit_code": 0}
+    assert events[-1] == {
+        "type": "result", "ok": True, "text": "um dois", "exit_code": 0,
+        "session_id": None, "session_resumed": False,
+        "usage": None, "cost_usd": None,
+    }
+
+
+def test_cmd_stream_json_exposes_session_and_usage(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli_main, "find_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_main, "canonical_project_root", lambda root: Path(root))
+    monkeypatch.setattr(cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None))
+
+    def fake_run(**kwargs):
+        assert kwargs["persist_session"] is True
+        assert kwargs["resume_session"] is None
+        return explore.ExploreResult(
+            0, "ok", session_id="thread-123",
+            usage={"input_tokens": 5, "cached_input_tokens": 2,
+                   "output_tokens": 3, "reasoning_output_tokens": 1,
+                   "total_tokens": 8},
+        )
+
+    monkeypatch.setattr(explore, "run_read_only_explore", fake_run)
+    cli_main.cmd_explore(_args(stream_json=True, persist_session=True))
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+    assert events[0]["session"] == {"mode": "new", "id": None}
+    assert events[-1]["session_id"] == "thread-123"
+    assert events[-1]["session_resumed"] is False
+    assert events[-1]["usage"]["total_tokens"] == 8
+    assert events[-1]["cost_usd"] is None
 
 
 def test_cmd_standalone_preserva_exit_code_do_executor(tmp_path, monkeypatch, capsys):

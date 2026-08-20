@@ -112,11 +112,27 @@ def test_identity_ready(
     for field in ("seeded", "idempotent", "resettable", "journey_ready"):
         if payload.get(field) is not True:
             return False, f"test_identity_ready FAIL: {field} deve ser true"
-    if str(payload.get("credentials_source") or "").strip().casefold() not in {
+    credentials_source = str(payload.get("credentials_source") or "").strip().casefold()
+    protected_sources = {
         "secret_store",
         "protected_file",
         "device_secure_store",
-    }:
+    }
+    if credentials_source == "not_required":
+        authentication = payload.get("authentication")
+        no_authentication_required = (
+            isinstance(authentication, dict)
+            and authentication.get("required_for_journey") is False
+            and str(authentication.get("status") or "").strip().casefold()
+            == "not_required"
+            and authentication.get("credential_material_observed_or_recorded") is False
+        )
+        if not no_authentication_required:
+            return False, (
+                "test_identity_ready FAIL: origem not_required exige jornada "
+                "explicitamente sem autenticação"
+            )
+    elif credentials_source not in protected_sources:
         return False, "test_identity_ready FAIL: origem de credenciais desprotegida"
     if payload.get("secret_values_recorded") is not False:
         return False, "test_identity_ready FAIL: recibo pode conter segredo"
@@ -199,13 +215,28 @@ def _navigation_repo_file(
     return resolved
 
 
-def _navigation_scope_ids(scope_file: Path, scope_pattern: str) -> set[str]:
+def _navigation_scope_ids(
+    scope_file: Path,
+    scope_pattern: str,
+    scope_exclude_pattern: str | None = None,
+) -> set[str]:
     try:
         pattern = re.compile(scope_pattern, re.IGNORECASE)
     except re.error as exc:
         raise ValueError(f"scope_pattern inválido: {exc}") from exc
     text = scope_file.read_text(encoding="utf-8", errors="strict")
-    return {match.group(0).upper() for match in pattern.finditer(text)}
+    if not scope_exclude_pattern:
+        return {match.group(0).upper() for match in pattern.finditer(text)}
+    try:
+        exclude = re.compile(scope_exclude_pattern, re.IGNORECASE)
+    except re.error as exc:
+        raise ValueError(f"scope_exclude_pattern inválido: {exc}") from exc
+    return {
+        match.group(0).upper()
+        for line in text.splitlines()
+        if not exclude.search(line)
+        for match in pattern.finditer(line)
+    }
 
 
 def _load_navigation_contract(
@@ -599,6 +630,7 @@ def _validate_review_outcome_payload(
 
     results: dict[str, dict] = {}
     failed_refs: set[str] = set()
+    pending_refs: set[str] = set()
     for index, raw_result in enumerate(
         _navigation_list(payload.get("results"), "results")
     ):
@@ -609,8 +641,10 @@ def _validate_review_outcome_payload(
         status = _navigation_text(
             result.get("result"), f"results[{index}].result"
         ).upper()
-        if status not in {"PASS", "FAIL"}:
-            raise ValueError(f"results[{index}].result deve ser PASS ou FAIL")
+        if status not in {"PASS", "FAIL", "PENDING", "NOT_RUN"}:
+            raise ValueError(
+                f"results[{index}].result deve ser PASS, FAIL, PENDING ou NOT_RUN"
+            )
         evidence = _navigation_list(
             result.get("evidence"), f"results[{index}].evidence"
         )
@@ -623,6 +657,8 @@ def _validate_review_outcome_payload(
             )
         if status == "FAIL":
             failed_refs.add(ref)
+        elif status in {"PENDING", "NOT_RUN"}:
+            pending_refs.add(ref)
         results[ref] = result
 
     missing_refs = sorted(expected_refs - set(results))
@@ -676,6 +712,11 @@ def _validate_review_outcome_payload(
         if failed_refs:
             raise ValueError(
                 f"verdict APPROVED contém resultados FAIL: {sorted(failed_refs)}"
+            )
+        if pending_refs:
+            raise ValueError(
+                "verdict APPROVED contém resultados pendentes: "
+                f"{sorted(pending_refs)}"
             )
         if findings:
             raise ValueError("verdict APPROVED exige findings vazio")
@@ -735,6 +776,7 @@ def review_outcome_valid(
     path: str,
     scope_path: str,
     scope_pattern: str,
+    scope_exclude_pattern: str | None = None,
     markdown_path: str | None = None,
     require_approved: bool = False,
     project_root: str = ".",
@@ -744,7 +786,11 @@ def review_outcome_valid(
     root = Path(project_root).resolve()
     try:
         scope_file = _navigation_repo_file(root, scope_path, "review scope")
-        expected_refs = _navigation_scope_ids(scope_file, scope_pattern)
+        expected_refs = _navigation_scope_ids(
+            scope_file,
+            scope_pattern,
+            scope_exclude_pattern,
+        )
         verdict, finding_ids = _load_review_outcome(
             root=root,
             path=path,
@@ -1453,6 +1499,7 @@ def ui_criteria_coverage(
     report_path: str | None = "docs/screenshot-review.md",
     source_dir: str | None = None,
     evidence: str = "any",
+    exclude_pattern: str | None = None,
     project_root: str = ".",
 ) -> tuple[bool, str]:
     """Verifica cobertura genérica dos critérios de interface.
@@ -1473,6 +1520,12 @@ def ui_criteria_coverage(
         return False, f"ui_criteria_coverage FAIL: {criteria_path} nao encontrado"
 
     criteria = _extract_ui_criteria(criteria_file.read_text(encoding="utf-8", errors="ignore"))
+    if exclude_pattern:
+        try:
+            excluded = re.compile(exclude_pattern, re.IGNORECASE)
+        except re.error as exc:
+            return False, f"ui_criteria_coverage FAIL: exclude_pattern inválido: {exc}"
+        criteria = [item for item in criteria if not excluded.search(item[1])]
     if not criteria:
         return False, (
             "ui_criteria_coverage FAIL: nenhum criterio identificado em "

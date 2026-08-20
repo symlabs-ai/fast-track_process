@@ -10,6 +10,8 @@ Esta pasta contém a documentação principal do projeto.
 - `docs/ft_process_authoring.md` — **como construir um novo processo**: cada bloco
   de política, cada tipo de node, validadores, receitas e anti-padrões. Escrito
   para o agente que vai redigir o `process.yml`.
+- `docs/ft_model_orchestration.md` — política experimental para rotear modelos e
+  efforts por node, com escalonamento por evidência e experimento de custo/eficiência.
 - `docs/fast-track-flow.md` — visão do fluxo Fast Track.
 
 ---

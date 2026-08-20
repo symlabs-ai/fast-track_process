@@ -48,6 +48,10 @@ class ExploreResult:
     returncode: int
     text: str
     error: str | None = None
+    session_id: str | None = None
+    session_resumed: bool = False
+    usage: dict[str, int] | None = None
+    cost_usd: float | None = None
 
 
 def _normalized_effort(effort: str | None) -> str | None:
@@ -59,6 +63,52 @@ def _normalized_effort(effort: str | None) -> str | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
         raise ExploreConfigurationError("effort contém valor inválido")
     return value
+
+
+def _normalized_session_id(session_id: str | None) -> str | None:
+    if session_id is None:
+        return None
+    value = str(session_id).strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value):
+        raise ExploreConfigurationError("session id contém valor inválido")
+    return value
+
+
+def _normalized_usage(value: object) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+
+    def count(key: str, fallback: str | None = None) -> int:
+        raw = value.get(key, value.get(fallback, 0) if fallback else 0)
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    input_details = value.get("input_tokens_details")
+    output_details = value.get("output_tokens_details")
+    cached = count("cached_input_tokens")
+    reasoning = count("reasoning_output_tokens")
+    if isinstance(input_details, dict):
+        try:
+            cached = max(cached, int(input_details.get("cached_tokens") or 0))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(output_details, dict):
+        try:
+            reasoning = max(reasoning, int(output_details.get("reasoning_tokens") or 0))
+        except (TypeError, ValueError):
+            pass
+    usage = {
+        "input_tokens": count("input_tokens", "prompt_tokens"),
+        "cached_input_tokens": max(0, cached),
+        "output_tokens": count("output_tokens", "completion_tokens"),
+        "reasoning_output_tokens": max(0, reasoning),
+        "total_tokens": count("total_tokens"),
+    }
+    if not usage["total_tokens"]:
+        usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+    return usage
 
 
 def _read_only_prompt(request: str) -> str:
@@ -78,6 +128,8 @@ def build_read_only_command(
     project_root: str | Path,
     model: str | None = None,
     effort: str | None = None,
+    persist_session: bool = False,
+    resume_session: str | None = None,
 ) -> list[str]:
     """Monta a CLI nativa com a política read-only mais forte do provider."""
 
@@ -86,7 +138,13 @@ def build_read_only_command(
         raise ExploreConfigurationError(f"agent desconhecido: {agent}")
     root = str(Path(project_root).resolve())
     normalized_effort = _normalized_effort(effort)
+    normalized_session = _normalized_session_id(resume_session)
     task = _read_only_prompt(prompt)
+
+    if (persist_session or normalized_session) and selected != "codex":
+        raise ExploreConfigurationError(
+            "sessão persistente standalone está disponível somente para Codex"
+        )
 
     if selected == "claude":
         command = [
@@ -106,18 +164,27 @@ def build_read_only_command(
         return command
 
     if selected == "codex":
-        command = [
-            "codex", "exec",
-            "--sandbox", "read-only",
-            "--skip-git-repo-check",
-            "--ephemeral",
-            "--json",
-            "-C", root,
-        ]
+        if normalized_session:
+            command = [
+                "codex", "exec", "resume",
+                "-c", 'sandbox_mode="read-only"',
+                "--skip-git-repo-check", "--json",
+            ]
+        else:
+            command = [
+                "codex", "exec",
+                "--sandbox", "read-only",
+                "--skip-git-repo-check",
+            ]
+            if not persist_session:
+                command.append("--ephemeral")
+            command += ["--json", "-C", root]
         if normalized_effort:
             command += ["-c", f"model_reasoning_effort={json.dumps(normalized_effort)}"]
         if model:
             command += ["-m", str(model)]
+        if normalized_session:
+            command.append(normalized_session)
         command.append(task)
         return command
 
@@ -157,6 +224,9 @@ class ExploreStreamNormalizer:
         self.provider_error: str | None = None
         self._claude_saw_delta = False
         self._fallback: str | None = None
+        self.session_id: str | None = None
+        self.usage: dict[str, int] | None = None
+        self.cost_usd: float | None = None
 
     @property
     def text(self) -> str:
@@ -181,6 +251,16 @@ class ExploreStreamNormalizer:
             return []
 
         event_type = str(event.get("type") or "")
+        if self.agent == "codex" and event_type == "thread.started":
+            thread_id = event.get("thread_id")
+            if isinstance(thread_id, str) and thread_id.strip():
+                self.session_id = thread_id.strip()
+        usage = _normalized_usage(event.get("usage"))
+        if usage is not None:
+            self.usage = usage
+        raw_cost = event.get("total_cost_usd")
+        if isinstance(raw_cost, (int, float)) and raw_cost >= 0:
+            self.cost_usd = float(raw_cost)
         if event_type == "error":
             self.provider_error = str(
                 event.get("message") or event.get("error") or "provider retornou erro"
@@ -388,6 +468,8 @@ def run_read_only_explore(
     agent: str,
     model: str | None = None,
     effort: str | None = None,
+    persist_session: bool = False,
+    resume_session: str | None = None,
     on_chunk: Callable[[str], None] | None = None,
 ) -> ExploreResult:
     """Executa uma consulta standalone e entrega chunks à medida que chegam."""
@@ -399,6 +481,8 @@ def run_read_only_explore(
         project_root=root,
         model=model,
         effort=effort,
+        persist_session=persist_session,
+        resume_session=resume_session,
     )
     selected = agent.strip().lower()
     runtime: tempfile.TemporaryDirectory[str] | None = None
@@ -489,6 +573,10 @@ def run_read_only_explore(
                     normalizer.text,
                     "[INACTIVITY_TIMEOUT] executor sem produtividade observável "
                     f"por {idle_timeout} segundos",
+                    session_id=normalizer.session_id if (persist_session or resume_session) else None,
+                    session_resumed=bool(resume_session),
+                    usage=normalizer.usage,
+                    cost_usd=normalizer.cost_usd,
                 )
             except subprocess.TimeoutExpired:
                 _stop_process(proc)
@@ -499,6 +587,10 @@ def run_read_only_explore(
                     normalizer.text,
                     "[MAX_WALL_TIMEOUT] executor excedeu o teto absoluto opt-in "
                     f"de {max_wall_timeout} segundos",
+                    session_id=normalizer.session_id if (persist_session or resume_session) else None,
+                    session_resumed=bool(resume_session),
+                    usage=normalizer.usage,
+                    cost_usd=normalizer.cost_usd,
                 )
 
         stdout_thread.join(timeout=2)
@@ -511,12 +603,30 @@ def run_read_only_explore(
         stderr_text = "".join(stderr_parts).strip()
         if returncode != 0:
             error = normalizer.provider_error or stderr_text or f"executor saiu com código {returncode}"
-            return ExploreResult(returncode, text, error)
+            return ExploreResult(
+                returncode, text, error,
+                normalizer.session_id if (persist_session or resume_session) else None,
+                bool(resume_session), normalizer.usage, normalizer.cost_usd,
+            )
         if normalizer.provider_error:
-            return ExploreResult(1, text, normalizer.provider_error)
+            return ExploreResult(
+                1, text, normalizer.provider_error,
+                normalizer.session_id if (persist_session or resume_session) else None,
+                bool(resume_session), normalizer.usage, normalizer.cost_usd,
+            )
         if not text.strip():
-            return ExploreResult(1, "", stderr_text or "executor terminou sem resposta")
-        return ExploreResult(0, text)
+            return ExploreResult(
+                1, "", stderr_text or "executor terminou sem resposta",
+                normalizer.session_id if (persist_session or resume_session) else None,
+                bool(resume_session), normalizer.usage,
+                normalizer.cost_usd,
+            )
+        return ExploreResult(
+            0, text,
+            session_id=normalizer.session_id if (persist_session or resume_session) else None,
+            session_resumed=bool(resume_session), usage=normalizer.usage,
+            cost_usd=normalizer.cost_usd,
+        )
     finally:
         if runtime is not None:
             runtime.cleanup()

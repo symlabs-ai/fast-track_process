@@ -3046,7 +3046,14 @@ def cmd_explore(args):
 
     root = canonical_project_root(find_project_root())
     stream_json = bool(getattr(args, "stream_json", False))
-    force_standalone = bool(getattr(args, "standalone", False) or stream_json)
+    persist_session = bool(getattr(args, "persist_session", False))
+    resume_session = str(getattr(args, "resume_session", None) or "").strip() or None
+    force_standalone = bool(
+        getattr(args, "standalone", False)
+        or stream_json
+        or persist_session
+        or resume_session
+    )
     exploration_cycle = (
         None
         if force_standalone
@@ -3116,6 +3123,8 @@ def cmd_explore(args):
 
     try:
         agent, model, effort = _standalone_explore_selection(args, root)
+        if persist_session and resume_session:
+            raise ValueError("use --persist-session ou --resume-session, não ambos")
         if stream_json:
             _print_explore_json(
                 {
@@ -3125,6 +3134,10 @@ def cmd_explore(args):
                     "effort": effort,
                     "mode": "standalone",
                     "read_only": True,
+                    "session": {
+                        "mode": "resume" if resume_session else "new" if persist_session else "ephemeral",
+                        "id": resume_session,
+                    },
                 }
             )
 
@@ -3144,6 +3157,8 @@ def cmd_explore(args):
             agent=agent,
             model=model,
             effort=effort,
+            persist_session=persist_session,
+            resume_session=resume_session,
             on_chunk=on_chunk,
         )
     except (ExploreConfigurationError, ValueError) as exc:
@@ -3168,6 +3183,10 @@ def cmd_explore(args):
                     "ok": True,
                     "text": result.text,
                     "exit_code": 0,
+                    "session_id": result.session_id,
+                    "session_resumed": result.session_resumed,
+                    "usage": result.usage,
+                    "cost_usd": result.cost_usd,
                 }
             )
         elif result.text and not result.text.endswith("\n"):
@@ -3183,6 +3202,10 @@ def cmd_explore(args):
                 "message": message,
                 "text": result.text,
                 "exit_code": result.returncode,
+                "session_id": result.session_id,
+                "session_resumed": result.session_resumed,
+                "usage": result.usage,
+                "cost_usd": result.cost_usd,
             }
         )
     else:
@@ -4591,6 +4614,20 @@ def cmd_retry(args):
     mode = "mvp" if getattr(args, "auto", False) else "step"
 
     if not retrying_pending_review:
+        retry_focal = getattr(
+            runner,
+            "retry_blocked_focal_evidence_without_llm",
+            None,
+        )
+        if callable(retry_focal) and retry_focal(mode=mode):
+            resumed = runner.state_mgr.load()
+            if mode == "mvp" and resumed.node_status not in {
+                "blocked",
+                "awaiting_approval",
+                "pending_fix",
+            }:
+                runner.run(mode=mode)
+            return
         retry_validation = getattr(
             runner,
             "retry_blocked_validation_without_llm",
@@ -6372,6 +6409,17 @@ def main():
         "--standalone",
         action="store_true",
         help="Forçar consulta read-only independente, mesmo com node exploration ativo",
+    )
+    session = ex.add_mutually_exclusive_group()
+    session.add_argument(
+        "--persist-session",
+        action="store_true",
+        help="Criar sessão Codex standalone retomável e retornar seu id",
+    )
+    session.add_argument(
+        "--resume-session",
+        metavar="SESSION_ID",
+        help="Retomar uma sessão Codex standalone existente pelo id",
     )
     ex.add_argument(
         "--finish", action="store_true", help="Encerrar exploração e gerar relatório"

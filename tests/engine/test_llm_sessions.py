@@ -160,6 +160,36 @@ def test_model_change_supersedes_session(tmp_path: Path) -> None:
     assert record["history"][-1]["session_id"] == old_id
 
 
+def test_effort_change_resumes_same_session(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    node = runner.graph.get_node("build")
+    first: dict = {}
+    runner._attach_llm_session(first, node=node, selection=_selection())
+    session_id = first["llm_session_id"]
+    context = first.pop("_ft_session_context")
+    runner._record_llm_session_result(
+        context,
+        DelegateResult(True, "DONE", [], [], session_id=session_id),
+    )
+
+    changed: dict = {}
+    runner._attach_llm_session(
+        changed,
+        node=node,
+        selection=LLMSelection(
+            engine="claude",
+            model="sonnet",
+            effort="medium",
+        ),
+    )
+
+    record = runner.state_mgr.state.llm_sessions["sprint:sprint-01"]
+    assert changed["llm_session_id"] == session_id
+    assert changed["llm_session_resume"] is True
+    assert record["effort"] == "medium"
+    assert record["history"] == []
+
+
 def test_codex_auth_route_supersedes_gateway_session(tmp_path: Path) -> None:
     runner = _runner(tmp_path)
     node = runner.graph.get_node("build")
@@ -327,6 +357,125 @@ def test_direct_fix_reuses_session_policy_and_injects_plan(tmp_path: Path) -> No
     assert kwargs["llm_session_resume"] is False
     assert "PLANO INTERNO DO CICLO" in kwargs["task"]
     assert "corrigir rápido" in kwargs["task"]
+
+
+def test_directed_fix_preserves_and_resumes_builder_session(tmp_path: Path) -> None:
+    process = tmp_path / "process.yml"
+    process.write_text(
+        """
+id: directed_fix_session
+version: "1"
+title: Directed Fix Session
+session_policy:
+  mode: sprint
+  providers: [codex]
+  initial_plan: deterministic
+  parallel_strategy: fork
+  recovery: rehydrate
+nodes:
+  - id: review
+    type: review
+    title: Review
+    sprint: sprint-01
+    executor: codex
+    outputs: [docs/review.yml]
+    write_scope: [docs/review.yml]
+    on_fail:
+      goto: fix
+    next: end
+  - id: fix
+    type: build
+    title: Fix
+    sprint: sprint-01
+    executor: codex
+    outputs: [project/]
+    write_scope: [project]
+    fix_review: review
+    next: review
+  - id: end
+    type: end
+    title: End
+""",
+        encoding="utf-8",
+    )
+    runner = StepRunner(
+        process_path=process,
+        state_path=tmp_path / "state" / "engine_state.yml",
+        project_root=tmp_path,
+    )
+    runner.state_mgr._state = EngineState(
+        process_id="directed_fix_session",
+        current_node="review",
+        current_sprint="sprint-01",
+        node_status="pending_fix",
+        pending_fix={
+            "goto": "fix",
+            "origin": "review",
+            "feedback": "F-001 continua vermelho",
+        },
+        metrics={"llm_calls": 0},
+    )
+    runner.state_mgr.save()
+
+    fix_node = runner.graph.get_node("fix")
+    selection = _codex_selection()
+    initial: dict = {}
+    runner._attach_llm_session(initial, node=fix_node, selection=selection)
+    context = initial.pop("_ft_session_context")
+    runner._record_llm_session_result(
+        context,
+        DelegateResult(True, "DONE", [], [], session_id="thread-builder"),
+    )
+
+    assert runner.apply_fix("Corrigir somente F-001")
+
+    resumed: dict = {}
+    runner._attach_llm_session(resumed, node=fix_node, selection=selection)
+    assert resumed["llm_session_id"] == "thread-builder"
+    assert resumed["llm_session_resume"] is True
+    record = runner.state_mgr.state.llm_sessions["sprint:sprint-01"]
+    assert record["session_id"] == "thread-builder"
+    assert record["established"] is True
+    assert record.get("reset_reason") is None
+
+
+def test_directed_fix_blocks_incompatible_session_change(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    node = runner.graph.get_node("build")
+    initial: dict = {}
+    runner._attach_llm_session(initial, node=node, selection=_selection())
+    session_id = initial["llm_session_id"]
+    context = initial.pop("_ft_session_context")
+    runner._record_llm_session_result(
+        context,
+        DelegateResult(True, "DONE", [], [], session_id=session_id),
+    )
+    runner.state_mgr.state.active_fix_return = {
+        "fix_node": "build",
+        "review_node": "review",
+    }
+    runner.state_mgr.save()
+
+    changed: dict = {}
+    try:
+        runner._attach_llm_session(
+            changed,
+            node=node,
+            selection=_selection("opus"),
+        )
+    except RuntimeError as exc:
+        assert "DIRECTED_FIX_SESSION_AFFINITY_CONFLICT" in str(exc)
+    else:
+        raise AssertionError("troca incompatível abriu um fix sem contexto")
+
+    record = runner.state_mgr.state.llm_sessions["sprint:sprint-01"]
+    assert record["session_id"] == session_id
+    assert record["model"] == "sonnet"
+    assert record["history"] == []
+    assert runner.state_mgr.state.node_status == "blocked"
+    assert "DIRECTED_FIX_SESSION_AFFINITY_CONFLICT" in str(
+        runner.state_mgr.state.blocked_reason
+    )
 
 
 def test_direct_fix_on_ready_node_validates_and_advances_without_redelegation(

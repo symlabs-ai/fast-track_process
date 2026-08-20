@@ -462,6 +462,18 @@ def _workspace_progress_paths(
     return [root]
 
 
+def _is_engine_runtime_progress_path(relative: Path) -> bool:
+    """Ignore files whose growth is caused by the supervisor itself."""
+    parts = relative.parts
+    if parts and parts[0] == "state":
+        return True
+    return (
+        len(parts) == 1
+        and relative.name.startswith("cycle-")
+        and relative.name.endswith("_log.md")
+    )
+
+
 def _workspace_progress_snapshot(paths: list[Path], project_root: str) -> _WorkspaceProgressSnapshot:
     """Fingerprint authored worktree files without reading their contents.
 
@@ -480,10 +492,13 @@ def _workspace_progress_snapshot(paths: list[Path], project_root: str) -> _Works
     def record(path: Path, *, missing: bool = False) -> None:
         nonlocal file_count, total_bytes, source_file_count, source_bytes
         try:
-            relative = path.relative_to(root).as_posix()
+            relative_path = path.relative_to(root)
+            relative = relative_path.as_posix()
         except ValueError:
             return
         if relative == ".git" or relative.startswith(".git/"):
+            return
+        if _is_engine_runtime_progress_path(relative_path):
             return
         if missing:
             digest.update(f"M\0{relative}\0".encode("utf-8", errors="surrogateescape"))
@@ -559,7 +574,6 @@ def _workspace_progress_snapshot(paths: list[Path], project_root: str) -> _Works
         pending = [watched]
         while pending:
             directory = pending.pop()
-            record(directory)
             try:
                 entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
             except OSError:
@@ -571,6 +585,8 @@ def _workspace_progress_snapshot(paths: list[Path], project_root: str) -> _Works
                 except ValueError:
                     continue
                 if ".git" in relative.parts:
+                    continue
+                if _is_engine_runtime_progress_path(relative):
                     continue
                 try:
                     if entry.is_dir(follow_symlinks=False):
@@ -873,13 +889,17 @@ def _has_productive_liveness(
     baseline: _ProcessLiveness,
     current: _ProcessLiveness,
 ) -> bool:
+    # rchar/wchar also count pipe, socket and keepalive traffic. A remote LLM
+    # process can therefore emit the same small heartbeat forever while doing
+    # no observable work. Keep those counters for diagnostics, but renew the
+    # inactivity lease only on CPU, topology/fd changes or actual storage I/O.
     return current.alive and (
         current.process_count != baseline.process_count
         or current.socket_count != baseline.socket_count
         or current.fd_count != baseline.fd_count
-        or current.cpu_ticks != baseline.cpu_ticks
-        or current.read_chars != baseline.read_chars
-        or current.write_chars != baseline.write_chars
+        # One scheduler tick per probe is typical event-loop polling. Require
+        # at least two ticks before CPU alone can renew the lease.
+        or current.cpu_ticks - baseline.cpu_ticks >= 2
         or current.read_bytes != baseline.read_bytes
         or current.write_bytes != baseline.write_bytes
     )

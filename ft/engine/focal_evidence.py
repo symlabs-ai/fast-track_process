@@ -101,6 +101,45 @@ _COUNT_WORDS = {
 }
 
 
+def _contains_marker(context: str, marker: str, *, prefix: bool = False) -> bool:
+    """Match semantic markers as words, never as incidental substrings.
+
+    Short markers such as ``ui`` previously matched ordinary words including
+    Portuguese ``suíte`` after accent normalization.  A small set of deliberate
+    stems still accepts inflections such as render/renderizado and persist/
+    persistência.
+    """
+
+    suffix = "" if prefix else r"(?!\w)"
+    return bool(re.search(rf"(?<!\w){re.escape(marker)}{suffix}", context))
+
+
+FOCAL_REVIEW_ORDERING_INSTRUCTIONS = """\
+ORDEM OBRIGATÓRIA DA AUDITORIA FOCAL
+
+1. Reproduza e audite primeiro somente as claims e os alvos citados no finding.
+2. Se qualquer claim focal falhar, encerre com `VERDICT: REJECTED` e não execute
+   regressão ampla, recaptura integral, suíte completa ou varredura de itens já
+   aprovados. Preserve evidência suficiente do FAIL focal e escreva imediatamente
+   os outputs canônicos do review; não repita a claim apenas para embelezar ou
+   ampliar uma prova repo-local que já demonstra o resultado observado.
+   No receipt estruturado, marque como `PENDING` ou `NOT_RUN` tudo que não foi
+   executado por causa desse early-stop. Gere findings somente para refs com
+   `FAIL` observado; refs pendentes não são defeitos e não podem ser enviadas ao
+   próximo fix.
+3. Somente depois de obter zero FAIL no escopo focal execute checks de regressão
+   proporcionais e baratos sobre o que já estava aprovado.
+4. A regressão posterior não amplia o finding, não reabre requisitos preservados
+   e deve parar no primeiro sinal material de regressão, reportando-o separadamente.
+5. Se a execução focal corrente já deixou um FAIL reproduzível e sanitizado no
+   diretório novo desta tentativa, reutilize essa evidência para serializar
+   `REJECTED`; não reinicie serviços nem repita a jornada após interrupção.
+6. Depois que o FAIL corrente for corrigido, audite-o primeiro; se passar,
+   continue pelos refs pendentes até o próximo FAIL ou até zerar a fila. Somente
+   um receipt sem FAIL nem pendência pode declarar `APPROVED`.
+"""
+
+
 FOCAL_EVIDENCE_INSTRUCTIONS = """\
 CONTRATO GLOBAL DE FIDELIDADE DA AUDITORIA FOCAL
 
@@ -289,10 +328,12 @@ def _required_anchors(finding_context: str) -> dict[str, tuple[str, ...]]:
 def _requires_real_ui_data(finding_context: str) -> bool:
     context = _normalized(finding_context)
     has_ui = bool(re.search(r"(?<!\w)s\d{2}(?!\w)", context)) or any(
-        marker in context for marker in _UI_MARKERS
+        _contains_marker(context, marker, prefix=marker in {"render", "exibir"})
+        for marker in _UI_MARKERS
     )
     has_data = bool(_required_anchors(finding_context)) or any(
-        marker in context for marker in _DATA_MARKERS
+        _contains_marker(context, marker, prefix=marker == "persist")
+        for marker in _DATA_MARKERS
     )
     return has_ui and has_data
 
@@ -570,10 +611,19 @@ def validate_focal_approval(
             )
         return FocalEvidenceValidation(True)
 
-    if not _requires_real_ui_data(finding_context):
+    finding_kind = _normalized(record.get("finding_kind"))
+    requires_real_ui_data = _requires_real_ui_data(finding_context)
+    # Review contexts also carry generic cautions such as “fixtures do not
+    # prove backend data”. Those words must not turn an explicitly visual
+    # layout finding into a data-journey finding. Named user-data anchors stay
+    # fail-closed and cannot be bypassed by declaring ui_visual.
+    if finding_kind == "ui_visual" and not _required_anchors(finding_context):
+        requires_real_ui_data = False
+
+    if not requires_real_ui_data:
         return FocalEvidenceValidation(True)
 
-    if _normalized(record.get("finding_kind")) != "ui_data":
+    if finding_kind != "ui_data":
         return FocalEvidenceValidation(
             False,
             "finding de dados visíveis deve declarar finding_kind: ui_data",

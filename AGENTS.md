@@ -66,6 +66,16 @@ do mockup correspondente (`S01`, `S02`, ...). O receipt inventaria todas as
 telas e exige screenshot real por tela; overlay da captura, referência genérica,
 tela sem mockup ou inventário incompleto reprova a validação.
 
+## Manual de orquestração de modelos
+
+Ao ser perguntado sobre como orquestrar, escolher, trocar ou medir modelos e
+efforts em um processo FT, use e informe o manual
+[`docs/ft_model_orchestration.md`](docs/ft_model_orchestration.md). Ele é a
+política experimental obrigatória: exige roteamento por node, probe de
+capabilities no ambiente alvo, escalonamento por evidência e comparação de
+custo/eficiência com a telemetria real do ciclo. Não responda com preferência
+genérica de modelo nem altere a rota silenciosamente.
+
 ## 0. Inicializar ou diagnosticar o repositório
 
 ```bash
@@ -317,10 +327,44 @@ são apresentados como prova. Uma rejeição deve informar onde ocorreu, passos,
 resultado esperado e observado. Se a URL ou a evidência necessária estiver
 ausente ou inacessível, o humano ainda não tem base para aprovar.
 
+Além do pacote técnico apresentado pelo próprio `ft`, o agente condutor deve
+traduzir cada human gate no chat para uma pergunta curta, concreta e fácil de
+entender. A mensagem deve explicar em linguagem simples qual decisão precisa
+ser tomada, resumir as opções e seus impactos e terminar com uma pergunta
+direta, como `Você aprova ...?`, indicando também como rejeitar ou pedir
+ajustes. A saída do engine complementa essa pergunta, mas não a substitui. O
+agente deve decompor gates com vários achados, critérios ou decisões e explicar
+sucintamente cada item em separado: qual é o problema, qual risco ele cria e o
+que será feito para resolvê-lo, sempre em linguagem não técnica. Não esconda
+decisões diferentes sob um resumo único nem presuma que termos internos como
+`receipt`, `allowlist`, fingerprint, lane ou terminalidade sejam
+autoexplicativos. Cada item que possa ser aceito ou rejeitado independentemente
+deve terminar em sua própria pergunta numerada e respondível. Ao final, permita
+ao usuário `aprovar todas` ou indicar os números que deseja rejeitar ou ajustar;
+uma pergunta agregada não substitui essas perguntas individuais. O
+agente não pode aprovar, rejeitar nem usar `--bypass-human-gates` sem uma
+resposta explícita do usuário à pergunta apresentada no chat.
+
 Quando só há um ciclo aplicável, `--cycle` pode ser omitido. Rejeições devem ter
 motivo objetivo porque o texto vira contexto do retry.
 
 ## 5. Bloqueios e recuperação
+
+### Generalidade do processo e contexto do ciclo
+
+`process.yml`, tanto no catálogo global quanto no fork local do projeto,
+descreve somente comportamento reutilizável por qualquer ciclo daquele projeto.
+É proibido gravar no processo contexto de uma tentativa concreta, incluindo
+IDs de finding ou critério, contagens PASS/FAIL, nomes de runs, hashes, paths de
+evidência, instruções `RECOVERY` ou decisões tomadas durante um ciclo.
+
+Esse contexto pertence exclusivamente ao state do ciclo, `cycle_memory`,
+receipts/evidências focais e à instrução passada a `ft fix`. Uma correção
+dirigida retoma a mesma sessão builder da sprint com todo o histórico anterior,
+executa somente o fix e sua revisão focal e então segue o grafo. Ela não reseta
+a sessão, não reescreve o processo e não volta ao workflow completo. Se o
+provider não puder retomar a conversa, a engine deve declarar a reidratação ou
+bloquear; nunca abrir silenciosamente uma correção sem contexto.
 
 | Situação | Ação |
 |---|---|

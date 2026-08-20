@@ -93,6 +93,107 @@ def test_mock_only_approval_is_rejected_when_verdict_follows_claim_status(
     assert "mock" in result.reason.casefold()
 
 
+def test_visual_finding_ignores_incidental_data_policy_language(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "docs" / "s19-modal.png"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_bytes(b"modal screenshot")
+
+    result = validate_focal_approval(
+        review_output=_review(
+            """focal_evidence:
+  coverage_complete: true
+  finding_kind: ui_visual
+  evidence_level: physical_e2e
+  data_origin: local_product
+  mock_only: false
+  journey: [abrir S19 e comparar o diálogo]
+  visual_evidence: [docs/s19-modal.png]
+  claims:
+    - requirement: S19 renderiza diálogo central sobre a superfície de origem
+      expected: diálogo central com backdrop
+      observed: diálogo central com backdrop
+      status: PASS
+      evidence: [docs/s19-modal.png]"""
+        ),
+        finding_context=(
+            "S19 deve renderizar como diálogo central. Dados determinísticos "
+            "podem apoiar a renderização, mas não comprovam backend ou persistência."
+        ),
+        project_root=tmp_path,
+    )
+
+    assert result.passed, result.reason
+
+
+def test_http_html_smoke_is_not_reclassified_as_real_ui_data(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "docs" / "smoke-report.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("GET /: HTTP 200, text/html, non-empty body\n", encoding="utf-8")
+
+    result = validate_focal_approval(
+        review_output=_review(
+            """focal_evidence:
+  coverage_complete: true
+  finding_kind: behavior
+  evidence_level: integration
+  data_origin: local_product
+  mock_only: false
+  journey: [start isolated backend, execute GET /, inspect status and HTML body]
+  visual_evidence: []
+  claims:
+    - requirement: GET / returns non-empty HTML with a 2xx status
+      expected: HTTP 2xx and non-empty HTML
+      observed: HTTP 200 and non-empty text/html body
+      status: PASS
+      evidence: [docs/smoke-report.md]"""
+        ),
+        finding_context=(
+            "Corrija o smoke no backend: GET / deve retornar HTML não vazio com "
+            "status 2xx, preservando /health e as rotas da API. Não rode a "
+            "suíte completa durante a correção focal."
+        ),
+        project_root=tmp_path,
+    )
+
+    assert result.passed, result.reason
+
+
+def test_named_ui_data_anchor_cannot_be_reclassified_as_visual(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "docs" / "s44-phone.png"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_bytes(b"phone screenshot")
+
+    result = validate_focal_approval(
+        review_output=_review(
+            """focal_evidence:
+  coverage_complete: true
+  finding_kind: ui_visual
+  evidence_level: physical_e2e
+  data_origin: real_system
+  mock_only: false
+  journey: [abrir S44 e observar o telefone]
+  visual_evidence: [docs/s44-phone.png]
+  claims:
+    - requirement: telefone aparece na S44
+      expected: telefone visível
+      observed: telefone visível
+      status: PASS
+      evidence: [docs/s44-phone.png]"""
+        ),
+        finding_context="Na tela S44, o telefone cadastrado deve aparecer.",
+        project_root=tmp_path,
+    )
+
+    assert not result.passed
+    assert "finding_kind: ui_data" in result.reason
+
+
 def test_ui_data_approval_rejects_incomplete_field_coverage(tmp_path: Path) -> None:
     evidence = tmp_path / "docs" / "s44-device.png"
     evidence.parent.mkdir(parents=True)

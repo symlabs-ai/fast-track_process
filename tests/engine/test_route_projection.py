@@ -379,11 +379,11 @@ nodes:
         check=True,
         capture_output=True,
         text=True,
-    ).stdout == ""
-    assert "Foundation [foundation]" in subprocess.run(
+    ).stdout == "?? request.md\n"
+    assert subprocess.run(
         ["git", "log", "-1", "--pretty=%s"],
         cwd=root,
         check=True,
         capture_output=True,
         text=True,
-    ).stdout
+    ).stdout.strip() == "baseline"

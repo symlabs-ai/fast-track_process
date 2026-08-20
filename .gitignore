@@ -17,6 +17,7 @@ dist/
 # Secrets
 .env
 .env.local
+.envrc.private
 
 # OS
 .DS_Store

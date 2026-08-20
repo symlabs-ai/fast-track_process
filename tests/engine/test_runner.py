@@ -3,6 +3,7 @@
 import json
 
 import pytest
+import yaml
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,7 @@ from ft.engine.runner import (
     ValidationResult,
     build_task_prompt,
     _brief_cycle_objective,
+    _explicit_review_verdicts,
     _llm_progress_snapshot,
     _parse_review_verdict,
 )
@@ -182,11 +184,26 @@ nodes:
         objective = _brief_cycle_objective(
             "## Demanda\n- Implementar uma alteração " + ("muito detalhada " * 30)
         )
-
         assert objective is not None
         assert "\n" not in objective
         assert len(objective) <= 160
         assert objective.endswith("…")
+
+    def test_review_runs_environment_setup_and_teardown(self, runner_v2):
+        node = runner_v2.graph.get_node("step.01.hipotese")
+        node.env_setup = ["prepare review environment"]
+        node.env_teardown = ["cleanup review environment"]
+
+        with (
+            patch.object(runner_v2, "_run_env_setup", return_value=True) as setup,
+            patch.object(runner_v2, "_run_review_inner") as review,
+            patch.object(runner_v2, "_run_env_teardown") as teardown,
+        ):
+            runner_v2._run_review(node)
+
+        setup.assert_called_once_with(node)
+        review.assert_called_once_with(node)
+        teardown.assert_called_once_with(node)
 
     def test_init_persists_selected_llm_engine(self, tmp_path):
         process_path = tmp_path / "process.yml"
@@ -2158,7 +2175,7 @@ nodes:
             "Veredicto: REJEITADO",
             "Parecer — REPROVADO",
             "Verdict: FAILED",
-            "| R-002 | REJECTED | evidência |",
+            "| Veredito | REJECTED |",
         ],
     )
     def test_review_verdict_parser_recognizes_rejection_variants(self, line):
@@ -2173,6 +2190,78 @@ nodes:
         )
 
         assert _parse_review_verdict(report) == "APPROVED"
+
+    def test_review_verdict_parser_ignores_per_criterion_pass_cells(self):
+        report = (
+            "VERDICT: REJECTED\n\n"
+            "| Critério | Resultado | Evidência |\n"
+            "| --- | --- | --- |\n"
+            "| C01 | PASS | docs/screenshots/c01.png |\n"
+            "| C02 | FAIL | docs/screenshots/c02.png |\n"
+        )
+
+        assert _parse_review_verdict(report) == "REJECTED"
+
+    def test_review_verdict_parser_ignores_nested_yaml_result_fields(self):
+        receipt = (
+            "schema_version: 1\n"
+            "verdict: REJECTED\n"
+            "results:\n"
+            "  - ref: S01.1\n"
+            "    result: PASS\n"
+            "  - ref: S01.2\n"
+            "    result: FAIL\n"
+        )
+
+        assert _explicit_review_verdicts(receipt) == ["REJECTED"]
+        assert _parse_review_verdict(receipt) == "REJECTED"
+
+    def test_review_rejection_reason_does_not_conflict_with_pass_rows(self, tmp_path):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        (docs / "review.md").write_text(
+            "VERDICT: REJECTED\n\n"
+            "| Critério | Resultado | Evidência |\n"
+            "| --- | --- | --- |\n"
+            "| C01 | PASS | docs/screenshots/c01.png |\n"
+            "| C02 | FAIL | docs/screenshots/c02.png |\n",
+            encoding="utf-8",
+        )
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: verdict_table_rows
+title: Verdict table rows
+nodes:
+  - id: review
+    type: review
+    title: Review
+    outputs: [docs/review.md]
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+
+        reason = runner._review_rejection_reason(
+            runner.graph.get_node("review"),
+            response_output="VERDICT: REJECTED",
+        )
+
+        assert reason is not None
+        assert reason.startswith("CANONICAL_REVIEW_REJECTED")
+        assert "REVIEW_VERDICT_CONFLICT" not in reason
 
     def test_review_rejection_wins_over_approved_response_and_other_outputs(
         self,
@@ -2834,9 +2923,10 @@ nodes:
     type: review
     title: Headless review
     no_pre_seed: true
-    outputs: [docs/headless-review.md]
+    outputs: [docs/headless-review.md, docs/headless-review.yml]
     validators:
       - file_exists: docs/headless-review.md
+      - file_exists: docs/headless-review.yml
     on_fail:
       human_gate: Corrigir divergência focal.
       goto: fix
@@ -2875,9 +2965,7 @@ nodes:
         }
         runner.state_mgr.save()
 
-        report = (
-            "VERDICT: APPROVED\n\n"
-            "```yaml\n"
+        receipt = (
             "focal_evidence:\n"
             "  coverage_complete: true\n"
             "  finding_kind: technical\n"
@@ -2892,9 +2980,8 @@ nodes:
             "      observed: 25/25 checks passed\n"
             "      status: PASS\n"
             "      evidence: [docs/headless-regression.txt]\n"
-            "```\n"
         )
-        wrong_kind_report = report.replace(
+        wrong_kind_receipt = receipt.replace(
             "finding_kind: technical",
             "finding_kind: ui_data",
         )
@@ -2904,16 +2991,25 @@ nodes:
             nonlocal attempts
             assert "AUDITORIA FOCAL HEADLESS" in kwargs["task"]
             assert "não crie, solicite ou use tela" in kwargs["task"].casefold()
-            selected_report = wrong_kind_report if attempts == 0 else report
+            selected_receipt = wrong_kind_receipt if attempts == 0 else receipt
             if attempts:
                 assert "CORREÇÃO DO RECIBO FOCAL" in kwargs["task"]
                 assert "não altere o produto" in kwargs["task"]
             attempts += 1
             (docs / "headless-review.md").write_text(
-                selected_report,
+                "VERDICT: APPROVED\n",
                 encoding="utf-8",
             )
-            return DelegateResult(True, "DONE", [], ["docs/headless-review.md"])
+            (docs / "headless-review.yml").write_text(
+                selected_receipt,
+                encoding="utf-8",
+            )
+            return DelegateResult(
+                True,
+                "DONE",
+                [],
+                ["docs/headless-review.md", "docs/headless-review.yml"],
+            )
 
         with patch("ft.engine.runner.delegate_to_llm", side_effect=headless_approval):
             runner._run_review(runner.graph.get_node("review"))
@@ -2925,6 +3021,103 @@ nodes:
                 retrying.active_fix_return["focal_evidence_feedback"].casefold()
             )
 
+            runner._run_review(runner.graph.get_node("review"))
+
+        reviewed = runner.state_mgr.load()
+        assert reviewed.current_node == "acceptance"
+        assert reviewed.active_fix_return is None
+        assert "focal_evidence_retries" not in reviewed.metrics
+
+    def test_declared_focal_receipt_retry_reuses_valid_canonical_outputs(
+        self,
+        tmp_path,
+    ):
+        project_root = tmp_path / "project"
+        docs = project_root / "docs"
+        state_dir = project_root / "state"
+        contract_dir = project_root / ".ft"
+        docs.mkdir(parents=True)
+        state_dir.mkdir()
+        contract_dir.mkdir()
+        (contract_dir / "project.yml").write_text(
+            "validation:\n  mode: disabled\n  reason: headless\n",
+            encoding="utf-8",
+        )
+        (docs / "evidence.txt").write_text("contract passed\n", encoding="utf-8")
+        (docs / "review.md").write_text("VERDICT: APPROVED\n", encoding="utf-8")
+        (docs / "review.yml").write_text(
+            "focal_evidence:\n"
+            "  coverage_complete: true\n"
+            "  finding_kind: technical\n"
+            "  evidence_level: integration\n"
+            "  data_origin: local_product\n"
+            "  mock_only: false\n"
+            "  journey: [execute public contract]\n"
+            "  visual_evidence: []\n"
+            "  claims:\n"
+            "    - requirement: public contract\n"
+            "      expected: pass\n"
+            "      observed: pass\n"
+            "      status: PASS\n"
+            "      evidence: [docs/evidence.txt]\n",
+            encoding="utf-8",
+        )
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: canonical_focal_retry
+title: Canonical focal retry
+nodes:
+  - id: fix
+    type: build
+    title: Fix
+    fix_review: review
+    next: review
+  - id: review
+    type: review
+    title: Review
+    outputs: [docs/review.md, docs/review.yml]
+    validators:
+      - file_exists: docs/review.md
+      - file_exists: docs/review.yml
+    next: acceptance
+  - id: acceptance
+    type: human_gate
+    title: Acceptance
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.current_node = "review"
+        state.node_status = "ready"
+        state.active_fix_return = {
+            "fix_node": "fix",
+            "audit_entry_node": "review",
+            "review_node": "review",
+            "evidence_origin": "review",
+            "review_mode": "declared",
+            "review_context": "Audite apenas o contrato público.",
+            "focal_evidence_feedback": (
+                "aprovação focal sem bloco YAML focal_evidence"
+            ),
+        }
+        state.metrics["focal_evidence_retries"] = {"review": 1}
+        runner.state_mgr.save()
+
+        with patch(
+            "ft.engine.runner.delegate_to_llm",
+            side_effect=AssertionError("não deveria chamar LLM"),
+        ):
             runner._run_review(runner.graph.get_node("review"))
 
         reviewed = runner.state_mgr.load()
@@ -3679,6 +3872,8 @@ nodes:
         )
         assert "Corrigir VIS-001" in prompt
         assert "prompt amplo original deste review está suspenso" in prompt
+        assert "ORDEM OBRIGATÓRIA DA AUDITORIA FOCAL" in prompt
+        assert "Somente depois de obter zero FAIL" in prompt
 
         runner._advance_state("physical.review", "end")
         assert runner.state_mgr.load().active_fix_return is None
@@ -3775,6 +3970,13 @@ nodes:
         assert (
             "S12 ainda diverge do mockup"
             in fixing.active_fix_return["review_context"]
+        )
+        assert (
+            "S12 ainda diverge do mockup"
+            in fixing.active_fix_return["finding_context"]
+        )
+        assert "quando o finding for de UI" not in (
+            fixing.active_fix_return["finding_context"]
         )
         assert fixing.completed_nodes == [
             "foundation",
@@ -4972,7 +5174,96 @@ class TestStatus:
         total = state.metrics["steps_total"]
         assert f"Progresso: {total}/{total} (passo atual)" in out
         assert f"{total + 1}/{total}" not in out
-        assert "2 execuções (1 reexecução)" in out
+        assert "2 execuções (1 reexecução total)" in out
+
+    def test_status_explains_directed_fix_loop_and_review_progress(
+        self,
+        tmp_path,
+        capsys,
+    ):
+        project_root = tmp_path / "project"
+        state_dir = project_root / "state"
+        docs_dir = project_root / "docs"
+        state_dir.mkdir(parents=True)
+        docs_dir.mkdir()
+        process_path = tmp_path / "process.yml"
+        process_path.write_text(
+            """
+id: focal_status
+version: "1.0.0"
+title: Focal status
+nodes:
+  - id: build
+    type: build
+    title: Build
+    executor: codex
+    next: review
+  - id: fix
+    type: build
+    title: Fix
+    executor: codex
+    next: review
+  - id: review
+    type: review
+    title: Review
+    executor: codex
+    outputs:
+      - docs/review.yml
+    on_fail:
+      goto: fix
+    next: end
+  - id: end
+    type: end
+    title: End
+""",
+            encoding="utf-8",
+        )
+        runner = StepRunner(
+            process_path=process_path,
+            state_path=state_dir / "engine_state.yml",
+            project_root=project_root,
+        )
+        runner.init_state()
+        state = runner.state_mgr.load()
+        state.completed_nodes = ["build"]
+        state.current_node = "review"
+        state.node_status = "ready"
+        runner.state_mgr.save()
+
+        def write_review(passed: int, failed: int, findings: int) -> None:
+            payload = {
+                "verdict": "REJECTED",
+                "results": [
+                    *({"result": "PASS"} for _ in range(passed)),
+                    *({"result": "FAIL"} for _ in range(failed)),
+                ],
+                "findings": [{"id": f"F-{index}"} for index in range(findings)],
+            }
+            (docs_dir / "review.yml").write_text(
+                yaml.safe_dump(payload),
+                encoding="utf-8",
+            )
+
+        review = runner.graph.get_node("review")
+        write_review(33, 50, 8)
+        runner._handle_on_fail(review, "oito findings")
+        assert runner.apply_fix("primeiro fix")
+
+        write_review(79, 4, 1)
+        runner._handle_on_fail(review, "um finding")
+        assert runner.apply_fix("segundo fix")
+
+        fixing = runner.state_mgr.load()
+        assert fixing.active_fix_return["attempt"] == 2
+        assert fixing.active_fix_return["baseline_progress"]["failed"] == 50
+        assert fixing.active_fix_return["latest_progress"]["failed"] == 4
+
+        runner.status()
+        out = capsys.readouterr().out
+        assert "CORREÇÃO DIRIGIDA — tentativa 2: review → fix → review" in out
+        assert "não regressão do fluxo completo" in out
+        assert "33/83 PASS · 50 FAIL · 8 findings" in out
+        assert "79/83 PASS · 4 FAIL · 1 finding" in out
 
     def test_status_backfills_inserted_decision_nodes_when_branch_already_traversed(self, tmp_path, capsys):
         project_root = tmp_path / "project_root"

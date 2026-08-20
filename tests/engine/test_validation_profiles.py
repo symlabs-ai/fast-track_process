@@ -182,6 +182,11 @@ def test_catalog_has_mobile_web_and_native_desktop_profiles():
         for profile in profiles.values()
         for target in profile["targets"]
     )
+    assert all(
+        "accessibility" not in target["checks"]
+        for profile in profiles.values()
+        for target in profile["targets"]
+    )
 
 
 def test_explicit_android_physical_matrix_carries_physical_validation_learnings(tmp_path):
@@ -200,14 +205,12 @@ def test_explicit_android_physical_matrix_carries_physical_validation_learnings(
     assert target["installation_required"] is True
     assert {
         "visual",
-        "accessibility",
         "navigation",
         "state_isolation",
         "state_persistence",
         "runtime_permissions",
         "system_insets",
         "back_navigation",
-        "orientation",
         "physical_connectivity",
         ARTIFACT_INSTALL_REUSE_CHECK,
     }.issubset(target["checks"])

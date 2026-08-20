@@ -303,6 +303,26 @@ histórico. O intervalo default é 60 segundos quando `--watch` é usado sem val
 cada tela mostra o horário da última atualização. O buffer normal é preservado
 para permitir rolagem, e `Ctrl+C` encerra o acompanhamento.
 
+### Exploração standalone com sessão Codex retomável
+
+Uma integração pode manter contexto conversacional entre consultas read-only
+sem associá-las a um node do ciclo:
+
+```bash
+ft explore "primeira pergunta" --codex gpt-5.6-luna --effort low \
+  --standalone --stream-json --persist-session
+ft explore "pergunta seguinte" --codex gpt-5.6-luna --effort low \
+  --standalone --stream-json --resume-session <session-id>
+```
+
+A persistência standalone está disponível somente para Codex. As duas formas
+continuam sob sandbox read-only; o identificador retornado é opaco e não é uma
+credencial. O evento NDJSON `result` informa `session_id`, `session_resumed`, o
+`usage` normalizado do turno e `cost_usd`. Este último permanece `null` quando o
+provider não reporta custo monetário: o FT não estima preço a partir de tokens.
+Sem uma dessas flags, a exploração continua efêmera e não expõe o id interno da
+sessão.
+
 ### Pacote obrigatório de decisão humana
 
 Ao entrar em `human_gate`, pausar por `requires_approval` ou exibir um gate
@@ -899,6 +919,15 @@ handoff em macro-nodes. RED, GREEN e refactor continuam separados, e todos os
 gates/validators Python permanecem autoritativos. Uma sessão expirada é
 substituída uma vez por uma conversa reidratada com plano, estado e artefatos.
 Processos sem `session_policy` continuam stateless.
+
+Processos globais e forks locais contêm apenas regras gerais, válidas para
+qualquer ciclo do projeto. Contexto efêmero — finding, critério, receipt, hash,
+run, evidência, contagem ou instrução de recuperação — nunca é escrito em
+`process.yml`; permanece no state e nos artefatos do ciclo. `ft fix` preserva e
+retoma a sessão builder da sprint, injeta esse contexto e executa somente
+`fix → revisão focal`. A lane reviewer continua independente. Falha de resume
+usa a reidratação explícita declarada pela policy ou bloqueia; não cria uma
+correção fria silenciosa e não reabre o workflow completo.
 
 `--parallel` controla somente concorrência. Para continuar um builder já em
 acabamento sem reabrir o processo integral, use `--route validation`; combine

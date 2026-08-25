@@ -4,7 +4,34 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
-## [Unreleased]
+## [v0.21.0] - 2026-08-25
+
+### `ft analyse-template` mede o determinismo estático de um processo
+
+- Novo comando `ft analyse-template -t <template|path> [--json]`: cada node
+  recebe um score conforme executor e força dos validators (python/gate 1.0;
+  LLM travado por validator binário 0.7; forma 0.4; existência 0.1) e o
+  template recebe a média — decisão humana fica fora, como eixo separado.
+- Nodes fracos são listados com indicação de backstop: gate determinístico
+  downstream que referencia os outputs do node (busca no grafo por
+  next/branches). Bandas de regressão protegem os templates do catálogo.
+
+### Templates deprecated removidos do catálogo
+
+- `base`, `bug`, `feature`, `mvp-builder`, `fast-track-v2` e `ft-ui-prototype`
+  saem do catálogo; os equivalentes vivos são `bug-fast`, `feature-fast` e
+  `mvp-builder-fast`.
+- Fixtures e contratos de teste migraram para os templates vivos; testes
+  comparativos fast-vs-baseline viraram asserções absolutas. Os defaults de
+  lifecycle listam somente templates existentes.
+
+### Exemplo de orquestração de modelos por node
+
+- `docs/examples/model-orchestration-process.yml`: processo validado que
+  demonstra troca de engine/modelo/effort por etapa (gates Python, discovery
+  econômico, implementação equilibrada, revisão de risco no modelo mais forte
+  e auditoria cross-provider), linkado no manual `ft_model_orchestration.md`.
+
 
 ### Exploração standalone Codex pode preservar sessão e telemetria
 

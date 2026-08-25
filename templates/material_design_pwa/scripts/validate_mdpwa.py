@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import sys
 import unicodedata
+from pathlib import Path
 
 import yaml
-
 
 AUDIT_PATH = "docs/mdpwa-audit.md"
 QUESTIONS_PATH = "docs/mdpwa-questions.md"
@@ -200,9 +199,7 @@ def validate_audit(root: Path) -> None:
     plan = _plan_contract(root)
     backlog_text = _read(root, "docs/PROJECT_BACKLOG.md")
     if plan["backlog_item"] not in backlog_text.upper():
-        raise MdpwaValidationError(
-            f"PROJECT_BACKLOG não contém {plan['backlog_item']}"
-        )
+        raise MdpwaValidationError(f"PROJECT_BACKLOG não contém {plan['backlog_item']}")
 
 
 def validate_theme(root: Path) -> None:
@@ -216,8 +213,7 @@ def validate_theme(root: Path) -> None:
             missing.append(label)
     if missing:
         raise MdpwaValidationError(
-            f"{theme_file} sem o contrato mínimo de tokens M3: "
-            + ", ".join(missing)
+            f"{theme_file} sem o contrato mínimo de tokens M3: " + ", ".join(missing)
         )
 
 
@@ -235,7 +231,9 @@ def validate_pwa(root: Path) -> None:
         raise MdpwaValidationError(f"{plan['manifest_path']}: raiz deve ser um objeto")
 
     missing_keys = [
-        key for key in MANIFEST_REQUIRED_KEYS if not str(manifest.get(key) or "").strip()
+        key
+        for key in MANIFEST_REQUIRED_KEYS
+        if not str(manifest.get(key) or "").strip()
     ]
     if missing_keys:
         raise MdpwaValidationError(
@@ -273,7 +271,11 @@ def validate_review(root: Path) -> None:
     statuses: dict[str, set[str]] = {item: set() for item in REVIEW_CHECKLIST}
     for line in report.splitlines():
         normalized = _normalize(line)
-        found = {status for status in ("pass", "fail") if re.search(rf"\b{status}\b", normalized)}
+        found = {
+            status
+            for status in ("pass", "fail")
+            if re.search(rf"\b{status}\b", normalized)
+        }
         if len(found) != 1:
             continue
         for item in REVIEW_CHECKLIST:
@@ -330,9 +332,7 @@ def validate_reconcile(root: Path) -> None:
         result,
     )
     if not section:
-        raise MdpwaValidationError(
-            f"{RESULT_PATH} sem seção `Documentação atualizada`"
-        )
+        raise MdpwaValidationError(f"{RESULT_PATH} sem seção `Documentação atualizada`")
     for required in ("CHANGELOG.md", "docs/PROJECT_BACKLOG.md"):
         if required not in section.group(1):
             raise MdpwaValidationError(

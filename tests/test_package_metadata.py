@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import tomllib
+from pathlib import Path
 
 import pytest
 

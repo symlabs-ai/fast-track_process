@@ -20,14 +20,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-
 DEFAULT_DISCOVERY_TIMEOUT_SECONDS = 5.0
 MAX_DISCOVERY_TIMEOUT_SECONDS = 10.0
 MAX_DISCOVERY_OUTPUT_CHARS = 5_000_000
 
-_AGENTS: tuple[tuple[str, str, tuple[str, ...], Callable[[str], dict[str, object]]], ...] = (
-    ("claude", "Claude", ("claude", "--help"), lambda output: _parse_claude_help(output)),
-    ("codex", "Codex", ("codex", "debug", "models"), lambda output: _parse_codex_catalog(output)),
+_AGENTS: tuple[
+    tuple[str, str, tuple[str, ...], Callable[[str], dict[str, object]]], ...
+] = (
+    (
+        "claude",
+        "Claude",
+        ("claude", "--help"),
+        lambda output: _parse_claude_help(output),
+    ),
+    (
+        "codex",
+        "Codex",
+        ("codex", "debug", "models"),
+        lambda output: _parse_codex_catalog(output),
+    ),
     (
         "opencode",
         "OpenCode",
@@ -41,7 +52,9 @@ _SIMPLE_CHOICE_LIST = re.compile(
     r"\((?:choices?:\s*)?(?P<choices>[a-z][\w-]*(?:\s*,\s*[a-z][\w-]*)+)\)",
     re.IGNORECASE,
 )
-_CLAUDE_MODEL_ID = re.compile(r"\bclaude-[a-z0-9][a-z0-9.-]*(?:-[a-z0-9][a-z0-9.-]*)*\b", re.IGNORECASE)
+_CLAUDE_MODEL_ID = re.compile(
+    r"\bclaude-[a-z0-9][a-z0-9.-]*(?:-[a-z0-9][a-z0-9.-]*)*\b", re.IGNORECASE
+)
 _QUOTED_VALUE = re.compile(r"['\"]([a-z0-9][a-z0-9._/-]*)['\"]", re.IGNORECASE)
 
 
@@ -62,7 +75,9 @@ def discover_llm_capabilities(
     working_directory = str(cwd) if cwd is not None else None
     agents_by_id: dict[str, dict[str, object]] = {}
 
-    with ThreadPoolExecutor(max_workers=len(_AGENTS), thread_name_prefix="ft-capabilities") as executor:
+    with ThreadPoolExecutor(
+        max_workers=len(_AGENTS), thread_name_prefix="ft-capabilities"
+    ) as executor:
         futures = {
             executor.submit(
                 _probe_agent,
@@ -95,7 +110,9 @@ def discover_llm_capabilities(
     for agent in agents:
         agent_id = str(agent["id"])
         default_model = agent.get("default_model")
-        model_defaults[agent_id] = str(default_model) if default_model is not None else None
+        model_defaults[agent_id] = (
+            str(default_model) if default_model is not None else None
+        )
         effort_defaults[agent_id] = {
             str(model["id"]): (
                 str(model["default_effort"])
@@ -107,7 +124,9 @@ def discover_llm_capabilities(
         }
         for error in agent.get("errors", []):
             if isinstance(error, dict):
-                top_level_errors.append({"agent": agent_id, **{str(k): str(v) for k, v in error.items()}})
+                top_level_errors.append(
+                    {"agent": agent_id, **{str(k): str(v) for k, v in error.items()}}
+                )
 
     return {
         "source": "real_provider_probe",
@@ -158,7 +177,9 @@ def _probe_agent(
             check=False,
         )
     except FileNotFoundError:
-        return _unavailable_agent(agent_id, label, "not_installed", f"{command[0]} CLI is not installed")
+        return _unavailable_agent(
+            agent_id, label, "not_installed", f"{command[0]} CLI is not installed"
+        )
     except subprocess.TimeoutExpired:
         return _unavailable_agent(
             agent_id,
@@ -289,8 +310,12 @@ def _parse_claude_help(output: str) -> dict[str, object]:
     if not model_description:
         raise ValueError("Claude help has no --model option")
 
-    full_ids = _unique(value.lower() for value in _CLAUDE_MODEL_ID.findall(model_description))
-    quoted = _unique(value.lower() for value in _QUOTED_VALUE.findall(model_description))
+    full_ids = _unique(
+        value.lower() for value in _CLAUDE_MODEL_ID.findall(model_description)
+    )
+    quoted = _unique(
+        value.lower() for value in _QUOTED_VALUE.findall(model_description)
+    )
     aliases = [value for value in quoted if not value.startswith("claude-")]
 
     selected_ids: list[str] = []
@@ -307,7 +332,9 @@ def _parse_claude_help(output: str) -> dict[str, object]:
         selected_ids.append(model_id)
         if model_id in full_ids:
             consumed_full_ids.add(model_id)
-    selected_ids.extend(full_id for full_id in full_ids if full_id not in consumed_full_ids)
+    selected_ids.extend(
+        full_id for full_id in full_ids if full_id not in consumed_full_ids
+    )
     selected_ids = _unique(selected_ids)
     if not selected_ids:
         raise ValueError("Claude help has no model values")
@@ -373,12 +400,19 @@ def _parse_codex_catalog(output: str) -> dict[str, object]:
             priority = float(raw_model.get("priority", index))
         except (TypeError, ValueError):
             priority = float(index)
-        is_default = raw_model.get("is_default") is True or raw_model.get("default") is True
+        is_default = (
+            raw_model.get("is_default") is True or raw_model.get("default") is True
+        )
         normalized_with_priority.append(
             (
                 priority,
                 index,
-                _model(model_id, label or _humanize_model_id(model_id), efforts, default_effort),
+                _model(
+                    model_id,
+                    label or _humanize_model_id(model_id),
+                    efforts,
+                    default_effort,
+                ),
                 is_default,
             )
         )
@@ -392,7 +426,11 @@ def _parse_codex_catalog(output: str) -> dict[str, object]:
         default_model = _nonempty_string(payload.get("default_model"))
     if default_model not in model_ids:
         default_model = next(
-            (str(model["id"]) for _, _, model, is_default in normalized_with_priority if is_default),
+            (
+                str(model["id"])
+                for _, _, model, is_default in normalized_with_priority
+                if is_default
+            ),
             None,
         )
 
@@ -406,7 +444,9 @@ def _parse_opencode_models(output: str) -> dict[str, object]:
     models: list[dict[str, object]] = []
     explicit_default: str | None = None
     for metadata in _json_objects(output):
-        provider_id = _nonempty_string(metadata.get("providerID") or metadata.get("provider_id"))
+        provider_id = _nonempty_string(
+            metadata.get("providerID") or metadata.get("provider_id")
+        )
         raw_id = _nonempty_string(metadata.get("id"))
         if not provider_id or not raw_id:
             continue
@@ -414,14 +454,20 @@ def _parse_opencode_models(output: str) -> dict[str, object]:
         if status and status.lower() not in {"active", "available"}:
             continue
 
-        model_id = raw_id if raw_id.startswith(f"{provider_id}/") else f"{provider_id}/{raw_id}"
+        model_id = (
+            raw_id
+            if raw_id.startswith(f"{provider_id}/")
+            else f"{provider_id}/{raw_id}"
+        )
         variants = metadata.get("variants", {})
         efforts: list[str] = []
         if isinstance(variants, dict):
             for variant_name, variant in variants.items():
                 if not isinstance(variant, dict):
                     continue
-                effort = variant.get("reasoningEffort") or variant.get("reasoning_effort")
+                effort = variant.get("reasoningEffort") or variant.get(
+                    "reasoning_effort"
+                )
                 normalized_effort = _nonempty_string(effort)
                 if normalized_effort:
                     efforts.append(normalized_effort.lower())
@@ -498,7 +544,9 @@ def _deduplicate_models(models: list[dict[str, object]]) -> list[dict[str, objec
 
 
 def _extract_default(description: str) -> str | None:
-    match = re.search(r"\(default:\s*['\"]?([a-z0-9][a-z0-9._/-]*)", description, re.IGNORECASE)
+    match = re.search(
+        r"\(default:\s*['\"]?([a-z0-9][a-z0-9._/-]*)", description, re.IGNORECASE
+    )
     return match.group(1).lower() if match else None
 
 
@@ -513,7 +561,11 @@ def _humanize_model_id(model_id: str) -> str:
     name = model_id.rsplit("/", 1)[-1]
     name = re.sub(r"^claude-", "", name, flags=re.IGNORECASE)
     acronyms = {"gpt": "GPT", "glm": "GLM", "oss": "OSS", "ai": "AI"}
-    return " ".join(acronyms.get(token.lower(), token.capitalize()) for token in name.split("-") if token)
+    return " ".join(
+        acronyms.get(token.lower(), token.capitalize())
+        for token in name.split("-")
+        if token
+    )
 
 
 def _unique(values: Iterable[str]) -> list[str]:

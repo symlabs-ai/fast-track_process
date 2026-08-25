@@ -7,23 +7,23 @@ import yaml
 from ft.engine.runner import VALIDATOR_REGISTRY
 
 
-def test_mvp_builder_maintains_features_before_planning_and_after_delivery():
+def test_mvp_builder_fast_maintains_features_before_planning_and_after_delivery():
     root = Path(__file__).resolve().parents[2]
     data = yaml.safe_load(
-        (root / "templates/mvp-builder/process.yml").read_text(encoding="utf-8")
+        (root / "templates/mvp-builder-fast/process.yml").read_text(encoding="utf-8")
     )
     by_id = {node["id"]: node for node in data["nodes"]}
 
-    assert data["version"] == "1.3.0"
     assert "docs/FEATURES.md" in data["artifact_policy"]["canonical"]
-    assert by_id["ft.start.backlog.route"]["branches"]["true"] == "ft.start.features.route"
-    assert by_id["ft.plan.00.project_backlog"]["next"] == "ft.start.features.route"
+    assert (
+        by_id["ft.start.backlog.route"]["branches"]["true"] == "ft.start.features.route"
+    )
     assert by_id["ft.start.features.route"]["branches"] == {
-        "true": "ft.plan.01.task_list",
-        "false": "ft.plan.00.features_catalog",
+        "true": "ft.plan.00.foundation_existing",
+        "false": "ft.plan.00.foundation_features",
     }
 
-    create = by_id["ft.plan.00.features_catalog"]
+    create = by_id["ft.plan.00.foundation_features"]
     update = by_id["ft.handoff.02b.features_update"]
     assert by_id["ft.handoff.02.backlog_update"]["next"] == update["id"]
     assert update["next"] == "ft.handoff.02.prd_rewrite"

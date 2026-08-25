@@ -1,6 +1,7 @@
 """
 ProcessRegistry — garante unicidade de process_id (RF-01).
 """
+
 from __future__ import annotations
 
 from pathlib import Path

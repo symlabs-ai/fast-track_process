@@ -1,7 +1,7 @@
 """Regressões para contexto e progresso limitados à rota selecionada."""
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -9,7 +9,6 @@ import yaml
 
 from ft.engine.runner import StepRunner
 from ft.engine.state import StateManager
-
 
 PROCESS = """\
 id: route_projection
@@ -373,17 +372,23 @@ nodes:
     assert state.node_status == "done"
     assert state.metrics["llm_calls"] == 0
     assert state.gate_log["foundation"] == "PASS"
-    assert subprocess.run(
-        ["git", "status", "--porcelain", "--", "request.md", "foundation.ok"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout == "?? request.md\n"
-    assert subprocess.run(
-        ["git", "log", "-1", "--pretty=%s"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip() == "baseline"
+    assert (
+        subprocess.run(
+            ["git", "status", "--porcelain", "--", "request.md", "foundation.ok"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        == "?? request.md\n"
+    )
+    assert (
+        subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == "baseline"
+    )

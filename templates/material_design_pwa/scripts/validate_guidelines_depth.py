@@ -13,6 +13,7 @@ Contrato de marcadores que o ciclo DEVE produzir (análogo a data-ui-criteria):
 Uso: validate_guidelines_depth.py [project_root]
 Sai 0 se todos os checks passam; !=0 listando os que faltam.
 """
+
 import re
 import sys
 from pathlib import Path
@@ -44,20 +45,23 @@ def main() -> int:
     # 1. Listas de conteúdo com marcador de list-item E elemento leading (ícone)
     if 'data-md-component="list-item"' not in src:
         fails.append(
-            "LIST-ITEM: nenhum item de lista com data-md-component=\"list-item\" — "
+            'LIST-ITEM: nenhum item de lista com data-md-component="list-item" — '
             "listas de conteúdo (compras/garantias/preços/busca) devem usar list items M3 "
             "com elemento leading (ícone/avatar), não <li> cru com link default"
         )
     else:
         # TODO arquivo com list-item deve ter um leading (ícone/avatar) — não só um.
         li_files = [
-            p for p in (root / SRC).rglob("*.tsx")
+            p
+            for p in (root / SRC).rglob("*.tsx")
             if 'data-md-component="list-item"' in p.read_text(errors="ignore")
         ]
         sem_leading = [
             str(p.relative_to(root))
             for p in li_files
-            if not re.search(r'data-md-(leading|icon)|Icon\w*|<svg', p.read_text(errors="ignore"))
+            if not re.search(
+                r"data-md-(leading|icon)|Icon\w*|<svg", p.read_text(errors="ignore")
+            )
         ]
         if sem_leading:
             fails.append(
@@ -84,7 +88,9 @@ def main() -> int:
                 continue  # a navegação não é lista de conteúdo
             if re.search(r"<li[\s>]", txt):
                 usa_marcador = "data-md-component" in txt
-                usa_componente = re.search(r"import[^\n]*(ListItem|PurchaseListItem)", txt)
+                usa_componente = re.search(
+                    r"import[^\n]*(ListItem|PurchaseListItem)", txt
+                )
                 if not usa_marcador and not usa_componente:
                     raw_li_files.append(str(p.relative_to(root)))
     if raw_li_files:
@@ -96,13 +102,21 @@ def main() -> int:
     # 3. Links de item de lista não podem usar cor default do browser (azul sublinhado)
     #    — deve haver uma regra de reset de link nas listas M3
     css = read(root, f"{SRC}/app/globals.css") + read(root, f"{SRC}/app/theme.css")
-    if not re.search(r'data-md-component="list"[^{]*\{[^}]*list-style\s*:\s*none', css, re.S) \
-       and 'list-style: none' not in css and 'list-style:none' not in css:
-        fails.append("LIST-STYLE: listas M3 devem remover bullets default (list-style: none)")
+    if (
+        not re.search(
+            r'data-md-component="list"[^{]*\{[^}]*list-style\s*:\s*none', css, re.S
+        )
+        and "list-style: none" not in css
+        and "list-style:none" not in css
+    ):
+        fails.append(
+            "LIST-STYLE: listas M3 devem remover bullets default (list-style: none)"
+        )
 
     # 4. FAB persistente e SENSÍVEL AO CONTEXTO (rota/aba) em todas as telas
     fab_files = [
-        p for p in (root / SRC).rglob("*.tsx")
+        p
+        for p in (root / SRC).rglob("*.tsx")
         if 'data-md-component="fab"' in p.read_text(errors="ignore")
     ]
     if not fab_files:
@@ -117,7 +131,9 @@ def main() -> int:
             )
         # (b) persistente: renderizado pelo app shell/layout, não numa página só
         layout = read(root, f"{SRC}/app/layout.tsx")
-        fab_no_shell = ('data-md-component="fab"' in layout) or bool(re.search(r"\bFab\b|<\w*Fab", layout))
+        fab_no_shell = ('data-md-component="fab"' in layout) or bool(
+            re.search(r"\bFab\b|<\w*Fab", layout)
+        )
         if not fab_no_shell:
             fails.append(
                 "FAB-PERSISTENTE: o FAB deve ser renderizado pelo app shell (app/layout.tsx), "
@@ -126,23 +142,31 @@ def main() -> int:
 
     # 5. Filtros da timeline como chips
     if 'data-md-component="chip"' not in src:
-        fails.append('CHIP: filtros da linha do tempo devem usar filter chips (data-md-component="chip")')
+        fails.append(
+            'CHIP: filtros da linha do tempo devem usar filter chips (data-md-component="chip")'
+        )
 
     # 6. Barra de busca M3
     if 'data-md-component="search"' not in src:
-        fails.append('SEARCH: /busca deve usar uma barra de busca M3 (data-md-component="search")')
+        fails.append(
+            'SEARCH: /busca deve usar uma barra de busca M3 (data-md-component="search")'
+        )
 
     # 7. State layer / ripple
-    if not re.search(r'state-layer|m3-state|\.ripple', src):
-        fails.append("STATE-LAYER: falta utilitário de state layer/ripple para feedback de toque")
+    if not re.search(r"state-layer|m3-state|\.ripple", src):
+        fails.append(
+            "STATE-LAYER: falta utilitário de state layer/ripple para feedback de toque"
+        )
 
     # 8. Seleção: barra contextual efêmera + gatilho long-press nas listas
     if 'data-md-component="contextual-bar"' not in src:
         fails.append(
-            'SELECTION-BAR: listas de conteúdo devem ter uma top app bar contextual efêmera '
+            "SELECTION-BAR: listas de conteúdo devem ter uma top app bar contextual efêmera "
             'de seleção (data-md-component="contextual-bar", role="toolbar")'
         )
-    if not re.search(r'data-md-longpress|onLongPress|useLongPress|LONG_?PRESS|longPress', src):
+    if not re.search(
+        r"data-md-longpress|onLongPress|useLongPress|LONG_?PRESS|longPress", src
+    ):
         fails.append(
             "SELECTION-LONGPRESS: o modo de seleção deve ser acionado por long-press "
             "(data-md-longpress / handler de long-press), não checkbox como gatilho primário"
@@ -155,15 +179,17 @@ def main() -> int:
         #     cabeçalho E na barra contextual (>=2), provando que ela reusa a mesma área.
         if src.count('data-md-region="top-app-bar"') < 2:
             fails.append(
-                'SELECTION-TOPBAR-SLOT: a barra contextual deve ocupar o MESMO slot do top app '
-                'bar e substituí-lo (não empilhar abaixo como card). Marque cabeçalho E barra '
+                "SELECTION-TOPBAR-SLOT: a barra contextual deve ocupar o MESMO slot do top app "
+                "bar e substituí-lo (não empilhar abaixo como card). Marque cabeçalho E barra "
                 'com data-md-region="top-app-bar" e renderize a barra pelo app shell.'
             )
         # 9b. Full-bleed: a barra não pode ter aparência de card (margin/border-radius) que a
         #     descole do slot do top app bar.
         bar_css = re.search(r"\.m3-contextual-bar\s*\{([^}]*)\}", src)
         bloco = bar_css.group(1) if bar_css else ""
-        if re.search(r"\bmargin\b\s*:", bloco) and not re.search(r"\bmargin\b\s*:\s*0", bloco):
+        if re.search(r"\bmargin\b\s*:", bloco) and not re.search(
+            r"\bmargin\b\s*:\s*0", bloco
+        ):
             fails.append(
                 "SELECTION-TOPBAR-SLOT: a barra contextual deve ser full-bleed no slot do top "
                 "app bar (sem margin de card em .m3-contextual-bar)."
@@ -171,11 +197,13 @@ def main() -> int:
         # 9c. Sem estouro horizontal: overflow menu OU contenção de largura na barra
         #     (min-width:0 / overflow / flex-wrap). Contador flex:1 sem contenção estoura.
         tem_overflow_menu = 'data-md-component="overflow-menu"' in src
-        tem_contencao = bool(re.search(r"min-width:\s*0|overflow(-x)?\s*:|flex-wrap", bloco))
+        tem_contencao = bool(
+            re.search(r"min-width:\s*0|overflow(-x)?\s*:|flex-wrap", bloco)
+        )
         if not (tem_overflow_menu or tem_contencao):
             fails.append(
                 "SELECTION-NO-OVERFLOW: a barra contextual não pode estourar na horizontal no "
-                "compacto — limite a <=3 ações-ícone + data-md-component=\"overflow-menu\", ou "
+                'compacto — limite a <=3 ações-ícone + data-md-component="overflow-menu", ou '
                 "aplique contenção (min-width:0 / overflow / flex-wrap) em .m3-contextual-bar."
             )
         # 9d. Long-press não pode disparar o menu/callout nativo do navegador junto com a
@@ -187,7 +215,9 @@ def main() -> int:
             re.search(r"-webkit-touch-callout\s*:\s*none", src)
             or re.search(r"user-select\s*:\s*none", src)
         )
-        tem_ctxmenu = bool(re.search(r"onContextMenu|oncontextmenu|['\"]contextmenu['\"]", src))
+        tem_ctxmenu = bool(
+            re.search(r"onContextMenu|oncontextmenu|['\"]contextmenu['\"]", src)
+        )
         if not tem_callout:
             fails.append(
                 "SELECTION-NATIVE-SUPPRESS: o long-press dispara o callout/seleção de texto "
@@ -214,11 +244,17 @@ def main() -> int:
             )
 
     if fails:
-        print("guidelines-depth FAIL: " + str(len(fails)) + " requisito(s) de componente M3 não atendidos:")
+        print(
+            "guidelines-depth FAIL: "
+            + str(len(fails))
+            + " requisito(s) de componente M3 não atendidos:"
+        )
         for f in fails:
             print("  - " + f)
         return 1
-    print("guidelines-depth PASS: componentes M3 (lista/leading/FAB/chip/search/state-layer) presentes")
+    print(
+        "guidelines-depth PASS: componentes M3 (lista/leading/FAB/chip/search/state-layer) presentes"
+    )
     return 0
 
 

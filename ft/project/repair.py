@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import shutil
-import subprocess
 from typing import Any
 from uuid import uuid4
 
@@ -133,28 +133,54 @@ def check_project(project_root: str | Path) -> ProjectCheckResult:
     root = requested.resolve()
     issues: list[ProjectIssue] = []
     if requested.is_symlink():
-        issues.append(ProjectIssue("project.symlink", "raiz do projeto é link simbólico", path=requested))
+        issues.append(
+            ProjectIssue(
+                "project.symlink", "raiz do projeto é link simbólico", path=requested
+            )
+        )
     if not root.is_dir():
-        issues.append(ProjectIssue("project.missing", "diretório do projeto ausente", path=root))
+        issues.append(
+            ProjectIssue("project.missing", "diretório do projeto ausente", path=root)
+        )
         return ProjectCheckResult(root, "broken", tuple(issues))
 
     git_entry = root / ".git"
     top = _git(root, "rev-parse", "--show-toplevel")
     if not git_entry.exists() or top is None or top.returncode != 0:
-        issues.append(ProjectIssue("git.missing", "repositório Git próprio ausente", path=git_entry))
+        issues.append(
+            ProjectIssue(
+                "git.missing", "repositório Git próprio ausente", path=git_entry
+            )
+        )
     else:
         try:
             owns_repo = Path(top.stdout.strip()).resolve() == root
         except OSError:
             owns_repo = False
         if not owns_repo:
-            issues.append(ProjectIssue("git.not_root", "projeto não é a raiz do repositório Git", path=root))
+            issues.append(
+                ProjectIssue(
+                    "git.not_root", "projeto não é a raiz do repositório Git", path=root
+                )
+            )
         head = _git(root, "rev-parse", "--verify", "HEAD")
         if head is None or head.returncode != 0:
-            issues.append(ProjectIssue("git.head_missing", "repositório Git não possui HEAD", path=git_entry))
+            issues.append(
+                ProjectIssue(
+                    "git.head_missing",
+                    "repositório Git não possui HEAD",
+                    path=git_entry,
+                )
+            )
         status = _git(root, "status", "--porcelain=v1", "--untracked-files=all")
         if status is None or status.returncode != 0:
-            issues.append(ProjectIssue("git.status_failed", "não foi possível consultar o status Git", path=git_entry))
+            issues.append(
+                ProjectIssue(
+                    "git.status_failed",
+                    "não foi possível consultar o status Git",
+                    path=git_entry,
+                )
+            )
         elif status.stdout.strip():
             issues.append(
                 ProjectIssue(
@@ -181,9 +207,22 @@ def check_project(project_root: str | Path) -> ProjectCheckResult:
     )
     for directory, code in guarded_directories:
         if directory.is_symlink():
-            issues.append(ProjectIssue(code + ".symlink", "diretório estrutural é link simbólico", path=directory))
+            issues.append(
+                ProjectIssue(
+                    code + ".symlink",
+                    "diretório estrutural é link simbólico",
+                    path=directory,
+                )
+            )
         elif not directory.is_dir():
-            issues.append(ProjectIssue(code, "diretório estrutural ausente", path=directory, repairable=True))
+            issues.append(
+                ProjectIssue(
+                    code,
+                    "diretório estrutural ausente",
+                    path=directory,
+                    repairable=True,
+                )
+            )
 
     for file_path, code in (
         (paths.project_ft_dir(root) / ".gitignore", "layout.gitignore_missing"),
@@ -192,9 +231,19 @@ def check_project(project_root: str | Path) -> ProjectCheckResult:
         (root / "AGENTS.md", "layout.agents_missing"),
     ):
         if file_path.is_symlink():
-            issues.append(ProjectIssue(code + ".symlink", "arquivo estrutural é link simbólico", path=file_path))
+            issues.append(
+                ProjectIssue(
+                    code + ".symlink",
+                    "arquivo estrutural é link simbólico",
+                    path=file_path,
+                )
+            )
         elif not file_path.is_file():
-            issues.append(ProjectIssue(code, "arquivo estrutural ausente", path=file_path, repairable=True))
+            issues.append(
+                ProjectIssue(
+                    code, "arquivo estrutural ausente", path=file_path, repairable=True
+                )
+            )
 
     contract_path = paths.project_contract(root)
     if contract_path.is_symlink():
@@ -230,15 +279,30 @@ def check_project(project_root: str | Path) -> ProjectCheckResult:
             )
 
     manifest_path = paths.project_manifest(root)
-    unsafe_manifest = paths.project_ft_dir(root).is_symlink() or manifest_path.is_symlink()
+    unsafe_manifest = (
+        paths.project_ft_dir(root).is_symlink() or manifest_path.is_symlink()
+    )
     if unsafe_manifest:
-        issues.append(ProjectIssue("manifest.symlink", "manifest não pode ser link simbólico", path=manifest_path))
+        issues.append(
+            ProjectIssue(
+                "manifest.symlink",
+                "manifest não pode ser link simbólico",
+                path=manifest_path,
+            )
+        )
         manifest = None
         parse_error = None
     else:
         manifest, parse_error = _raw_manifest(manifest_path)
     if not unsafe_manifest and not manifest_path.is_file():
-        issues.append(ProjectIssue("manifest.missing", "manifest FT ausente", path=manifest_path, repairable=True))
+        issues.append(
+            ProjectIssue(
+                "manifest.missing",
+                "manifest FT ausente",
+                path=manifest_path,
+                repairable=True,
+            )
+        )
     elif not unsafe_manifest and parse_error:
         issues.append(
             ProjectIssue(
@@ -270,7 +334,14 @@ def check_project(project_root: str | Path) -> ProjectCheckResult:
                     repairable = True
                 except (ManifestError, ValueError):
                     pass
-            issues.append(ProjectIssue("manifest.invalid", str(exc), path=manifest_path, repairable=repairable))
+            issues.append(
+                ProjectIssue(
+                    "manifest.invalid",
+                    str(exc),
+                    path=manifest_path,
+                    repairable=repairable,
+                )
+            )
         except ValueError as exc:
             issues.append(ProjectIssue("manifest.legacy", str(exc), path=manifest_path))
 
@@ -350,7 +421,9 @@ def _copy_backup(source: Path, backup_dir: Path, root: Path) -> None:
     shutil.copy2(source, destination)
 
 
-def _reconstructed_manifest(root: Path, previous: dict[str, Any] | None) -> dict[str, Any]:
+def _reconstructed_manifest(
+    root: Path, previous: dict[str, Any] | None
+) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "schema_version": LAYOUT_VERSION,
         "processes": {},
@@ -360,7 +433,11 @@ def _reconstructed_manifest(root: Path, previous: dict[str, Any] | None) -> dict
         if isinstance(defaults, dict):
             manifest["defaults"] = dict(defaults)
         revision = previous.get("llm_defaults_revision")
-        if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0:
+        if (
+            isinstance(revision, int)
+            and not isinstance(revision, bool)
+            and revision >= 0
+        ):
             manifest["llm_defaults_revision"] = revision
         old_processes = previous.get("processes")
         if isinstance(old_processes, dict):
@@ -439,7 +516,8 @@ def repair_project(project_root: str | Path) -> ProjectRepairResult:
         needs_manifest_rebuild = (
             previous is None
             or parse_error is not None
-            or previous.get("schema_version") not in (
+            or previous.get("schema_version")
+            not in (
                 LEGACY_NAMED_LAYOUT_VERSION,
                 LAYOUT_VERSION,
             )
@@ -525,6 +603,8 @@ def repair_project(project_root: str | Path) -> ProjectRepairResult:
         )
 
     after = check_project(root)
-    remaining_errors = tuple(issue for issue in after.issues if issue.severity == "error")
+    remaining_errors = tuple(
+        issue for issue in after.issues if issue.severity == "error"
+    )
     status = "blocked" if remaining_errors else "repaired" if actions else "unchanged"
     return ProjectRepairResult(root, status, tuple(actions), after.issues, backup_dir)

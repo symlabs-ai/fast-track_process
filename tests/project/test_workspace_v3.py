@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -25,7 +25,6 @@ from ft.project import (
     repair_project,
 )
 from ft.templates import TemplateCatalogError, resolve_template
-
 
 MINIMAL_PROCESS = """id: test
 version: '1.0'
@@ -105,9 +104,10 @@ def test_v3_registration_and_resolution_are_explicit(tmp_path):
     ]
     assert get_project_process_record(project, "feature")["template"] == "feature"
     assert resolve_project_process(project) is None
-    assert resolve_project_process(project, "tweak") == (
-        project / ".ft/process/tweak/process.yml"
-    ).resolve()
+    assert (
+        resolve_project_process(project, "tweak")
+        == (project / ".ft/process/tweak/process.yml").resolve()
+    )
     assert "default_process" not in read_manifest(project)
 
 
@@ -146,11 +146,14 @@ def test_v2_is_readable_but_next_write_normalizes_to_v3(tmp_path):
         "version": 1,
         "legacy_entrypoint": "feature",
     }
-    assert resolve_template(
-        project,
-        "feature",
-        catalog_root=tmp_path / "catalog-does-not-exist",
-    ).process_file == process.resolve()
+    assert (
+        resolve_template(
+            project,
+            "feature",
+            catalog_root=tmp_path / "catalog-does-not-exist",
+        ).process_file
+        == process.resolve()
+    )
 
 
 def test_v1_migration_keeps_local_process_runnable_as_explicit_template(tmp_path):
@@ -161,9 +164,7 @@ def test_v1_migration_keeps_local_process_runnable_as_explicit_template(tmp_path
     manifest_path = project / ".ft/manifest.yml"
     manifest_path.parent.mkdir()
     manifest_path.write_text(
-        "schema_version: 1\n"
-        "process: process/process.yml\n"
-        "template: feature\n",
+        "schema_version: 1\nprocess: process/process.yml\ntemplate: feature\n",
         encoding="utf-8",
     )
 
@@ -176,11 +177,14 @@ def test_v1_migration_keeps_local_process_runnable_as_explicit_template(tmp_path
         "version": 1,
         "legacy_entrypoint": "init",
     }
-    assert resolve_template(
-        project,
-        "feature",
-        catalog_root=tmp_path / "catalog-does-not-exist",
-    ).process_file == migrated_process.resolve()
+    assert (
+        resolve_template(
+            project,
+            "feature",
+            catalog_root=tmp_path / "catalog-does-not-exist",
+        ).process_file
+        == migrated_process.resolve()
+    )
 
 
 def test_v3_rejects_default_process(tmp_path):
@@ -323,7 +327,10 @@ def test_v2_migration_dry_run_and_apply_preserve_bundles_and_cycles(tmp_path):
 
     result = migrate_v2_manifest(project)
     assert result.status == "migrated"
-    assert result.backup_path is not None and result.backup_path.read_bytes() == manifest_before
+    assert (
+        result.backup_path is not None
+        and result.backup_path.read_bytes() == manifest_before
+    )
     manifest = read_manifest(project)
     assert manifest["schema_version"] == 3
     assert "default_process" not in manifest
@@ -404,16 +411,22 @@ nodes: []
     assert cycle.read_bytes() == cycle_before
 
     absent_catalog = tmp_path / "absent-catalog"
-    assert resolve_template(
-        project,
-        "feature",
-        catalog_root=absent_catalog,
-    ).process_file == feature.resolve()
-    assert resolve_template(
-        project,
-        "mvp-builder",
-        catalog_root=absent_catalog,
-    ).process_file == mvp.resolve()
+    assert (
+        resolve_template(
+            project,
+            "feature",
+            catalog_root=absent_catalog,
+        ).process_file
+        == feature.resolve()
+    )
+    assert (
+        resolve_template(
+            project,
+            "mvp-builder",
+            catalog_root=absent_catalog,
+        ).process_file
+        == mvp.resolve()
+    )
 
 
 def test_v2_migration_rejects_policy_mismatch_without_touching_manifest(tmp_path):
@@ -523,9 +536,7 @@ def test_check_is_read_only_and_repair_reconstructs_from_orphan_bundle(
     assert (repaired.backup_dir / "repair.yml").is_file()
     manifest = read_manifest(project)
     assert manifest["schema_version"] == 3
-    assert manifest["processes"]["custom"]["path"] == (
-        ".ft/process/custom/process.yml"
-    )
+    assert manifest["processes"]["custom"]["path"] == (".ft/process/custom/process.yml")
     assert "template" not in manifest["processes"]["custom"]
     assert not check_project(project).errors
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -17,7 +17,6 @@ from ft.engine.graph import load_graph
 from ft.engine.layout import validate_template_is_pristine
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import VALIDATOR_REGISTRY
-
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "templates" / "bug-fast"
@@ -103,8 +102,7 @@ def _project(tmp_path: Path) -> Path:
     _write(
         tmp_path,
         "project/app.py",
-        "def add(left: int, right: int) -> int:\n"
-        "    return left - right\n",
+        "def add(left: int, right: int) -> int:\n    return left - right\n",
     )
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.name", "Test")
@@ -129,9 +127,7 @@ def _test_source() -> str:
 def _subprocess_env() -> dict[str, str]:
     environment = os.environ.copy()
     environment["PATH"] = (
-        str(Path(sys.executable).parent)
-        + os.pathsep
-        + environment.get("PATH", "")
+        str(Path(sys.executable).parent) + os.pathsep + environment.get("PATH", "")
     )
     return environment
 
@@ -220,15 +216,11 @@ def _implement(root: Path, source: str = "    return left + right\n") -> None:
 
 
 def _receipt(root: Path) -> dict[str, object]:
-    return json.loads(
-        (root / "docs/bug-validation.json").read_text(encoding="utf-8")
-    )
+    return json.loads((root / "docs/bug-validation.json").read_text(encoding="utf-8"))
 
 
 def _baseline(root: Path) -> dict[str, object]:
-    return yaml.safe_load(
-        (root / "docs/bug-baseline.yml").read_text(encoding="utf-8")
-    )
+    return yaml.safe_load((root / "docs/bug-baseline.yml").read_text(encoding="utf-8"))
 
 
 def _approved_review(root: Path) -> None:
@@ -326,9 +318,7 @@ def test_bug_fast_catalog_graph_and_sessions() -> None:
         "recovery": "rehydrate",
     }
     delegated = [
-        node.id
-        for node in graph.nodes.values()
-        if node.executor.startswith("llm_")
+        node.id for node in graph.nodes.values() if node.executor.startswith("llm_")
     ]
     assert delegated == [
         "bug.diagnose_fix",
@@ -403,9 +393,7 @@ def test_bug_fast_happy_path_uses_one_suite_and_deterministic_reconcile(
     assert "| PB-002 | Bug | P1 | accepted |" in (
         root / "docs/PROJECT_BACKLOG.md"
     ).read_text(encoding="utf-8")
-    assert "PB-001, PB-002" in (
-        root / "docs/FEATURES.md"
-    ).read_text(encoding="utf-8")
+    assert "PB-001, PB-002" in (root / "docs/FEATURES.md").read_text(encoding="utf-8")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     assert changelog.count("#BUG PB-002 / FEAT-001") == 1
     result = (root / "docs/bug-result.md").read_text(encoding="utf-8")
@@ -448,8 +436,7 @@ def test_bug_fast_rejected_review_anchors_and_audits_only_fix(
     _write(
         root,
         "project/app.py",
-        "def add(left: int, right: int) -> int:\n"
-        "    return left + right\n",
+        "def add(left: int, right: int) -> int:\n    return left + right\n",
     )
     green = _product(root, "green")
     assert green.returncode == 0, green.stderr
@@ -459,8 +446,7 @@ def test_bug_fast_rejected_review_anchors_and_audits_only_fix(
     _write(
         root,
         "docs/bug-fix-review.md",
-        "# Auditoria do fix\n\n"
-        "- `project/app.py`: B-01 PASS; redundância removida.\n",
+        "# Auditoria do fix\n\n- `project/app.py`: B-01 PASS; redundância removida.\n",
     )
     _write(
         root,
@@ -516,9 +502,7 @@ def test_bug_fast_refreshes_fix_anchor_after_a_new_full_review(
     _git(root, "commit", "-qm", "first rejected review")
     new_base = _git(root, "rev-parse", "HEAD")
 
-    review = yaml.safe_load(
-        (root / "docs/bug-review.yml").read_text(encoding="utf-8")
-    )
+    review = yaml.safe_load((root / "docs/bug-review.yml").read_text(encoding="utf-8"))
     review["summary"] = "Review completa renovada após expansão focal."
     _write(
         root,
@@ -550,8 +534,7 @@ def test_bug_fast_tracks_shared_src_changes_with_project_product(
     _write(
         root,
         "project/app.py",
-        "def add(left: int, right: int) -> int:\n"
-        "    return left + right\n",
+        "def add(left: int, right: int) -> int:\n    return left + right\n",
     )
     _write(root, "src/shared_contract.py", "SNAPSHOT_VERSION = 1\n")
     green = _product(root, "green")
@@ -576,8 +559,7 @@ def test_bug_fast_counts_reconciled_receipts_as_derived_artifacts(
     _write(
         root,
         "project/app.py",
-        "def add(left: int, right: int) -> int:\n"
-        "    return left + right\n",
+        "def add(left: int, right: int) -> int:\n    return left + right\n",
     )
     for index in range(6):
         _write(
@@ -605,9 +587,7 @@ def test_bug_fast_internal_acceptance_does_not_require_make_url(
     _write(
         root,
         "project/Makefile",
-        "build:\n\t@true\n\n"
-        "test:\n\t@true\n\n"
-        "run:\n\t@true\n",
+        "build:\n\t@true\n\ntest:\n\t@true\n\nrun:\n\t@true\n",
     )
 
     result = subprocess.run(

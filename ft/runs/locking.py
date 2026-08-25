@@ -12,17 +12,17 @@ kernel.
 
 from __future__ import annotations
 
+import fcntl
+import json
+import os
+import subprocess
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
-import fcntl
-import json
-import os
 from pathlib import Path
-import subprocess
-import threading
-import time
 from typing import Iterator, Literal, TextIO
 from uuid import uuid4
 
@@ -69,11 +69,7 @@ class LockOwner:
             return None
         if not isinstance(fields["suspended"], bool):
             return None
-        if not all(
-            fields[name]
-            for name in fields
-            if name not in {"pid", "suspended"}
-        ):
+        if not all(fields[name] for name in fields if name not in {"pid", "suspended"}):
             return None
         return cls(**fields)
 

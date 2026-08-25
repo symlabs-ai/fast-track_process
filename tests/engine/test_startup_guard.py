@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from argparse import Namespace
-from contextlib import contextmanager
 import os
-from pathlib import Path
 import subprocess
 import sys
+from argparse import Namespace
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -105,9 +105,12 @@ def test_pid_identity_mismatch_is_not_a_live_owner(tmp_path: Path) -> None:
         manager.release_lock()
         raw = state_path.read_text(encoding="utf-8")
         state_path.write_text(
-            raw.replace("_lock: null", "_lock:\n  owner: ft_engine\n"
-                        f"  pid: {child.pid}\n"
-                        "  pid_start: definitely-not-this-process"),
+            raw.replace(
+                "_lock: null",
+                "_lock:\n  owner: ft_engine\n"
+                f"  pid: {child.pid}\n"
+                "  pid_start: definitely-not-this-process",
+            ),
             encoding="utf-8",
         )
 

@@ -51,7 +51,9 @@ STATE_DIVERGED_NO_BASE = "diverged_no_base"
 STATE_TEMPLATE_MISSING = "template_missing"
 STATE_BROKEN = "broken"
 
-ACTIONABLE_STATES = frozenset({STATE_FAST_FORWARD, STATE_DIVERGED, STATE_DIVERGED_NO_BASE})
+ACTIONABLE_STATES = frozenset(
+    {STATE_FAST_FORWARD, STATE_DIVERGED, STATE_DIVERGED_NO_BASE}
+)
 
 # Mesmos sufixos que a materialização considera texto ao reescrever paths.
 _TEXT_SUFFIXES = {".md", ".py", ".sh", ".toml", ".txt", ".yaml", ".yml"}
@@ -97,8 +99,7 @@ def template_process_file(template_dir: Path) -> Path | None:
     if canonical.is_file():
         return canonical
     legacy = sorted(
-        path for path in template_dir.glob("*.yml")
-        if path.name != "environment.yml"
+        path for path in template_dir.glob("*.yml") if path.name != "environment.yml"
     )
     return legacy[0] if legacy else None
 
@@ -120,32 +121,37 @@ def rewrite_local_refs(directory: Path, process_name: str) -> None:
             content = file_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        rewritten = content.replace(
-            ".ft/process/scripts", named_scripts
-        ).replace(
+        rewritten = content.replace(".ft/process/scripts", named_scripts).replace(
             ".ft/process/process.yml", named_process
         )
         if file_path.is_relative_to(scripts_root):
             # Scripts de bundles nomeados vivem um nível mais fundo que no
             # layout flat: reancora os paths relativos ao root do projeto.
-            rewritten = rewritten.replace(
-                '$(dirname "${BASH_SOURCE[0]}")/../../../..',
-                "__FT_NAMED_BASH_ROOT__",
-            ).replace(
-                '$(dirname "${BASH_SOURCE[0]}")/../../..',
-                "__FT_NAMED_BASH_ROOT__",
-            ).replace(
-                "__FT_NAMED_BASH_ROOT__",
-                '$(dirname "${BASH_SOURCE[0]}")/../../../..',
-            ).replace(
-                '$(dirname "$0")/../../../../project',
-                "__FT_NAMED_PROJECT_ROOT__",
-            ).replace(
-                '$(dirname "$0")/../../../project',
-                "__FT_NAMED_PROJECT_ROOT__",
-            ).replace(
-                "__FT_NAMED_PROJECT_ROOT__",
-                '$(dirname "$0")/../../../../project',
+            rewritten = (
+                rewritten.replace(
+                    '$(dirname "${BASH_SOURCE[0]}")/../../../..',
+                    "__FT_NAMED_BASH_ROOT__",
+                )
+                .replace(
+                    '$(dirname "${BASH_SOURCE[0]}")/../../..',
+                    "__FT_NAMED_BASH_ROOT__",
+                )
+                .replace(
+                    "__FT_NAMED_BASH_ROOT__",
+                    '$(dirname "${BASH_SOURCE[0]}")/../../../..',
+                )
+                .replace(
+                    '$(dirname "$0")/../../../../project',
+                    "__FT_NAMED_PROJECT_ROOT__",
+                )
+                .replace(
+                    '$(dirname "$0")/../../../project',
+                    "__FT_NAMED_PROJECT_ROOT__",
+                )
+                .replace(
+                    "__FT_NAMED_PROJECT_ROOT__",
+                    '$(dirname "$0")/../../../../project',
+                )
             )
         if rewritten != content:
             file_path.write_text(rewritten, encoding="utf-8")
@@ -173,26 +179,18 @@ def _make_owner_writable(directory: Path) -> None:
     for current, dirnames, filenames in os.walk(directory):
         current_path = Path(current)
         current_path.chmod(
-            current_path.stat().st_mode
-            | stat.S_IRUSR
-            | stat.S_IWUSR
-            | stat.S_IXUSR
+            current_path.stat().st_mode | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
         )
         for dirname in dirnames:
             path = current_path / dirname
             if not path.is_symlink():
                 path.chmod(
-                    path.stat().st_mode
-                    | stat.S_IRUSR
-                    | stat.S_IWUSR
-                    | stat.S_IXUSR
+                    path.stat().st_mode | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
                 )
         for filename in filenames:
             path = current_path / filename
             if not path.is_symlink():
-                path.chmod(
-                    path.stat().st_mode | stat.S_IRUSR | stat.S_IWUSR
-                )
+                path.chmod(path.stat().st_mode | stat.S_IRUSR | stat.S_IWUSR)
 
 
 def _remove_tree(directory: Path, *, ignore_errors: bool = False) -> None:
@@ -229,7 +227,9 @@ def _copy_bundle(source: Path, destination: Path) -> None:
     _make_owner_writable(destination)
 
 
-def materialize_global_to(template_dir: Path, process_name: str, destination: Path) -> None:
+def materialize_global_to(
+    template_dir: Path, process_name: str, destination: Path
+) -> None:
     """Copia o template global já reescrito em coordenadas locais."""
     _copy_bundle(template_dir, destination)
     rewrite_local_refs(destination, process_name)
@@ -348,25 +348,34 @@ def scan_processes(
         template_dir = templates / template_id
 
         if local_process is None or not local_process.is_file():
-            states.append(ProcessDriftState(
-                name=name, template_id=template_id, entrypoint=entrypoint,
-                local_dir=root / ".ft" / "process" / name,
-                local_process=local_process or Path("?"),
-                template_dir=template_dir,
-                state=STATE_BROKEN,
-                detail="processo registrado no manifest não existe no disco",
-            ))
+            states.append(
+                ProcessDriftState(
+                    name=name,
+                    template_id=template_id,
+                    entrypoint=entrypoint,
+                    local_dir=root / ".ft" / "process" / name,
+                    local_process=local_process or Path("?"),
+                    template_dir=template_dir,
+                    state=STATE_BROKEN,
+                    detail="processo registrado no manifest não existe no disco",
+                )
+            )
             continue
 
         local_dir = local_process.parent
         if template_process_file(template_dir) is None:
-            states.append(ProcessDriftState(
-                name=name, template_id=template_id, entrypoint=entrypoint,
-                local_dir=local_dir, local_process=local_process,
-                template_dir=template_dir,
-                state=STATE_TEMPLATE_MISSING,
-                detail="template global não encontrado no engine",
-            ))
+            states.append(
+                ProcessDriftState(
+                    name=name,
+                    template_id=template_id,
+                    entrypoint=entrypoint,
+                    local_dir=local_dir,
+                    local_process=local_process,
+                    template_dir=template_dir,
+                    state=STATE_TEMPLATE_MISSING,
+                    detail="template global não encontrado no engine",
+                )
+            )
             continue
 
         try:
@@ -376,12 +385,18 @@ def scan_processes(
                 local_dir, template_dir, record, local_digest, global_digest
             )
         except ValueError as exc:
-            states.append(ProcessDriftState(
-                name=name, template_id=template_id, entrypoint=entrypoint,
-                local_dir=local_dir, local_process=local_process,
-                template_dir=template_dir,
-                state=STATE_BROKEN, detail=str(exc),
-            ))
+            states.append(
+                ProcessDriftState(
+                    name=name,
+                    template_id=template_id,
+                    entrypoint=entrypoint,
+                    local_dir=local_dir,
+                    local_process=local_process,
+                    template_dir=template_dir,
+                    state=STATE_BROKEN,
+                    detail=str(exc),
+                )
+            )
             continue
 
         if local_digest and local_digest == global_digest:
@@ -402,13 +417,22 @@ def scan_processes(
             state = STATE_DIVERGED
             detail = "fork local customizado e template global evoluiu"
 
-        states.append(ProcessDriftState(
-            name=name, template_id=template_id, entrypoint=entrypoint,
-            local_dir=local_dir, local_process=local_process,
-            template_dir=template_dir, state=state, detail=detail,
-            local_digest=local_digest, global_digest=global_digest,
-            base_digest=base_digest, base_source=base_source,
-        ))
+        states.append(
+            ProcessDriftState(
+                name=name,
+                template_id=template_id,
+                entrypoint=entrypoint,
+                local_dir=local_dir,
+                local_process=local_process,
+                template_dir=template_dir,
+                state=state,
+                detail=detail,
+                local_digest=local_digest,
+                global_digest=global_digest,
+                base_digest=base_digest,
+                base_source=base_source,
+            )
+        )
     return states
 
 
@@ -446,7 +470,9 @@ def _is_text(*payloads: bytes | None) -> bool:
     return True
 
 
-def _git_merge_file(base: bytes, local: bytes, other: bytes, workdir: Path) -> tuple[bytes, bool]:
+def _git_merge_file(
+    base: bytes, local: bytes, other: bytes, workdir: Path
+) -> tuple[bytes, bool]:
     """Merge 3-way de um arquivo via ``git merge-file --diff3``.
 
     Retorna (conteúdo, conflitou). O conteúdo com marcadores é preservado
@@ -460,9 +486,18 @@ def _git_merge_file(base: bytes, local: bytes, other: bytes, workdir: Path) -> t
     other_file.write_bytes(other)
     result = subprocess.run(
         [
-            "git", "merge-file", "--diff3",
-            "-L", "local", "-L", "base", "-L", "global",
-            str(local_file), str(base_file), str(other_file),
+            "git",
+            "merge-file",
+            "--diff3",
+            "-L",
+            "local",
+            "-L",
+            "base",
+            "-L",
+            "global",
+            str(local_file),
+            str(base_file),
+            str(other_file),
         ],
         capture_output=True,
         text=True,
@@ -553,7 +588,12 @@ def _merge_one(
         return local, False, "local"
 
     # Os três diferem: merge textual quando der, conflito estrutural senão.
-    if base is not None and local is not None and other is not None and _is_text(base, local, other):
+    if (
+        base is not None
+        and local is not None
+        and other is not None
+        and _is_text(base, local, other)
+    ):
         content, conflicted = _git_merge_file(base, local, other, scratch)
         return content, conflicted, "merge"
 
@@ -646,11 +686,14 @@ def prepare_fast_forward(
 
     before = _iter_bundle_files(state.local_dir)
     after = _iter_bundle_files(staging)
-    changed = sorted(
-        f"adicionado: {relative}" for relative in set(after) - set(before)
-    ) + sorted(
-        f"atualizado: {relative}" for relative in set(after) & set(before)
-        if after[relative].read_bytes() != before[relative].read_bytes()
-    ) + sorted(f"removido: {relative}" for relative in set(before) - set(after))
+    changed = (
+        sorted(f"adicionado: {relative}" for relative in set(after) - set(before))
+        + sorted(
+            f"atualizado: {relative}"
+            for relative in set(after) & set(before)
+            if after[relative].read_bytes() != before[relative].read_bytes()
+        )
+        + sorted(f"removido: {relative}" for relative in set(before) - set(after))
+    )
 
     return staging, changed

@@ -6,27 +6,26 @@ state and LLM logs remain under ``$FT_HOME`` and are never archived here.
 
 from __future__ import annotations
 
-from collections import Counter
-from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import fcntl
 import hashlib
 import os
-from pathlib import Path
 import re
 import shutil
 import stat
 import subprocess
 import tempfile
 import threading
+from collections import Counter
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import yaml
 
 from ft.engine import paths
-
 
 LAYOUT_VERSION = 3
 LEGACY_NAMED_LAYOUT_VERSION = 2
@@ -45,6 +44,7 @@ class LayoutMigrationRequired(ValueError):
 
 class ManifestError(ValueError):
     """Raised when the project manifest cannot be trusted."""
+
 
 PROJECT_GITIGNORE = """# Runtime data never belongs to the project history.
 /runtime/
@@ -286,24 +286,28 @@ def _manifest_for_v3_write(manifest: dict[str, Any]) -> dict[str, Any]:
 # Caches e artefatos gerados nunca fazem parte de um bundle de processo —
 # compartilhado entre o digest (cycle pinning) e as operações de cópia/merge
 # do ft process update, que precisam enxergar o mesmo conjunto de arquivos.
-BUNDLE_IGNORED_DIRS = frozenset({
-    "__pycache__",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    "node_modules",
-})
-BUNDLE_IGNORED_FILES = frozenset({
-    ".DS_Store",
-    ".serve.log",
-    ".serve.pid",
-    ".serve_backend.pid",
-    ".serve_frontend.pid",
-    ".serve_url",
-    ".presented_artifact",
-    ".presentation.log",
-    ".presentation.pid",
-})
+BUNDLE_IGNORED_DIRS = frozenset(
+    {
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "node_modules",
+    }
+)
+BUNDLE_IGNORED_FILES = frozenset(
+    {
+        ".DS_Store",
+        ".serve.log",
+        ".serve.pid",
+        ".serve_backend.pid",
+        ".serve_frontend.pid",
+        ".serve_url",
+        ".presented_artifact",
+        ".presentation.log",
+        ".presentation.pid",
+    }
+)
 BUNDLE_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
@@ -374,8 +378,8 @@ def _process_digest(
         payload = resolved.read_bytes()
         raw_mode = stat.S_IMODE(resolved.stat().st_mode)
         mode = (
-            0o755 if raw_mode & 0o111 else 0o644
-        ) if normalize_git_modes else raw_mode
+            (0o755 if raw_mode & 0o111 else 0o644) if normalize_git_modes else raw_mode
+        )
         header = f"{len(relative)}:{relative}:{mode:o}:{len(payload)}:".encode("utf-8")
         digest.update(header)
         digest.update(payload)
@@ -407,10 +411,7 @@ def process_digest_matches(
     """
     if process_digest(process_file) == expected_digest:
         return True
-    return (
-        _process_digest(process_file, normalize_git_modes=False)
-        == expected_digest
-    )
+    return _process_digest(process_file, normalize_git_modes=False) == expected_digest
 
 
 def _safe_manifest_process_path(root: Path, raw_path: object) -> Path | None:
@@ -538,7 +539,10 @@ def resolve_project_process(
         return None
     _validate_v2_manifest(manifest, manifest_path)
     selected = process_name
-    if selected is None and manifest.get("schema_version") == LEGACY_NAMED_LAYOUT_VERSION:
+    if (
+        selected is None
+        and manifest.get("schema_version") == LEGACY_NAMED_LAYOUT_VERSION
+    ):
         selected = manifest.get("default_process")
     if not isinstance(selected, str) or not selected.strip():
         return None
@@ -636,10 +640,7 @@ def _suspend_manifest_write_lock(project_root: str | Path):
     """
     root = Path(project_root).resolve()
     lock_path = (
-        paths.ft_home()
-        / "locks"
-        / paths.project_runtime_key(root)
-        / ".manifest.lock"
+        paths.ft_home() / "locks" / paths.project_runtime_key(root) / ".manifest.lock"
     )
     held = getattr(_MANIFEST_LOCK_STATE, "held", {})
     entry = held.get(lock_path)
@@ -765,9 +766,7 @@ def _atomic_write_manifest(manifest_path: Path, manifest: dict[str, Any]) -> Non
     """Replace the manifest atomically; caller holds ``_manifest_write_lock``."""
     payload = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
     original_mode = (
-        stat.S_IMODE(manifest_path.stat().st_mode)
-        if manifest_path.exists()
-        else 0o644
+        stat.S_IMODE(manifest_path.stat().st_mode) if manifest_path.exists() else 0o644
     )
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
@@ -833,7 +832,9 @@ def register_project_process(
         relative = process_file.relative_to(root).as_posix()
         process_file.relative_to(paths.project_process_dir(root).resolve())
     except ValueError as exc:
-        raise ValueError("processo registrado deve estar dentro de .ft/process/") from exc
+        raise ValueError(
+            "processo registrado deve estar dentro de .ft/process/"
+        ) from exc
 
     if process_file != canonical:
         raise ValueError(
@@ -858,11 +859,13 @@ def register_project_process(
             raise ManifestError("manifest inválido: processes deve ser mapping")
         existing = processes.get(process_name, {})
         record = dict(existing) if isinstance(existing, dict) else {}
-        record.update({
-            "path": relative,
-            "template": template_id,
-            "entrypoint": entrypoint,
-        })
+        record.update(
+            {
+                "path": relative,
+                "template": template_id,
+                "entrypoint": entrypoint,
+            }
+        )
         if not record.get("source_digest") and source_digest:
             record["source_digest"] = source_digest
         if not record.get("base_digest"):
@@ -960,7 +963,9 @@ def _ensure_project_layout_locked(
     manifest.setdefault("processes", {})
     if defaults:
         current = manifest.setdefault("defaults", {})
-        current.update({key: value for key, value in defaults.items() if value is not None})
+        current.update(
+            {key: value for key, value in defaults.items() if value is not None}
+        )
         requested_effort = defaults.get("llm_effort")
         if (
             isinstance(requested_effort, str)
@@ -1069,9 +1074,7 @@ def _update_manifest_llm_defaults_locked(
 
     manifest_path = paths.project_manifest(root)
     if not manifest_path.is_file():
-        raise FileNotFoundError(
-            f"projeto não inicializado: {manifest_path} não existe"
-        )
+        raise FileNotFoundError(f"projeto não inicializado: {manifest_path} não existe")
     manifest = _read_manifest_file(manifest_path)
     if not manifest:
         raise ManifestError(
@@ -1096,8 +1099,14 @@ def _update_manifest_llm_defaults_locked(
     else:
         defaults["llm_effort"] = effort
     raw_revision = manifest.get("llm_defaults_revision", 0)
-    if not isinstance(raw_revision, int) or isinstance(raw_revision, bool) or raw_revision < 0:
-        raise ValueError("manifest inválido: llm_defaults_revision deve ser inteiro >= 0")
+    if (
+        not isinstance(raw_revision, int)
+        or isinstance(raw_revision, bool)
+        or raw_revision < 0
+    ):
+        raise ValueError(
+            "manifest inválido: llm_defaults_revision deve ser inteiro >= 0"
+        )
     manifest["llm_defaults_revision"] = raw_revision + 1
 
     _atomic_write_manifest(manifest_path, manifest)
@@ -1121,7 +1130,9 @@ def validate_template_is_pristine(template_dir: str | Path) -> None:
     offenders: list[str] = []
     for item in root.rglob("*"):
         rel = item.relative_to(root)
-        if item.name in forbidden_names or any(part.startswith("cycle-") for part in rel.parts):
+        if item.name in forbidden_names or any(
+            part.startswith("cycle-") for part in rel.parts
+        ):
             offenders.append(str(rel))
     if offenders:
         shown = ", ".join(offenders[:8])
@@ -1136,7 +1147,9 @@ def _safe_relative(path: str) -> Path:
 
 
 def _normalized_cycle_paths(values: list[str] | tuple[str, ...]) -> list[Path]:
-    candidates = sorted({_safe_relative(value) for value in values}, key=lambda p: len(p.parts))
+    candidates = sorted(
+        {_safe_relative(value) for value in values}, key=lambda p: len(p.parts)
+    )
     result: list[Path] = []
     for candidate in candidates:
         if any(candidate == parent or parent in candidate.parents for parent in result):
@@ -1162,27 +1175,20 @@ def _merge_move(src: Path, dst: Path) -> None:
 
 
 def _rewrite_process_references(content: str, *, broad: bool = False) -> str:
-    rewritten = content.replace(
-        ".ft/process/scripts", "__FT_PROCESS_SCRIPTS__"
-    ).replace(
-        ".ft/process/process.yml", "__FT_PROCESS_YAML__"
-    ).replace(
-        "process/scripts", ".ft/process/scripts"
-    ).replace(
-        "process/process.yml", ".ft/process/process.yml"
-    ).replace(
-        "__FT_PROCESS_SCRIPTS__", ".ft/process/scripts"
-    ).replace(
-        "__FT_PROCESS_YAML__", ".ft/process/process.yml"
+    rewritten = (
+        content.replace(".ft/process/scripts", "__FT_PROCESS_SCRIPTS__")
+        .replace(".ft/process/process.yml", "__FT_PROCESS_YAML__")
+        .replace("process/scripts", ".ft/process/scripts")
+        .replace("process/process.yml", ".ft/process/process.yml")
+        .replace("__FT_PROCESS_SCRIPTS__", ".ft/process/scripts")
+        .replace("__FT_PROCESS_YAML__", ".ft/process/process.yml")
     )
     if not broad:
         return rewritten
 
     rewritten = rewritten.replace(
         ' / ".ft" / "process"', "__FT_PATH_DOUBLE_QUOTED__"
-    ).replace(
-        " / '.ft' / 'process'", "__FT_PATH_SINGLE_QUOTED__"
-    )
+    ).replace(" / '.ft' / 'process'", "__FT_PATH_SINGLE_QUOTED__")
     rewritten = re.sub(
         r' / "process"(?=\s*(?:/|\)))',
         ' / ".ft" / "process"',
@@ -1194,18 +1200,13 @@ def _rewrite_process_references(content: str, *, broad: bool = False) -> str:
         rewritten,
     )
     rewritten = re.sub(r"(?m)^(\s*)process/$", r"\1.ft/process/", rewritten)
-    rewritten = rewritten.replace(
-        "__FT_PATH_DOUBLE_QUOTED__", ' / ".ft" / "process"'
-    ).replace(
-        "__FT_PATH_SINGLE_QUOTED__", " / '.ft' / 'process'"
-    ).replace(
-        "../process/", "../.ft/process/"
-    ).replace(
-        '"process/', '".ft/process/'
-    ).replace(
-        "'process/", "'.ft/process/"
-    ).replace(
-        "`process/", "`.ft/process/"
+    rewritten = (
+        rewritten.replace("__FT_PATH_DOUBLE_QUOTED__", ' / ".ft" / "process"')
+        .replace("__FT_PATH_SINGLE_QUOTED__", " / '.ft' / 'process'")
+        .replace("../process/", "../.ft/process/")
+        .replace('"process/', '".ft/process/')
+        .replace("'process/", "'.ft/process/")
+        .replace("`process/", "`.ft/process/")
     )
     rewritten = re.sub(
         r'(/ "\.ft" / "process"\)\.mkdir)\(\)',
@@ -1217,17 +1218,17 @@ def _rewrite_process_references(content: str, *, broad: bool = False) -> str:
         r"\1(parents=True)",
         rewritten,
     )
-    rewritten = rewritten.replace(
-        "['docs', 'process', 'src']", "['docs', '.ft', 'src']"
-    ).replace(
-        '["docs", "process", "src"]', '["docs", ".ft", "src"]'
-    ).replace(
-        "docs/, process/ e src/", "docs/, .ft/ e src/"
+    rewritten = (
+        rewritten.replace("['docs', 'process', 'src']", "['docs', '.ft', 'src']")
+        .replace('["docs", "process", "src"]', '["docs", ".ft", "src"]')
+        .replace("docs/, process/ e src/", "docs/, .ft/ e src/")
     )
     auto_open = "(depth < 1 && PRIORITY.includes(name)) || prefix === '.ft/process/'"
-    rewritten = rewritten.replace(auto_open, "__FT_AUTO_OPEN_PROCESS__").replace(
-        "depth < 1 && PRIORITY.includes(name)", auto_open
-    ).replace("__FT_AUTO_OPEN_PROCESS__", auto_open)
+    rewritten = (
+        rewritten.replace(auto_open, "__FT_AUTO_OPEN_PROCESS__")
+        .replace("depth < 1 && PRIORITY.includes(name)", auto_open)
+        .replace("__FT_AUTO_OPEN_PROCESS__", auto_open)
+    )
     return rewritten
 
 
@@ -1241,58 +1242,67 @@ def _rewrite_named_process_references(
     # Path validation is centralized in paths.project_named_process_dir.
     paths.project_named_process_dir(Path("."), process_name)
     named_root = f".ft/process/{process_name}"
-    protected = content.replace(
-        f"{named_root}/scripts", "__FT_SELECTED_PROCESS_SCRIPTS__"
-    ).replace(
-        f"{named_root}/process.yml", "__FT_SELECTED_PROCESS_YAML__"
-    ).replace(
-        f' / ".ft" / "process" / "{process_name}" / "scripts"',
-        "__FT_SELECTED_PATH_SCRIPTS_DOUBLE__",
-    ).replace(
-        f" / '.ft' / 'process' / '{process_name}' / 'scripts'",
-        "__FT_SELECTED_PATH_SCRIPTS_SINGLE__",
-    ).replace(
-        f' / ".ft" / "process" / "{process_name}" / "process.yml"',
-        "__FT_SELECTED_PATH_YAML_DOUBLE__",
-    ).replace(
-        f" / '.ft' / 'process' / '{process_name}' / 'process.yml'",
-        "__FT_SELECTED_PATH_YAML_SINGLE__",
+    protected = (
+        content.replace(f"{named_root}/scripts", "__FT_SELECTED_PROCESS_SCRIPTS__")
+        .replace(f"{named_root}/process.yml", "__FT_SELECTED_PROCESS_YAML__")
+        .replace(
+            f' / ".ft" / "process" / "{process_name}" / "scripts"',
+            "__FT_SELECTED_PATH_SCRIPTS_DOUBLE__",
+        )
+        .replace(
+            f" / '.ft' / 'process' / '{process_name}' / 'scripts'",
+            "__FT_SELECTED_PATH_SCRIPTS_SINGLE__",
+        )
+        .replace(
+            f' / ".ft" / "process" / "{process_name}" / "process.yml"',
+            "__FT_SELECTED_PATH_YAML_DOUBLE__",
+        )
+        .replace(
+            f" / '.ft' / 'process' / '{process_name}' / 'process.yml'",
+            "__FT_SELECTED_PATH_YAML_SINGLE__",
+        )
     )
     rewritten = _rewrite_process_references(protected, broad=broad)
     rewritten = rewritten.replace(
         ".ft/process/scripts", f"{named_root}/scripts"
-    ).replace(
-        ".ft/process/process.yml", f"{named_root}/process.yml"
+    ).replace(".ft/process/process.yml", f"{named_root}/process.yml")
+    rewritten = (
+        rewritten.replace(
+            ' / ".ft" / "process" / "scripts"',
+            f' / ".ft" / "process" / "{process_name}" / "scripts"',
+        )
+        .replace(
+            " / '.ft' / 'process' / 'scripts'",
+            f" / '.ft' / 'process' / '{process_name}' / 'scripts'",
+        )
+        .replace(
+            ' / ".ft" / "process" / "process.yml"',
+            f' / ".ft" / "process" / "{process_name}" / "process.yml"',
+        )
+        .replace(
+            " / '.ft' / 'process' / 'process.yml'",
+            f" / '.ft' / 'process' / '{process_name}' / 'process.yml'",
+        )
     )
-    rewritten = rewritten.replace(
-        ' / ".ft" / "process" / "scripts"',
-        f' / ".ft" / "process" / "{process_name}" / "scripts"',
-    ).replace(
-        " / '.ft' / 'process' / 'scripts'",
-        f" / '.ft' / 'process' / '{process_name}' / 'scripts'",
-    ).replace(
-        ' / ".ft" / "process" / "process.yml"',
-        f' / ".ft" / "process" / "{process_name}" / "process.yml"',
-    ).replace(
-        " / '.ft' / 'process' / 'process.yml'",
-        f" / '.ft' / 'process' / '{process_name}' / 'process.yml'",
-    )
-    return rewritten.replace(
-        "__FT_SELECTED_PROCESS_SCRIPTS__", f"{named_root}/scripts"
-    ).replace(
-        "__FT_SELECTED_PROCESS_YAML__", f"{named_root}/process.yml"
-    ).replace(
-        "__FT_SELECTED_PATH_SCRIPTS_DOUBLE__",
-        f' / ".ft" / "process" / "{process_name}" / "scripts"',
-    ).replace(
-        "__FT_SELECTED_PATH_SCRIPTS_SINGLE__",
-        f" / '.ft' / 'process' / '{process_name}' / 'scripts'",
-    ).replace(
-        "__FT_SELECTED_PATH_YAML_DOUBLE__",
-        f' / ".ft" / "process" / "{process_name}" / "process.yml"',
-    ).replace(
-        "__FT_SELECTED_PATH_YAML_SINGLE__",
-        f" / '.ft' / 'process' / '{process_name}' / 'process.yml'",
+    return (
+        rewritten.replace("__FT_SELECTED_PROCESS_SCRIPTS__", f"{named_root}/scripts")
+        .replace("__FT_SELECTED_PROCESS_YAML__", f"{named_root}/process.yml")
+        .replace(
+            "__FT_SELECTED_PATH_SCRIPTS_DOUBLE__",
+            f' / ".ft" / "process" / "{process_name}" / "scripts"',
+        )
+        .replace(
+            "__FT_SELECTED_PATH_SCRIPTS_SINGLE__",
+            f" / '.ft' / 'process' / '{process_name}' / 'scripts'",
+        )
+        .replace(
+            "__FT_SELECTED_PATH_YAML_DOUBLE__",
+            f' / ".ft" / "process" / "{process_name}" / "process.yml"',
+        )
+        .replace(
+            "__FT_SELECTED_PATH_YAML_SINGLE__",
+            f" / '.ft' / 'process' / '{process_name}' / 'process.yml'",
+        )
     )
 
 
@@ -1346,7 +1356,10 @@ def _project_reference_files(root: Path) -> list[Path]:
         path = root / rel
         if not path.is_file():
             continue
-        if path.suffix.lower() not in _PROJECT_TEXT_SUFFIXES and path.name not in _PROJECT_TEXT_NAMES:
+        if (
+            path.suffix.lower() not in _PROJECT_TEXT_SUFFIXES
+            and path.name not in _PROJECT_TEXT_NAMES
+        ):
             continue
         candidates.append(path)
     return sorted(set(candidates))
@@ -1412,7 +1425,9 @@ def is_cycle_artifact(path: str | Path, graph_meta: dict[str, Any] | None) -> bo
     canonical = _normalized_cycle_paths(canonical_values)
     cycle = _normalized_cycle_paths(cycle_values)
 
-    covered_by_cycle = any(candidate == rel or candidate in rel.parents for candidate in cycle)
+    covered_by_cycle = any(
+        candidate == rel or candidate in rel.parents for candidate in cycle
+    )
     if not covered_by_cycle:
         return False
 
@@ -1487,7 +1502,9 @@ def _cycle_artifact_move_plan(
         dest_rel = (
             Path("build-marker.txt")
             if rel == Path(".build_ok")
-            else Path(*rel.parts[1:]) if rel.parts[0] == "docs" else rel
+            else Path(*rel.parts[1:])
+            if rel.parts[0] == "docs"
+            else rel
         )
         plan.append((src, cycle_dir / dest_rel, str(dest_rel)))
     for log_file in sorted(root.glob("*_log.md")):
@@ -1589,9 +1606,7 @@ def archive_cycle_artifacts(
         llm_record["execution_plan"] = {
             "path": "llm-execution-plan.yml",
             "source": (
-                plan_metadata.get("source")
-                if isinstance(plan_metadata, dict)
-                else None
+                plan_metadata.get("source") if isinstance(plan_metadata, dict) else None
             ),
             "generated_at": (
                 plan_metadata.get("generated_at")
@@ -1606,7 +1621,9 @@ def archive_cycle_artifacts(
         "status": (
             "done"
             if imported
-            else getattr(state, "node_status", "unknown") if state is not None else "unknown"
+            else getattr(state, "node_status", "unknown")
+            if state is not None
+            else "unknown"
         ),
         "process": {
             "id": (
@@ -1620,14 +1637,20 @@ def archive_cycle_artifacts(
                 else process_meta.get("version")
             ),
             "path": selected_process_path,
-            "template": getattr(state, "template_id", None) if state is not None else None,
+            "template": getattr(state, "template_id", None)
+            if state is not None
+            else None,
             "initial_digest": (
                 getattr(state, "process_digest", None) if state is not None else None
             ),
-            "closed_digest": process_digest(selected_process) if selected_process else None,
+            "closed_digest": process_digest(selected_process)
+            if selected_process
+            else None,
         },
         "git": {
-            "base_commit": getattr(state, "base_commit", None) if state is not None else None,
+            "base_commit": getattr(state, "base_commit", None)
+            if state is not None
+            else None,
             "worktree_branch": (
                 getattr(state, "worktree_branch", None) if state is not None else None
             ),
@@ -1635,14 +1658,10 @@ def archive_cycle_artifacts(
         "project": {
             "id": getattr(state, "project_id", None) if state is not None else None,
             "phase": (
-                getattr(state, "project_phase", None)
-                if state is not None
-                else None
+                getattr(state, "project_phase", None) if state is not None else None
             ),
             "target": (
-                getattr(state, "project_target", None)
-                if state is not None
-                else None
+                getattr(state, "project_target", None) if state is not None else None
             ),
             "definition_of_done_digest": (
                 getattr(state, "project_definition_of_done_digest", None)
@@ -1660,15 +1679,21 @@ def archive_cycle_artifacts(
             "completed": (
                 "unknown"
                 if imported
-                else metrics.get("steps_completed", 0) if isinstance(metrics, dict) else 0
+                else metrics.get("steps_completed", 0)
+                if isinstance(metrics, dict)
+                else 0
             ),
             "total": (
                 "unknown"
                 if imported
-                else metrics.get("steps_total", 0) if isinstance(metrics, dict) else 0
+                else metrics.get("steps_total", 0)
+                if isinstance(metrics, dict)
+                else 0
             ),
         },
-        "gate_summary": dict(Counter(gate_log.values())) if isinstance(gate_log, dict) else {},
+        "gate_summary": dict(Counter(gate_log.values()))
+        if isinstance(gate_log, dict)
+        else {},
         "artifacts": _cycle_artifact_inventory(cycle_dir),
     }
     if imported:
@@ -1745,7 +1770,9 @@ def _backup_legacy_runtime(root: Path, actions: list[str], *, dry_run: bool) -> 
         _merge_move(src, backup / rel)
 
 
-def _import_legacy_cycle_archives(root: Path, actions: list[str], *, dry_run: bool) -> None:
+def _import_legacy_cycle_archives(
+    root: Path, actions: list[str], *, dry_run: bool
+) -> None:
     archive_root = root / "docs" / "archive"
     if not archive_root.is_dir():
         return
@@ -1924,7 +1951,11 @@ def _assert_merge_move_safe(src: Path, dst: Path) -> None:
     if src.is_file():
         if not dst.exists():
             return
-        if dst.is_file() and not dst.is_symlink() and src.read_bytes() == dst.read_bytes():
+        if (
+            dst.is_file()
+            and not dst.is_symlink()
+            and src.read_bytes() == dst.read_bytes()
+        ):
             return
         raise FileExistsError(f"conflito durante migração: {src} -> {dst}")
     raise ValueError(f"fonte de migração inválida: {src}")
@@ -2062,7 +2093,10 @@ def _rewrite_named_bundle(bundle: Path, process_name: str) -> int:
     for path in bundle.rglob("*"):
         if not path.is_file() or path.is_symlink():
             continue
-        if path.suffix.lower() not in _PROJECT_TEXT_SUFFIXES and path.name not in _PROJECT_TEXT_NAMES:
+        if (
+            path.suffix.lower() not in _PROJECT_TEXT_SUFFIXES
+            and path.name not in _PROJECT_TEXT_NAMES
+        ):
             continue
         try:
             content = path.read_text(encoding="utf-8")
@@ -2078,18 +2112,14 @@ def _rewrite_named_bundle(bundle: Path, process_name: str) -> int:
                 '$(dirname "${BASH_SOURCE[0]}")/../..',
             ):
                 rewritten = rewritten.replace(legacy, "__FT_NAMED_BASH_ROOT__")
-            rewritten = rewritten.replace(
-                "__FT_NAMED_BASH_ROOT__", bash_root
-            )
+            rewritten = rewritten.replace("__FT_NAMED_BASH_ROOT__", bash_root)
             rewritten = rewritten.replace(project_root, "__FT_NAMED_PROJECT_ROOT__")
             for legacy in (
                 '$(dirname "$0")/../../../project',
                 '$(dirname "$0")/../../project',
             ):
                 rewritten = rewritten.replace(legacy, "__FT_NAMED_PROJECT_ROOT__")
-            rewritten = rewritten.replace(
-                "__FT_NAMED_PROJECT_ROOT__", project_root
-            )
+            rewritten = rewritten.replace("__FT_NAMED_PROJECT_ROOT__", project_root)
         if rewritten != content:
             path.write_text(rewritten, encoding="utf-8")
             changed += 1
@@ -2121,7 +2151,8 @@ def _v3_manifest_from_legacy(
     migrated = {
         key: value
         for key, value in manifest.items()
-        if key not in {"schema_version", "process", "template", "origin_template", "processes"}
+        if key
+        not in {"schema_version", "process", "template", "origin_template", "processes"}
     }
     migrated["schema_version"] = LAYOUT_VERSION
     migrated.pop("default_process", None)
@@ -2166,15 +2197,17 @@ def _v3_manifest_from_legacy(
     declared_default_entrypoint = _declared_legacy_entrypoint(
         digest_source or default_process
     )
-    default_record.update({
-        "path": default_process.relative_to(root).as_posix(),
-        "template": default_record.get("template") or template_name,
-        "entrypoint": (
-            declared_default_entrypoint
-            or default_record.get("entrypoint")
-            or "init"
-        ),
-    })
+    default_record.update(
+        {
+            "path": default_process.relative_to(root).as_posix(),
+            "template": default_record.get("template") or template_name,
+            "entrypoint": (
+                declared_default_entrypoint
+                or default_record.get("entrypoint")
+                or "init"
+            ),
+        }
+    )
     if default_record.get("entrypoint") == "run":
         default_record.pop(V2_RUN_COMPATIBILITY_FIELD, None)
     default_record["base_digest"] = process_digest(digest_source or default_process)
@@ -2261,8 +2294,10 @@ def _migrate_legacy_layout(
             return ["manifest v2 -> v3 (default_process removido)"]
         _atomic_write_manifest(manifest_path, candidate)
         return ["manifest v2 -> v3 (default_process removido)"]
-    if (is_current or is_v2) and has_legacy_manifest_keys and not (
-        flat_process.is_file() or legacy_process.is_dir()
+    if (
+        (is_current or is_v2)
+        and has_legacy_manifest_keys
+        and not (flat_process.is_file() or legacy_process.is_dir())
     ):
         raise ManifestError(
             "manifesto híbrido contém chaves legadas, mas não existe processo "
@@ -2302,9 +2337,7 @@ def _migrate_legacy_layout(
     canonical = paths.project_named_process_file(root, default_name)
     _assert_project_local_path(root, destination)
     _assert_project_local_path(root, canonical)
-    actions.append(
-        f"{source_label} -> .ft/process/{default_name}/"
-    )
+    actions.append(f"{source_label} -> .ft/process/{default_name}/")
 
     candidate_manifest = _v3_manifest_from_legacy(
         manifest,
@@ -2403,7 +2436,9 @@ def _migrate_legacy_layout(
 
     if not canonical.exists():
         if not preferred.is_file():
-            raise FileNotFoundError(f"YAML principal não encontrado após migração: {preferred}")
+            raise FileNotFoundError(
+                f"YAML principal não encontrado após migração: {preferred}"
+            )
         _merge_move_without_overwrite(preferred, canonical)
 
     rewritten_count = _rewrite_named_bundle(destination, default_name)

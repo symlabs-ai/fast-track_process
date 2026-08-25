@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
@@ -17,7 +17,6 @@ from ft.engine.validation_profiles import (
     resolve_validation_matrix,
     safe_project_output,
 )
-
 
 _CANDIDATE_PLACEHOLDERS = frozenset(
     {"", "-", "n/a", "na", "none", "null", "unknown", "tbd", "latest"}

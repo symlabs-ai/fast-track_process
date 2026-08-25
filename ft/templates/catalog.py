@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any, Literal
 
 import yaml
@@ -18,8 +18,8 @@ from ft.engine.layout import (
     process_digest,
 )
 
-
 _TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
 
 # V2 exposed two project process entrypoints that became templates under the
 # universal V3 ``ft run --template`` command.  The old value remains inside a
@@ -124,7 +124,9 @@ def template_kind(template_dir: Path) -> str:
     except (OSError, yaml.YAMLError) as exc:
         raise TemplateCatalogError(f"manifest inválido em {manifest}: {exc}") from exc
     if not isinstance(payload, dict):
-        raise TemplateCatalogError(f"manifest inválido em {manifest}: raiz deve ser mapping")
+        raise TemplateCatalogError(
+            f"manifest inválido em {manifest}: raiz deve ser mapping"
+        )
     kind = str(payload.get("kind") or "process")
     if kind not in {"init", "process"}:
         raise TemplateCatalogError(
@@ -240,8 +242,7 @@ def validate_runnable_policy(
         not isinstance(allowed, list)
         or not allowed
         or not all(
-            isinstance(item, str)
-            and item in {"building", "maintenance", "archived"}
+            isinstance(item, str) and item in {"building", "maintenance", "archived"}
             for item in allowed
         )
         or len(set(allowed)) != len(allowed)
@@ -376,9 +377,7 @@ class TemplateCatalog:
             )
         process_file = template_process_file(directory)
         if process_file is None:
-            raise TemplateNotFoundError(
-                f"template '{selected}' não contém process.yml"
-            )
+            raise TemplateNotFoundError(f"template '{selected}' não contém process.yml")
         payload = _load_process_payload(process_file)
         policy = validate_runnable_policy(
             payload,
@@ -460,10 +459,14 @@ class TemplateCatalog:
             # through ft run, and should be presented just like an unavailable
             # template while retaining the concrete cause.
             choices = ", ".join(self.names()) or "nenhum"
-            raise TemplateCatalogError(f"{exc}. Templates disponíveis: {choices}") from exc
+            raise TemplateCatalogError(
+                f"{exc}. Templates disponíveis: {choices}"
+            ) from exc
 
 
-def project_template_record(project_root: str | Path, name: str) -> dict[str, Any] | None:
+def project_template_record(
+    project_root: str | Path, name: str
+) -> dict[str, Any] | None:
     """Return one registered project template without selecting a default."""
     selected = validate_template_name(name)
     return get_project_process_record(Path(project_root).resolve(), selected)

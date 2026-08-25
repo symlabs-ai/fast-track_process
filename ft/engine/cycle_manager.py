@@ -2,6 +2,7 @@
 CycleManager — gerencia ciclos (cycle-01, cycle-02, ...) (RF-04).
 Opera sobre o mesmo arquivo de estado do StateManager.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

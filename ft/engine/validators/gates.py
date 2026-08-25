@@ -10,11 +10,10 @@ from pathlib import Path
 
 from ft.engine import paths
 from ft.engine.artifact_paths import resolve_tech_stack_path
-
 from ft.engine.validators.artifacts import (
+    coverage_min,
     file_exists,
     tests_pass,
-    coverage_min,
 )
 
 
@@ -69,7 +68,10 @@ def gate_smoke(
                 timeout=120,
             )
             if result.returncode != 0:
-                return False, f"gate_smoke FAIL: comando '{smoke_cmd}' retornou {result.returncode}"
+                return (
+                    False,
+                    f"gate_smoke FAIL: comando '{smoke_cmd}' retornou {result.returncode}",
+                )
         except subprocess.TimeoutExpired:
             return False, f"gate_smoke FAIL: comando '{smoke_cmd}' timeout"
 
@@ -154,13 +156,19 @@ def gate_server_starts(
         if itype_file.exists():
             content = itype_file.read_text().lower()
             if skip_if_interface.lower() in content:
-                return True, f"gate_server_starts: pulado (interface_type={skip_if_interface})"
+                return (
+                    True,
+                    f"gate_server_starts: pulado (interface_type={skip_if_interface})",
+                )
         # Também checar engine_state (procura no run mais recente ou legado)
         for state_candidate in _find_state_files(project_root):
             if state_candidate.exists():
                 state_content = state_candidate.read_text()
                 if f"interface_type: {skip_if_interface}" in state_content:
-                    return True, f"gate_server_starts: pulado (interface_type={skip_if_interface})"
+                    return (
+                        True,
+                        f"gate_server_starts: pulado (interface_type={skip_if_interface})",
+                    )
 
     root = Path(project_root)
 
@@ -180,22 +188,35 @@ def gate_server_starts(
         "src/server.py",
     ]
     entry = next(
-        (c for c in candidates
-         if (root / c).exists()
-         and any(kw in (root / c).read_text(errors="ignore") for kw in http_keywords)),
+        (
+            c
+            for c in candidates
+            if (root / c).exists()
+            and any(kw in (root / c).read_text(errors="ignore") for kw in http_keywords)
+        ),
         None,
     )
     if not entry:
-        return False, "gate_server_starts FAIL: nenhum entry point HTTP encontrado (main.py / app.py / server.py)"
+        return (
+            False,
+            "gate_server_starts FAIL: nenhum entry point HTTP encontrado (main.py / app.py / server.py)",
+        )
 
     # Verifica que tem FastAPI ou Flask no arquivo
     content = (root / entry).read_text()
-    if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =", "uvicorn", "import app")):
-        return False, f"gate_server_starts FAIL: {entry} nao parece um servidor HTTP (FastAPI/Flask nao encontrado)"
+    if not any(
+        kw in content
+        for kw in ("FastAPI", "Flask", "Starlette", "app =", "uvicorn", "import app")
+    ):
+        return (
+            False,
+            f"gate_server_starts FAIL: {entry} nao parece um servidor HTTP (FastAPI/Flask nao encontrado)",
+        )
 
     # Tenta subir o servidor em porta temporaria e bater em /health ou /
     # Carrega variáveis do .env se existir (necessário para SECRET_KEY e similares)
     import os as _os
+
     gate_env = _os.environ.copy()
     env_file = Path(project_root) / ".env"
     if env_file.exists():
@@ -208,8 +229,18 @@ def gate_server_starts(
     gate_env.setdefault("SECRET_KEY", "gate-test-secret-key")
     try:
         proc = subprocess.Popen(
-            ["python", "-m", "uvicorn", entry.replace("/", ".").replace(".py", "") + ":app",
-             "--host", "127.0.0.1", "--port", "18765", "--timeout-keep-alive", "1"],
+            [
+                "python",
+                "-m",
+                "uvicorn",
+                entry.replace("/", ".").replace(".py", "") + ":app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "18765",
+                "--timeout-keep-alive",
+                "1",
+            ],
             cwd=project_root,
             env=gate_env,
             stdout=subprocess.PIPE,
@@ -218,7 +249,8 @@ def gate_server_starts(
         time.sleep(3)
         check = subprocess.run(
             ["curl", "-sf", "http://127.0.0.1:18765/health"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         proc.terminate()
         proc.wait(timeout=5)
@@ -227,11 +259,18 @@ def gate_server_starts(
         # Tenta / como fallback
         check2 = subprocess.run(
             ["curl", "-sf", "http://127.0.0.1:18765/"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         proc2_ok = check2.returncode == 0
-        return (True, f"gate_server_starts: {entry} sobe OK") if proc2_ok else \
-               (False, f"gate_server_starts FAIL: {entry} sobe mas nao responde em / nem /health")
+        return (
+            (True, f"gate_server_starts: {entry} sobe OK")
+            if proc2_ok
+            else (
+                False,
+                f"gate_server_starts FAIL: {entry} sobe mas nao responde em / nem /health",
+            )
+        )
     except Exception as exc:
         try:
             proc.terminate()
@@ -240,7 +279,9 @@ def gate_server_starts(
         return False, f"gate_server_starts FAIL: erro ao iniciar servidor — {exc}"
 
 
-def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple[bool, str]:
+def gate_kb_review(
+    project_root: str = ".", kb_path: str | None = None
+) -> tuple[bool, str]:
     """
     Gate final de liberação — verifica que o projeto não repete pitfalls
     documentados na KB de runs anteriores.
@@ -264,6 +305,7 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
     interface_type = "unknown"
     if tech_stack.exists():
         import re
+
         m = re.search(r"interface_type:\s*(\w+)", tech_stack.read_text())
         if m:
             interface_type = m.group(1).lower()
@@ -304,9 +346,12 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
             "src/server.py",
         ]
         entry = next(
-            (c for c in http_candidates
-             if (root / c).exists()
-             and any(kw in (root / c).read_text(errors="ignore") for kw in _http_kw)),
+            (
+                c
+                for c in http_candidates
+                if (root / c).exists()
+                and any(kw in (root / c).read_text(errors="ignore") for kw in _http_kw)
+            ),
             None,
         )
         if not entry:
@@ -316,7 +361,17 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
             )
         else:
             content = (root / entry).read_text()
-            if not any(kw in content for kw in ("FastAPI", "Flask", "Starlette", "app =", "uvicorn", "import app")):
+            if not any(
+                kw in content
+                for kw in (
+                    "FastAPI",
+                    "Flask",
+                    "Starlette",
+                    "app =",
+                    "uvicorn",
+                    "import app",
+                )
+            ):
                 failures.append(
                     f"KB-SM5: {entry} existe mas não parece servidor HTTP "
                     f"(FastAPI/Flask/Starlette não encontrado)"
@@ -362,7 +417,12 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
                 "/savegames",
                 "/health",
             )
-            for frontend_file in list(frontend_src.rglob("*.js")) + list(frontend_src.rglob("*.jsx")) + list(frontend_src.rglob("*.ts")) + list(frontend_src.rglob("*.tsx")):
+            for frontend_file in (
+                list(frontend_src.rglob("*.js"))
+                + list(frontend_src.rglob("*.jsx"))
+                + list(frontend_src.rglob("*.ts"))
+                + list(frontend_src.rglob("*.tsx"))
+            ):
                 try:
                     content = frontend_file.read_text(errors="ignore")
                 except Exception:
@@ -383,11 +443,19 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
         frontend_src = root / "frontend/src"
         if frontend_src.is_dir():
             import re as _re
+
             path_routing_found = False
-            for f in list(frontend_src.rglob("*.jsx")) + list(frontend_src.rglob("*.tsx")) + list(frontend_src.rglob("*.js")):
+            for f in (
+                list(frontend_src.rglob("*.jsx"))
+                + list(frontend_src.rglob("*.tsx"))
+                + list(frontend_src.rglob("*.js"))
+            ):
                 try:
                     content = f.read_text(errors="ignore")
-                    if _re.search(r'(BrowserRouter|HashRouter|createBrowserRouter|<Route\s+path=)', content):
+                    if _re.search(
+                        r"(BrowserRouter|HashRouter|createBrowserRouter|<Route\s+path=)",
+                        content,
+                    ):
                         path_routing_found = True
                         break
                 except Exception:
@@ -404,9 +472,10 @@ def gate_kb_review(project_root: str = ".", kb_path: str | None = None) -> tuple
         prd_review = root / "docs/frontend-prd-review.md"
         if prd_review.exists():
             import re as _re
+
             review_content = prd_review.read_text()
             # Verifica se o veredicto final é REJECTED (não APPROVED)
-            if _re.search(r'Veredicto:\s*REJECTED', review_content, _re.IGNORECASE):
+            if _re.search(r"Veredicto:\s*REJECTED", review_content, _re.IGNORECASE):
                 failures.append(
                     "KB-P5: frontend-prd-review.md com veredicto REJECTED — "
                     "conformidade de navegação (nav contract) não foi validada; "
@@ -437,17 +506,21 @@ def gate_acceptance_cli(project_root: str = ".") -> tuple[bool, str]:
 
     report = Path(project_root) / "docs/acceptance-cli-report.md"
     if not report.exists():
-        return False, "gate_acceptance_cli FAIL: acceptance-cli-report.md não encontrado"
+        return (
+            False,
+            "gate_acceptance_cli FAIL: acceptance-cli-report.md não encontrado",
+        )
 
     content = report.read_text()
     lines = [line for line in content.splitlines() if line.strip()]
     if len(lines) < 10:
-        return False, f"gate_acceptance_cli FAIL: relatório muito curto ({len(lines)} linhas)"
+        return (
+            False,
+            f"gate_acceptance_cli FAIL: relatório muito curto ({len(lines)} linhas)",
+        )
 
     fail_lines = [
-        line.strip()
-        for line in content.splitlines()
-        if re.search(r"\[FAIL\]", line)
+        line.strip() for line in content.splitlines() if re.search(r"\[FAIL\]", line)
     ]
     if fail_lines:
         preview = "; ".join(fail_lines[:3])
@@ -476,11 +549,29 @@ def gate_pulse_instrumented(project_root: str = ".") -> tuple[bool, str]:
 
     # Cada track tem seus padrões de detecção independentes
     tracks = {
-        "track-infra": [r'track-infra', r'/health', r'SELECT 1', r'select 1'],
-        "track-negocio": [r'track-negocio', r'UseCaseRunner', r'forgepulse', r'forge_pulse'],
-        "track-erro": [r'track-erro', r'exception_handler\(HTTPException\)', r'HTTPException.*handler'],
-        "track-perf": [r'track-perf', r'X-Process-Time-Ms', r'process_time_middleware', r'time\.monotonic'],
-        "track-dx": [r'track-dx', r'exception_handler\(Exception\)', r'global_exception_handler'],
+        "track-infra": [r"track-infra", r"/health", r"SELECT 1", r"select 1"],
+        "track-negocio": [
+            r"track-negocio",
+            r"UseCaseRunner",
+            r"forgepulse",
+            r"forge_pulse",
+        ],
+        "track-erro": [
+            r"track-erro",
+            r"exception_handler\(HTTPException\)",
+            r"HTTPException.*handler",
+        ],
+        "track-perf": [
+            r"track-perf",
+            r"X-Process-Time-Ms",
+            r"process_time_middleware",
+            r"time\.monotonic",
+        ],
+        "track-dx": [
+            r"track-dx",
+            r"exception_handler\(Exception\)",
+            r"global_exception_handler",
+        ],
     }
 
     search_dirs = []
@@ -517,14 +608,23 @@ def gate_pulse_instrumented(project_root: str = ".") -> tuple[bool, str]:
             f"Implemente os tracks ausentes em main.py (entry point do servidor) antes do gate.audit."
         )
 
-    return True, "gate_pulse_instrumented: PASS — todos os 5 tracks do ForgeBase Pulse implementados"
+    return (
+        True,
+        "gate_pulse_instrumented: PASS — todos os 5 tracks do ForgeBase Pulse implementados",
+    )
 
 
 def gate_frontend(project_root: str = ".") -> tuple[bool, str]:
     """Gate de frontend — verifica estrutura minima de PWA."""
     import json
+
     failures = []
-    for path in ["frontend/package.json", "frontend/index.html", "frontend/public/manifest.json", "frontend/src/"]:
+    for path in [
+        "frontend/package.json",
+        "frontend/index.html",
+        "frontend/public/manifest.json",
+        "frontend/src/",
+    ]:
         full = Path(project_root) / path
         if not full.exists():
             failures.append(f"{path} nao encontrado")
@@ -569,20 +669,40 @@ def gate_ui_vscode_layout(project_root: str = ".") -> tuple[bool, str]:
     # Evidências de cada pilar (termos alternativos aceitos)
     pillars = {
         "Activity Bar": [
-            "activity", "activitybar", "activity-bar", "activity_bar",
-            "sidebar-icons", "icon-bar", "nav-icons",
+            "activity",
+            "activitybar",
+            "activity-bar",
+            "activity_bar",
+            "sidebar-icons",
+            "icon-bar",
+            "nav-icons",
         ],
         "Drawer lateral": [
-            "drawer", "sidebar", "side-panel", "sidepanel",
-            "panel-lateral", "resizable",
+            "drawer",
+            "sidebar",
+            "side-panel",
+            "sidepanel",
+            "panel-lateral",
+            "resizable",
         ],
         "Tabs painel central": [
-            "tab", "tabs", "tabpanel", "tab-bar", "tabbar",
-            "active-tab", "open-tab",
+            "tab",
+            "tabs",
+            "tabpanel",
+            "tab-bar",
+            "tabbar",
+            "active-tab",
+            "open-tab",
         ],
         "Terminal horizontal": [
-            "terminal", "bottom-panel", "bottom panel", "split",
-            "panel-bottom", "panelbottom", "ctrl+`", "ctrl-backtick",
+            "terminal",
+            "bottom-panel",
+            "bottom panel",
+            "split",
+            "panel-bottom",
+            "panelbottom",
+            "ctrl+`",
+            "ctrl-backtick",
         ],
     }
 
@@ -598,4 +718,7 @@ def gate_ui_vscode_layout(project_root: str = ".") -> tuple[bool, str]:
             f"{', '.join(missing)}"
         )
 
-    return True, "gate_ui_vscode_layout: Activity Bar, Drawer, Tabs e Terminal presentes"
+    return (
+        True,
+        "gate_ui_vscode_layout: Activity Bar, Drawer, Tabs e Terminal presentes",
+    )

@@ -8,16 +8,16 @@ Only then may maintenance templates run.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import subprocess
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
@@ -26,9 +26,9 @@ from ft.engine import paths
 from ft.engine.validation_profiles import (
     ValidationProfileError,
     default_validation_config,
+    normalize_validation_config,
     resolve_validation_matrix,
     safe_project_output,
-    normalize_validation_config,
 )
 from ft.engine.validators.artifacts import _backlog_rows, _row_value
 from ft.engine.validators.platforms import (
@@ -36,16 +36,13 @@ from ft.engine.validators.platforms import (
     validation_matrix_valid,
 )
 
-
 PROJECT_CONTRACT_VERSION = 1
 PROJECT_READINESS_VERSION = 1
 PROJECT_PHASES = frozenset({"building", "maintenance", "archived"})
 PROJECT_ROLES = frozenset({"builder", "maintenance", "neutral"})
 DEFAULT_MAINTENANCE_TEMPLATES = frozenset(
     {
-        "feature",
         "feature-fast",
-        "bug",
         "bug-fast",
         "tweak",
         "material_design_pwa",
@@ -53,7 +50,6 @@ DEFAULT_MAINTENANCE_TEMPLATES = frozenset(
 )
 DEFAULT_BUILDER_TEMPLATES = frozenset(
     {
-        "mvp-builder",
         "mvp-builder-fast",
         "fastfy",
     }
@@ -199,7 +195,9 @@ def _safe_project_file(root: Path, path: Path, *, label: str) -> Path:
         resolved_parent = lexical.parent.resolve()
         resolved_parent.relative_to(root)
     except ValueError as exc:
-        raise ProjectContractError(f"{label} escapa da raiz do projeto: {path}") from exc
+        raise ProjectContractError(
+            f"{label} escapa da raiz do projeto: {path}"
+        ) from exc
     return lexical
 
 
@@ -238,7 +236,9 @@ def validate_project_contract(
     """Validate and normalize the project lifecycle contract."""
     location = Path(path)
     if not isinstance(payload, Mapping):
-        raise ProjectContractError(f"contrato inválido em {location}: raiz deve ser mapping")
+        raise ProjectContractError(
+            f"contrato inválido em {location}: raiz deve ser mapping"
+        )
     contract = dict(payload)
     if contract.get("schema_version") != PROJECT_CONTRACT_VERSION:
         raise ProjectContractError(
@@ -341,11 +341,7 @@ def validate_project_contract(
         "require_clean_checkout",
         "require_no_active_cycles",
     ):
-        value = (
-            backlog.get(field)
-            if field == "require_evidence"
-            else dod.get(field)
-        )
+        value = backlog.get(field) if field == "require_evidence" else dod.get(field)
         if not isinstance(value, bool):
             raise ProjectContractError(f"{field} deve ser booleano")
 
@@ -362,12 +358,9 @@ def validate_project_contract(
         gate_ids.append(gate_id)
         _relative_path(gate.get("path"), field=f"required_gates[{index}].path")
         field_name = gate.get("field")
-        if (
-            not isinstance(field_name, str)
-            or not re.fullmatch(
-                r"[A-Za-z0-9_-]+(?:\.(?:[A-Za-z0-9_-]+|\d+))*",
-                field_name,
-            )
+        if not isinstance(field_name, str) or not re.fullmatch(
+            r"[A-Za-z0-9_-]+(?:\.(?:[A-Za-z0-9_-]+|\d+))*",
+            field_name,
         ):
             raise ProjectContractError(f"required_gates[{index}].field inválido")
         if "equals" not in gate:
@@ -525,7 +518,9 @@ def _load_structured_file(path: Path) -> Any:
             return json.loads(text)
         return yaml.safe_load(text)
     except (OSError, UnicodeError, json.JSONDecodeError, yaml.YAMLError) as exc:
-        raise ProjectContractError(f"evidência estruturada inválida em {path}: {exc}") from exc
+        raise ProjectContractError(
+            f"evidência estruturada inválida em {path}: {exc}"
+        ) from exc
 
 
 def _resolve_field(payload: Any, field: str) -> tuple[bool, Any]:
@@ -761,9 +756,7 @@ def evaluate_project_readiness(
         excluded_ids = set(backlog_policy["excluded_ids"])
         missing_required = sorted(required_ids - set(by_id))
         selected_ids = {
-            str(row["_id"])
-            for row in rows
-            if str(row.get("_priority")) in priorities
+            str(row["_id"]) for row in rows if str(row.get("_priority")) in priorities
         } | required_ids
         selected_ids -= excluded_ids
         accepted_statuses = set(backlog_policy["accepted_statuses"])
@@ -851,9 +844,7 @@ def evaluate_project_readiness(
                 f"{gate_id}: campo {gate['field']} ausente em {relative}"
             )
         else:
-            detail = (
-                f"{gate_id}: {gate['field']}={actual!r}; esperado {expected!r}"
-            )
+            detail = f"{gate_id}: {gate['field']}={actual!r}; esperado {expected!r}"
         _record_check(
             checks,
             blockers,
@@ -897,11 +888,7 @@ def evaluate_project_readiness(
                     project_root=str(root),
                 )
                 platform_ok = matrix_ok and report_ok
-                detail = (
-                    report_detail
-                    if matrix_ok
-                    else matrix_detail
-                )
+                detail = report_detail if matrix_ok else matrix_detail
                 _record_check(
                     checks,
                     blockers,
@@ -1045,7 +1032,9 @@ def reopen_project_contract(
     contract = read_project_contract(root)
     assert contract is not None
     if _active_cycle_ids(root):
-        raise ProjectLifecycleError("não reabra o projeto enquanto houver ciclos abertos")
+        raise ProjectLifecycleError(
+            "não reabra o projeto enquanto houver ciclos abertos"
+        )
     lifecycle = dict(contract["lifecycle"])
     lifecycle["phase"] = "building"
     lifecycle["owner_template"] = None
@@ -1069,9 +1058,8 @@ def reopen_project_contract(
         "ready": False,
         "evaluated_revision": _head_revision(root),
         "definition_of_done_digest": definition_of_done_digest(updated),
-        "evidence_fingerprint": "sha256:" + hashlib.sha256(
-            reason.strip().encode("utf-8")
-        ).hexdigest(),
+        "evidence_fingerprint": "sha256:"
+        + hashlib.sha256(reason.strip().encode("utf-8")).hexdigest(),
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "checks": [],
         "blocking_count": 1,
@@ -1147,10 +1135,7 @@ def assert_template_allowed(
     role, allowed = project_role_for_template(template_name, execution_policy)
     if role == "neutral":
         contract = read_project_contract(project_root, required=False)
-        if (
-            contract is not None
-            and contract["lifecycle"]["phase"] not in allowed
-        ):
+        if contract is not None and contract["lifecycle"]["phase"] not in allowed:
             raise ProjectLifecycleError(
                 f"template '{template_name}' recusado: projeto arquivado"
             )
@@ -1176,7 +1161,7 @@ def assert_template_allowed(
             )
         raise ProjectLifecycleError(
             f"template construtor '{template_name}' recusado: projeto está em "
-            f"{phase}. Use `ft project-reopen --reason \"...\"` para abrir um "
+            f'{phase}. Use `ft project-reopen --reason "..."` para abrir um '
             "novo objetivo de projeto."
         )
     if role == "builder":

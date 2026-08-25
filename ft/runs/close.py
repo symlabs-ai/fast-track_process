@@ -9,7 +9,6 @@ from typing import Callable, Iterator, TypeVar
 from ft.runs.locking import close_merge_lock
 from ft.runs.registry import CycleRecord, select_cycle
 
-
 T = TypeVar("T")
 
 

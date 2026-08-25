@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
+from pathlib import Path
 from uuid import uuid4
 
 from ft.engine import paths, process_update

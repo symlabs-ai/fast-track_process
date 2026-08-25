@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path, PurePosixPath
 import stat
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 import yaml
@@ -37,10 +37,12 @@ def _safe_destination(raw: object) -> str | None:
     if "\\" in raw:
         raise InputPolicyError("input_policy.destination deve usar separadores POSIX")
     path = PurePosixPath(raw)
-    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
-        raise InputPolicyError(
-            "input_policy.destination deve ser path relativo seguro"
-        )
+    if (
+        path.is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise InputPolicyError("input_policy.destination deve ser path relativo seguro")
     if path.parts[0] in {".ft", ".git"}:
         raise InputPolicyError(
             "input_policy.destination não pode escrever metadados internos"

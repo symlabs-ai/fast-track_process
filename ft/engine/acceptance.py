@@ -17,12 +17,14 @@ class AcceptanceMatrix:
             raise ValueError(
                 f"categoria inválida: '{category}'. Valores válidos: {VALID_CATEGORIES}"
             )
-        self._scenarios.append({
-            "id": str(uuid.uuid4()),
-            "category": category,
-            "user_story": user_story,
-            "description": description,
-        })
+        self._scenarios.append(
+            {
+                "id": str(uuid.uuid4()),
+                "category": category,
+                "user_story": user_story,
+                "description": description,
+            }
+        )
 
     def get_scenarios(self, category: str) -> list[dict[str, Any]]:
         return [s for s in self._scenarios if s["category"] == category]

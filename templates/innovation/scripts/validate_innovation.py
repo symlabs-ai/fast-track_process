@@ -71,7 +71,9 @@ def load_evidence(lens: str, errors: list[str]) -> list[dict]:
     return claims
 
 
-def check_claims(lens: str, claims: list[dict], known_h: list[str], errors: list[str]) -> None:
+def check_claims(
+    lens: str, claims: list[dict], known_h: list[str], errors: list[str]
+) -> None:
     path = RESEARCH / f"{lens}-evidence.yml"
     seen_ids: set[str] = set()
     for i, claim in enumerate(claims):
@@ -90,7 +92,9 @@ def check_claims(lens: str, claims: list[dict], known_h: list[str], errors: list
             errors.append(f"{label}: statement vazio")
         source = str(claim.get("source", ""))
         if not re.match(r"https?://\S+$", source):
-            errors.append(f"{label}: source deve ser URL (http/https), obtido '{source or '<vazio>'}'")
+            errors.append(
+                f"{label}: source deve ser URL (http/https), obtido '{source or '<vazio>'}'"
+            )
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(claim.get("date", ""))):
             errors.append(f"{label}: date deve ser YYYY-MM-DD")
         if claim.get("confidence") not in CONFIDENCE_LEVELS:
@@ -101,7 +105,9 @@ def check_claims(lens: str, claims: list[dict], known_h: list[str], errors: list
         else:
             for h in supports:
                 if str(h) not in known_h:
-                    errors.append(f"{label}: supports referencia '{h}' inexistente em hypotheses.md")
+                    errors.append(
+                        f"{label}: supports referencia '{h}' inexistente em hypotheses.md"
+                    )
 
 
 def all_evidence_ids() -> set[str]:
@@ -140,7 +146,11 @@ def stage_intake() -> list[str]:
     hypotheses = hypothesis_ids()
     if not hypotheses:
         errors.append("docs/hypotheses.md: nenhuma hipótese H-NN encontrada")
-    text = (DOCS / "hypotheses.md").read_text(encoding="utf-8") if (DOCS / "hypotheses.md").exists() else ""
+    text = (
+        (DOCS / "hypotheses.md").read_text(encoding="utf-8")
+        if (DOCS / "hypotheses.md").exists()
+        else ""
+    )
     for h in hypotheses:
         if not re.search(rf"^##\s+{h}\s+—", text, re.MULTILINE):
             errors.append(f"docs/hypotheses.md: {h} sem heading '## {h} — <afirmação>'")
@@ -178,7 +188,9 @@ def stage_validation() -> list[str]:
     errors: list[str] = []
     fm, text = read_frontmatter(DOCS / "validation.md")
     if fm.get("overall_verdict") not in VERDICTS:
-        errors.append("docs/validation.md: overall_verdict deve ser supported|refuted|inconclusive")
+        errors.append(
+            "docs/validation.md: overall_verdict deve ser supported|refuted|inconclusive"
+        )
     known_h = hypothesis_ids()
     known_ev = all_evidence_ids()
     for h in known_h:
@@ -189,18 +201,26 @@ def stage_validation() -> list[str]:
         rest = row.group(1)
         verdict = next((v for v in VERDICTS if re.search(rf"\b{v}\b", rest)), None)
         if not verdict:
-            errors.append(f"docs/validation.md: linha de {h} sem verdict supported|refuted|inconclusive")
+            errors.append(
+                f"docs/validation.md: linha de {h} sem verdict supported|refuted|inconclusive"
+            )
         cited = re.findall(r"\bEV-[A-Z]\d{2,}\b", rest)
         if verdict in {"supported", "refuted"} and not cited:
-            errors.append(f"docs/validation.md: {h} com verdict '{verdict}' mas sem EV-* citado")
+            errors.append(
+                f"docs/validation.md: {h} com verdict '{verdict}' mas sem EV-* citado"
+            )
         for ev in cited:
             if ev not in known_ev:
-                errors.append(f"docs/validation.md: {h} cita '{ev}' inexistente nos evidence.yml")
+                errors.append(
+                    f"docs/validation.md: {h} cita '{ev}' inexistente nos evidence.yml"
+                )
     questions = DOCS / "research-questions.md"
     if fm.get("overall_verdict") == "inconclusive":
         qtext = questions.read_text(encoding="utf-8") if questions.exists() else ""
         if not re.search(r"^\s*(\d+)[.)]\s+\S", qtext, re.MULTILINE):
-            errors.append("docs/research-questions.md: verdict inconclusive exige perguntas numeradas")
+            errors.append(
+                "docs/research-questions.md: verdict inconclusive exige perguntas numeradas"
+            )
     return errors
 
 
@@ -217,14 +237,18 @@ def stage_business_case() -> list[str]:
     if not scs:
         errors.append("docs/business-case.md: nenhum critério SC-NN encontrado")
     for sc in scs:
-        block = re.search(rf"^###\s+{sc}\b(.*?)(?=^###\s|\Z)", text, re.MULTILINE | re.DOTALL)
+        block = re.search(
+            rf"^###\s+{sc}\b(.*?)(?=^###\s|\Z)", text, re.MULTILINE | re.DOTALL
+        )
         if not block:
             errors.append(f"docs/business-case.md: {sc} sem bloco '### {sc} — ...'")
             continue
         body = block.group(1)
         for field in ("Métrica", "Alvo", "Prazo"):
             if not re.search(rf"-\s*{field}:\s*\S", body):
-                errors.append(f"docs/business-case.md: {sc} sem campo '{field}:' preenchido")
+                errors.append(
+                    f"docs/business-case.md: {sc} sem campo '{field}:' preenchido"
+                )
     return errors
 
 
@@ -244,7 +268,9 @@ def stage_prd() -> list[str]:
     for sc in scs:
         row = re.search(rf"^\|\s*{sc}\s*\|(.+)$", prd, re.MULTILINE)
         if not row or not re.search(r"\bAC-\d{2}\b", row.group(1)):
-            errors.append(f"docs/PRD.md: Rastreabilidade sem linha '{sc} | AC-*' — todo SC exige ao menos um AC")
+            errors.append(
+                f"docs/PRD.md: Rastreabilidade sem linha '{sc} | AC-*' — todo SC exige ao menos um AC"
+            )
 
     handoff_path = DOCS / "handoff.md"
     handoff_fm, handoff = read_frontmatter(handoff_path)
@@ -264,8 +290,7 @@ def stage_prd() -> list[str]:
         )
     elif process_sequence != expected_sequence:
         errors.append(
-            "docs/handoff.md: process_sequence deve ser "
-            + str(expected_sequence)
+            "docs/handoff.md: process_sequence deve ser " + str(expected_sequence)
         )
     if handoff_fm.get("delivery_readiness") != "planning_required":
         errors.append("docs/handoff.md: delivery_readiness deve ser planning_required")
@@ -301,10 +326,14 @@ def stage_post_mortem() -> list[str]:
     known_ev = all_evidence_ids()
     cited = set(re.findall(r"\bEV-[A-Z]\d{2,}\b", text))
     if known_ev and not cited:
-        errors.append("docs/post-mortem.md: 'Por que morreu' deve citar ao menos um EV-* real")
+        errors.append(
+            "docs/post-mortem.md: 'Por que morreu' deve citar ao menos um EV-* real"
+        )
     for ev in cited:
         if ev not in known_ev:
-            errors.append(f"docs/post-mortem.md: cita '{ev}' inexistente nos evidence.yml")
+            errors.append(
+                f"docs/post-mortem.md: cita '{ev}' inexistente nos evidence.yml"
+            )
     return errors
 
 

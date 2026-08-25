@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import shutil
 from uuid import uuid4
 
 from ft.engine import paths
@@ -121,7 +121,9 @@ def migrate_v2_manifest(
     root = Path(project_root).resolve()
     manifest_path = paths.project_manifest(root)
     if paths.project_ft_dir(root).is_symlink() or manifest_path.is_symlink():
-        raise ManifestError(f"manifest FT não pode usar link simbólico: {manifest_path}")
+        raise ManifestError(
+            f"manifest FT não pode usar link simbólico: {manifest_path}"
+        )
     if not manifest_path.is_file():
         raise FileNotFoundError(f"manifest FT ausente: {manifest_path}")
 

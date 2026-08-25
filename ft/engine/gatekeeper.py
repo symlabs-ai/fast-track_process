@@ -12,7 +12,9 @@ class GatekeeperResult(Enum):
 
 
 class Gatekeeper:
-    def evaluate(self, criteria: dict[str, Any], *, all_passed: bool) -> GatekeeperResult:
+    def evaluate(
+        self, criteria: dict[str, Any], *, all_passed: bool
+    ) -> GatekeeperResult:
         if all_passed:
             return GatekeeperResult.PASS
         return GatekeeperResult.BLOCK

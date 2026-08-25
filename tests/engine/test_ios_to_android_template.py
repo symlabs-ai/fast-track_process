@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -11,7 +11,6 @@ from ft.engine.graph import load_graph
 from ft.engine.layout import validate_template_is_pristine
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import VALIDATOR_REGISTRY
-
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "templates" / "ios-to-android"
@@ -227,9 +226,9 @@ def test_contract_requires_same_git_and_all_four_targets(tmp_path: Path) -> None
     (root / "android/.git").rmdir()
 
     project = yaml.safe_load((root / ".ft/project.yml").read_text())
-    project["validation"]["platforms"]["android"]["targets"]["physical"][
-        "required"
-    ] = False
+    project["validation"]["platforms"]["android"]["targets"]["physical"]["required"] = (
+        False
+    )
     _yaml(root, ".ft/project.yml", project)
     result = _run(root, "contract")
     assert result.returncode == 1

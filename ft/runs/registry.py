@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import yaml
 
 from ft.engine import paths
 from ft.runs.locking import LockKind, ProjectLock, project_prep_lock
-
 
 _SAFE_CYCLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 _NUMBERED_CYCLE_RE = re.compile(r"^cycle-(\d+)(?:-|$)")
@@ -52,8 +51,7 @@ class AmbiguousCycleError(CycleRegistryError):
         self.cycle_ids = tuple(cycle_ids)
         rendered = ", ".join(self.cycle_ids)
         super().__init__(
-            "mais de um ciclo está aberto; informe --cycle. "
-            f"Opções: {rendered}"
+            f"mais de um ciclo está aberto; informe --cycle. Opções: {rendered}"
         )
 
 
@@ -136,7 +134,9 @@ def _read_allocation_ledger(project_root: Path) -> tuple[set[str], set[int]]:
     try:
         data = yaml.safe_load(ledger.read_text(encoding="utf-8")) or {}
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
-        raise CycleRegistryError(f"ledger de ciclos inválido em {ledger}: {exc}") from exc
+        raise CycleRegistryError(
+            f"ledger de ciclos inválido em {ledger}: {exc}"
+        ) from exc
     raw_allocated = data.get("allocated", []) if isinstance(data, dict) else None
     if not isinstance(raw_allocated, list) or not all(
         isinstance(item, str) for item in raw_allocated
@@ -265,9 +265,7 @@ class CycleAllocator:
         if requested_name is not None:
             cycle_id = validate_cycle_name(requested_name)
             number = _cycle_number(cycle_id)
-            if cycle_id in known or (
-                number is not None and number in reserved_numbers
-            ):
+            if cycle_id in known or (number is not None and number in reserved_numbers):
                 raise CycleAlreadyExists(f"ciclo já reservado: {cycle_id}")
         else:
             known_numbers = {
@@ -277,16 +275,12 @@ class CycleAllocator:
             } | reserved_numbers
             number = max(known_numbers, default=0) + 1
             base = f"cycle-{number:02d}"
-            cycle_id = (
-                f"{base}-{_template_slug(template_id)}" if template_id else base
-            )
+            cycle_id = f"{base}-{_template_slug(template_id)}" if template_id else base
             while cycle_id in known:
                 number += 1
                 base = f"cycle-{number:02d}"
                 cycle_id = (
-                    f"{base}-{_template_slug(template_id)}"
-                    if template_id
-                    else base
+                    f"{base}-{_template_slug(template_id)}" if template_id else base
                 )
 
         allocated.add(cycle_id)
@@ -396,9 +390,10 @@ class CycleRegistry:
             if not entry.is_dir() or not _SAFE_CYCLE_RE.fullmatch(entry.name):
                 continue
             # A state file or Git worktree marker is concrete runtime evidence.
-            if not (entry / ".git").is_file() and not (
-                entry / "state" / "engine_state.yml"
-            ).is_file():
+            if (
+                not (entry / ".git").is_file()
+                and not (entry / "state" / "engine_state.yml").is_file()
+            ):
                 continue
             record = _read_cycle_record(entry)
             if include_terminal or not record.terminal:
@@ -418,16 +413,16 @@ class CycleRegistry:
         records = self.open_cycles(include_terminal=include_terminal)
         if requested is not None:
             name = validate_cycle_name(requested)
-            match = next((record for record in records if record.cycle_id == name), None)
+            match = next(
+                (record for record in records if record.cycle_id == name), None
+            )
             if match is None:
                 available = ", ".join(record.cycle_id for record in records)
                 suffix = f" Ciclos abertos: {available}" if available else ""
                 raise CycleNotFoundError(f"ciclo não encontrado: {name}.{suffix}")
             if not match.ready and not allow_not_ready:
                 reason = match.state_error or f"status {match.status}"
-                raise CycleNotReadyError(
-                    f"ciclo {name} não está pronto: {reason}"
-                )
+                raise CycleNotReadyError(f"ciclo {name} não está pronto: {reason}")
             return match
 
         if not records:

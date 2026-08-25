@@ -21,9 +21,13 @@ def tests_pass(project_root: str = ".") -> tuple[bool, str]:
         timeout=120,
     )
     if result.returncode == 0:
-        last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        last_line = (
+            result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        )
         return True, f"tests_pass: {last_line}"
-    last_lines = result.stdout.strip().splitlines()[-3:] if result.stdout.strip() else []
+    last_lines = (
+        result.stdout.strip().splitlines()[-3:] if result.stdout.strip() else []
+    )
     summary = " | ".join(last_lines)
     return False, f"tests_pass FAIL: {summary}"
 
@@ -53,7 +57,7 @@ def coverage_min(min_pct: int, project_root: str = ".") -> tuple[bool, str]:
     )
     for line in result.stdout.splitlines():
         if "TOTAL" in line:
-            match = re.search(r'(\d+)%', line)
+            match = re.search(r"(\d+)%", line)
             if match:
                 pct = int(match.group(1))
                 if pct >= min_pct:
@@ -105,17 +109,25 @@ def coverage_per_file(
         return False, "coverage_per_file FAIL: nenhum arquivo matchou os paths"
 
     if failures:
-        return False, f"coverage_per_file FAIL ({len(failures)} abaixo de {min_pct}%): {'; '.join(failures[:5])}"
+        return (
+            False,
+            f"coverage_per_file FAIL ({len(failures)} abaixo de {min_pct}%): {'; '.join(failures[:5])}",
+        )
     return True, f"coverage_per_file: {checked} arquivos >= {min_pct}%"
 
 
-def tests_exist(test_pattern: str = "tests/", project_root: str = ".") -> tuple[bool, str]:
+def tests_exist(
+    test_pattern: str = "tests/", project_root: str = "."
+) -> tuple[bool, str]:
     """Verifica que existem arquivos de teste."""
     test_dir = Path(project_root) / test_pattern
     if test_dir.is_dir():
         test_files = list(test_dir.glob("test_*.py"))
         if test_files:
-            return True, f"tests_exist: {len(test_files)} arquivos de teste em {test_pattern}"
+            return (
+                True,
+                f"tests_exist: {len(test_files)} arquivos de teste em {test_pattern}",
+            )
         return False, f"tests_exist FAIL: nenhum test_*.py em {test_pattern}"
     # Pode ser um glob pattern
     test_files = list(Path(project_root).glob(test_pattern))

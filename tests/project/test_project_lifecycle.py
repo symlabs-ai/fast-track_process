@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
 
+from ft.engine.validation_profiles import (
+    MOCKUP_WATERMARK_CHECK,
+    write_validation_matrix,
+)
 from ft.project import bootstrap_project
 from ft.project.lifecycle import (
     ProjectLifecycleError,
@@ -16,10 +20,6 @@ from ft.project.lifecycle import (
     read_project_contract,
     reopen_project_contract,
     write_project_contract,
-)
-from ft.engine.validation_profiles import (
-    MOCKUP_WATERMARK_CHECK,
-    write_validation_matrix,
 )
 
 

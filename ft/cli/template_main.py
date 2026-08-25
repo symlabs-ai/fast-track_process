@@ -7,7 +7,13 @@ from pathlib import Path
 
 
 def _tool_path() -> Path:
-    return Path(__file__).resolve().parent.parent.parent / "process" / "fast_track" / "tools" / "ft.py"
+    return (
+        Path(__file__).resolve().parent.parent.parent
+        / "process"
+        / "fast_track"
+        / "tools"
+        / "ft.py"
+    )
 
 
 def _load_tool_main():

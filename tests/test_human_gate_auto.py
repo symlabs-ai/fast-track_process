@@ -59,21 +59,35 @@ class _St:
 
 
 def test_cycle_complete_por_node_status_done():
-    assert _cycle_complete(_St(node_status="done", current_node=None,
-                               completed_nodes=["a", "b"])) is True
+    assert (
+        _cycle_complete(
+            _St(node_status="done", current_node=None, completed_nodes=["a", "b"])
+        )
+        is True
+    )
 
 
 def test_cycle_complete_current_none_com_nos_feitos():
-    assert _cycle_complete(_St(node_status="ready", current_node=None,
-                               completed_nodes=["a"])) is True
+    assert (
+        _cycle_complete(
+            _St(node_status="ready", current_node=None, completed_nodes=["a"])
+        )
+        is True
+    )
 
 
 def test_estado_novo_nunca_rodou_nao_e_completo():
     # fresh: current_node None mas SEM nós completos → pode init/rodar
-    assert _cycle_complete(_St(node_status="ready", current_node=None,
-                               completed_nodes=[])) is False
+    assert (
+        _cycle_complete(_St(node_status="ready", current_node=None, completed_nodes=[]))
+        is False
+    )
 
 
 def test_ciclo_em_andamento_nao_e_completo():
-    assert _cycle_complete(_St(node_status="delegated", current_node="n1",
-                               completed_nodes=["a"])) is False
+    assert (
+        _cycle_complete(
+            _St(node_status="delegated", current_node="n1", completed_nodes=["a"])
+        )
+        is False
+    )

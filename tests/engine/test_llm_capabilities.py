@@ -9,7 +9,6 @@ from ft.engine.llm_capabilities import (
     discover_llm_capabilities,
 )
 
-
 CLAUDE_HELP = """
 Options:
   --effort <level>  Effort level for the current session (low, medium, high, xhigh, max)
@@ -189,7 +188,9 @@ def test_timeout_and_nonzero_exit_are_structured_and_fail_closed(monkeypatch):
         if command[0] == "codex":
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])
         if command[0] == "opencode":
-            return _completed(command, "", returncode=7, stderr="provider unavailable\ntry later")
+            return _completed(
+                command, "", returncode=7, stderr="provider unavailable\ntry later"
+            )
         return _successful_run(command, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", fake_run)

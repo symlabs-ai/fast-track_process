@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from ft.cli.main import cmd_runs
 from ft.engine import layout as layout_module
 from ft.engine.layout import (
     ManifestError,
@@ -27,10 +28,8 @@ from ft.engine.layout import (
     update_manifest_llm_defaults,
     validate_template_is_pristine,
 )
-from ft.engine.state import EngineState
 from ft.engine.runner import StepRunner
-from ft.cli.main import cmd_runs
-
+from ft.engine.state import EngineState
 
 MINIMAL_PROCESS = """id: test
 version: '1.0'
@@ -1097,7 +1096,9 @@ metrics:
     cmd_runs(SimpleNamespace(project=str(project), done=True))
 
     output = capsys.readouterr().out
-    active_line = next(line for line in output.splitlines() if "cycle-03-active" in line)
+    active_line = next(
+        line for line in output.splitlines() if "cycle-03-active" in line
+    )
     total_line = next(line for line in output.splitlines() if "TOTAL" in line)
     assert "1min 05s" in active_line
     assert "em curso" not in active_line

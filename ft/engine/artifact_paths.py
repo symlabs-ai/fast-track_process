@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 TECH_STACK_PATH = Path("docs/TECH_STACK.md")
 LEGACY_TECH_STACK_PATHS = (Path("docs/tech_stack.md"),)
 

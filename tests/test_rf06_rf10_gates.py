@@ -8,16 +8,21 @@ RF-09: gate E2E falha se qualquer cenário não passar
 RF-10: gates bloqueados não podem ser contornados sem resolução explícita
 """
 
-import pytest
 from unittest.mock import patch
 
-from ft.engine.validators.gates import gate_tdd_sequence, gate_coverage_80, gate_e2e_all_pass
-from ft.engine.state import StateManager
+import pytest
 
+from ft.engine.state import StateManager
+from ft.engine.validators.gates import (
+    gate_coverage_80,
+    gate_e2e_all_pass,
+    gate_tdd_sequence,
+)
 
 # ---------------------------------------------------------------------------
 # RF-07: Gate TDD exige red→green sequencial
 # ---------------------------------------------------------------------------
+
 
 class TestGateTDDSequence:
     def test_passes_when_red_then_green(self, tmp_path):
@@ -65,6 +70,7 @@ class TestGateTDDSequence:
 # ---------------------------------------------------------------------------
 # RF-08: Gate de cobertura bloqueia se < 80%
 # ---------------------------------------------------------------------------
+
 
 class TestGateCoverage80:
     def test_passes_at_exactly_80_percent(self, tmp_path):
@@ -117,6 +123,7 @@ class TestGateCoverage80:
 # RF-09: Gate E2E falha se qualquer cenário não passar
 # ---------------------------------------------------------------------------
 
+
 class TestGateE2EAllPass:
     def test_passes_when_all_scenarios_pass(self, tmp_path):
         """Gate E2E deve passar quando todos os cenários passam."""
@@ -152,7 +159,11 @@ class TestGateE2EAllPass:
         """Gate E2E deve falhar se lista de cenários está vazia."""
         passed, detail = gate_e2e_all_pass([], project_root=str(tmp_path))
         assert passed is False
-        assert "cenário" in detail.lower() or "scenario" in detail.lower() or "vazio" in detail.lower()
+        assert (
+            "cenário" in detail.lower()
+            or "scenario" in detail.lower()
+            or "vazio" in detail.lower()
+        )
 
     def test_detail_lists_failed_scenarios(self, tmp_path):
         """Detail deve listar IDs dos cenários que falharam."""
@@ -167,9 +178,7 @@ class TestGateE2EAllPass:
 
     def test_five_scenarios_all_pass(self, tmp_path):
         """Todos os 5 cenários E2E obrigatórios devem passar (AC-05)."""
-        scenarios = [
-            {"id": f"e2e-0{i}", "passed": True} for i in range(1, 6)
-        ]
+        scenarios = [{"id": f"e2e-0{i}", "passed": True} for i in range(1, 6)]
         passed, detail = gate_e2e_all_pass(scenarios, project_root=str(tmp_path))
         assert passed is True
 
@@ -177,6 +186,7 @@ class TestGateE2EAllPass:
 # ---------------------------------------------------------------------------
 # RF-10: Gates bloqueados não podem ser contornados
 # ---------------------------------------------------------------------------
+
 
 class TestGateBlockedCannotBypass:
     def test_blocked_state_prevents_advance_guarded(self, tmp_path):

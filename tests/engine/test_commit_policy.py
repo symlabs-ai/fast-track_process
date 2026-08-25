@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from argparse import Namespace
 from pathlib import Path
-import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -61,10 +61,7 @@ def _process_yaml(*, verify_hooks: bool | None, build: bool = False) -> str:
         "    type: end\n"
         "    title: End\n"
         if build
-        else
-        "  - id: end\n"
-        "    type: end\n"
-        "    title: End\n"
+        else "  - id: end\n    type: end\n    title: End\n"
     )
     return (
         "id: commit_policy_test\n"
@@ -101,15 +98,18 @@ def test_policy_defaults_to_hooks_and_only_literal_false_disables() -> None:
     assert verify_hooks_from_process_meta(None) is True
     assert verify_hooks_from_process_meta({}) is True
     assert verify_hooks_from_process_meta({"commit_policy": {}}) is True
-    assert verify_hooks_from_process_meta(
-        {"commit_policy": {"verify_hooks": True}}
-    ) is True
-    assert verify_hooks_from_process_meta(
-        {"commit_policy": {"verify_hooks": "false"}}
-    ) is True
-    assert verify_hooks_from_process_meta(
-        {"commit_policy": {"verify_hooks": False}}
-    ) is False
+    assert (
+        verify_hooks_from_process_meta({"commit_policy": {"verify_hooks": True}})
+        is True
+    )
+    assert (
+        verify_hooks_from_process_meta({"commit_policy": {"verify_hooks": "false"}})
+        is True
+    )
+    assert (
+        verify_hooks_from_process_meta({"commit_policy": {"verify_hooks": False}})
+        is False
+    )
 
 
 @pytest.mark.parametrize(

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -28,7 +28,6 @@ from ft.runs import (
     project_prep_lock,
     select_cycle,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -480,9 +479,7 @@ print(json.dumps({'cycle': prepared.cycle_id, 'worktree': str(prepared.worktree)
     outputs = [worker.communicate(timeout=30) for worker in workers]
     assert all(worker.returncode == 0 for worker in workers), outputs
     payloads = [json.loads(stdout) for stdout, _stderr in outputs]
-    assert {
-        int(payload["cycle"].split("-")[1]) for payload in payloads
-    } == {1, 2}
+    assert {int(payload["cycle"].split("-")[1]) for payload in payloads} == {1, 2}
     for payload, template in zip(payloads, ("feature", "tweak"), strict=True):
         assert payload["cycle"].endswith(f"-{template}")
         state = Path(payload["worktree"]) / "state" / "engine_state.yml"

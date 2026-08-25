@@ -5,7 +5,6 @@ from ft.project.bootstrap import (
     BootstrapResult,
     bootstrap_project,
 )
-from ft.project.migration import MigrationResult, migrate_v2_manifest
 from ft.project.lifecycle import (
     ProjectContractError,
     ProjectLifecycleError,
@@ -20,6 +19,7 @@ from ft.project.lifecycle import (
     reopen_project_contract,
     validate_project_contract,
 )
+from ft.project.migration import MigrationResult, migrate_v2_manifest
 from ft.project.repair import (
     ProjectCheckResult,
     ProjectIssue,

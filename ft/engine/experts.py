@@ -7,14 +7,13 @@ process means copy-once materialization also pins the prompt used by a cycle.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
-
 
 EXPERT_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -41,9 +40,7 @@ class Expert:
 def validate_expert_id(value: object) -> str:
     """Return a safe canonical expert id suitable for a filename."""
     if not isinstance(value, str) or not EXPERT_ID_RE.fullmatch(value):
-        raise ExpertError(
-            f"id de expert inválido: {value!r}; use snake_case minúsculo"
-        )
+        raise ExpertError(f"id de expert inválido: {value!r}; use snake_case minúsculo")
     return value
 
 
@@ -115,9 +112,8 @@ def load_expert(path: str | Path) -> Expert:
         raise ExpertError(f"version inválida no expert: {source}")
 
     raw_tags = metadata.get("tags", [])
-    if (
-        not isinstance(raw_tags, list)
-        or any(not isinstance(tag, str) or not tag.strip() for tag in raw_tags)
+    if not isinstance(raw_tags, list) or any(
+        not isinstance(tag, str) or not tag.strip() for tag in raw_tags
     ):
         raise ExpertError(f"tags do expert devem ser uma lista de textos: {source}")
     tags = tuple(dict.fromkeys(tag.strip() for tag in raw_tags))
@@ -164,9 +160,7 @@ def list_process_experts(process_file: str | Path) -> tuple[Expert, ...]:
     if not experts_dir.exists():
         return ()
     if experts_dir.is_symlink() or not experts_dir.is_dir():
-        raise ExpertError(
-            f"catálogo de experts deve ser diretório real: {experts_dir}"
-        )
+        raise ExpertError(f"catálogo de experts deve ser diretório real: {experts_dir}")
 
     experts: list[Expert] = []
     for candidate in sorted(experts_dir.iterdir()):
@@ -187,9 +181,7 @@ def compose_expert_task(
 ) -> str:
     """Combine specialist role and node task without expanding authority."""
     context_block = (
-        f"\nCONTEXTO AUDITÁVEL DO NODE\n{runtime_context}\n"
-        if runtime_context
-        else ""
+        f"\nCONTEXTO AUDITÁVEL DO NODE\n{runtime_context}\n" if runtime_context else ""
     )
     return f"""PERFIL DE EXPERT ATIVO
 Id: {expert.id}

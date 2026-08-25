@@ -3,6 +3,7 @@ Basic Chat Example - Getting started with ForgeLLM.
 
 This example demonstrates basic chat functionality with different providers.
 """
+
 import os
 
 from forge_llm import ChatAgent

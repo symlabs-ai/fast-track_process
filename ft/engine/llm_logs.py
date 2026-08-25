@@ -39,8 +39,10 @@ def build_llm_log_path(
     safe_phase = phase.replace("/", "-")
     stamp = (timestamp or datetime.now()).strftime("%Y%m%d-%H%M%S")
     suffix = ".jsonl" if engine == "codex" else ".log"
-    return Path(state_path).parent / "llm_logs" / (
-        f"{stamp}__{safe_node}__{safe_phase}{suffix}"
+    return (
+        Path(state_path).parent
+        / "llm_logs"
+        / (f"{stamp}__{safe_node}__{safe_phase}{suffix}")
     )
 
 

@@ -8,7 +8,6 @@ import ctypes
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import signal
@@ -18,9 +17,9 @@ import sys
 import tempfile
 import time
 import unicodedata
+from pathlib import Path
 
 import yaml
-
 
 REQUEST_PATH = Path("docs/feature-request.md")
 BASELINE_PATH = Path("docs/tweak-baseline.yml")
@@ -809,7 +808,9 @@ def _command_focal(root: Path, argv: list[str]) -> None:
     try:
         process = subprocess.Popen(argv, cwd=product_root, start_new_session=True)
     except OSError as exc:
-        raise TweakValidationError(f"não foi possível iniciar comando focal: {exc}") from exc
+        raise TweakValidationError(
+            f"não foi possível iniciar comando focal: {exc}"
+        ) from exc
     try:
         exit_code = process.wait(timeout=FOCAL_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -864,7 +865,9 @@ def _command_quick(root: Path) -> None:
             start_new_session=True,
         )
     except OSError as exc:
-        raise TweakValidationError(f"não foi possível iniciar build rápido: {exc}") from exc
+        raise TweakValidationError(
+            f"não foi possível iniciar build rápido: {exc}"
+        ) from exc
     timed_out = False
     try:
         exit_code = process.wait(timeout=QUICK_TIMEOUT_SECONDS)
@@ -913,9 +916,9 @@ def _forbidden_product_path(relative: str) -> str | None:
     for part in lowered_parts:
         normalized = _normalize_text(part)
         stem = _normalize_text(Path(part).stem)
-        if _SENSITIVE_PATH_TOKEN_RE.search(normalized) or _SENSITIVE_PATH_PREFIX_RE.search(
-            stem
-        ):
+        if _SENSITIVE_PATH_TOKEN_RE.search(
+            normalized
+        ) or _SENSITIVE_PATH_PREFIX_RE.search(stem):
             return "área sensível"
     name = path.name.lower()
     if name in _FORBIDDEN_NAMES:
@@ -954,7 +957,9 @@ def _base_file_size(root: Path, base_commit: str, relative: str) -> int:
         raise TweakValidationError(f"tamanho Git inválido: {relative}") from exc
 
 
-def _validate_patch_bytes(root: Path, base_commit: str, changed_paths: list[str]) -> int:
+def _validate_patch_bytes(
+    root: Path, base_commit: str, changed_paths: list[str]
+) -> int:
     patch = _git(
         root,
         "diff",
@@ -967,19 +972,24 @@ def _validate_patch_bytes(root: Path, base_commit: str, changed_paths: list[str]
     )
     patch_bytes = len(patch)
     for relative in changed_paths:
-        tracked = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", relative],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        ).returncode == 0
+        tracked = (
+            subprocess.run(
+                ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", relative],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            ).returncode
+            == 0
+        )
         if not tracked:
             candidate = _safe_path(root, Path(relative))
             # Account for the full payload plus the small diff headers Git
             # would emit for a newly added file. `git diff` omits untracked
             # files, so a line-only guard is not sufficient here.
-            patch_bytes += candidate.stat().st_size + (2 * len(os.fsencode(relative))) + 128
+            patch_bytes += (
+                candidate.stat().st_size + (2 * len(os.fsencode(relative))) + 128
+            )
     if patch_bytes > MAX_PATCH_BYTES:
         raise TweakValidationError(
             f"patch possui {patch_bytes} bytes; limite do tweak é {MAX_PATCH_BYTES}"
@@ -988,13 +998,16 @@ def _validate_patch_bytes(root: Path, base_commit: str, changed_paths: list[str]
 
 
 def _line_delta(root: Path, base_commit: str, relative: str) -> int:
-    tracked = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", relative],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=5,
-    ).returncode == 0
+    tracked = (
+        subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", relative],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        ).returncode
+        == 0
+    )
     if tracked:
         raw = _git(root, "diff", "--numstat", base_commit, "--", relative)
         line = raw.decode("utf-8", errors="replace").strip().splitlines()
@@ -1064,7 +1077,9 @@ def _validate_report(
     try:
         reported_argv = shlex.split(command_lines[0].strip())
     except ValueError as exc:
-        raise TweakValidationError("Comando focal do relatório possui aspas inválidas") from exc
+        raise TweakValidationError(
+            "Comando focal do relatório possui aspas inválidas"
+        ) from exc
     if reported_argv != receipt["argv"]:
         raise TweakValidationError(
             "Comando focal do relatório não corresponde ao comando realmente executado"
@@ -1114,7 +1129,8 @@ def _command_implementation(root: Path) -> None:
 
     if unexpected:
         raise TweakValidationError(
-            "tweak alterou paths fora do produto/testes: " + ", ".join(sorted(unexpected))
+            "tweak alterou paths fora do produto/testes: "
+            + ", ".join(sorted(unexpected))
         )
     changed_paths = sorted(changed)
     if not changed_paths:
@@ -1132,7 +1148,9 @@ def _command_implementation(root: Path) -> None:
         candidate = _safe_path(root, Path(relative))
         metadata = candidate.lstat()
         if not stat.S_ISREG(metadata.st_mode):
-            raise TweakValidationError(f"somente arquivos regulares são permitidos: {relative}")
+            raise TweakValidationError(
+                f"somente arquivos regulares são permitidos: {relative}"
+            )
         if metadata.st_size > MAX_FILE_BYTES:
             raise TweakValidationError(
                 f"arquivo possui {metadata.st_size} bytes; "
@@ -1210,7 +1228,9 @@ def main(argv: list[str] | None = None) -> int:
             _command_begin(root)
         elif arguments.command == "implementation":
             if arguments.arguments:
-                raise TweakValidationError("implementation não aceita argumentos extras")
+                raise TweakValidationError(
+                    "implementation não aceita argumentos extras"
+                )
             _command_implementation(root)
         elif arguments.command == "quick":
             if arguments.arguments:
@@ -1221,7 +1241,12 @@ def main(argv: list[str] | None = None) -> int:
             if focal_arguments[:1] == ["--"]:
                 focal_arguments.pop(0)
             _command_focal(root, focal_arguments)
-    except (OSError, subprocess.TimeoutExpired, TweakValidationError, yaml.YAMLError) as exc:
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+        TweakValidationError,
+        yaml.YAMLError,
+    ) as exc:
         print(f"tweak validation FAIL: {exc}", file=sys.stderr)
         return 1
     return 0

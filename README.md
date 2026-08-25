@@ -224,17 +224,11 @@ read-only e somente outputs/write_scope do node são graváveis. Use as variáve
 
 | Template | Uso |
 |---|---|
-| `base` | Processo mínimo para composição local |
-| `feature` | Evolução incremental de manutenção após entrega |
 | `feature-fast` | Feature de manutenção com sessões persistentes e auditoria do delta |
-| `bug` | Correção focal em projeto entregue, com regressão RED→GREEN |
 | `bug-fast` | Bug de manutenção em duas chamadas LLM e fix focal |
 | `tweak` | Mudança pequena em projeto entregue |
 | `mdd` | Definição, pacote executivo, 12 PNGs do pitch, protótipo vertical do site e handoff |
-| `mvp-builder` | Construtor completo durante a fase `building` |
-| `mvp-builder-fast` | Construtor rápido com plano interno, sessões e macro-nodes |
-| `fast-track-v2` | Processo histórico V2 |
-| `ft-ui-prototype` | Prototipagem rápida de UI |
+| `mvp-builder-fast` | Construtor rápido: protótipos raster do produto após o PRD, plano interno, sessões e macro-nodes |
 | `fastfy` | Adoção de repositório legado na base canônica Fast Track |
 | `material_design_pwa` | Evolução de UI existente para Material Design 3 e PWA |
 | `ios-to-android` | Port de app iOS entregue para Android no mesmo repositório, com paridade e regressão física nos dois alvos |
@@ -278,7 +272,12 @@ qualquer fonte.
 ## Validação local
 
 ```bash
-python -m ruff check ft tests
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy
 python -m pytest -q
 python -m pip wheel --no-deps --wheel-dir dist .
 ```
+
+O `pytest` mede branches e exige cobertura total mínima de 70%. Para instalar
+os hooks locais, execute `env/git-dev/install_precommit.sh`.

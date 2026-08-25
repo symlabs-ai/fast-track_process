@@ -8,16 +8,15 @@ walking the checkout.  HyperMode remains the default for nodes without a
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
 import subprocess
-from typing import Mapping
 import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping
 
 import yaml
-
 
 FEATURE_DELTA_PREFIX = "feature_delta."
 TWEAK_PROFILE = "tweak.direct"
@@ -34,12 +33,35 @@ CONTEXT_END = "</FT_CONTEXT_PROFILE>"
 _FORBIDDEN_COMPONENTS = frozenset({"state", "log", "logs", "archive", "archives"})
 _FORBIDDEN_PREFIXES = ((".ft", "cycles"),)
 _GIT_OBJECT_RE = re.compile(r"[0-9a-fA-F]{7,64}")
-_DELTA_TEXT_SUFFIXES = frozenset({
-    ".css", ".go", ".graphql", ".html", ".java", ".js", ".json",
-    ".jsx", ".kt", ".md", ".php", ".py", ".rb", ".rs", ".scss",
-    ".sh", ".sql", ".svelte", ".toml", ".ts", ".tsx", ".vue",
-    ".xml", ".yaml", ".yml",
-})
+_DELTA_TEXT_SUFFIXES = frozenset(
+    {
+        ".css",
+        ".go",
+        ".graphql",
+        ".html",
+        ".java",
+        ".js",
+        ".json",
+        ".jsx",
+        ".kt",
+        ".md",
+        ".php",
+        ".py",
+        ".rb",
+        ".rs",
+        ".scss",
+        ".sh",
+        ".sql",
+        ".svelte",
+        ".toml",
+        ".ts",
+        ".tsx",
+        ".vue",
+        ".xml",
+        ".yaml",
+        ".yml",
+    }
+)
 _DELTA_ROOTS = frozenset({"project", "src", "test", "tests"})
 _TWEAK_UI_RE = re.compile(
     r"(?<![a-z0-9_])(?:"
@@ -658,7 +680,9 @@ def _feature_target_ids(root: Path) -> tuple[str, ...]:
     return tuple(dict.fromkeys(field_pattern.findall(result[0])))
 
 
-def _targeted_id_lines(path: Path, target_ids: tuple[str, ...], limit: int = 2_000) -> str:
+def _targeted_id_lines(
+    path: Path, target_ids: tuple[str, ...], limit: int = 2_000
+) -> str:
     """Stream a canonical doc and retain only rows mentioning this feature's IDs."""
     if not target_ids or limit <= 0:
         return ""
@@ -703,14 +727,16 @@ def _compact_receipt(path: Path) -> str | None:
         "fingerprint": payload.get("fingerprint"),
         "recorded_at": payload.get("recorded_at"),
         "product_root": payload.get("product_root"),
-        "commands": payload.get("commands") if isinstance(payload.get("commands"), list) else [],
+        "commands": payload.get("commands")
+        if isinstance(payload.get("commands"), list)
+        else [],
         "file_count": (
-            len(files)
-            if isinstance(files, list)
-            else payload.get("file_count", 0)
+            len(files) if isinstance(files, list) else payload.get("file_count", 0)
         ),
     }
-    return json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        compact, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _feedback_sentinel(last_approval_message: str | None) -> str:
@@ -786,7 +812,9 @@ def _tech_stack_selection(root: Path) -> tuple[tuple[str, ...], str | None]:
 
 def _normalized_relevance_text(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text)
-    return "".join(char for char in decomposed if not unicodedata.combining(char)).lower()
+    return "".join(
+        char for char in decomposed if not unicodedata.combining(char)
+    ).lower()
 
 
 def _tweak_conditional_paths(root: Path) -> frozenset[str]:
@@ -826,7 +854,9 @@ def _tweak_conditional_paths(root: Path) -> frozenset[str]:
     return frozenset(selected)
 
 
-def _effective_paths(spec: ContextProfileSpec, root: Path) -> tuple[tuple[str, ...], str | None]:
+def _effective_paths(
+    spec: ContextProfileSpec, root: Path
+) -> tuple[tuple[str, ...], str | None]:
     selected_tech, tech_manifest = _tech_stack_selection(root)
     selected_conditional = (
         _tweak_conditional_paths(root)
@@ -847,7 +877,9 @@ def _effective_paths(spec: ContextProfileSpec, root: Path) -> tuple[tuple[str, .
     return tuple(dict.fromkeys(paths)), tech_manifest
 
 
-def _git_output(root: Path, args: list[str], *, max_bytes: int = 128_000) -> bytes | None:
+def _git_output(
+    root: Path, args: list[str], *, max_bytes: int = 128_000
+) -> bytes | None:
     try:
         result = subprocess.run(
             ["git", "-C", str(root), *args],
@@ -905,7 +937,10 @@ def _changed_delta_sections(
     """Build focal diff/current excerpts from Git paths, never a filesystem walk."""
     if not base_commit or not _GIT_OBJECT_RE.fullmatch(base_commit):
         return []
-    if _git_output(root, ["cat-file", "-e", f"{base_commit}^{{commit}}"], max_bytes=1) is None:
+    if (
+        _git_output(root, ["cat-file", "-e", f"{base_commit}^{{commit}}"], max_bytes=1)
+        is None
+    ):
         return []
 
     tracked_raw = _git_output(
@@ -948,8 +983,13 @@ def _changed_delta_sections(
     diff_raw = _git_output(
         root,
         [
-            "diff", "--no-ext-diff", "--no-color", "--unified=2",
-            base_commit, "--", *changed,
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            "--unified=2",
+            base_commit,
+            "--",
+            *changed,
         ],
         max_bytes=16_001,
     )
@@ -968,7 +1008,9 @@ def _changed_delta_sections(
             continue
         path = Path(relative)
         if path.suffix.lower() not in _DELTA_TEXT_SUFFIXES and path.name not in {
-            "Dockerfile", "Makefile", "Procfile",
+            "Dockerfile",
+            "Makefile",
+            "Procfile",
         }:
             continue
         candidate = _safe_candidate(root, relative)
@@ -999,11 +1041,13 @@ def _product_manifest_section(
     )
     if raw is None:
         return None
-    paths = sorted({
-        value
-        for value in raw.decode("utf-8", errors="replace").split("\0")
-        if value and _eligible_delta_path(value)
-    })
+    paths = sorted(
+        {
+            value
+            for value in raw.decode("utf-8", errors="replace").split("\0")
+            if value and _eligible_delta_path(value)
+        }
+    )
     if not paths:
         return None
     payload = {
@@ -1110,11 +1154,7 @@ def compose_context_profile(
                 if relative in {"docs/PROJECT_BACKLOG.md", "docs/FEATURES.md"}
                 else ""
             )
-            targeted_block = (
-                f"\nTARGETED_ID_EXCERPTS:\n{targeted}"
-                if targeted
-                else ""
-            )
+            targeted_block = f"\nTARGETED_ID_EXCERPTS:\n{targeted}" if targeted else ""
             read_result = _read_head_tail_text(
                 candidate,
                 max(0, per_section_cap - len(marker) - len(targeted_block)),
@@ -1213,19 +1253,23 @@ def compose_context_profile(
 
     # OpenCode receives hard read denials in addition to the prompt policy.
     # Other providers intentionally rely on the prompt restriction only.
-    deny_paths = tuple(dict.fromkeys((
-        # Deny the declared profile universe, not only sections that happened
-        # to fit in the cap.  Otherwise an omitted tail document could be read
-        # back by OpenCode and make the effective context unbounded.
-        *spec.paths,
-        "docs/**",
-        ".ft/cycles/**",
-        "state/**",
-        "**/log/**",
-        "**/logs/**",
-        "**/archive/**",
-        "**/archives/**",
-    )))
+    deny_paths = tuple(
+        dict.fromkeys(
+            (
+                # Deny the declared profile universe, not only sections that happened
+                # to fit in the cap.  Otherwise an omitted tail document could be read
+                # back by OpenCode and make the effective context unbounded.
+                *spec.paths,
+                "docs/**",
+                ".ft/cycles/**",
+                "state/**",
+                "**/log/**",
+                "**/logs/**",
+                "**/archive/**",
+                "**/archives/**",
+            )
+        )
+    )
     prompt = f"{context}\n\n---\n\n{original_prompt}"
     return ContextProfileResult(
         prompt=prompt,

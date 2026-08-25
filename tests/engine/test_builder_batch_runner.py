@@ -5,17 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
 import threading
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import yaml
 
 from ft.engine.delegate import DelegateResult
 from ft.engine.runner import StepRunner
-
 
 PROCESS = """\
 id: builder_batch_test

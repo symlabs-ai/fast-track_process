@@ -295,7 +295,23 @@ ft fix "instrução" --cycle <id>
 ft explore "pedido livre" --cycle <id>
 ft abort --cycle <id>
 ft cancel "motivo" --cycle <id>
+
+# Análise de template
+ft validate -t <template>
+ft lint-process -t <template>
+ft analyse-template -t <template|path> [--json]
 ```
+
+`ft analyse-template` computa o score estático de determinismo (0–100%) de um
+processo: cada node recebe um `d_i` conforme executor e força dos validators
+(`python`/gate = 1.0; LLM travado por validator binário = 0.7; só validators de
+forma = 0.4; só existência = 0.1; sem validator = 0.05) e o score é a média dos
+`d_i`. Nodes de decisão humana (`human_gate`, `requires_approval`) ficam fora da
+conta e são reportados como eixo separado. Nodes fracos são listados com a
+indicação de haver (ou não) gate determinístico downstream que re-valide seus
+outputs — os marcados com `!` são o ponto de maior alavancagem para elevar o
+determinismo do template. Aceita nome de template (local materializado ou
+global do engine) ou path direto para um `process.yml`.
 
 `ft status --watch [SEGUNDOS]` abre uma tela fixa em terminal interativo e
 redesenha o status no mesmo lugar, sem produzir uma sequência de snapshots no
@@ -545,7 +561,7 @@ engine. Depois de aplicar e testar a mudança global, registre a disposição:
 ft process-candidates PI-001 --cycle cycle-07 \
   --status promoted \
   --reason "Aplicado e validado pela suíte do engine" \
-  --reference "commit abc123 templates/mvp-builder/process.yml"
+  --reference "commit abc123 templates/mvp-builder-fast/process.yml"
 
 ft process-candidates PI-002 --cycle cycle-07 \
   --status deferred --reason "Precisa de outro ciclo real"
@@ -866,12 +882,15 @@ hipótese e PRD como entrada e não executa mais esses nodes internamente.
 ft run . --template mdd --request "Descrever problema e resultado" --auto
 ```
 
-### `mvp-builder`
+### `mvp-builder-fast`
 
-Processo construtor completo para projeto em `building`. Materialize e execute:
+Processo construtor completo para projeto em `building`, desenhado para reduzir
+inicializações frias do executor sem transferir o controle do grafo para o LLM:
 
 ```bash
-ft run . --template mvp-builder --auto
+ft run . --template mvp-builder-fast --auto --parallel --codex
+ft run . --template mvp-builder-fast --route validation \
+  --input feedback.md --auto --parallel --max-parallel 4 --codex
 ```
 
 Com `--parallel`, nodes do mesmo `parallel_group` rodam em worktrees internas e
@@ -880,17 +899,6 @@ gates, decisions e dependências cruzadas são recusados pelo validador do grafo
 `--max-parallel N` limita os workers. Sem a flag, os grupos permanecem
 sequenciais.
 
-### `mvp-builder-fast`
-
-Variante opt-in do processo completo, voltada a reduzir inicializações frias do
-executor sem transferir o controle do grafo para o LLM:
-
-```bash
-ft run . --template mvp-builder-fast --auto --parallel --codex
-ft run . --template mvp-builder-fast --route validation \
-  --input feedback.md --auto --parallel --max-parallel 4 --codex
-```
-
 O engine gera um plano consultivo em
 `state/llm_execution_plan.yml` usando a demanda e os documentos iniciais. O
 plano contém somente a rota escolhida e seus loops focais; branches não
@@ -898,6 +906,13 @@ selecionadas não entram no prompt nem no denominador do progresso. Decisões j�
 executadas são persistidas, e planos legados que representavam o grafo inteiro
 são regenerados automaticamente. O runner mantém uma conversa por sprint e cria
 lanes isoladas para review e fan-out.
+
+Para produtos com superfície visual, logo depois de validar PRD, brief e
+critérios de UI, o template gera PNGs de cada tela e estado P0 com `image_gen`.
+Um review independente e um human gate aprovam esse contrato visual antes de
+backlog, stack, API, navegação, massa de dados ou código. Essa etapa não recria
+pitch deck ou site: esses são artefatos exclusivos do `mdd`.
+
 Claude usa `--session-id`/`--resume`; Codex captura o `thread_id` e usa
 `codex exec resume`. Human gates encerram o processo do CLI, mas o identificador
 fica no state para a retomada posterior. No `ft close`, o plano é preservado em
@@ -1125,38 +1140,11 @@ uma chamada LLM extra. O human gate de arquitetura aprova o objetivo e o DoD
 global. O fim do grafo significa “ciclo construtor concluído”; a entrega do
 projeto continua dependendo de `ft project-close`.
 
-### `feature`
-
-Implementa uma capacidade em projeto já entregue (`maintenance`), com elucidação,
-aprovação, implementação, validação, evidência, review e aceite:
-
-```bash
-ft run . --template feature --request "Adicionar busca por telefone" --codex
-ft run . --template feature --input demanda.md --codex
-```
-
-Cada demanda deve citar exatamente um PB preexistente; ciclos simultâneos usam
-PBs distintos. Para uma capacidade nova, o processo reserva o FEAT definitivo
-sob lock curto. O state fixa path e digest do fork local.
-
-Código/testes, validação completa, evidência referencial e review semântica são
-nodes diferentes. A review produz rota estruturada (`approved`,
-`implementation`, `evidence` ou `scope`) e o decision node invalida o progresso
-posterior quando volta no grafo. A implementação usa lease global de
-produtividade renovável e meta temporal de episódio; não há hard stop
-wall-clock por default.
-
-Baseline attestation e implementation receipt são separados. `ensure` verifica
-primeiro o receipt local; cache compartilhado só existe como experimento opt-in
-para validação declarada hermética. O reconcile propõe YAML, o engine valida os
-IDs permitidos e aplica os documentos canônicos deterministicamente. Entradas
-novas de changelog começam com `#FEAT`.
-
 ### `feature-fast`
 
-Mantém os contratos, human gates, receipts e reconciliação segura do `feature`
-em projeto já entregue,
-com sessões persistentes e um caminho focal para correções de review:
+Implementa uma capacidade em projeto já entregue (`maintenance`), com
+contratos, human gates, receipts e reconciliação segura, sessões persistentes
+e um caminho focal para correções de review:
 
 ```bash
 ft run . --template feature-fast \
@@ -1181,23 +1169,10 @@ arquivos e testes relacionados, gera IDs imutáveis de review e decide
 `rerun|reuse` para receipts adicionais conforme seus paths declarados. Assim,
 um ensaio físico só é repetido quando uma dependência física realmente mudou.
 
-### `bug`
-
-Correção focal de manutenção para defeito reproduzível. Exige diagnóstico, teste RED,
-correção mínima, o mesmo teste GREEN, build/test e aceite:
-
-```bash
-ft run . --template bug --request "Terminal duplica o eco do input" --codex
-```
-
-Use `feature` quando houver comportamento novo, contrato, auth/security,
-migração, dados, dependência, infraestrutura ou mudança transversal. Entradas de
-changelog começam com `#BUG`.
-
 ### `bug-fast`
 
-Mantém em `maintenance` a reprodução RED→GREEN e a suíte completa do `bug`, mas troca a chamada
-documental final por reconciliação Python e acrescenta uma review independente:
+Correção focal de manutenção para defeito reproduzível, com reprodução
+RED→GREEN, suíte completa, reconciliação Python e review independente:
 
 ```bash
 ft run . --template bug-fast \
@@ -1227,14 +1202,12 @@ ft run . --template tweak --request "Mudar o botão Salvar para azul" --codex
 
 Não executa discovery completo, review independente ou E2E full. Limites de
 arquivos, linhas, patch e áreas de risco impedem que um ajuste pequeno vire uma
-mudança transversal; nesses casos, abra outro ciclo com `feature`.
+mudança transversal; nesses casos, abra outro ciclo com `feature-fast`.
 
 ### Outros
 
-`base` fornece grafo mínimo; `ft-ui-prototype` cobre prototipagem de UI;
 `fastfy` adota repositórios legados; `material_design_pwa` aplica M3 e PWA a
-uma UI existente; `fast-track-v2` preserva o processo histórico. Todos usam o
-mesmo comando de run e viram forks locais. O bundle `evolve_process` é interno
+uma UI existente. Todos usam o mesmo comando de run e viram forks locais. O bundle `evolve_process` é interno
 ao comando `ft evolve`, não abre ciclo por `ft run`. `symlabs` e `tecnospeed`
 são templates `kind: init` (ambiente por organização) — pertencem ao
 `ft init --template`, não ao run.

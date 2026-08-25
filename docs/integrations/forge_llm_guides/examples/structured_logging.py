@@ -4,6 +4,7 @@ Structured Logging Example - JSON logging with correlation IDs.
 This example demonstrates how to use ForgeLLM's structured logging
 for production observability.
 """
+
 import os
 import time
 

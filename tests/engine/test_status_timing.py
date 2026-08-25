@@ -8,7 +8,6 @@ from pathlib import Path
 from ft.engine.layout import ensure_project_layout, register_project_process
 from ft.engine.runner import StepRunner
 
-
 _PROCESS = """\
 id: timing_proc
 version: "1.0.0"

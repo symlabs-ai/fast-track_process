@@ -9,8 +9,9 @@ from ft.engine.delegate import DelegateResult
 from ft.engine.runner import StepRunner
 
 
-def _result(*, success: bool, died: bool = False, rate_limited: bool = False,
-            output: str = "x") -> DelegateResult:
+def _result(
+    *, success: bool, died: bool = False, rate_limited: bool = False, output: str = "x"
+) -> DelegateResult:
     return DelegateResult(
         success=success,
         output=output,
@@ -35,10 +36,12 @@ def _retry(results):
 
 
 def test_died_delegation_is_retried_until_success():
-    final, calls = _retry([
-        _result(success=False, died=True),
-        _result(success=True),
-    ])
+    final, calls = _retry(
+        [
+            _result(success=False, died=True),
+            _result(success=True),
+        ]
+    )
     assert final.success is True
     assert calls == 2
 
@@ -57,9 +60,11 @@ def test_content_failure_is_not_retried():
 
 
 def test_rate_limit_is_not_retried_here():
-    final, calls = _retry([
-        _result(success=False, died=False, rate_limited=True),
-    ])
+    final, calls = _retry(
+        [
+            _result(success=False, died=False, rate_limited=True),
+        ]
+    )
     assert final.rate_limited is True
     assert calls == 1
 

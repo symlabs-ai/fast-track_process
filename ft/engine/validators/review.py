@@ -34,7 +34,10 @@ def no_large_files(
                 large.append(f"{rel} ({lines})")
 
     if large:
-        return False, f"no_large_files FAIL: {len(large)} acima de {max_lines} linhas: {'; '.join(large[:3])}"
+        return (
+            False,
+            f"no_large_files FAIL: {len(large)} acima de {max_lines} linhas: {'; '.join(large[:3])}",
+        )
     return True, f"no_large_files: nenhum arquivo acima de {max_lines} linhas"
 
 
@@ -67,7 +70,10 @@ def no_print_statements(
 
     if not filtered:
         return True, "no_print_statements: prints apenas em arquivos permitidos"
-    return False, f"no_print_statements FAIL: {len(filtered)} print() em codigo de producao"
+    return (
+        False,
+        f"no_print_statements FAIL: {len(filtered)} print() em codigo de producao",
+    )
 
 
 def changed_files_have_tests(
@@ -93,11 +99,17 @@ def changed_files_have_tests(
         name = Path(src_file).stem
         test_patterns = [
             Path(project_root) / "tests" / f"test_{name}.py",
-            Path(project_root) / "tests" / Path(src_file).parent.name / f"test_{name}.py",
+            Path(project_root)
+            / "tests"
+            / Path(src_file).parent.name
+            / f"test_{name}.py",
         ]
         if not any(p.exists() for p in test_patterns):
             missing_tests.append(src_file)
 
     if missing_tests:
-        return False, f"changed_files_have_tests FAIL: sem testes para: {', '.join(missing_tests)}"
+        return (
+            False,
+            f"changed_files_have_tests FAIL: sem testes para: {', '.join(missing_tests)}",
+        )
     return True, f"changed_files_have_tests: {len(src_files)} arquivos com testes"

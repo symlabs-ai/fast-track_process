@@ -59,7 +59,11 @@ def format_check(
     if result.returncode == 0:
         return True, "format_check: codigo formatado"
 
-    lines = result.stderr.strip().splitlines() if result.stderr else result.stdout.strip().splitlines()
+    lines = (
+        result.stderr.strip().splitlines()
+        if result.stderr
+        else result.stdout.strip().splitlines()
+    )
     unformatted = [line for line in lines if "would reformat" in line.lower()]
     count = len(unformatted)
     return False, f"format_check FAIL: {count} arquivos nao formatados"

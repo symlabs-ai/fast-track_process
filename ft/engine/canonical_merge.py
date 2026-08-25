@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-
 CANONICAL_CONFLICT_PATHS = frozenset(
     {
         "CHANGELOG.md",
@@ -338,8 +337,7 @@ def _merge_table_document(
                 f"{relative}: ID {row_id} foi adicionado com conteúdos diferentes"
             )
         empty_base = tuple(
-            row_id if header == "id" else "—"
-            for header in base.normalized_headers
+            row_id if header == "id" else "—" for header in base.normalized_headers
         )
         merged_cells = _merge_row_cells(
             relative,
@@ -606,7 +604,9 @@ def _apply_transaction(root: Path, merged: dict[str, bytes]) -> None:
                 target.read_bytes(),
                 stat.S_IMODE(target.stat().st_mode),
             )
-            prepared[relative] = _prepare_atomic_file(target, content, originals[relative][1])
+            prepared[relative] = _prepare_atomic_file(
+                target, content, originals[relative][1]
+            )
 
         for relative in sorted(prepared):
             os.replace(prepared[relative], root / relative)
@@ -634,7 +634,9 @@ def _apply_transaction(root: Path, merged: dict[str, bytes]) -> None:
 def _git_index_path(root: Path) -> Path:
     result = _git(root, "rev-parse", "--git-path", "index")
     if result.returncode != 0:
-        raise CanonicalMergeError(_git_failure("não foi possível localizar o índice", result))
+        raise CanonicalMergeError(
+            _git_failure("não foi possível localizar o índice", result)
+        )
     raw = result.stdout.decode("utf-8").strip()
     path = Path(raw)
     return path if path.is_absolute() else root / path
@@ -642,7 +644,9 @@ def _git_index_path(root: Path) -> Path:
 
 def _prepare_atomic_file(target: Path, content: bytes, mode: int) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, raw_path = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{target.name}.", dir=target.parent
+    )
     temporary = Path(raw_path)
     try:
         with os.fdopen(descriptor, "wb") as handle:

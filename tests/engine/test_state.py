@@ -1,8 +1,8 @@
 """Unit tests for ft.engine.state."""
 
 import os
-import pytest
 
+import pytest
 import yaml
 
 from ft.engine.state import StateManager

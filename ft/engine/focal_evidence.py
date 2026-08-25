@@ -8,11 +8,11 @@ the real backend to a physical screen).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-from pathlib import Path
 import re
 import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
 
 import yaml
 
@@ -296,7 +296,9 @@ def _evidence_records(review_output: str) -> list[dict[str, object]]:
             payload = yaml.safe_load(block)
         except yaml.YAMLError:
             continue
-        if isinstance(payload, dict) and isinstance(payload.get("focal_evidence"), dict):
+        if isinstance(payload, dict) and isinstance(
+            payload.get("focal_evidence"), dict
+        ):
             records.append(payload["focal_evidence"])
     return records
 
@@ -320,7 +322,10 @@ def _required_anchors(finding_context: str) -> dict[str, tuple[str, ...]]:
     context = _normalized(finding_context)
     required: dict[str, tuple[str, ...]] = {}
     for canonical, aliases in _ANCHORS.items():
-        if any(re.search(rf"(?<!\w){re.escape(_normalized(alias))}(?!\w)", context) for alias in aliases):
+        if any(
+            re.search(rf"(?<!\w){re.escape(_normalized(alias))}(?!\w)", context)
+            for alias in aliases
+        ):
             required[canonical] = aliases
     return required
 
@@ -650,7 +655,11 @@ def validate_focal_approval(
     if (
         not resolved_visual
         or any(path is None for path in resolved_visual)
-        or not any(path.suffix.casefold() in _VISUAL_SUFFIXES for path in resolved_visual if path)
+        or not any(
+            path.suffix.casefold() in _VISUAL_SUFFIXES
+            for path in resolved_visual
+            if path
+        )
     ):
         return FocalEvidenceValidation(
             False,
@@ -747,9 +756,7 @@ def validate_focal_approval(
         artifact_path = _safe_existing_path(root, artifact.get("path"))
         evidence_path = _safe_existing_path(root, artifact.get("evidence"))
         declared = _normalized(artifact.get("sha256")).removeprefix("sha256:")
-        observed = _normalized(artifact.get("observed_sha256")).removeprefix(
-            "sha256:"
-        )
+        observed = _normalized(artifact.get("observed_sha256")).removeprefix("sha256:")
         if artifact_path is None or evidence_path is None:
             return FocalEvidenceValidation(
                 False,
@@ -783,7 +790,9 @@ def validate_focal_approval(
         for match in re.findall(r"(?i)(?<!\w)s\d{2}(?!\w)", finding_context)
     }
     record_text = str(record).upper()
-    missing_screens = sorted(screen for screen in required_screens if screen not in record_text)
+    missing_screens = sorted(
+        screen for screen in required_screens if screen not in record_text
+    )
     if missing_screens:
         return FocalEvidenceValidation(
             False,

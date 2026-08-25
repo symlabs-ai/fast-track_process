@@ -149,14 +149,13 @@ def test_atomic_layout_update_preserves_unrelated_keys_and_mode(
     }
 
 
-def test_atomic_layout_update_rejects_invalid_manifest_without_replacing(tmp_path: Path):
+def test_atomic_layout_update_rejects_invalid_manifest_without_replacing(
+    tmp_path: Path,
+):
     manifest_path = tmp_path / ".ft" / "manifest.yml"
     manifest_path.parent.mkdir(parents=True)
     original = (
-        "schema_version: 2\n"
-        "processes: {}\n"
-        "defaults: [not, a, mapping]\n"
-        "keep: true\n"
+        "schema_version: 2\nprocesses: {}\ndefaults: [not, a, mapping]\nkeep: true\n"
     )
     manifest_path.write_text(original, encoding="utf-8")
 

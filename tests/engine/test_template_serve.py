@@ -1,11 +1,11 @@
 import os
-from pathlib import Path
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 
 def _free_port() -> int:
@@ -28,7 +28,7 @@ def _stop_owned_process(token: str) -> None:
 
 def test_global_serve_script_isolates_occupied_port_and_preserves_listener(tmp_path):
     root = tmp_path / "sample"
-    project = root / "project"
+    project = root / "src"
     scripts = root / ".ft" / "process" / "scripts"
     project.mkdir(parents=True)
     scripts.mkdir(parents=True)
@@ -45,7 +45,7 @@ def test_global_serve_script_isolates_occupied_port_and_preserves_listener(tmp_p
     template = (
         Path(__file__).resolve().parents[2]
         / "templates"
-        / "mvp-builder"
+        / "mvp-builder-fast"
         / "scripts"
         / "serve.sh"
     )
@@ -185,9 +185,7 @@ def test_fast_serve_script_presents_desktop_appimage_instead_of_web(tmp_path):
     )
     artifact = dist / "Product_0.0.1_amd64.AppImage"
     artifact.write_text(
-        "#!/usr/bin/env bash\n"
-        "trap 'exit 0' TERM INT\n"
-        "while :; do sleep 1; done\n",
+        "#!/usr/bin/env bash\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
         encoding="utf-8",
     )
     artifact.chmod(0o755)
@@ -221,9 +219,9 @@ def test_fast_serve_script_presents_desktop_appimage_instead_of_web(tmp_path):
         assert (root / ".presented_artifact").read_text(
             encoding="utf-8"
         ).strip() == "src/dist/Product_0.0.1_amd64.AppImage"
-        presentation_token = (root / ".presentation.pid").read_text(
-            encoding="utf-8"
-        ).strip()
+        presentation_token = (
+            (root / ".presentation.pid").read_text(encoding="utf-8").strip()
+        )
         assert presentation_token.startswith(("group:", "pid:"))
     finally:
         if presentation_token:

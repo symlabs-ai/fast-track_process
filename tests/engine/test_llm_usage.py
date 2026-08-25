@@ -24,7 +24,9 @@ def test_summarize_claude_log_dedupes_message_usage(tmp_path):
         "\n".join(
             [
                 "## Output",
-                json.dumps({"type": "system", "subtype": "init", "model": "claude-fable-5"}),
+                json.dumps(
+                    {"type": "system", "subtype": "init", "model": "claude-fable-5"}
+                ),
                 json.dumps(event),
                 json.dumps(event),
             ]
@@ -112,7 +114,9 @@ def test_codex_cached_input_is_subset_not_additive_cache_read(tmp_path):
 def test_format_lines_are_explicit_about_missing_usage(tmp_path):
     logs = tmp_path / "state" / "llm_logs"
     logs.mkdir(parents=True)
-    (logs / "20260710-010101__node__run.log").write_text("plain output\n", encoding="utf-8")
+    (logs / "20260710-010101__node__run.log").write_text(
+        "plain output\n", encoding="utf-8"
+    )
 
     lines = format_llm_usage_lines(summarize_llm_usage(logs, default_engine="opencode"))
 

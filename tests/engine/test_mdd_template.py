@@ -7,7 +7,6 @@ from ft.engine.process_validator import validate_process
 from ft.project.lifecycle import project_role_for_template
 from ft.templates.catalog import TemplateCatalog
 
-
 ROOT = Path(__file__).resolve().parents[2]
 MDD_PROCESS = ROOT / "templates" / "mdd" / "process.yml"
 
@@ -49,9 +48,7 @@ def test_mdd_graph_is_complete_and_valid() -> None:
         "mdd.14.handoff",
         "mdd.end",
     ]
-    assert graph.get_node("mdd.01b.hipotese_gate").reject_next == (
-        "mdd.01.hipotese"
-    )
+    assert graph.get_node("mdd.01b.hipotese_gate").reject_next == ("mdd.01.hipotese")
     assert graph.get_node("mdd.02b.vision_gate").reject_next == "mdd.02.vision"
     assert graph.get_node("mdd.03b.prd_gate").reject_next == "mdd.03.prd"
     assert graph.get_node("mdd.04.definition_gate").type == "gate"
@@ -59,16 +56,12 @@ def test_mdd_graph_is_complete_and_valid() -> None:
     assert graph.get_node("mdd.09.package_review").reject_next == (
         "mdd.09b.package_revision"
     )
-    assert graph.get_node("mdd.09b.package_revision").next == (
-        "mdd.08.package_gate"
-    )
+    assert graph.get_node("mdd.09b.package_revision").next == ("mdd.08.package_gate")
     assert graph.get_node("mdd.12.visual_gate").type == "gate"
     assert graph.get_node("mdd.13.visual_review").reject_next == (
         "mdd.13b.visual_revision"
     )
-    assert graph.get_node("mdd.13b.visual_revision").next == (
-        "mdd.12.visual_gate"
-    )
+    assert graph.get_node("mdd.13b.visual_revision").next == ("mdd.12.visual_gate")
     assert graph.get_node("mdd.14.handoff").next == "mdd.end"
 
 
@@ -123,27 +116,15 @@ def test_mdd_derives_narrative_only_after_approved_definition() -> None:
     assert graph.get_node("mdd.01b.hipotese_gate").next == "mdd.02.vision"
     assert graph.get_node("mdd.02b.vision_gate").next == "mdd.03.prd"
     assert graph.get_node("mdd.03b.prd_gate").next == "mdd.04.definition_gate"
-    assert graph.get_node("mdd.04.definition_gate").next == (
-        "mdd.05.executive_summary"
-    )
-    assert graph.get_node("mdd.05.executive_summary").next == (
-        "mdd.06.pitch_deck"
-    )
+    assert graph.get_node("mdd.04.definition_gate").next == ("mdd.05.executive_summary")
+    assert graph.get_node("mdd.05.executive_summary").next == ("mdd.06.pitch_deck")
     assert graph.get_node("mdd.06.pitch_deck").next == "mdd.07.site_proposal"
     assert graph.get_node("mdd.07.site_proposal").next == "mdd.08.package_gate"
     assert graph.get_node("mdd.08.package_gate").next == "mdd.09.package_review"
-    assert graph.get_node("mdd.09.package_review").next == (
-        "mdd.10.pitch_images"
-    )
-    assert graph.get_node("mdd.10.pitch_images").next == (
-        "mdd.11.site_prototype"
-    )
-    assert graph.get_node("mdd.11.site_prototype").next == (
-        "mdd.12.visual_gate"
-    )
-    assert graph.get_node("mdd.12.visual_gate").next == (
-        "mdd.13.visual_review"
-    )
+    assert graph.get_node("mdd.09.package_review").next == ("mdd.10.pitch_images")
+    assert graph.get_node("mdd.10.pitch_images").next == ("mdd.11.site_prototype")
+    assert graph.get_node("mdd.11.site_prototype").next == ("mdd.12.visual_gate")
+    assert graph.get_node("mdd.12.visual_gate").next == ("mdd.13.visual_review")
     assert graph.get_node("mdd.13.visual_review").next == "mdd.14.handoff"
 
 
@@ -227,8 +208,14 @@ def test_approved_package_generates_visual_assets_with_sol_max() -> None:
     assert review.reject_next == "mdd.13b.visual_revision"
     assert "docs/pitch-deck-images/" in review.outputs
     assert "docs/site-prototype/" in review.outputs
-    assert any("sigla técnica ou institucional" in item for item in review.decision_context["checklist"])
-    assert any("usuário final como produto" in item for item in review.decision_context["checklist"])
+    assert any(
+        "sigla técnica ou institucional" in item
+        for item in review.decision_context["checklist"]
+    )
+    assert any(
+        "usuário final como produto" in item
+        for item in review.decision_context["checklist"]
+    )
 
 
 def test_handoff_inventories_every_approved_mdd_artifact() -> None:

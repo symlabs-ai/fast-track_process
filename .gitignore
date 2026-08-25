@@ -22,10 +22,6 @@ dist/
 # OS
 .DS_Store
 
-# Pre-commit configs (gerados pelo setup_env.sh na raiz — env/git-dev/ é o fonte)
-/pre-commit-config.yaml
-/ruff.toml
-
 # Environment — configuração local (cada usuário tem o seu, não commitar)
 environment/gateway.md
 environment/*.local.md

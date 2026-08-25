@@ -2,6 +2,7 @@
 MetricsTracker — rastreamento de métricas (RF-05).
 Opera sobre o campo 'metrics' do arquivo de estado.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,7 +31,9 @@ class MetricsTracker:
         data["metrics"] = metrics
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(
+                data, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+            )
 
     def add_tokens(self, n: int) -> None:
         m = self._load_metrics()

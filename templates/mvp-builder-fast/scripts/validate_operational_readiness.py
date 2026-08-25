@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -16,22 +16,49 @@ class ValidationError(AssertionError):
 
 
 TEXT_SUFFIXES = {
-    ".css", ".html", ".js", ".jsx", ".mjs", ".py", ".rs", ".swift",
-    ".ts", ".tsx", ".vue", ".kt", ".kts", ".java",
+    ".css",
+    ".html",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".py",
+    ".rs",
+    ".swift",
+    ".ts",
+    ".tsx",
+    ".vue",
+    ".kt",
+    ".kts",
+    ".java",
 }
 EXCLUDED_PARTS = {
-    ".git", ".ft", "node_modules", "target", "dist", "build", "coverage",
-    "tests", "test", "fixtures", "__mocks__", "test-results",
+    ".git",
+    ".ft",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "coverage",
+    "tests",
+    "test",
+    "fixtures",
+    "__mocks__",
+    "test-results",
 }
 RUNTIME_PROHIBITIONS = (
     ("default synthetic seed", re.compile(r"\b_default_seed\s*\(")),
     ("visual-state materializer", re.compile(r"\bmaterializeVisualState\b")),
     ("visual-state production module", re.compile(r"visual[-_]state[-_]data", re.I)),
-    ("mock/fake/demo runtime data", re.compile(r"\b(?:mock|fake|demo)[_-]?(?:data|seed|provider|state)\b", re.I)),
+    (
+        "mock/fake/demo runtime data",
+        re.compile(r"\b(?:mock|fake|demo)[_-]?(?:data|seed|provider|state)\b", re.I),
+    ),
 )
 FONT_SIZE = re.compile(r"font-size\s*:\s*([0-9]+(?:\.[0-9]+)?)px", re.I)
 FONT_SHORTHAND = re.compile(r"\bfont\s*:\s*[^;\n]*?\b([0-9]+(?:\.[0-9]+)?)px", re.I)
-INLINE_FONT_SIZE = re.compile(r"\bfontSize\s*(?::|=)\s*(?:\{\s*)?[\"']?([0-9]+(?:\.[0-9]+)?)", re.I)
+INLINE_FONT_SIZE = re.compile(
+    r"\bfontSize\s*(?::|=)\s*(?:\{\s*)?[\"']?([0-9]+(?:\.[0-9]+)?)", re.I
+)
 PLACEHOLDERS = {"", "-", "—", "n/a", "na", "none", "null", "tbd", "todo"}
 
 
@@ -80,7 +107,9 @@ def _backlog_scope(path: Path) -> set[str]:
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         normalized = [cell.casefold() for cell in cells]
         if "id" in normalized and "prioridade" in normalized and "status" in normalized:
-            header = {name: normalized.index(name) for name in ("id", "prioridade", "status")}
+            header = {
+                name: normalized.index(name) for name in ("id", "prioridade", "status")
+            }
             continue
         if header is None or not cells or set("".join(cells)) <= {"-", ":"}:
             continue
@@ -106,7 +135,11 @@ def _source_files(path: Path) -> list[Path]:
         if relative_parts & EXCLUDED_PARTS:
             continue
         name = candidate.name.casefold()
-        if ".test." in name or ".spec." in name or candidate.suffix.casefold() not in TEXT_SUFFIXES:
+        if (
+            ".test." in name
+            or ".spec." in name
+            or candidate.suffix.casefold() not in TEXT_SUFFIXES
+        ):
             continue
         files.append(candidate)
     return files
@@ -115,12 +148,16 @@ def _source_files(path: Path) -> list[Path]:
 def _scan_runtime(root: Path, paths: list[Any]) -> list[str]:
     hits: list[str] = []
     for index, raw in enumerate(paths):
-        production = _safe_path(root, raw, f"scan.production_paths[{index}]", file=False)
+        production = _safe_path(
+            root, raw, f"scan.production_paths[{index}]", file=False
+        )
         for source in _source_files(production):
             try:
                 text = source.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
-                raise ValidationError(f"cannot read production source: {source}") from exc
+                raise ValidationError(
+                    f"cannot read production source: {source}"
+                ) from exc
             relative = source.relative_to(root).as_posix()
             for label, pattern in RUNTIME_PROHIBITIONS:
                 if pattern.search(text) or pattern.search(source.name):
@@ -129,18 +166,27 @@ def _scan_runtime(root: Path, paths: list[Any]) -> list[str]:
                 for match in INLINE_FONT_SIZE.finditer(line):
                     size = float(match.group(1))
                     if 0 < size < 12:
-                        hits.append(f"{relative}:{line_number}: readable font below 12px ({size:g}px)")
+                        hits.append(
+                            f"{relative}:{line_number}: readable font below 12px ({size:g}px)"
+                        )
             if source.suffix.casefold() == ".css":
                 for line_number, line in enumerate(text.splitlines(), start=1):
-                    for match in (*FONT_SIZE.finditer(line), *FONT_SHORTHAND.finditer(line)):
+                    for match in (
+                        *FONT_SIZE.finditer(line),
+                        *FONT_SHORTHAND.finditer(line),
+                    ):
                         size = float(match.group(1))
                         if 0 < size < 12:
-                            hits.append(f"{relative}:{line_number}: readable font below 12px ({size:g}px)")
+                            hits.append(
+                                f"{relative}:{line_number}: readable font below 12px ({size:g}px)"
+                            )
     return sorted(set(hits))
 
 
 def validate(report_path: Path, project_contract_path: Path, *, root: Path) -> None:
-    report = _mapping(yaml.safe_load(report_path.read_text(encoding="utf-8")) or {}, "report")
+    report = _mapping(
+        yaml.safe_load(report_path.read_text(encoding="utf-8")) or {}, "report"
+    )
     if report.get("schema_version") != 1:
         raise ValidationError("schema_version must be 1")
     if report.get("evidence_grade") != "OPERATIONAL_REAL_DATA":
@@ -164,7 +210,10 @@ def validate(report_path: Path, project_contract_path: Path, *, root: Path) -> N
 
     ui = _mapping(report.get("ui", {}), "ui")
     if ui.get("applicable") is True:
-        if not isinstance(ui.get("minimum_observed_font_px"), (int, float)) or ui["minimum_observed_font_px"] < 12:
+        if (
+            not isinstance(ui.get("minimum_observed_font_px"), (int, float))
+            or ui["minimum_observed_font_px"] < 12
+        ):
             raise ValidationError("ui.minimum_observed_font_px must be at least 12")
         if ui.get("zoom_percent") != 100:
             raise ValidationError("ui.zoom_percent must be 100")
@@ -178,7 +227,10 @@ def validate(report_path: Path, project_contract_path: Path, *, root: Path) -> N
     declared_hits = _list(scan.get("prohibited_hits"), "scan.prohibited_hits")
     actual_hits = _scan_runtime(root, production_paths)
     if declared_hits or actual_hits:
-        raise ValidationError("prohibited production runtime found: " + "; ".join(actual_hits or map(str, declared_hits)))
+        raise ValidationError(
+            "prohibited production runtime found: "
+            + "; ".join(actual_hits or map(str, declared_hits))
+        )
 
     backlog_path = _safe_path(root, report.get("scope_path"), "scope_path", file=True)
     scope = _backlog_scope(backlog_path)
@@ -195,13 +247,17 @@ def validate(report_path: Path, project_contract_path: Path, *, root: Path) -> N
         if not evidence:
             raise ValidationError(f"{ref} has no operational evidence")
         for evidence_index, path in enumerate(evidence):
-            _safe_path(root, path, f"results[{index}].evidence[{evidence_index}]", file=True)
+            _safe_path(
+                root, path, f"results[{index}].evidence[{evidence_index}]", file=True
+            )
         journey_ids = _list(result.get("journeys"), f"results[{index}].journeys")
         if not journey_ids:
             raise ValidationError(f"{ref} is not linked to an operational journey")
         indexed[ref] = result
     if set(indexed) != scope:
-        raise ValidationError(f"P0/P1 coverage mismatch: missing={sorted(scope-set(indexed))}, extra={sorted(set(indexed)-scope)}")
+        raise ValidationError(
+            f"P0/P1 coverage mismatch: missing={sorted(scope - set(indexed))}, extra={sorted(set(indexed) - scope)}"
+        )
 
     journeys = _list(report.get("journeys"), "journeys")
     journey_index: dict[str, dict[str, Any]] = {}
@@ -212,25 +268,46 @@ def validate(report_path: Path, project_contract_path: Path, *, root: Path) -> N
             raise ValidationError(f"duplicate journey {journey_id}")
         if journey.get("result") != "PASS":
             raise ValidationError(f"journey {journey_id} is not PASS")
-        if journey.get("navigation_mode") not in {"production_ui", "public_api", "public_cli", "native_ui"}:
-            raise ValidationError(f"journey {journey_id} does not use a production public surface")
+        if journey.get("navigation_mode") not in {
+            "production_ui",
+            "public_api",
+            "public_cli",
+            "native_ui",
+        }:
+            raise ValidationError(
+                f"journey {journey_id} does not use a production public surface"
+            )
         if journey.get("data_origin") != "created_via_public_interface":
             raise ValidationError(f"journey {journey_id} uses non-operational data")
         canary = _mapping(journey.get("canary"), f"journeys[{index}].canary")
-        created = _text(canary.get("created_value"), f"journeys[{index}].canary.created_value")
-        persisted = _text(canary.get("persisted_value"), f"journeys[{index}].canary.persisted_value")
-        observed = _text(canary.get("observed_value"), f"journeys[{index}].canary.observed_value")
+        created = _text(
+            canary.get("created_value"), f"journeys[{index}].canary.created_value"
+        )
+        persisted = _text(
+            canary.get("persisted_value"), f"journeys[{index}].canary.persisted_value"
+        )
+        observed = _text(
+            canary.get("observed_value"), f"journeys[{index}].canary.observed_value"
+        )
         if not created == persisted == observed:
-            raise ValidationError(f"journey {journey_id} canary differs across write/persistence/presentation")
+            raise ValidationError(
+                f"journey {journey_id} canary differs across write/persistence/presentation"
+            )
         if journey.get("persistence_restart_verified") is not True:
-            raise ValidationError(f"journey {journey_id} did not survive a real restart")
+            raise ValidationError(
+                f"journey {journey_id} did not survive a real restart"
+            )
         evidence = _list(journey.get("evidence"), f"journeys[{index}].evidence")
         if not evidence:
             raise ValidationError(f"journey {journey_id} has no evidence")
         for evidence_index, path in enumerate(evidence):
-            _safe_path(root, path, f"journeys[{index}].evidence[{evidence_index}]", file=True)
+            _safe_path(
+                root, path, f"journeys[{index}].evidence[{evidence_index}]", file=True
+            )
         journey_index[journey_id] = journey
-    referenced_journeys = {str(item) for result in indexed.values() for item in result["journeys"]}
+    referenced_journeys = {
+        str(item) for result in indexed.values() for item in result["journeys"]
+    }
     if not referenced_journeys or not referenced_journeys.issubset(journey_index):
         raise ValidationError("results reference missing operational journeys")
 
@@ -240,7 +317,10 @@ def validate(report_path: Path, project_contract_path: Path, *, root: Path) -> N
     if report.get("verdict") != "APPROVED":
         raise ValidationError("verdict must be APPROVED")
 
-    contract = _mapping(yaml.safe_load(project_contract_path.read_text(encoding="utf-8")) or {}, "project contract")
+    contract = _mapping(
+        yaml.safe_load(project_contract_path.read_text(encoding="utf-8")) or {},
+        "project contract",
+    )
     dod = _mapping(contract.get("definition_of_done"), "definition_of_done")
     gates = _list(dod.get("required_gates"), "definition_of_done.required_gates")
     expected_gate = {
@@ -250,7 +330,9 @@ def validate(report_path: Path, project_contract_path: Path, *, root: Path) -> N
         "equals": "APPROVED",
     }
     if expected_gate not in gates:
-        raise ValidationError("project-close does not require the operational-real-data gate")
+        raise ValidationError(
+            "project-close does not require the operational-real-data gate"
+        )
 
 
 def main() -> int:
@@ -260,7 +342,11 @@ def main() -> int:
     args = parser.parse_args()
     root = Path.cwd().resolve()
     try:
-        validate((root / args.report).resolve(), (root / args.project_contract).resolve(), root=root)
+        validate(
+            (root / args.report).resolve(),
+            (root / args.project_contract).resolve(),
+            root=root,
+        )
     except (OSError, UnicodeError, yaml.YAMLError, ValidationError) as exc:
         parser.error(str(exc))
     return 0

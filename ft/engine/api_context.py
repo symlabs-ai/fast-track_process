@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def _normalise_api_path(raw: str) -> str:
@@ -71,9 +71,7 @@ def extract_api_endpoint_candidates(
                     " ",
                     description.replace("|", " "),
                 ).strip(" -–:`")[:72]
-                candidates.append(
-                    (method, path, description or f"{method} {path}")
-                )
+                candidates.append((method, path, description or f"{method} {path}"))
 
     if ("GET", "/health") not in {
         (method, path) for method, path, _description in candidates
@@ -103,9 +101,7 @@ def enrich_api_contract_feedback(
     for method, path, description in candidates:
         request = "-" if method == "GET" else "`{...}`"
         response = (
-            '`{ "status": "ok" }`'
-            if path == "/health"
-            else '`{ "items": [...] }`'
+            '`{ "status": "ok" }`' if path == "/health" else '`{ "items": [...] }`'
         )
         errors = "500" if method == "GET" else "400, 500"
         rows.append(

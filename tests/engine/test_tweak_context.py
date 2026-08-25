@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -170,7 +170,11 @@ def test_tweak_delta_precedes_bounded_product_manifest_on_retry(tmp_path: Path) 
     )
     _write(tmp_path, "src/theme.css", ".save { color: red; }\n")
     for index in range(150):
-        _write(tmp_path, f"src/components/component_{index:03}.tsx", "export default null;\n")
+        _write(
+            tmp_path,
+            f"src/components/component_{index:03}.tsx",
+            "export default null;\n",
+        )
     _git(tmp_path, "add", "docs", "src")
     _git(tmp_path, "commit", "-qm", "base")
     base = _git(tmp_path, "rev-parse", "HEAD")

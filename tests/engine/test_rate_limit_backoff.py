@@ -11,14 +11,13 @@ from unittest.mock import patch
 import pytest
 
 from ft.engine.delegate import (
-    DelegateResult,
     _RATE_LIMIT_PATTERNS,
     _RATE_LIMIT_WAIT,
+    DelegateResult,
     _rate_limit_backoff_schedule,
     delegate_to_llm,
 )
 from ft.engine.runner import RATE_LIMIT_MARKER, StepRunner
-
 
 _PROCESS_YAML = """
 process_id: test-rate-limit
@@ -91,7 +90,9 @@ class TestRateLimitedFlag:
         assert _RATE_LIMIT_PATTERNS.search(output)
 
     def test_pattern_matches_429_only_with_error_context(self):
-        assert _RATE_LIMIT_PATTERNS.search("API Error: 429 rate_limit — try again later")
+        assert _RATE_LIMIT_PATTERNS.search(
+            "API Error: 429 rate_limit — try again later"
+        )
         assert _RATE_LIMIT_PATTERNS.search("HTTP 429 Too Many Requests")
 
     def test_pattern_ignores_opencode_timestamps_and_step_limits(self):
@@ -186,7 +187,9 @@ class TestRunnerPause:
         runner.init_state()
         state = runner.state_mgr.load()
         node = runner.graph.get_node(state.current_node)
-        runner.state_mgr.block(f"{RATE_LIMIT_MARKER} API indisponível no node {node.id}")
+        runner.state_mgr.block(
+            f"{RATE_LIMIT_MARKER} API indisponível no node {node.id}"
+        )
 
         runner._pause_for_rate_limit(node, "sprint-01")
 
@@ -344,8 +347,7 @@ class TestLargePromptViaStdin:
 
         big_task = "x" * (_MAX_ARGV_PROMPT_BYTES + 1)
         raw_done = (
-            '{"type":"item.completed","item":'
-            '{"type":"agent_message","text":"DONE"}}'
+            '{"type":"item.completed","item":{"type":"agent_message","text":"DONE"}}'
         )
         captured = {}
         fake_git = SimpleNamespace(stdout="", stderr="", returncode=0)

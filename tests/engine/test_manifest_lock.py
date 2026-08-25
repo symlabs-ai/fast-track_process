@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import stat
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 import yaml
 
 from ft.cli import main as cli_main
-from ft.engine import layout
-from ft.engine import paths
+from ft.engine import layout, paths
 from ft.engine.state import process_start_identity
 
 
@@ -144,8 +143,7 @@ def test_suspended_project_lock_allows_other_process_then_reacquires(
             _wait_for_path(second_ready)
             assert second_ready.read_text(encoding="utf-8") == "blocked"
             assert not second_acquired.exists(), (
-                "o processo externo atravessou o lock que deveria ter sido "
-                "readquirido"
+                "o processo externo atravessou o lock que deveria ter sido readquirido"
             )
 
         assert second is not None

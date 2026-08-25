@@ -38,9 +38,7 @@ def _patch_common(monkeypatch, tmp_path, cycles):
         raise AmbiguousCycleError(cycles)
 
     monkeypatch.setattr(runs_mod, "select_cycle", fake_select)
-    monkeypatch.setattr(
-        cli, "get_runner", lambda **kw: _StubRunner(kw.get("cycle"))
-    )
+    monkeypatch.setattr(cli, "get_runner", lambda **kw: _StubRunner(kw.get("cycle")))
 
 
 def test_status_fans_out_labeled_blocks_for_each_open_cycle(
@@ -57,9 +55,7 @@ def test_status_fans_out_labeled_blocks_for_each_open_cycle(
     assert out.count("<status ") == 2
 
 
-def test_status_with_explicit_cycle_does_not_fan_out(
-    monkeypatch, tmp_path, capsys
-):
+def test_status_with_explicit_cycle_does_not_fan_out(monkeypatch, tmp_path, capsys):
     _patch_common(monkeypatch, tmp_path, ["cycle-a", "cycle-b"])
 
     cli.cmd_status(SimpleNamespace(cycle="cycle-b"))

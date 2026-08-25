@@ -7,9 +7,9 @@ de parallel_group no process_validator.
 
 from __future__ import annotations
 
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -28,7 +28,6 @@ from ft.engine.process_validator import validate_process
 from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import StateManager
 from ft.engine.trace import build_run_report
-
 
 _PARALLEL_PROCESS = """\
 id: parallel_proc
@@ -312,21 +311,35 @@ def _graph_with(nodes: list[Node]):
 
 
 def test_validator_rejects_shared_outputs_in_group() -> None:
-    from ft.engine.process_validator import _check_parallel_groups, ValidationReport
+    from ft.engine.process_validator import ValidationReport, _check_parallel_groups
 
     report = ValidationReport()
     nodes = [
-        Node(id="a", type="document", title="A", executor="llm_coder",
-             outputs=["docs/x.md"], parallel_group="g", next="b"),
-        Node(id="b", type="document", title="B", executor="llm_coder",
-             outputs=["docs/x.md"], parallel_group="g", next="end"),
+        Node(
+            id="a",
+            type="document",
+            title="A",
+            executor="llm_coder",
+            outputs=["docs/x.md"],
+            parallel_group="g",
+            next="b",
+        ),
+        Node(
+            id="b",
+            type="document",
+            title="B",
+            executor="llm_coder",
+            outputs=["docs/x.md"],
+            parallel_group="g",
+            next="end",
+        ),
     ]
     _check_parallel_groups(_graph_with(nodes), report)
     assert any("outputs sobrepostos" in i.message for i in report.errors)
 
 
 def test_validator_rejects_parent_child_outputs_in_group() -> None:
-    from ft.engine.process_validator import _check_parallel_groups, ValidationReport
+    from ft.engine.process_validator import ValidationReport, _check_parallel_groups
 
     report = ValidationReport()
     nodes = [
@@ -354,14 +367,28 @@ def test_validator_rejects_parent_child_outputs_in_group() -> None:
 
 
 def test_validator_rejects_control_and_python_nodes_in_group() -> None:
-    from ft.engine.process_validator import _check_parallel_groups, ValidationReport
+    from ft.engine.process_validator import ValidationReport, _check_parallel_groups
 
     report = ValidationReport()
     nodes = [
-        Node(id="a", type="gate", title="A", executor="python",
-             outputs=["docs/x.md"], parallel_group="g", next="b"),
-        Node(id="b", type="document", title="B", executor="llm_coder",
-             outputs=["docs/y.md"], parallel_group="g", next="end"),
+        Node(
+            id="a",
+            type="gate",
+            title="A",
+            executor="python",
+            outputs=["docs/x.md"],
+            parallel_group="g",
+            next="b",
+        ),
+        Node(
+            id="b",
+            type="document",
+            title="B",
+            executor="llm_coder",
+            outputs=["docs/y.md"],
+            parallel_group="g",
+            next="end",
+        ),
     ]
     _check_parallel_groups(_graph_with(nodes), report)
     messages = [i.message for i in report.errors]
@@ -369,9 +396,9 @@ def test_validator_rejects_control_and_python_nodes_in_group() -> None:
     assert any("exige executor LLM" in m for m in messages)
 
 
-def test_mvp_builder_template_parallel_groups_are_valid() -> None:
+def test_mvp_builder_fast_template_parallel_groups_are_valid() -> None:
     root = Path(__file__).resolve().parents[2]
-    graph = load_graph(root / "templates" / "mvp-builder" / "process.yml")
+    graph = load_graph(root / "templates" / "mvp-builder-fast" / "process.yml")
     report = validate_process(graph)
     assert report.passed, [i.message for i in report.errors]
 
@@ -397,7 +424,9 @@ def test_mvp_builder_template_parallel_groups_are_valid() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _git(
+    repo: Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         cwd=repo,

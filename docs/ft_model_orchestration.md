@@ -75,6 +75,11 @@ econômicos com validators, em vez de elevar o modelo principal.
 
 ## Como declarar no processo
 
+Um processo de exemplo completo e validado, com uma troca de modelo por etapa
+(gates Python, discovery econômico, implementação equilibrada, revisão de risco
+no modelo mais forte e auditoria cross-provider), está em
+`docs/examples/model-orchestration-process.yml`.
+
 O default do ciclo deve ser a rota mais frequente. Declare override no node
 quando o papel for diferente. O exemplo usa Codex; substitua somente por uma
 combinação validada no ambiente.
@@ -117,6 +122,92 @@ O modelo de revisão não corrige o produto. Se encontrar defeito, a rota retorn
 ao node focal de correção e executa os validators novamente. Para nodes Claude,
 use o executor e os identificadores aceitos no probe; aliases só são aceitáveis
 quando a reprodutibilidade não exigir versão fixada.
+
+### Harness OpenCode: Laguna no PGX
+
+Quando o ambiente executor expuser `pgx/laguna-2k`, `pgx/laguna-4k`,
+`pgx/laguna-8k`, `pgx/laguna-16k` e `pgx/laguna-32k`, o harness dos
+orquestradores usa a seguinte política objetiva:
+
+| Perfil | Uso | Condição operacional |
+| --- | --- | --- |
+| `pgx/laguna-2k` | discovery, inventário, tarefas mecânicas, uso intensivo de tools e respostas curtas | o contrato cabe em até 2K tokens de saída |
+| `pgx/laguna-4k` | implementação curta e delimitada | 2K são insuficientes, mas o contrato cabe em 4K |
+| `pgx/laguna-8k` | implementação comum | default do ciclo |
+| `pgx/laguna-16k` | revisão, arquitetura e artefatos longos | há evidência de que 8K de saída são insuficientes |
+| `pgx/laguna-32k` | geração excepcional | seleção manual, com justificativa e slot exclusivo |
+
+Os cinco perfis usam o mesmo modelo base. O sufixo representa o teto de saída,
+não uma promoção de qualidade. Como a janela total é compartilhada entre
+prompt e resposta, um perfil com saída maior deixa menos espaço para o prompt;
+não selecione `16k` ou `32k` preventivamente. O perfil 32K nunca é default:
+ele reserva 25% de uma janela de 128K e pode manter o slot ocupado por dezenas
+de minutos.
+
+Valide os nomes no host que executará o ciclo e configure o default mais
+frequente:
+
+```bash
+ft llm-capabilities --json
+ft llm-defaults \
+  --agent opencode \
+  --model pgx/laguna-8k \
+  --effort medium
+```
+
+Declare exceções por node, nunca por troca silenciosa durante uma chamada:
+
+```yaml
+- id: feature.discovery
+  type: discovery
+  executor: opencode
+  llm_engine: opencode
+  llm_model: pgx/laguna-2k
+  llm_effort: medium
+  outputs: [docs/feature-map.md]
+  write_scope: [docs/feature-map.md]
+
+- id: feature.implement
+  type: build
+  executor: opencode
+  llm_engine: opencode
+  llm_model: pgx/laguna-8k
+  llm_effort: medium
+  outputs: [src/feature.py, tests/test_feature.py]
+  validators:
+    - tests_pass: true
+
+- id: feature.review_long
+  type: review
+  executor: opencode
+  llm_engine: opencode
+  llm_model: pgx/laguna-16k
+  llm_effort: medium
+  outputs: [docs/review/feature.md]
+  write_scope: [docs/review/feature.md]
+
+- id: feature.export_exceptional
+  type: build
+  executor: opencode
+  llm_engine: opencode
+  llm_model: pgx/laguna-32k
+  llm_effort: medium
+  outputs: [docs/export/complete.md]
+  write_scope: [docs/export/complete.md]
+```
+
+Retry preserva o perfil. O escalonamento `2K → 4K → 8K → 16K → 32K` ocorre
+somente na fronteira de um novo node ou episódio e exige ao menos um destes
+sinais:
+
+- a resposta anterior foi truncada;
+- um validator demonstrou artefato incompleto por falta de saída; ou
+- o escopo descoberto exige revisão, arquitetura ou artefato que não cabe no
+  teto atual.
+
+Perfil indisponível bloqueia a rota. O orquestrador não substitui o modelo por
+outro alias e não reduz validators, `write_scope`, testes ou human gates para
+fazer a execução caber.
 
 ## Escalonamento e troca de rota
 

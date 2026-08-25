@@ -13,7 +13,6 @@ import os
 import re
 from pathlib import Path
 
-
 _PROCESS_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -53,7 +52,9 @@ def legacy_flat_process_file(project_root: str | Path) -> Path:
 
 def project_named_process_dir(project_root: str | Path, process_name: str) -> Path:
     """Directory of a named local process under ``.ft/process/``."""
-    if not isinstance(process_name, str) or not _PROCESS_NAME_RE.fullmatch(process_name):
+    if not isinstance(process_name, str) or not _PROCESS_NAME_RE.fullmatch(
+        process_name
+    ):
         raise ValueError(f"nome de processo inválido: {process_name!r}")
     return project_process_dir(project_root) / process_name
 

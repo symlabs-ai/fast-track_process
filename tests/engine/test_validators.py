@@ -10,11 +10,12 @@ import yaml
 from ft.engine.parallel import check_independence
 from ft.engine.validators.artifacts import (
     api_contract_complete,
+    backlog_pending_decisions,
     command_succeeds,
     demand_coverage,
     document_quality,
-    file_exists,
     features_catalog_valid,
+    file_exists,
     has_sections,
     implemented_backlog_covered_by_features,
     library_contract_complete,
@@ -22,23 +23,25 @@ from ft.engine.validators.artifacts import (
     min_user_stories,
     navigation_contract_valid,
     navigation_reachability,
-    review_chain_approved,
-    review_outcome_valid,
-    backlog_pending_decisions,
     project_backlog_valid,
     pytest_red_quality,
     relative_dates_only,
+    review_chain_approved,
+    review_outcome_valid,
     sections_unchanged,
     task_list_references_backlog,
-    test_identity_ready as validate_test_identity_ready,
-    ui_criteria_ids,
     ui_criteria_coverage,
+    ui_criteria_ids,
+)
+from ft.engine.validators.artifacts import (
+    test_identity_ready as validate_test_identity_ready,
 )
 from ft.engine.validators.gates import gate_acceptance_cli, gate_kb_review
 
 # ---------------------------------------------------------------------------
 # artifacts
 # ---------------------------------------------------------------------------
+
 
 class TestFileExists:
     def test_existing_file(self, tmp_path):
@@ -139,7 +142,9 @@ class TestNavigationReachability:
         evidence = docs / "evidence" / "navigation"
         evidence.mkdir(parents=True)
         scope = docs / "scope.yml"
-        scope.write_text("requirements:\n  - id: R-001\n  - id: R-002\n", encoding="utf-8")
+        scope.write_text(
+            "requirements:\n  - id: R-001\n  - id: R-002\n", encoding="utf-8"
+        )
         contract = {
             "schema_version": 1,
             "scope_sha256": hashlib.sha256(scope.read_bytes()).hexdigest(),
@@ -161,12 +166,16 @@ class TestNavigationReachability:
             ],
         }
         contract_path = docs / "navigation-contract.yml"
-        contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+        contract_path.write_text(
+            yaml.safe_dump(contract, sort_keys=False), encoding="utf-8"
+        )
 
         public_evidence = evidence / "public.txt"
         entitled_evidence = evidence / "entitled.txt"
         public_evidence.write_text("browser journey public PASS\n", encoding="utf-8")
-        entitled_evidence.write_text("browser journey entitled PASS\n", encoding="utf-8")
+        entitled_evidence.write_text(
+            "browser journey entitled PASS\n", encoding="utf-8"
+        )
         report = {
             "schema_version": 1,
             "contract_sha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(),
@@ -211,7 +220,9 @@ class TestNavigationReachability:
             ],
         }
         report_path = docs / "navigation-reachability.yml"
-        report_path.write_text(yaml.safe_dump(report, sort_keys=False), encoding="utf-8")
+        report_path.write_text(
+            yaml.safe_dump(report, sort_keys=False), encoding="utf-8"
+        )
         return scope, contract_path, report_path
 
     @staticmethod
@@ -511,9 +522,7 @@ class TestReviewOutcome:
             "schema_version": 1,
             "scope_sha256": "0" * 64,
             "verdict": "APPROVED",
-            "results": [
-                {"ref": "FX-001", "result": "PASS", "evidence": ["PASS"]}
-            ],
+            "results": [{"ref": "FX-001", "result": "PASS", "evidence": ["PASS"]}],
             "findings": [],
         }
         (tmp_path / "docs/fix-review.yml").write_text(
@@ -548,9 +557,7 @@ class TestReviewOutcome:
             "schema_version": 1,
             "scope_sha256": hashlib.sha256(fix_scope.read_bytes()).hexdigest(),
             "verdict": "APPROVED",
-            "results": [
-                {"ref": "FX-001", "result": "PASS", "evidence": ["PASS"]}
-            ],
+            "results": [{"ref": "FX-001", "result": "PASS", "evidence": ["PASS"]}],
             "findings": [],
         }
         (tmp_path / "docs/fix-review.yml").write_text(
@@ -607,7 +614,9 @@ class TestHasSections:
     def test_all_sections_present(self, tmp_path):
         f = tmp_path / "doc.md"
         f.write_text("# Hipotese\ncontent\n# Visao\ncontent\n# User Stories\ncontent")
-        passed, detail = has_sections("doc.md", ["Hipotese", "Visao", "User Stories"], str(tmp_path))
+        passed, detail = has_sections(
+            "doc.md", ["Hipotese", "Visao", "User Stories"], str(tmp_path)
+        )
         assert passed
 
     def test_missing_section(self, tmp_path):
@@ -637,7 +646,9 @@ class TestDocumentQuality:
             encoding="utf-8",
         )
 
-        passed, detail = document_quality("docs/task_list.md", project_root=str(tmp_path), min_lines_count=5)
+        passed, detail = document_quality(
+            "docs/task_list.md", project_root=str(tmp_path), min_lines_count=5
+        )
 
         assert not passed
         assert "ruido de execucao" in detail
@@ -873,7 +884,9 @@ class TestFeaturesCatalog:
             "| FEAT-001 | active | PB-001 | Cadastro | Cadastro de clientes | cycle-01 | docs/e2e.md | cycle-01 | — |",
         )
 
-        passed, detail = implemented_backlog_covered_by_features(project_root=str(tmp_path))
+        passed, detail = implemented_backlog_covered_by_features(
+            project_root=str(tmp_path)
+        )
 
         assert not passed
         assert "PB-002" in detail
@@ -886,7 +899,9 @@ class TestFeaturesCatalog:
         )
         self._write_features(tmp_path)
 
-        passed, detail = implemented_backlog_covered_by_features(project_root=str(tmp_path))
+        passed, detail = implemented_backlog_covered_by_features(
+            project_root=str(tmp_path)
+        )
 
         assert passed
         assert "0 PB" in detail
@@ -899,7 +914,9 @@ class TestFeaturesCatalog:
         self._write_features(tmp_path)
 
         catalog_passed, _ = features_catalog_valid(project_root=str(tmp_path))
-        coverage_passed, _ = implemented_backlog_covered_by_features(project_root=str(tmp_path))
+        coverage_passed, _ = implemented_backlog_covered_by_features(
+            project_root=str(tmp_path)
+        )
 
         assert catalog_passed
         assert coverage_passed
@@ -909,12 +926,11 @@ class TestApiContractComplete:
     def test_fails_when_product_endpoints_use_root_path(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "PRD.md").write_text(
+            "Como usuário quero criar clientes.\n", encoding="utf-8"
+        )
         (docs / "api_contract.md").write_text(
-            "## Base URL\n\n"
-            "## Endpoints\n\n"
-            "**GET /**\n"
-            "**POST /**\n",
+            "## Base URL\n\n## Endpoints\n\n**GET /**\n**POST /**\n",
             encoding="utf-8",
         )
 
@@ -927,7 +943,9 @@ class TestApiContractComplete:
     def test_fails_when_creation_product_has_no_post(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "PRD.md").write_text(
+            "Como usuário quero criar clientes.\n", encoding="utf-8"
+        )
         (docs / "api_contract.md").write_text(
             "## Base URL\n\n"
             "## Endpoints\n\n"
@@ -948,7 +966,9 @@ class TestApiContractComplete:
     def test_passes_complete_contract(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "PRD.md").write_text(
+            "Como usuário quero criar clientes.\n", encoding="utf-8"
+        )
         (docs / "api_contract.md").write_text(
             "## Base URL\n\n"
             "## Endpoints\n\n"
@@ -970,7 +990,9 @@ class TestApiContractComplete:
     def test_counts_bold_bullet_endpoints_but_still_requires_minimum(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "PRD.md").write_text("Como usuário quero criar clientes.\n", encoding="utf-8")
+        (docs / "PRD.md").write_text(
+            "Como usuário quero criar clientes.\n", encoding="utf-8"
+        )
         (docs / "api_contract.md").write_text(
             "## Base URL\n\n"
             "## Endpoints\n\n"
@@ -979,7 +1001,9 @@ class TestApiContractComplete:
             encoding="utf-8",
         )
 
-        passed, detail = api_contract_complete(project_root=str(tmp_path), min_endpoints=3)
+        passed, detail = api_contract_complete(
+            project_root=str(tmp_path), min_endpoints=3
+        )
 
         assert not passed
         assert "1 endpoint" in detail
@@ -1058,7 +1082,9 @@ class TestRelativeDatesOnly:
     def test_passes_relative_dates(self, tmp_path):
         f = tmp_path / "docs" / "test_data.md"
         f.parent.mkdir()
-        f.write_text("Agenda: HOJE 14:00; HOJE+1 09:00; HOJE-1 18:00\n", encoding="utf-8")
+        f.write_text(
+            "Agenda: HOJE 14:00; HOJE+1 09:00; HOJE-1 18:00\n", encoding="utf-8"
+        )
 
         passed, detail = relative_dates_only(project_root=str(tmp_path))
 
@@ -1097,7 +1123,9 @@ class TestSectionsUnchanged:
             "## User Stories\n### US-01 — Fluxo\nHistoria original.\n\n"
             "## 8.5 Contrato de Navegacao UI\nNovo contrato.\n"
         )
-        current.write_text(baseline + "\n## 8.6 Contrato de Integracao HTTP\nHealth e proxy.\n")
+        current.write_text(
+            baseline + "\n## 8.6 Contrato de Integracao HTTP\nHealth e proxy.\n"
+        )
         snapshot.write_text(baseline)
 
         passed, detail = sections_unchanged(
@@ -1213,14 +1241,18 @@ class TestUICriteriaCoverage:
     def test_ui_criteria_ids_fails_without_stable_ids(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir(parents=True)
-        (docs / "ui_criteria.md").write_text("- Tela inicial mostra resumo.\n", encoding="utf-8")
+        (docs / "ui_criteria.md").write_text(
+            "- Tela inicial mostra resumo.\n", encoding="utf-8"
+        )
 
         passed, detail = ui_criteria_ids(min_count=1, project_root=str(tmp_path))
 
         assert not passed
         assert "use IDs" in detail
 
-    def test_passes_when_identified_criteria_are_reported_and_source_has_component(self, tmp_path):
+    def test_passes_when_identified_criteria_are_reported_and_source_has_component(
+        self, tmp_path
+    ):
         docs = tmp_path / "docs"
         src = tmp_path / "project" / "frontend" / "src"
         docs.mkdir(parents=True)
@@ -1244,7 +1276,9 @@ class TestUICriteriaCoverage:
             encoding="utf-8",
         )
 
-        passed, detail = ui_criteria_coverage(source_dir="project/frontend/src", project_root=str(tmp_path))
+        passed, detail = ui_criteria_coverage(
+            source_dir="project/frontend/src", project_root=str(tmp_path)
+        )
 
         assert passed
         assert "2 criterios" in detail
@@ -1332,8 +1366,12 @@ class TestUICriteriaCoverage:
         src = tmp_path / "project" / "frontend" / "src"
         docs.mkdir(parents=True)
         src.mkdir(parents=True)
-        (docs / "ui_criteria.md").write_text("- [ ] C01: Tela inicial mostra resumo.\n", encoding="utf-8")
-        (src / "main.js").write_text('<main data-ui-criteria="C01"></main>', encoding="utf-8")
+        (docs / "ui_criteria.md").write_text(
+            "- [ ] C01: Tela inicial mostra resumo.\n", encoding="utf-8"
+        )
+        (src / "main.js").write_text(
+            '<main data-ui-criteria="C01"></main>', encoding="utf-8"
+        )
 
         passed, detail = ui_criteria_coverage(
             report_path="docs/screenshot-review.md",
@@ -1368,7 +1406,9 @@ class TestUICriteriaCoverage:
             "- [ ] C01: Tela de filtros possui menu suspenso para status.\n",
             encoding="utf-8",
         )
-        (src / "main.js").write_text('<button data-ui-criteria="C01">Status</button>', encoding="utf-8")
+        (src / "main.js").write_text(
+            '<button data-ui-criteria="C01">Status</button>', encoding="utf-8"
+        )
 
         passed, detail = ui_criteria_coverage(
             report_path=None,
@@ -1383,7 +1423,9 @@ class TestUICriteriaCoverage:
     def test_fails_when_criteria_have_no_ids(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir(parents=True)
-        (docs / "ui_criteria.md").write_text("- Menu suspenso para status.\n", encoding="utf-8")
+        (docs / "ui_criteria.md").write_text(
+            "- Menu suspenso para status.\n", encoding="utf-8"
+        )
         (docs / "screenshot-review.md").write_text("PASS\n", encoding="utf-8")
 
         passed, detail = ui_criteria_coverage(project_root=str(tmp_path))
@@ -1426,8 +1468,7 @@ class TestPytestRedQuality:
             encoding="utf-8",
         )
         (tests / "test_servico_manager.test").write_text(
-            "def test_not_collected():\n"
-            "    assert True\n",
+            "def test_not_collected():\n    assert True\n",
             encoding="utf-8",
         )
 
@@ -1439,7 +1480,9 @@ class TestPytestRedQuality:
 
 class TestCommandSucceeds:
     def test_fails_when_pipeline_left_side_fails(self, tmp_path):
-        passed, detail = command_succeeds("python -c 'raise SystemExit(7)' | tail -5", str(tmp_path))
+        passed, detail = command_succeeds(
+            "python -c 'raise SystemExit(7)' | tail -5", str(tmp_path)
+        )
 
         assert not passed
         assert "código 7" in detail
@@ -1448,14 +1491,18 @@ class TestCommandSucceeds:
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
 
-        passed, detail = command_succeeds("python -m pytest tests/ -q 2>&1 | tail -5", str(tmp_path))
+        passed, detail = command_succeeds(
+            "python -m pytest tests/ -q 2>&1 | tail -5", str(tmp_path)
+        )
 
         assert not passed
         assert "nenhum teste" in detail or "código 5" in detail
 
     def test_reruns_silent_command_for_diagnostics(self, tmp_path):
         silent = MagicMock(returncode=1, stdout="", stderr="")
-        diagnostic = MagicMock(returncode=1, stdout="", stderr="Missing script: \"build\"\n")
+        diagnostic = MagicMock(
+            returncode=1, stdout="", stderr='Missing script: "build"\n'
+        )
 
         with patch(
             "ft.engine.validators.artifacts._run_shell_command",
@@ -1510,6 +1557,7 @@ class TestCommandSucceeds:
 # parallel — independence check
 # ---------------------------------------------------------------------------
 
+
 class TestCheckIndependence:
     def test_disjoint_outputs(self):
         assert check_independence(["src/a.py"], ["src/b.py"]) is True
@@ -1521,10 +1569,12 @@ class TestCheckIndependence:
         assert check_independence([], ["src/a.py"]) is True
 
     def test_partial_overlap(self):
-        assert check_independence(
-            ["src/a.py", "src/shared.py"],
-            ["src/b.py", "src/shared.py"]
-        ) is False
+        assert (
+            check_independence(
+                ["src/a.py", "src/shared.py"], ["src/b.py", "src/shared.py"]
+            )
+            is False
+        )
 
     def test_parent_child_overlap(self):
         assert check_independence(["src/"], ["src/pkg/module.py"]) is False
@@ -1536,6 +1586,7 @@ class TestCheckIndependence:
 # ---------------------------------------------------------------------------
 # gates
 # ---------------------------------------------------------------------------
+
 
 class TestGateAcceptanceCli:
     def test_skip_for_ui_projects(self, tmp_path):

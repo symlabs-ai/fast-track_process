@@ -9,8 +9,9 @@ from typing import Any
 
 import yaml
 
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "validate_mockup_prd_review.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[1] / "scripts" / "validate_mockup_prd_review.py"
+)
 SPEC = importlib.util.spec_from_file_location("validate_mockup_prd_review", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 VALIDATOR = importlib.util.module_from_spec(SPEC)
@@ -56,7 +57,11 @@ class MockupPrdReviewValidatorTests(unittest.TestCase):
         self.prd.parent.mkdir(parents=True, exist_ok=True)
         self.prd.write_text("\n".join(prd_lines) + "\n", encoding="utf-8")
         self.ui_criteria.write_text(
-            "# UI Criteria\n" + "\n".join(f"- C{index:03d}: critério {index}" for index in range(1, total + 1)) + "\n",
+            "# UI Criteria\n"
+            + "\n".join(
+                f"- C{index:03d}: critério {index}" for index in range(1, total + 1)
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -118,7 +123,9 @@ class MockupPrdReviewValidatorTests(unittest.TestCase):
             "prd_sha256": _sha256(self.prd),
             "ui_criteria_sha256": _sha256(self.ui_criteria),
             "screen_map_sha256": _sha256(self.screen_map),
-            "verdict": "REJECTED" if any(view["result"] == "INCOHERENT" for view in views) else "APPROVED",
+            "verdict": "REJECTED"
+            if any(view["result"] == "INCOHERENT" for view in views)
+            else "APPROVED",
             "summary": {
                 "total_views": len(views),
                 "coherent": sum(view["result"] == "COHERENT" for view in views),
@@ -225,7 +232,10 @@ class MockupPrdReviewValidatorTests(unittest.TestCase):
             with self.subTest(case=case):
                 report = self._fixture(mapped=2, auxiliary=True)
                 if case == "order":
-                    report["views"][0], report["views"][1] = report["views"][1], report["views"][0]
+                    report["views"][0], report["views"][1] = (
+                        report["views"][1],
+                        report["views"][0],
+                    )
                     expected_error = "differs from screen-map"
                 elif case == "mapped_tnn":
                     report["views"][0]["prd_screen_id"] = "T02"
@@ -290,8 +300,12 @@ class MockupPrdReviewValidatorTests(unittest.TestCase):
         self._fixture(mapped=1, auxiliary=False)
         screen_map = yaml.safe_load(self.screen_map.read_text(encoding="utf-8"))
         screen_map["screens"][0]["states"][0]["image"] = "../escape.png"
-        self.screen_map.write_text(yaml.safe_dump(screen_map, sort_keys=False), encoding="utf-8")
-        with self.assertRaisesRegex(VALIDATOR.ValidationError, "must stay under images"):
+        self.screen_map.write_text(
+            yaml.safe_dump(screen_map, sort_keys=False), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(
+            VALIDATOR.ValidationError, "must stay under images"
+        ):
             self._validate()
 
     def test_rejects_markdown_yaml_parity_drift(self) -> None:
@@ -301,7 +315,9 @@ class MockupPrdReviewValidatorTests(unittest.TestCase):
             text.replace("RESULT: COHERENT", "RESULT: INCOHERENT"),
             encoding="utf-8",
         )
-        with self.assertRaisesRegex(VALIDATOR.ValidationError, "Markdown state coverage"):
+        with self.assertRaisesRegex(
+            VALIDATOR.ValidationError, "Markdown state coverage"
+        ):
             self._validate()
 
 

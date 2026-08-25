@@ -8,12 +8,12 @@ another machine must initialize its own environment again.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import os
-from pathlib import Path
 import subprocess
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
 
@@ -123,9 +123,7 @@ def run_init_template(
                 f"init [{descriptor.name}] {label}: timeout ({SCRIPT_TIMEOUT_SECONDS}s)"
             ) from exc
         except OSError as exc:
-            raise InitScriptError(
-                f"init [{descriptor.name}] {label}: {exc}"
-            ) from exc
+            raise InitScriptError(f"init [{descriptor.name}] {label}: {exc}") from exc
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip() or "sem saída"
             raise InitScriptError(

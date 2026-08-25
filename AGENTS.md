@@ -76,6 +76,27 @@ capabilities no ambiente alvo, escalonamento por evidência e comparação de
 custo/eficiência com a telemetria real do ciclo. Não responda com preferência
 genérica de modelo nem altere a rota silenciosamente.
 
+### Roteamento objetivo do Laguna no PGX
+
+Quando `ft llm-capabilities --json` confirmar os cinco perfis OpenCode no
+ambiente executor, aplique esta política:
+
+- `pgx/laguna-2k`: discovery, inventário, tarefas mecânicas, uso intensivo de
+  tools e respostas curtas;
+- `pgx/laguna-4k`: implementação curta e delimitada;
+- `pgx/laguna-8k`: implementação comum e rota padrão do ciclo;
+- `pgx/laguna-16k`: revisão, arquitetura e artefatos que comprovadamente
+  exijam mais de 8K tokens de saída;
+- `pgx/laguna-32k`: geração excepcional e manual, nunca rota default.
+
+O sufixo indica a reserva máxima de saída, não uma diferença de qualidade do
+modelo. Os perfis compartilham a mesma janela total; reservar mais saída reduz
+o espaço útil de prompt. Fixe a escolha por node em `llm_model`. Retry preserva
+a rota. Escalone `2K → 4K → 8K → 16K → 32K` somente na fronteira de um novo
+node ou episódio, após truncamento, validação incompleta ou complexidade
+comprovada. Se o perfil não estiver disponível, bloqueie: não faça fallback
+silencioso.
+
 ## 0. Inicializar ou diagnosticar o repositório
 
 ```bash
@@ -117,7 +138,10 @@ ciclo, crie os documentos que o template escolhido exige e faça commit:
 
 - produto novo com `mvp-builder-fast`: rode e encerre primeiro o template `mdd`,
   que produz hipótese, visão, PRD, sumário executivo, pitch deck, proposta de
-  site, um PNG por slide, um PNG vertical do protótipo do site e handoff;
+  site, um PNG por slide, um PNG vertical do protótipo do site e handoff. Em
+  seguida, o builder gera e submete à revisão humana os protótipos raster do
+  produto, derivados de PRD, brief e critérios visuais, antes do planejamento
+  técnico e do código;
 - produto novo com `mvp-builder`: o próprio construtor ainda pode conduzir sua
   fase MDD; `docs/PRD.md` e `docs/TECH_STACK.md` existentes são reaproveitados;
 - produto existente: preserve `docs/PROJECT_BACKLOG.md` como mudanças desejadas e
@@ -159,17 +183,11 @@ Templates principais:
 
 | Template | Uso |
 |---|---|
-| `base` | Grafo mínimo para projetos que querem compor o próprio processo |
-| `feature` | Evolução incremental após o projeto entrar em manutenção |
 | `feature-fast` | Feature de manutenção com sessões persistentes e auditoria do delta |
-| `bug` | Correção focal em projeto entregue, com regressão RED→GREEN |
 | `bug-fast` | Bug de manutenção em duas chamadas LLM e fix focal |
 | `tweak` | Mudança pequena e de baixo risco em projeto entregue |
 | `mdd` | Definição de produto e pacote executivo antes da construção |
-| `mvp-builder` | Processo construtor enquanto o projeto está em `building` |
-| `mvp-builder-fast` | Construtor rápido com plano interno, sessões persistentes e macro-nodes |
-| `fast-track-v2` | Processo histórico V2 |
-| `ft-ui-prototype` | Prototipagem rápida de UI |
+| `mvp-builder-fast` | Construtor rápido: protótipos raster do produto após o PRD, plano interno, sessões persistentes e macro-nodes |
 | `fastfy` | Adoção de repositório legado na base canônica Fast Track |
 | `material_design_pwa` | Evolução de UI existente para Material Design 3 e PWA |
 
@@ -552,3 +570,27 @@ No engine:
 - guia completo: `docs/ft_engine_usage.md`;
 - arquitetura: `docs/mvp-builder-architecture.md`;
 - catálogo global: `templates/`.
+
+<!-- symlabs-symgateway:start -->
+## Symlabs — LLMs via SymGateway por default
+
+Todo uso de OpenAI ou Anthropic neste repositório deve atravessar o
+SymGateway, salvo a exceção FT explícita abaixo. Não crie bypass ad hoc.
+
+- **Codex/OpenAI:** use o profile `symgateway-dev`, com
+  `SYMGATEWAY_API_KEY` e `SYMGATEWAY_PROJECT_SLUG` carregados pelo ambiente do
+  projeto.
+- **Exceção de imagem built-in:** somente um node de processo Fast Track que
+  declare `codex_auth: chatgpt` pode usar o provider OpenAI direto. A exceção
+  cobre o node inteiro, deve exigir login ChatGPT e existe apenas para uma
+  capability built-in requerida, como `$imagegen`/`image_gen`, indisponível em
+  custom providers. Sem login ou capability, bloqueie; não improvise fallback.
+- **Claude/Anthropic:** use `ANTHROPIC_BASE_URL` e `ANTHROPIC_API_KEY` definidos
+  em `.claude/settings.local.json`. Não execute `claude auth login` e não use
+  credencial ou endpoint direto da Anthropic.
+- Segredos permanecem apenas em `.envrc.private` e
+  `.claude/settings.local.json`, ambos ignorados pelo Git. Nunca copie chaves
+  para arquivos versionados, argumentos de processo, logs ou documentação.
+- Fora da exceção declarativa acima, se o roteamento do SymGateway estiver
+  ausente ou indisponível, interrompa a execução e corrija a configuração.
+<!-- symlabs-symgateway:end -->

@@ -72,9 +72,7 @@ def test_cycle_explicito_nao_depende_de_mtime(project: Path) -> None:
     _active_cycle(project, "cycle-02-feature")
     expected = _archived_cycle(project, "cycle-07-tweak")
 
-    label, source, state = evolve.find_cycle_context(
-        project, cycle="cycle-07-tweak"
-    )
+    label, source, state = evolve.find_cycle_context(project, cycle="cycle-07-tweak")
 
     assert "cycle-07-tweak" in label
     assert source == expected

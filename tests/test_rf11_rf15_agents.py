@@ -10,15 +10,15 @@ RF-15: ft_acceptance gera matriz de cenários (happy, edge, error)
 
 import pytest
 
+from ft.engine.acceptance import AcceptanceMatrix
 from ft.engine.agent_policy import AgentPolicy, AgentRole
 from ft.engine.gatekeeper import Gatekeeper, GatekeeperResult
 from ft.engine.tdd_cycle import TDDCycleTracker, TDDPhase
-from ft.engine.acceptance import AcceptanceMatrix
-
 
 # ---------------------------------------------------------------------------
 # RF-11: Cada agente opera apenas dentro do seu escopo
 # ---------------------------------------------------------------------------
+
 
 class TestAgentScope:
     def test_ft_manager_can_advance_nodes(self):
@@ -64,7 +64,7 @@ class TestAgentScope:
         with pytest.raises(PermissionError, match="escopo|scope|permitido"):
             policy.assert_allowed(
                 AgentRole.FORGE_CODER,
-                ".ft/process/fast-track-v2/process.yml",
+                ".ft/process/mvp-builder-fast/process.yml",
             )
 
     def test_path_within_scope_allowed(self):
@@ -84,13 +84,13 @@ class TestAgentScope:
 # RF-12: ft_manager é o único agente que pode avançar nodes
 # ---------------------------------------------------------------------------
 
+
 class TestFtManagerExclusiveAdvance:
     def test_ft_manager_is_only_agent_who_can_advance(self):
         """Apenas ft_manager deve ter can_advance_node=True."""
         policy = AgentPolicy()
         agents_that_can_advance = [
-            role for role in AgentRole
-            if policy.can_advance_node(role)
+            role for role in AgentRole if policy.can_advance_node(role)
         ]
         assert agents_that_can_advance == [AgentRole.FT_MANAGER]
 
@@ -98,6 +98,7 @@ class TestFtManagerExclusiveAdvance:
         """advance_as() chamado por agente não-manager deve lançar exceção."""
         policy = AgentPolicy()
         from ft.engine.state import StateManager
+
         mgr = StateManager(tmp_path / "state.yml")
         mgr.init_from_graph({"id": "proc-001"}, "node.01", 5)
 
@@ -108,6 +109,7 @@ class TestFtManagerExclusiveAdvance:
         """advance_as() chamado por ft_manager deve funcionar."""
         policy = AgentPolicy()
         from ft.engine.state import StateManager
+
         mgr = StateManager(tmp_path / "state.yml")
         mgr.init_from_graph({"id": "proc-001"}, "node.01", 5)
 
@@ -119,6 +121,7 @@ class TestFtManagerExclusiveAdvance:
 # ---------------------------------------------------------------------------
 # RF-13: ft_gatekeeper retorna apenas PASS ou BLOCK
 # ---------------------------------------------------------------------------
+
 
 class TestGatekeeperPassBlock:
     def test_gatekeeper_returns_pass(self):
@@ -162,7 +165,9 @@ class TestGatekeeperPassBlock:
     def test_gatekeeper_reason_on_block(self):
         """Gatekeeper deve fornecer reason ao retornar BLOCK."""
         gk = Gatekeeper()
-        result, reason = gk.evaluate_with_reason({}, all_passed=False, failure_detail="cobertura 65%")
+        result, reason = gk.evaluate_with_reason(
+            {}, all_passed=False, failure_detail="cobertura 65%"
+        )
         assert result == GatekeeperResult.BLOCK
         assert reason is not None
         assert len(reason) > 0
@@ -171,6 +176,7 @@ class TestGatekeeperPassBlock:
 # ---------------------------------------------------------------------------
 # RF-14: forge_coder executa red → green → refactor
 # ---------------------------------------------------------------------------
+
 
 class TestTDDCycleTracker:
     def test_initial_phase_is_red(self, tmp_path):
@@ -243,6 +249,7 @@ class TestTDDCycleTracker:
 # RF-15: ft_acceptance gera matriz de cenários
 # ---------------------------------------------------------------------------
 
+
 class TestAcceptanceMatrix:
     def test_matrix_has_happy_path_scenarios(self):
         """Matriz deve conter cenários de happy path."""
@@ -311,6 +318,7 @@ class TestAcceptanceMatrix:
         matrix.add_scenario("happy", "US-01", "test")
         d = matrix.to_dict()
         import json
+
         serialized = json.dumps(d)  # Não deve lançar exceção
         assert serialized is not None
 

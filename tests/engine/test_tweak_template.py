@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import json
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
-import shutil
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import pytest
 import yaml
@@ -20,7 +20,6 @@ from ft.engine.graph import load_graph
 from ft.engine.layout import validate_template_is_pristine
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import VALIDATOR_REGISTRY, run_validators
-
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "templates" / "tweak"
@@ -40,7 +39,9 @@ def _git(root: Path, *arguments: str) -> None:
     subprocess.run(["git", *arguments], cwd=root, check=True)
 
 
-def _project(tmp_path: Path, request: str = "Mude a cor do botão Salvar para azul.") -> Path:
+def _project(
+    tmp_path: Path, request: str = "Mude a cor do botão Salvar para azul."
+) -> Path:
     root = tmp_path
     scripts = root / ".ft" / "process" / "tweak" / "scripts"
     scripts.mkdir(parents=True)
@@ -56,13 +57,13 @@ def _project(tmp_path: Path, request: str = "Mude a cor do botão Salvar para az
         "project/Makefile",
         "build:\n"
         "\t@printf 'build\\n' >> ../.git/validation-calls.log\n"
-        "\t@if test \"$${MUTATE_ON_BUILD:-0}\" = 1; then "
+        '\t@if test "$${MUTATE_ON_BUILD:-0}" = 1; then '
         "printf '/* generated */\\n' >> button.css; fi\n"
-        "\t@if test \"$${BACKGROUND_ON_BUILD:-0}\" = 1; then "
+        '\t@if test "$${BACKGROUND_ON_BUILD:-0}" = 1; then '
         "(trap '' TERM; sleep 0.3; printf '/* late build */\\n' >> button.css) & fi\n\n"
-        "\t@if test \"$${DETACHED_ON_BUILD:-0}\" = 1; then "
-        "setsid sh -c 'trap \"\" TERM; sleep 0.3; "
-        "printf \"/* late detached build */\\\\n\" >> button.css' "
+        '\t@if test "$${DETACHED_ON_BUILD:-0}" = 1; then '
+        'setsid sh -c \'trap "" TERM; sleep 0.3; '
+        'printf "/* late detached build */\\\\n" >> button.css\' '
         "</dev/null >/dev/null 2>&1 & fi\n\n"
         "run:\n\t@true\n\n"
         "url:\n\t@echo http://127.0.0.1:8021\n",
@@ -484,7 +485,9 @@ def test_tweak_focal_kills_delayed_background_writer_before_receipt(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="requer subreaper Linux"
+)
 def test_tweak_focal_kills_detached_writer_before_receipt(tmp_path):
     root = _project(tmp_path)
     _preflight(root)
@@ -585,7 +588,9 @@ def test_tweak_quick_build_kills_delayed_background_writer(monkeypatch, tmp_path
     assert (root / changed[0]).read_text() == expected
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="requer subreaper Linux"
+)
 def test_tweak_quick_build_kills_detached_writer(monkeypatch, tmp_path):
     root = _project(tmp_path)
     _preflight(root)
@@ -623,7 +628,11 @@ def test_tweak_implementation_rejects_more_than_160_changed_lines(tmp_path):
     root = _project(tmp_path)
     _preflight(root)
     changed = ["project/oversized.css"]
-    _write(root, changed[0], "\n".join(f".x-{index} {{ color: blue; }}" for index in range(161)) + "\n")
+    _write(
+        root,
+        changed[0],
+        "\n".join(f".x-{index} {{ color: blue; }}" for index in range(161)) + "\n",
+    )
     _report(root, changed, "true")
 
     result = _run_validator(root, "implementation")
@@ -860,9 +869,7 @@ def test_tweak_serve_retries_by_starting_next_port_after_real_collision(tmp_path
             str(base_port),
             str(base_port + 1),
         ]
-        assert (root / ".serve_url").read_text().strip().endswith(
-            f":{base_port + 1}"
-        )
+        assert (root / ".serve_url").read_text().strip().endswith(f":{base_port + 1}")
         assert "port_is_free" not in SERVE_HELPER.read_text(encoding="utf-8")
     finally:
         subprocess.run(

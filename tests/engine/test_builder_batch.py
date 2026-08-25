@@ -7,10 +7,10 @@ fronteiras pertencem ao engine e são cobertas aqui.
 
 from __future__ import annotations
 
-from collections import Counter
-from copy import deepcopy
 import hashlib
 import os
+from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,6 @@ from ft.engine.builder_batch import (
     save_runtime,
     validate_batch_plan,
 )
-
 
 REQUEST_TEXT = """\
 WiFire Go — feedback da primeira etapa de validação
@@ -265,21 +264,13 @@ def test_valid_plan_binds_exact_request_and_covers_all_11_requirements_once() ->
     assert len(plan.requirements) == 11
     assert plan.requirement_texts["R-005"] == REQUIREMENTS[4]["text"]
     coverage = Counter(
-        requirement
-        for lane in plan.lanes
-        for requirement in lane.requirements
+        requirement for lane in plan.lanes for requirement in lane.requirements
     )
     assert coverage == Counter({f"R-{index:03d}": 1 for index in range(1, 12)})
     assert [lane.id for lane in plan.lanes] == ["L-01", "L-02", "L-03", "L-04"]
     assert _lane(plan, "L-04").areas == (
-        (
-            "project/android/app/src/main/java/com/wifire/go/ui/"
-            "onboarding/completion"
-        ),
-        (
-            "project/android/app/src/main/java/com/wifire/go/data/"
-            "onboarding/completion"
-        ),
+        ("project/android/app/src/main/java/com/wifire/go/ui/onboarding/completion"),
+        ("project/android/app/src/main/java/com/wifire/go/data/onboarding/completion"),
     )
 
 
@@ -340,9 +331,9 @@ def test_dependencies_must_reference_another_known_lane(
     depends_on: list[str],
 ) -> None:
     payload = _valid_payload()
-    next(
-        lane for lane in payload["lanes"] if lane["id"] == lane_id
-    )["depends_on"] = depends_on
+    next(lane for lane in payload["lanes"] if lane["id"] == lane_id)["depends_on"] = (
+        depends_on
+    )
 
     with pytest.raises(BatchPlanError, match=r"(?i)(depend|lane)"):
         _validated(payload)
@@ -416,14 +407,8 @@ def test_actual_changes_must_stay_in_lane_ownership_or_own_evidence() -> None:
     outside = paths_outside_ownership(
         changed,
         allowed=[
-            (
-                "project/android/app/src/main/java/com/wifire/go/ui/"
-                "onboarding/terms"
-            ),
-            (
-                "project/android/app/src/androidTest/java/com/wifire/go/"
-                "onboarding/terms"
-            ),
+            ("project/android/app/src/main/java/com/wifire/go/ui/onboarding/terms"),
+            ("project/android/app/src/androidTest/java/com/wifire/go/onboarding/terms"),
         ],
         evidence_root=POLICY["evidence_root"],
         lane_id="L-01",

@@ -9,9 +9,9 @@ each workspace can customize them without patching the engine.
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-import subprocess
 
 from ft.engine import paths
 from ft.engine.layout import (
@@ -54,7 +54,9 @@ class BootstrapResult:
         return self.status in {"created", "updated"}
 
 
-def _run_git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_git(
+    root: Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             ["git", *args],
@@ -114,7 +116,11 @@ def _common_scaffold(root: Path) -> tuple[str, ...]:
     process_keep = paths.project_process_dir(root) / ".gitkeep"
     process_keep.touch(exist_ok=True)
     return tuple(
-        sorted(path.relative_to(root).as_posix() for path in scaffold if path.is_file() and path not in before)
+        sorted(
+            path.relative_to(root).as_posix()
+            for path in scaffold
+            if path.is_file() and path not in before
+        )
     )
 
 
@@ -146,7 +152,9 @@ def bootstrap_project(
     """
     requested = Path(project_root).expanduser()
     if requested.is_symlink():
-        raise BootstrapError(f"raiz do projeto não pode ser link simbólico: {requested}")
+        raise BootstrapError(
+            f"raiz do projeto não pode ser link simbólico: {requested}"
+        )
     existed = requested.exists()
     if existed and not requested.is_dir():
         raise BootstrapError(f"raiz do projeto não é diretório: {requested}")
@@ -176,7 +184,9 @@ def bootstrap_project(
         raise BootstrapError(f"diretório .ft não pode ser link simbólico: {ft_dir}")
     manifest_path = paths.project_manifest(root)
     if manifest_path.is_symlink():
-        raise BootstrapError(f"manifest FT não pode ser link simbólico: {manifest_path}")
+        raise BootstrapError(
+            f"manifest FT não pode ser link simbólico: {manifest_path}"
+        )
     if manifest_path.is_file():
         try:
             manifest = read_manifest(root)
@@ -185,9 +195,7 @@ def bootstrap_project(
                 f"workspace FT inconsistente; execute o reparo antes: {exc}"
             ) from exc
         if manifest.get("schema_version") == LEGACY_NAMED_LAYOUT_VERSION:
-            raise BootstrapError(
-                "manifest v2 requer migração; execute ft init --fix"
-            )
+            raise BootstrapError("manifest v2 requer migração; execute ft init --fix")
         if manifest.get("schema_version") != LAYOUT_VERSION:
             raise BootstrapError("manifest FT possui versão não suportada")
 
@@ -230,7 +238,13 @@ def bootstrap_project(
     commit = head_after if head_after != head_before else None
 
     changed = bool(actions)
-    status = "created" if not existed or created_repository else "updated" if changed else "unchanged"
+    status = (
+        "created"
+        if not existed or created_repository
+        else "updated"
+        if changed
+        else "unchanged"
+    )
     return BootstrapResult(
         root=root,
         status=status,

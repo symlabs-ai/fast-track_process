@@ -1,4 +1,4 @@
-# Fluxograma — MVP Builder Fast (process.yml v1.18.0)
+# Fluxograma — MVP Builder Fast (process.yml v1.19.0)
 
 Fluxo principal do template `mvp-builder-fast`. Uma sessão LLM é mantida por
 sprint; `⑂` indica lanes paralelas e `R` indica a lane independente de review.
@@ -7,13 +7,18 @@ sprint; `⑂` indica lanes paralelas e `R` indica a lane independente de review.
 flowchart TD
     START([ft run]) --> PLAN["Plano interno<br/>state/llm_execution_plan.yml"]
     PLAN --> MDD[["Validar hipótese + PRD<br/>produzidos pelo template mdd"]]
-    MDD --> UI
+    MDD --> BRIEFG{{"Brief de superfície"}}
+    BRIEFG --> BRIEF["Persistir contrato de experiência"]
+    BRIEF --> SURFACE{"Produto tem superfície visual?"}
 
-    subgraph S2["Sprint 02 — Planning · sessão s2 + lanes"]
+    subgraph S2["Sprint 02 — Direção visual e planning · sessão s2 + lanes"]
         UI{"Critérios UI existem?"}
         UIQ{{"Perguntas UI"}}
         UICREATE["Criar critérios UI"]
         UIG{{"Revisão critérios UI"}}
+        MOCKUPS["Gerar protótipos raster P0<br/>Codex ChatGPT + $imagegen"]
+        MOCKREVIEW["R Coerência PRD–protótipos"]
+        MOCKG{{"Revisão humana dos protótipos"}}
         BACKLOG{"Backlog existe?"}
         FEATURES{"Features existem?"}
         FULL["Fundação completa<br/>backlog + features + tasks + stack"]
@@ -24,14 +29,15 @@ flowchart TD
         API["⑂ Contrato API"]
         UIC["⑂ Critérios UI"]
         DATA["⑂ Massa de dados"]
-        MOCKUPS["Gerar mockups P0<br/>Codex ChatGPT + $imagegen"]
-        MOCKREVIEW["R Coerência PRD–mockups"]
-        MOCKG{{"Revisão humana dos mockups"}}
         PG[["Gate Planning"]]
 
-        UI -- não --> UIQ --> UICREATE --> UIG --> BACKLOG
+        UI -- não --> UIQ --> UICREATE --> UIG --> MOCKUPS
         UIG -. reject .-> UICREATE
-        UI -- sim --> BACKLOG
+        SURFACE -- headless --> BACKLOG
+        SURFACE -- visual --> UI
+        UI -- sim --> MOCKUPS
+        MOCKUPS --> MOCKREVIEW --> MOCKG --> BACKLOG
+        MOCKG -. reject .-> MOCKUPS
         BACKLOG -- não --> FULL --> TECHG
         BACKLOG -- sim --> FEATURES
         FEATURES -- não --> FEAT --> TECHG
@@ -40,11 +46,9 @@ flowchart TD
         TECHG --> API
         TECHG --> UIC
         TECHG --> DATA
-        API --> MOCKUPS
-        UIC --> MOCKUPS
-        DATA --> MOCKUPS
-        MOCKUPS --> MOCKREVIEW --> MOCKG --> PG
-        MOCKG -. reject .-> MOCKUPS
+        API --> PG
+        UIC --> PG
+        DATA --> PG
     end
 
     subgraph S3["Sprint 03 — Superfície · sessão s3 + review R"]
@@ -139,8 +143,8 @@ flowchart TD
     classDef human fill:#f8d7da,stroke:#a71d2a,color:#000
     classDef gate fill:#d1ecf1,stroke:#0c5460,color:#000
     classDef work fill:#e2e3f5,stroke:#4a4a8a,color:#000
-    class PRD,UI,BACKLOG,FEATURES decision
-    class HIPG,PRDG,UIQ,UIG,TECHG,MOCKG,STAKE,HG human
+    class PRD,SURFACE,UI,BACKLOG,FEATURES decision
+    class HIPG,PRDG,BRIEFG,UIQ,UIG,TECHG,MOCKG,STAKE,HG human
     class MDD,PG,FG,TG,DG,SG,AG,EG,VG,BG,FCG,OPG gate
 ```
 

@@ -3,7 +3,6 @@ from pathlib import Path
 
 from ft.engine.focal_evidence import validate_focal_approval
 
-
 UI_DATA_FINDING = (
     "Na tela S44 os dados reais da conta não aparecem: o telefone cadastrado "
     "e o e-mail retornado pelo FastAPI precisam ser exibidos."
@@ -132,7 +131,9 @@ def test_http_html_smoke_is_not_reclassified_as_real_ui_data(
 ) -> None:
     evidence = tmp_path / "docs" / "smoke-report.md"
     evidence.parent.mkdir(parents=True)
-    evidence.write_text("GET /: HTTP 200, text/html, non-empty body\n", encoding="utf-8")
+    evidence.write_text(
+        "GET /: HTTP 200, text/html, non-empty body\n", encoding="utf-8"
+    )
 
     result = validate_focal_approval(
         review_output=_review(
@@ -224,7 +225,9 @@ def test_ui_data_approval_rejects_incomplete_field_coverage(tmp_path: Path) -> N
     assert "telefone" in result.reason.casefold()
 
 
-def test_ui_data_approval_accepts_complete_real_physical_journey(tmp_path: Path) -> None:
+def test_ui_data_approval_accepts_complete_real_physical_journey(
+    tmp_path: Path,
+) -> None:
     screenshot = tmp_path / "docs" / "s44-device.png"
     dump = tmp_path / "docs" / "s44-device.xml"
     screenshot.parent.mkdir(parents=True)
@@ -488,8 +491,7 @@ def test_approval_rejects_multiple_focal_evidence_receipts(tmp_path: Path) -> No
 
     result = validate_focal_approval(
         review_output=(
-            f"VERDICT: APPROVED\n```yaml\n{block}\n```\n"
-            f"```yaml\n{block}\n```\n"
+            f"VERDICT: APPROVED\n```yaml\n{block}\n```\n```yaml\n{block}\n```\n"
         ),
         finding_context=UI_DATA_FINDING,
         project_root=tmp_path,

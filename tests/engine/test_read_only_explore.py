@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from argparse import Namespace
 import io
 import json
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
+from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -72,12 +72,20 @@ def test_commands_standalone_sao_read_only(agent, tmp_path):
 
 def test_codex_persistent_session_is_read_only_and_resumable(tmp_path):
     fresh = explore.build_read_only_command(
-        agent="codex", prompt="primeira", project_root=tmp_path,
-        model="gpt-test", effort="low", persist_session=True,
+        agent="codex",
+        prompt="primeira",
+        project_root=tmp_path,
+        model="gpt-test",
+        effort="low",
+        persist_session=True,
     )
     resumed = explore.build_read_only_command(
-        agent="codex", prompt="segunda", project_root=tmp_path,
-        model="gpt-test", effort="low", resume_session="thread-123",
+        agent="codex",
+        prompt="segunda",
+        project_root=tmp_path,
+        model="gpt-test",
+        effort="low",
+        resume_session="thread-123",
     )
 
     assert fresh[:2] == ["codex", "exec"]
@@ -92,36 +100,46 @@ def test_codex_persistent_session_is_read_only_and_resumable(tmp_path):
 def test_persistent_session_rejects_non_codex_and_option_injection(tmp_path):
     with pytest.raises(explore.ExploreConfigurationError, match="somente para Codex"):
         explore.build_read_only_command(
-            agent="claude", prompt="x", project_root=tmp_path,
+            agent="claude",
+            prompt="x",
+            project_root=tmp_path,
             persist_session=True,
         )
     with pytest.raises(explore.ExploreConfigurationError, match="session id"):
         explore.build_read_only_command(
-            agent="codex", prompt="x", project_root=tmp_path,
+            agent="codex",
+            prompt="x",
+            project_root=tmp_path,
             resume_session="--last",
         )
 
 
 def test_normaliza_deltas_claude_sem_duplicar_resultado():
     normalizer = explore.ExploreStreamNormalizer("claude")
-    first = json.dumps({
-        "type": "stream_event",
-        "event": {
-            "type": "content_block_delta",
-            "delta": {"type": "text_delta", "text": "Olá "},
-        },
-    })
-    second = json.dumps({
-        "type": "stream_event",
-        "event": {
-            "type": "content_block_delta",
-            "delta": {"type": "text_delta", "text": "mundo"},
-        },
-    })
-    assistant = json.dumps({
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": "Olá mundo"}]},
-    })
+    first = json.dumps(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "Olá "},
+            },
+        }
+    )
+    second = json.dumps(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "mundo"},
+            },
+        }
+    )
+    assistant = json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Olá mundo"}]},
+        }
+    )
     result = json.dumps({"type": "result", "result": "Olá mundo"})
 
     assert normalizer.feed(first) == ["Olá "]
@@ -149,17 +167,27 @@ def test_normaliza_sessao_e_usage_codex():
         "reasoning_output_tokens": 4,
         "total_tokens": 112,
     }
+
+
 @pytest.mark.parametrize(
     ("agent", "event", "expected"),
     [
         (
             "codex",
-            {"type": "item.completed", "item": {"type": "agent_message", "text": "codex"}},
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "codex"},
+            },
             "codex",
         ),
         (
             "gemini",
-            {"type": "message", "role": "assistant", "content": "gemini", "delta": True},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "gemini",
+                "delta": True,
+            },
             "gemini",
         ),
         (
@@ -179,10 +207,13 @@ def test_runner_entrega_chunks_progressivos_e_exit_code(tmp_path, monkeypatch):
     class FakeProcess:
         def __init__(self):
             self.stdout = io.StringIO(
-                json.dumps({
-                    "type": "item.completed",
-                    "item": {"type": "agent_message", "text": "resposta"},
-                }) + "\n"
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "resposta"},
+                    }
+                )
+                + "\n"
             )
             self.stderr = io.StringIO("")
             self.pid = 123
@@ -193,7 +224,9 @@ def test_runner_entrega_chunks_progressivos_e_exit_code(tmp_path, monkeypatch):
         def wait(self, timeout=None):
             return 0
 
-    monkeypatch.setattr(explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(
+        explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess()
+    )
     chunks: list[str] = []
 
     result = explore.run_read_only_explore(
@@ -208,14 +241,21 @@ def test_runner_entrega_chunks_progressivos_e_exit_code(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_runner_returns_persistent_codex_session_and_current_turn_usage(tmp_path, monkeypatch):
+def test_runner_returns_persistent_codex_session_and_current_turn_usage(
+    tmp_path, monkeypatch
+):
     class FakeProcess:
         def __init__(self):
-            self.stdout = io.StringIO("\n".join([
-                '{"type":"thread.started","thread_id":"thread-123"}',
-                '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
-                '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}',
-            ]) + "\n")
+            self.stdout = io.StringIO(
+                "\n".join(
+                    [
+                        '{"type":"thread.started","thread_id":"thread-123"}',
+                        '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
+                        '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}',
+                    ]
+                )
+                + "\n"
+            )
             self.stderr = io.StringIO("")
             self.pid = 123
 
@@ -225,17 +265,23 @@ def test_runner_returns_persistent_codex_session_and_current_turn_usage(tmp_path
         def wait(self, timeout=None):
             return 0
 
-    monkeypatch.setattr(explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(
+        explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess()
+    )
     result = explore.run_read_only_explore(
-        request="pergunta", project_root=tmp_path, agent="codex",
+        request="pergunta",
+        project_root=tmp_path,
+        agent="codex",
         persist_session=True,
     )
 
     assert result.session_id == "thread-123"
     assert result.session_resumed is False
     assert result.usage == {
-        "input_tokens": 10, "cached_input_tokens": 0,
-        "output_tokens": 2, "reasoning_output_tokens": 0,
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
         "total_tokens": 12,
     }
     assert result.cost_usd is None
@@ -259,7 +305,9 @@ def test_explore_herda_supervisao_global_sem_teto_wall_clock(
         captured.update(kwargs)
         raise explore.ExecutorIdleTimeout(["codex"], kwargs["idle_timeout"])
 
-    monkeypatch.setattr(explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(
+        explore.subprocess, "Popen", lambda *args, **kwargs: FakeProcess()
+    )
     monkeypatch.setattr(explore, "_wait_for_process", stagnant)
     monkeypatch.setattr(explore, "_stop_process", lambda _proc: None)
     monkeypatch.setenv("FT_CODEX_IDLE_TIMEOUT", "2")
@@ -359,14 +407,19 @@ def test_parser_aceita_argv_claude_atual_da_f02(tmp_path, monkeypatch):
         sys,
         "argv",
         [
-            "ft", "explore",
-            "--claude", "opus",
-            "--effort", "high",
+            "ft",
+            "explore",
+            "--claude",
+            "opus",
+            "--effort",
+            "high",
             "--",
             "prompt da F02",
         ],
     )
-    monkeypatch.setattr(cli_main, "cmd_explore", lambda args: captured.update(vars(args)))
+    monkeypatch.setattr(
+        cli_main, "cmd_explore", lambda args: captured.update(vars(args))
+    )
 
     cli_main.main()
 
@@ -391,11 +444,11 @@ def test_argv_f02_e_cancelamento_externo_recolhem_provider(tmp_path):
     fake_codex = bin_dir / "codex"
     fake_codex.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$@\" > \"$FT_EXPLORE_TEST_ARGV\"\n"
+        'printf \'%s\\n\' "$@" > "$FT_EXPLORE_TEST_ARGV"\n'
         "sleep 30 &\n"
         "worker=$!\n"
-        "printf '%s %s\\n' \"$$\" \"$worker\" > \"$FT_EXPLORE_TEST_PIDS\"\n"
-        "wait \"$worker\"\n",
+        'printf \'%s %s\\n\' "$$" "$worker" > "$FT_EXPLORE_TEST_PIDS"\n'
+        'wait "$worker"\n',
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
@@ -409,10 +462,13 @@ def test_argv_f02_e_cancelamento_externo_recolhem_provider(tmp_path):
     process = subprocess.Popen(
         [
             sys.executable,
-            "-m", "ft.cli.main",
+            "-m",
+            "ft.cli.main",
             "explore",
-            "--codex", "gpt-test",
-            "--effort", "high",
+            "--codex",
+            "gpt-test",
+            "--effort",
+            "high",
             "--standalone",
             "--",
             "prompt da F02",
@@ -428,8 +484,12 @@ def test_argv_f02_e_cancelamento_externo_recolhem_provider(tmp_path):
         deadline = time.monotonic() + 5
         while not pids_path.is_file() and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert pids_path.is_file(), process.stderr.read() if process.poll() is not None else ""
-        provider_pid, worker_pid = [int(value) for value in pids_path.read_text().split()]
+        assert pids_path.is_file(), (
+            process.stderr.read() if process.poll() is not None else ""
+        )
+        provider_pid, worker_pid = [
+            int(value) for value in pids_path.read_text().split()
+        ]
 
         os.killpg(process.pid, signal.SIGTERM)
         assert process.wait(timeout=5) == -signal.SIGTERM
@@ -441,14 +501,16 @@ def test_argv_f02_e_cancelamento_externo_recolhem_provider(tmp_path):
             return "\nState:\tZ" not in "\n" + status.read_text(errors="replace")
 
         deadline = time.monotonic() + 3
-        while (alive(provider_pid) or alive(worker_pid)) and time.monotonic() < deadline:
+        while (
+            alive(provider_pid) or alive(worker_pid)
+        ) and time.monotonic() < deadline:
             time.sleep(0.02)
         assert not alive(provider_pid)
         assert not alive(worker_pid)
 
         provider_argv = argv_path.read_text(encoding="utf-8").splitlines()
         assert provider_argv[provider_argv.index("-m") + 1] == "gpt-test"
-        assert "model_reasoning_effort=\"high\"" in provider_argv
+        assert 'model_reasoning_effort="high"' in provider_argv
         assert "--sandbox" in provider_argv
         assert provider_argv[provider_argv.index("--sandbox") + 1] == "read-only"
         assert any("prompt da F02" in argument for argument in provider_argv)
@@ -483,37 +545,52 @@ def test_cmd_standalone_stream_json_emite_protocolo(tmp_path, monkeypatch, capsy
         return explore.ExploreResult(0, "um dois")
 
     monkeypatch.setattr(explore, "run_read_only_explore", fake_run)
-    cli_main.cmd_explore(_args(
-        stream_json=True,
-        agent="codex",
-        model="gpt-explicit",
-        effort="max",
-    ))
+    cli_main.cmd_explore(
+        _args(
+            stream_json=True,
+            agent="codex",
+            model="gpt-explicit",
+            effort="max",
+        )
+    )
 
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [event["type"] for event in events] == ["start", "chunk", "chunk", "result"]
     assert [event.get("seq") for event in events[1:3]] == [1, 2]
     assert events[0]["read_only"] is True
     assert events[-1] == {
-        "type": "result", "ok": True, "text": "um dois", "exit_code": 0,
-        "session_id": None, "session_resumed": False,
-        "usage": None, "cost_usd": None,
+        "type": "result",
+        "ok": True,
+        "text": "um dois",
+        "exit_code": 0,
+        "session_id": None,
+        "session_resumed": False,
+        "usage": None,
+        "cost_usd": None,
     }
 
 
 def test_cmd_stream_json_exposes_session_and_usage(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli_main, "find_project_root", lambda: tmp_path)
     monkeypatch.setattr(cli_main, "canonical_project_root", lambda root: Path(root))
-    monkeypatch.setattr(cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None))
+    monkeypatch.setattr(
+        cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None)
+    )
 
     def fake_run(**kwargs):
         assert kwargs["persist_session"] is True
         assert kwargs["resume_session"] is None
         return explore.ExploreResult(
-            0, "ok", session_id="thread-123",
-            usage={"input_tokens": 5, "cached_input_tokens": 2,
-                   "output_tokens": 3, "reasoning_output_tokens": 1,
-                   "total_tokens": 8},
+            0,
+            "ok",
+            session_id="thread-123",
+            usage={
+                "input_tokens": 5,
+                "cached_input_tokens": 2,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 8,
+            },
         )
 
     monkeypatch.setattr(explore, "run_read_only_explore", fake_run)
@@ -537,7 +614,9 @@ def test_cmd_standalone_preserva_exit_code_do_executor(tmp_path, monkeypatch, ca
             "stream-json deve selecionar standalone sem consultar ciclos"
         ),
     )
-    monkeypatch.setattr(cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None))
+    monkeypatch.setattr(
+        cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None)
+    )
     monkeypatch.setattr(
         explore,
         "run_read_only_explore",
@@ -605,7 +684,9 @@ def test_standalone_prevalece_sobre_node_exploration_ativo(tmp_path, monkeypatch
             "--standalone deve prevalecer sem consultar ciclos"
         ),
     )
-    monkeypatch.setattr(cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None))
+    monkeypatch.setattr(
+        cli_main, "manifest_llm_defaults", lambda root: ("codex", None, None)
+    )
     monkeypatch.setattr(
         cli_main,
         "get_runner",

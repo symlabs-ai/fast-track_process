@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ft.engine.runner import StepRunner
 
-
 PROCESS = """id: status_test
 version: 1.0.0
 title: Status Test
@@ -38,12 +37,12 @@ def test_status_places_repository_name_immediately_before_cycle(
     output = capsys.readouterr().out
     lines = output.splitlines()
     repository_line = next(
-        index for index, line in enumerate(lines)
+        index
+        for index, line in enumerate(lines)
         if "Repositório: meu-repositorio" in line
     )
     cycle_line = next(
-        index for index, line in enumerate(lines)
-        if "Ciclo: cycle-01" in line
+        index for index, line in enumerate(lines) if "Ciclo: cycle-01" in line
     )
     title_line = next(line for line in lines if "Process:" in line)
 

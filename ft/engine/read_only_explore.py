@@ -8,11 +8,9 @@ OpenCode expõem mensagens/parts conforme suas CLIs as concluem.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import io
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import signal
@@ -20,6 +18,8 @@ import subprocess
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from ft.engine.delegate import (
@@ -33,7 +33,6 @@ from ft.engine.delegate import (
     _workspace_progress_paths,
     _workspace_progress_snapshot,
 )
-
 
 SUPPORTED_AGENTS = {"claude", "codex", "gemini", "opencode"}
 DEFAULT_TIMEOUT_SECONDS = 1_800
@@ -149,11 +148,14 @@ def build_read_only_command(
     if selected == "claude":
         command = [
             "claude",
-            "--output-format", "stream-json",
+            "--output-format",
+            "stream-json",
             "--include-partial-messages",
             "--verbose",
-            "--permission-mode", "plan",
-            "--allowedTools", "Read,Glob,Grep",
+            "--permission-mode",
+            "plan",
+            "--allowedTools",
+            "Read,Glob,Grep",
             "--no-session-persistence",
         ]
         if model:
@@ -166,14 +168,20 @@ def build_read_only_command(
     if selected == "codex":
         if normalized_session:
             command = [
-                "codex", "exec", "resume",
-                "-c", 'sandbox_mode="read-only"',
-                "--skip-git-repo-check", "--json",
+                "codex",
+                "exec",
+                "resume",
+                "-c",
+                'sandbox_mode="read-only"',
+                "--skip-git-repo-check",
+                "--json",
             ]
         else:
             command = [
-                "codex", "exec",
-                "--sandbox", "read-only",
+                "codex",
+                "exec",
+                "--sandbox",
+                "read-only",
                 "--skip-git-repo-check",
             ]
             if not persist_session:
@@ -191,8 +199,10 @@ def build_read_only_command(
     if selected == "gemini":
         command = [
             "gemini",
-            "--approval-mode", "plan",
-            "--output-format", "stream-json",
+            "--approval-mode",
+            "plan",
+            "--output-format",
+            "stream-json",
         ]
         if model:
             command += ["--model", str(model)]
@@ -202,10 +212,13 @@ def build_read_only_command(
         return command
 
     command = [
-        "opencode", "run",
-        "--dir", root,
+        "opencode",
+        "run",
+        "--dir",
+        root,
         "--pure",
-        "--format", "json",
+        "--format",
+        "json",
     ]
     if model:
         command += ["--model", str(model)]
@@ -280,7 +293,9 @@ class ExploreStreamNormalizer:
                     return self._append(delta["text"])
             elif event_type == "assistant" and not self._claude_saw_delta:
                 message = event.get("message") or {}
-                content = message.get("content") or [] if isinstance(message, dict) else []
+                content = (
+                    message.get("content") or [] if isinstance(message, dict) else []
+                )
                 chunks: list[str] = []
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "text":
@@ -288,7 +303,9 @@ class ExploreStreamNormalizer:
                 return chunks
             elif event_type == "result":
                 if event.get("is_error"):
-                    self.provider_error = str(event.get("result") or "Claude retornou erro")
+                    self.provider_error = str(
+                        event.get("result") or "Claude retornou erro"
+                    )
                 elif isinstance(event.get("result"), str):
                     self._fallback = event["result"]
             return []
@@ -309,7 +326,9 @@ class ExploreStreamNormalizer:
             if event_type == "result":
                 status = str(event.get("status") or "").lower()
                 if status and status not in {"success", "ok", "completed"}:
-                    self.provider_error = str(event.get("error") or event.get("message") or status)
+                    self.provider_error = str(
+                        event.get("error") or event.get("message") or status
+                    )
                 for key in ("response", "text", "result"):
                     if isinstance(event.get(key), str):
                         self._fallback = event[key]
@@ -334,7 +353,9 @@ def _timeout_seconds() -> int:
         try:
             value = int(raw)
         except ValueError as exc:
-            raise ExploreConfigurationError("FT_EXPLORE_TIMEOUT deve ser inteiro") from exc
+            raise ExploreConfigurationError(
+                "FT_EXPLORE_TIMEOUT deve ser inteiro"
+            ) from exc
         if value <= 0:
             raise ExploreConfigurationError("FT_EXPLORE_TIMEOUT deve ser positivo")
         return value
@@ -362,11 +383,13 @@ def _opencode_environment(runtime: Path) -> dict[str, str]:
             pass
     permission = config.get("permission")
     permission = dict(permission) if isinstance(permission, dict) else {}
-    permission.update({
-        "external_directory": "deny",
-        "edit": "deny",
-        "bash": "deny",
-    })
+    permission.update(
+        {
+            "external_directory": "deny",
+            "edit": "deny",
+            "bash": "deny",
+        }
+    )
     config["permission"] = permission
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, ensure_ascii=False)
     return env
@@ -380,10 +403,17 @@ def _wrap_opencode_read_only(command: list[str], runtime: Path) -> list[str]:
         )
     return [
         bwrap,
-        "--ro-bind", "/", "/",
-        "--dev-bind", "/dev", "/dev",
-        "--proc", "/proc",
-        "--bind", str(runtime), str(runtime),
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev-bind",
+        "/dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--bind",
+        str(runtime),
+        str(runtime),
         *command,
     ]
 
@@ -535,8 +565,12 @@ def run_read_only_explore(
                 activity.setdefault("first", activity["last"])
                 stderr_parts.append(line)
 
-        stdout_thread = threading.Thread(target=pump_stdout, args=(proc.stdout,), daemon=True)
-        stderr_thread = threading.Thread(target=pump_stderr, args=(proc.stderr,), daemon=True)
+        stdout_thread = threading.Thread(
+            target=pump_stdout, args=(proc.stdout,), daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=pump_stderr, args=(proc.stderr,), daemon=True
+        )
         stdout_thread.start()
         stderr_thread.start()
 
@@ -573,7 +607,9 @@ def run_read_only_explore(
                     normalizer.text,
                     "[INACTIVITY_TIMEOUT] executor sem produtividade observável "
                     f"por {idle_timeout} segundos",
-                    session_id=normalizer.session_id if (persist_session or resume_session) else None,
+                    session_id=normalizer.session_id
+                    if (persist_session or resume_session)
+                    else None,
                     session_resumed=bool(resume_session),
                     usage=normalizer.usage,
                     cost_usd=normalizer.cost_usd,
@@ -587,7 +623,9 @@ def run_read_only_explore(
                     normalizer.text,
                     "[MAX_WALL_TIMEOUT] executor excedeu o teto absoluto opt-in "
                     f"de {max_wall_timeout} segundos",
-                    session_id=normalizer.session_id if (persist_session or resume_session) else None,
+                    session_id=normalizer.session_id
+                    if (persist_session or resume_session)
+                    else None,
                     session_resumed=bool(resume_session),
                     usage=normalizer.usage,
                     cost_usd=normalizer.cost_usd,
@@ -602,29 +640,48 @@ def run_read_only_explore(
         text = normalizer.text
         stderr_text = "".join(stderr_parts).strip()
         if returncode != 0:
-            error = normalizer.provider_error or stderr_text or f"executor saiu com código {returncode}"
+            error = (
+                normalizer.provider_error
+                or stderr_text
+                or f"executor saiu com código {returncode}"
+            )
             return ExploreResult(
-                returncode, text, error,
+                returncode,
+                text,
+                error,
                 normalizer.session_id if (persist_session or resume_session) else None,
-                bool(resume_session), normalizer.usage, normalizer.cost_usd,
+                bool(resume_session),
+                normalizer.usage,
+                normalizer.cost_usd,
             )
         if normalizer.provider_error:
             return ExploreResult(
-                1, text, normalizer.provider_error,
+                1,
+                text,
+                normalizer.provider_error,
                 normalizer.session_id if (persist_session or resume_session) else None,
-                bool(resume_session), normalizer.usage, normalizer.cost_usd,
+                bool(resume_session),
+                normalizer.usage,
+                normalizer.cost_usd,
             )
         if not text.strip():
             return ExploreResult(
-                1, "", stderr_text or "executor terminou sem resposta",
+                1,
+                "",
+                stderr_text or "executor terminou sem resposta",
                 normalizer.session_id if (persist_session or resume_session) else None,
-                bool(resume_session), normalizer.usage,
+                bool(resume_session),
+                normalizer.usage,
                 normalizer.cost_usd,
             )
         return ExploreResult(
-            0, text,
-            session_id=normalizer.session_id if (persist_session or resume_session) else None,
-            session_resumed=bool(resume_session), usage=normalizer.usage,
+            0,
+            text,
+            session_id=normalizer.session_id
+            if (persist_session or resume_session)
+            else None,
+            session_resumed=bool(resume_session),
+            usage=normalizer.usage,
             cost_usd=normalizer.cost_usd,
         )
     finally:

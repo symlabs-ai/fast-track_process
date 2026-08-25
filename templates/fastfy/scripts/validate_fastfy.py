@@ -9,13 +9,12 @@ engine gate log.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
-
 
 SURVEY_PATH = "docs/adoption-survey.md"
 QUESTIONS_PATH = "docs/adoption-questions.md"
@@ -31,8 +30,34 @@ CLARIFICATION_RE = re.compile(
 PB_RE = re.compile(r"\bPB-\d+[A-Z]?\b", re.IGNORECASE)
 FEAT_CHANGELOG_RE = re.compile(r"(?m)^[ \t]*(?:[-*+][ \t]+)?#FEAT(?=[ \t]|$)")
 TEST_FILE_RE = re.compile(r"(^|[._/-])(test|tests|spec|specs)([._/-]|$)", re.IGNORECASE)
-TEST_FILE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb", ".sh", ".java", ".php", ".exs"}
-SKIPPED_TREES = {".git", ".ft", "docs", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".claude"}
+TEST_FILE_SUFFIXES = {
+    ".py",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".rb",
+    ".sh",
+    ".java",
+    ".php",
+    ".exs",
+}
+SKIPPED_TREES = {
+    ".git",
+    ".ft",
+    "docs",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    ".claude",
+}
 
 
 class FastfyValidationError(ValueError):
@@ -58,7 +83,9 @@ def _frontmatter(text: str, path: str) -> dict[str, object]:
     try:
         data = yaml.safe_load(parts[1]) or {}
     except yaml.YAMLError as exc:
-        raise FastfyValidationError(f"{path}: frontmatter YAML inválido: {exc}") from exc
+        raise FastfyValidationError(
+            f"{path}: frontmatter YAML inválido: {exc}"
+        ) from exc
     if not isinstance(data, dict):
         raise FastfyValidationError(f"{path}: frontmatter deve ser um mapping")
     return data
@@ -92,7 +119,9 @@ def _survey_contract(root: Path) -> dict[str, object]:
 
     for field in ("build_command", "test_command"):
         if not str(metadata.get(field) or "").strip():
-            raise FastfyValidationError(f"{SURVEY_PATH}: campo {field} ausente ou vazio")
+            raise FastfyValidationError(
+                f"{SURVEY_PATH}: campo {field} ausente ou vazio"
+            )
 
     run_command = str(metadata.get("run_command") or "").strip()
     if interface != "internal" and not run_command:
@@ -168,8 +197,7 @@ def validate_survey(root: Path) -> None:
     if contract["clarification_status"] == "required":
         if "?" not in questions:
             raise FastfyValidationError(
-                "clarification_status=required exige perguntas em "
-                f"{QUESTIONS_PATH}"
+                f"clarification_status=required exige perguntas em {QUESTIONS_PATH}"
             )
         return
     plan = _read(root, PLAN_PATH)
@@ -198,9 +226,7 @@ def validate_docs(root: Path) -> None:
             "CHANGELOG.md sem seções; reconstrua o histórico a partir do Git"
         )
     adoption_lines = [
-        line
-        for line in changelog.splitlines()
-        if FEAT_CHANGELOG_RE.match(line)
+        line for line in changelog.splitlines() if FEAT_CHANGELOG_RE.match(line)
     ]
     if not adoption_lines:
         raise FastfyValidationError(

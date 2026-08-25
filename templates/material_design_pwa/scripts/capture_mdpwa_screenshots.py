@@ -8,6 +8,7 @@ Boota nada — assume o frontend já servido em base_url. Salva PNGs em out_dir
 Breakpoints M3: compact (390), medium (840), expanded (1280).
 Temas: light e dark (via emulateMedia prefers-color-scheme).
 """
+
 import sys
 from pathlib import Path
 
@@ -46,13 +47,18 @@ def main() -> int:
                 page = ctx.new_page()
                 for rota_nome, rota in ROTAS:
                     try:
-                        page.goto(f"{base_url}{rota}", wait_until="networkidle", timeout=30000)
+                        page.goto(
+                            f"{base_url}{rota}", wait_until="networkidle", timeout=30000
+                        )
                         page.wait_for_timeout(600)
                         dest = out_dir / f"{rota_nome}__{bp_nome}__{tema}.png"
                         page.screenshot(path=str(dest), full_page=True)
                         total += 1
                     except Exception as e:
-                        print(f"AVISO: falha em {rota} [{bp_nome}/{tema}]: {e}", file=sys.stderr)
+                        print(
+                            f"AVISO: falha em {rota} [{bp_nome}/{tema}]: {e}",
+                            file=sys.stderr,
+                        )
                 ctx.close()
         browser.close()
 

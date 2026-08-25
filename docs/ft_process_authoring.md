@@ -100,6 +100,38 @@ dentro do bundle.
 Tudo acima de `nodes:` são metadados lidos pela engine (`graph.meta`). Cada
 bloco resolve um problema específico. Declare só o que o processo usa.
 
+### Referência do cabeçalho: contrato, metadado e extensão
+
+O loader preserva em `graph.meta` **toda** chave de primeiro nível que não seja
+`nodes`. Isso não torna uma chave automaticamente suportada: somente as chaves
+consumidas pelo catálogo, runner, close ou validador produzem comportamento.
+Typos no cabeçalho podem, portanto, sobreviver silenciosamente e não fazer nada.
+
+| Tag | Tipo / default | Regra | Efeito na engine |
+|---|---|---|---|
+| `id` | string, sem default | Convenção: `snake_case`; é a identidade humana do processo. | Metadado e identificação em relatórios; não substitui o nome do template. |
+| `version` | string, sem default | Faça bump em mudança comportamental. | Versão comunicada para humanos e consumers do bundle; o loader não impõe semver. |
+| `title` | string, opcional | Descrição curta do processo. | Metadado de apresentação; não confundir com `nodes[].title`. |
+| `nodes` | lista, obrigatória | Cada item precisa de `id`; o grafo exige exatamente um `type: end`, sem órfãos ou destinos inexistentes. | É o grafo executável. |
+| `execution_policy` | mapping, obrigatório em template V3 executável | `entrypoint: run` e `template` igual ao diretório são validados pelo catálogo. | Autoriza `ft run` e declara ciclo, worktree, role e merge. |
+| `input_policy` | mapping, opcional | Se `required: true`, exige `destination` seguro e `prompt`. | Valida e materializa a entrada antes de criar o ciclo. |
+| `artifact_policy` | mapping, opcional | Use `canonical` e/ou `cycle` com paths relativos. | Decide merge/arquivamento dos artefatos no close. |
+| `close_policy` | mapping, opcional | `backlog.mode` é `global`, `referenced` ou `none`; `referenced` exige `references_path`. | Define a prova e o modo de merge no close. |
+| `correction_policy` | mapping, opcional | IDs citados devem existir e manter a cadeia de revisão segura. | Controla reentrada, retries e reviews obrigatórios após correção. |
+| `session_policy` | mapping, opcional | Schema fechado: `mode: sprint`, providers `claude`/`codex`, `initial_plan`, `parallel_strategy: fork`, `recovery: rehydrate`. | Habilita sessões persistentes e plano interno. |
+| `parallel_policy` | mapping, opcional | `planner_timeout_seconds` é inteiro positivo ou `null`; `rate_limit_respawns` é inteiro ≥ 0. | Configura o planejador de `--parallel`. |
+| `batch_policy` | mapping, obrigatório se houver `type: batch` | Exige os quatro paths canônicos; limites positivos; `protected_paths` em lista. | Contrato do fan-out dinâmico de lanes. |
+| `commit_policy` | mapping, opcional | `verify_hooks` é booleano. | Quando `false`, commits feitos pela engine usam `--no-verify`. |
+| `product_engineering_policy` | mapping de extensão, opcional | Não possui schema/consumo genérico no core atual. | Documenta a intenção do template; não cria controle de execução sozinho. |
+| `validation_policy` | mapping de extensão, opcional | Não possui schema/consumo genérico no core atual. | Documenta a política de validação do template; os validators e `.ft/project.yml` continuam autoritativos. |
+| `sprints` (no topo) | metadado de extensão, opcional | Não confundir com `nodes[].sprint`. | O core agrupa sprints pelos nodes; esta chave de topo não altera a execução. |
+| outra chave de topo | qualquer valor | Só declare quando existir consumidor explícito no bundle/engine. | É preservada em `graph.meta`, mas é ignorada pelo core se ninguém a consultar. |
+
+As seções seguintes detalham os subcampos dos blocos contratuais. A tabela
+acima também resolve uma ambiguidade comum: `product_engineering_policy`,
+`validation_policy` e `sprints` podem ser úteis como documentação local, mas
+não são mecanismos de enforcement do engine.
+
 ### 3.1 Identidade (obrigatório)
 
 ```yaml
@@ -131,9 +163,12 @@ execution_policy:
 |---|---|
 | `entrypoint` | `run` — o único entrypoint V3 |
 | `template` | validado contra o nome do diretório; divergência = template recusado |
+| `materialization` | política declarada do bundle; em V3 use `copy_once` |
+| `runtime_source` | política declarada da origem do processo; em V3 use `local_only` |
 | `requires_initialized_project` | `false` só para processos que não tocam produto (pesquisa, documentação) |
 | `requires_worktree` | `true` isola o ciclo em worktree Git própria; `false` executa no checkout |
 | `local_process_path` | path canônico da cópia materializada |
+| `merge_command` | comando humano recomendado para promover o ciclo; não substitui `close_policy.merge` |
 | `project_role` | `builder` (cria produto), `maintenance` (evolui), `neutral` (ambos) |
 | `allowed_project_phases` | **deve casar exatamente** com o role: builder→`[building]`, maintenance→`[maintenance]`, neutral→`[building, maintenance]` |
 
@@ -300,13 +335,79 @@ construção toleram `max_node_retries: 1`.
 Campos reconhecidos pelo loader. Nada fora desta lista é lido (chaves
 desconhecidas são silenciosamente ignoradas — cuidado com typos).
 
+### Referência completa de tags genéricas de node
+
+<!-- process-yml-node-reference:start -->
+
+Esta é a tabela de compatibilidade do YAML atual, derivada de `Node` no loader.
+"Todos" significa que o loader aceita a tag em qualquer node; isso não quer
+dizer que ela tenha efeito útil fora do tipo indicado. Defaults são os do loader
+antes da validação semântica.
+
+| Tag | Tipo / default | Válida em | Restrição | Efeito |
+|---|---|---|---|---|
+| `id` | string, obrigatório | todos | único e não vazio | identifica o node e seus receipts/logs. |
+| `type` | string; `build` | todos | um de `batch`, `build`, `decision`, `discovery`, `document`, `end`, `exploration`, `gate`, `human_gate`, `refactor`, `retro`, `review`, `sync`, `test_green`, `test_red` | seleciona a semântica de execução. |
+| `title` | string; default = `id` | todos | precisa resultar não vazio | nome exibido no status/card. |
+| `description` | string ou ausente | todos | texto curto para o usuário | explica o step; não roteia. |
+| `executor` | string; `python` | todos, exceto irrelevante em `end` | YAML aceita `python`, `human`, `claude`, `codex`, `gemini`, `opencode`; aliases LLM viram `llm_*` | escolhe Python, humano ou provider LLM. |
+| `sprint` | string ou ausente | todos | use ID estável | agrupa status e delimita `ft continue --sprint`. |
+| `next` | ID ou ausente | não terminais | destino deve existir; node não terminal precisa de `next` ou `branches` | aresta normal do grafo. |
+| `branches` | mapping ou ausente | `decision` | todos os destinos devem existir; use `_default` para fallback | roteamento determinístico da decisão. Fora de `decision`, não roteia. |
+| `condition` | string ou ausente | `decision` | chave de estado ou forma especial aceita pelo runner | valor consultado para escolher `branches`. |
+| `outputs` | lista; `[]` | todos | obrigatória para `parallel_group`; fortemente recomendada para LLM/build | declara produtos e infere o escopo de escrita. |
+| `write_scope` | lista; `[]` | todos | paths relativos permitidos; se ausente, deriva de `outputs` e, sem ambos, cai no fallback amplo `project/`, `docs/` | limita onde a delegação pode escrever. |
+| `prompt` | string ou ausente | LLM | referencie fontes/outputs sem inserir contexto efêmero no processo | instrução concreta enviada ao modelo. |
+| `expert` | ID ou ausente | executor LLM | requer `experts/<id>.md` válido e versionado | acrescenta orientação especialista auditável. |
+| `max_turns` | inteiro ou ausente | LLM | recomendado; default depende do tipo/executor | teto de turns da delegação. |
+| `llm_engine` | string ou ausente | LLM | override por node | substitui o provider do run para esse node. |
+| `llm_model` | string ou ausente | LLM | use modelo disponível no provider escolhido | substitui o modelo do run. |
+| `llm_effort` | string ou ausente | LLM | provider-specific | substitui reasoning effort do run. |
+| `codex_auth` | `chatgpt` ou ausente | Codex | qualquer outro valor falha; exige executor/engine Codex | usa rota built-in OpenAI/ChatGPT para o node inteiro. |
+| `env_setup` | lista; `[]` | delegações que precisam de preflight | comandos determinísticos e seguros | executa antes da delegação. |
+| `env_teardown` | lista; `[]` | delegações com recursos temporários | pareie com `env_setup` | executa após a delegação para encerrar recursos. |
+| `validators` | lista; `[]` | todos | nome e argumentos precisam existir no registry | prova determinística antes de avançar. |
+| `validation_mode` | `aggregate` | não `end` | `aggregate` ou `fail_fast` | agrega todos os diagnósticos ou para no primeiro. |
+| `on_fail` | mapping ou ausente | nodes com falha roteável | `goto` deve existir; pode informar `human_gate` | rota de recuperação depois de validator/review falhar. |
+| `requires_approval` | booleano; `false` | todos | use quando um node aprovado precisa parar para humano | pausa depois de passar. |
+| `no_pre_seed` | booleano; `false` | todos | use em trabalho/review que deve sempre ser refeito | impede reaproveitar outputs já válidos. |
+| `allow_pre_seed` | booleano; `false` | principalmente build/review/test | declare deliberadamente | permite reaproveitar checkpoint em tipos fail-closed. |
+| `preserve_outputs_on_reentry` | booleano; `false` | nodes `no_pre_seed` reentrantes | booleano | preserva draft existente em vez de apagá-lo antes de refazer. |
+| `fix_review` | ID ou ausente | node de correção | destino deve ser `review` e alcançável por cadeia linear de `next` | força auditoria focal depois do fix. |
+| `optional` | booleano; `false` | todos | use somente para trabalho dispensável | permite `ft explore --skip`. |
+| `reject_next` | ID ou ausente | `human_gate` | destino deve existir | rota quando o stakeholder rejeita. |
+| `approval_message_required` | booleano; `false` | `human_gate` | exige texto no `ft approve` | impede aprovação silenciosa. |
+| `decision_context` | mapping ou ausente | `human_gate` | só `decision`, `why_now`, `review_paths`, `checklist`, `limitations`, `approve_effect`, `reject_effect`; paths seguros | pacote de decisão exibido ao humano. |
+| `bypass_prompt` | string ou ausente | `human_gate` | só usado com `--bypass-human-gates` | atribui explicitamente a decisão delegada ao LLM. |
+| `bypass_reject_when` | `{path, pattern}` ou ausente | `human_gate` | path seguro e regex válida | em bypass, escolhe `reject_next` quando a evidência recomenda rejeição. |
+| `parallel_group` | string ou ausente | LLM não-controlador | membros têm outputs disjuntos; requer `--parallel` | executa fan-out estático em worktrees. |
+| `llm_timeout_seconds` | inteiro positivo ou ausente | LLM | não aceita bool/zero/negativo | sugestão da janela de inatividade, não deadline absoluto. |
+| `llm_episode` | string ou ausente | LLM | obrigatório se houver orçamento de episódio | agrupa chamadas relacionadas para telemetria/limite. |
+| `llm_episode_budget_seconds` | inteiro positivo ou ausente | LLM | exige `llm_episode` | meta cumulativa de telemetria; não interrompe trabalho. |
+| `llm_episode_max_calls` | inteiro positivo ou ausente | LLM | exige `llm_episode` | limite estrutural de chamadas no episódio. |
+| `episode_restart` | mapping branch→episode ou ausente | `decision` | cada chave deve ser branch existente e valor texto não vazio | reinicia o episódio LLM da rota escolhida. |
+| `review_route_path` | path ou ausente | `review` | fora de review é erro | deixa a decisão seguinte interpretar o veredito estruturado. |
+| `hyper_mode_docs` | lista de paths ou ausente | LLM | paths Markdown não vazios; incompatível com `context_profile` | documentos de contexto resumido. |
+| `hyper_mode_full_docs` | lista de paths ou ausente | LLM | mesma restrição | documentos injetados integralmente. |
+| `hyper_mode_preview_lines` | inteiro ≥ 0 ou ausente | LLM | incompatível com `context_profile` | limite de linhas do contexto resumido. |
+| `hyper_mode_full_max_lines` | inteiro ≥ 0 ou ausente | LLM | incompatível com `context_profile` | limite de linhas do contexto integral. |
+| `context_profile` | string ou ausente | LLM | precisa existir em `ft/engine/context_profiles.py`; incompatível com HyperMode | seleciona contexto determinístico e limitado. |
+
+<!-- process-yml-node-reference:end -->
+
+Para evitar que esta tabela se torne uma segunda implementação, toda alteração
+no loader ou no validador que adicione/remova uma tag deve atualizar esta seção
+na mesma mudança. O comando de verificação continua sendo
+`ft lint-process <path>`; a referência explica a tag, mas não substitui a
+validação do grafo.
+
 ### 4.1 Identidade e fluxo
 
 | Campo | Tipo | Nota |
 |---|---|---|
 | `id` | string | obrigatório, único. Convenção: `<processo>.<etapa>` ou `<fase>.<nn>.<nome>` |
 | `type` | string | obrigatório na prática (default `build`) |
-| `title` | string | obrigatório — aparece no card do step |
+| `title` | string | opcional; sem ele o loader usa `id` no card do step |
 | `description` | string | texto amigável exibido ao usuário quando o step inicia |
 | `executor` | string | `python`, `human`, `claude`, `codex`, `gemini`, `opencode` |
 | `sprint` | string | agrupa nodes; `ft continue --sprint` para na fronteira |

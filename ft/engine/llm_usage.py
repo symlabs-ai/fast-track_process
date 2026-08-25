@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 _COUNT_KEYS = (
     "input_tokens",
     "cache_creation_input_tokens",
@@ -53,9 +52,7 @@ def _normalize_usage(usage: dict[str, Any]) -> dict[str, int]:
     out["cache_creation_input_tokens"] = _safe_int(
         usage.get("cache_creation_input_tokens", 0)
     )
-    out["cache_read_input_tokens"] = _safe_int(
-        usage.get("cache_read_input_tokens", 0)
-    )
+    out["cache_read_input_tokens"] = _safe_int(usage.get("cache_read_input_tokens", 0))
     out["total_tokens"] = _safe_int(usage.get("total_tokens", 0))
     out["cached_input_tokens"] = _safe_int(usage.get("cached_input_tokens", 0))
     out["reasoning_output_tokens"] = _safe_int(usage.get("reasoning_output_tokens", 0))
@@ -132,7 +129,9 @@ def _iter_json_events(path: Path):
             yield event
 
 
-def _usage_from_event(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
+def _usage_from_event(
+    event: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Return usage, message_id, model from the most precise location in event."""
     message = event.get("message")
     if isinstance(message, dict):
@@ -175,7 +174,11 @@ def summarize_llm_usage(
         return _finalize_summary(summary)
 
     files = sorted(
-        [p for p in logs_dir.iterdir() if p.is_file() and p.suffix in {".log", ".jsonl"}],
+        [
+            p
+            for p in logs_dir.iterdir()
+            if p.is_file() and p.suffix in {".log", ".jsonl"}
+        ],
         key=lambda p: p.stat().st_mtime,
     )
     summary["log_files"] = len(files)

@@ -1,34 +1,32 @@
 name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  quality:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: python -m pip install -e ".[dev]"
-      - name: Ruff
-        run: python -m ruff check ft tests
-      - name: Tests
-        run: python -m pytest -q
-      - name: Build and smoke-test wheel
-        run: |
-          python -m pip wheel --no-deps --wheel-dir dist .
-          python -m venv --system-site-packages /tmp/ft-wheel-venv
-          /tmp/ft-wheel-venv/bin/python -m pip install --no-deps dist/*.whl
-          (
-            cd /tmp
-            /tmp/ft-wheel-venv/bin/ft --version
-            /tmp/ft-wheel-venv/bin/python -c "from ft.templates.catalog import TemplateCatalog; assert {'mvp-builder', 'feature', 'bug', 'tweak'} <= set(TemplateCatalog().names())"
-          )
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+      - run: python -m mypy
+      - run: python -m pytest -q
+      - run: git diff --check

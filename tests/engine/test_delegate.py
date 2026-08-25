@@ -5,43 +5,43 @@ import os
 import subprocess
 import sys
 import time
-
-import pytest
 from unittest.mock import patch
 
+import pytest
+
 from ft.engine.delegate import (
-    _build_executor_command,
-    _clean_opencode_capture_text,
-    _executor_env,
-    _executor_idle_grace_seconds,
-    _executor_idle_timeout_seconds,
-    _executor_max_wall_timeout_seconds,
-    _env_nonnegative_int,
-    _executor_timeout_seconds,
-    _append_opencode_runtime_diagnostics,
-    _extract_codex_output,
-    _extract_provider_session_id,
-    _extract_opencode_json_text,
-    _has_productive_liveness,
-    _is_opencode_internal_log_line,
-    _opencode_capture_command,
-    _prepare_opencode_sandbox_mounts,
-    _run_opencode_script,
-    _ProcessLiveness,
-    _process_liveness_snapshot,
-    _workspace_progress_paths,
-    _workspace_progress_snapshot,
-    _stop_process_tree,
-    _stream_process_output,
-    _supervised_command,
-    _symgateway_workflow_url,
-    _wait_for_process,
-    _wrap_opencode_sandbox_command,
     DEFAULT_OPENCODE_CONTEXT_LIMIT,
     DEFAULT_OPENCODE_MODEL,
     DEFAULT_OPENCODE_OUTPUT_LIMIT,
     DelegateResult,
     ExecutorIdleTimeout,
+    _append_opencode_runtime_diagnostics,
+    _build_executor_command,
+    _clean_opencode_capture_text,
+    _env_nonnegative_int,
+    _executor_env,
+    _executor_idle_grace_seconds,
+    _executor_idle_timeout_seconds,
+    _executor_max_wall_timeout_seconds,
+    _executor_timeout_seconds,
+    _extract_codex_output,
+    _extract_opencode_json_text,
+    _extract_provider_session_id,
+    _has_productive_liveness,
+    _is_opencode_internal_log_line,
+    _opencode_capture_command,
+    _prepare_opencode_sandbox_mounts,
+    _process_liveness_snapshot,
+    _ProcessLiveness,
+    _run_opencode_script,
+    _stop_process_tree,
+    _stream_process_output,
+    _supervised_command,
+    _symgateway_workflow_url,
+    _wait_for_process,
+    _workspace_progress_paths,
+    _workspace_progress_snapshot,
+    _wrap_opencode_sandbox_command,
     delegate_opencode_file_bundle_raw,
     delegate_to_llm,
     delegate_with_feedback,
@@ -54,19 +54,19 @@ class TestBuildExecutorCommand:
         monkeypatch.delenv("FT_CODEX_PROFILE", raising=False)
 
     def test_symgateway_workflow_url_inserts_or_replaces_label(self):
-        assert _symgateway_workflow_url(
-            "https://symgateway.symlabs.ai/p/openai/v1", "innovation"
-        ) == "https://symgateway.symlabs.ai/p/openai/w/innovation/v1"
+        assert (
+            _symgateway_workflow_url(
+                "https://symgateway.symlabs.ai/p/openai/v1", "innovation"
+            )
+            == "https://symgateway.symlabs.ai/p/openai/w/innovation/v1"
+        )
         assert _symgateway_workflow_url(
             "https://symgateway.symlabs.ai/p/anthropic-max/s/ragent/w/old",
             "orchestration",
-        ) == (
-            "https://symgateway.symlabs.ai/p/anthropic-max/s/ragent/"
-            "w/orchestration"
+        ) == ("https://symgateway.symlabs.ai/p/anthropic-max/s/ragent/w/orchestration")
+        assert (
+            _symgateway_workflow_url("https://api.openai.com/v1", "innovation") is None
         )
-        assert _symgateway_workflow_url(
-            "https://api.openai.com/v1", "innovation"
-        ) is None
 
     def test_env_nonnegative_int_accepts_zero(self, monkeypatch):
         monkeypatch.setenv("FT_OPENCODE_IDLE_RETRIES", "0")
@@ -153,8 +153,12 @@ class TestBuildExecutorCommand:
             effort="max",
         )
 
-        assert ["--model", "fable"] == cmd[cmd.index("--model"):cmd.index("--model") + 2]
-        assert ["--effort", "max"] == cmd[cmd.index("--effort"):cmd.index("--effort") + 2]
+        assert ["--model", "fable"] == cmd[
+            cmd.index("--model") : cmd.index("--model") + 2
+        ]
+        assert ["--effort", "max"] == cmd[
+            cmd.index("--effort") : cmd.index("--effort") + 2
+        ]
 
     def test_builds_claude_new_and_resumed_session_commands(self):
         session_id = "4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"
@@ -258,7 +262,7 @@ class TestBuildExecutorCommand:
         config_home.mkdir()
         (config_home / "symgateway-dev.config.toml").write_text(
             'model_provider = "symgateway_openai_dev"\n'
-            '[model_providers.symgateway_openai_dev]\n'
+            "[model_providers.symgateway_openai_dev]\n"
             'base_url = "https://symgateway.symlabs.ai/p/openai/v1"\n',
             encoding="utf-8",
         )
@@ -285,14 +289,25 @@ class TestBuildExecutorCommand:
         )
 
         override = (
-            'model_providers.symgateway_openai_dev.base_url='
+            "model_providers.symgateway_openai_dev.base_url="
             '"https://symgateway.symlabs.ai/p/openai/w/mdd/t/mdd/c/cycle-02-mdd/v1"'
         )
         assert fresh[:6] == [
-            "codex", "--profile", "symgateway-dev", "exec", "-c", override
+            "codex",
+            "--profile",
+            "symgateway-dev",
+            "exec",
+            "-c",
+            override,
         ]
         assert resumed[:7] == [
-            "codex", "--profile", "symgateway-dev", "exec", "resume", "-c", override
+            "codex",
+            "--profile",
+            "symgateway-dev",
+            "exec",
+            "resume",
+            "-c",
+            override,
         ]
 
     @pytest.mark.parametrize("workflow", ["bad/workflow", "x" * 65])
@@ -359,9 +374,9 @@ class TestBuildExecutorCommand:
         fake = bin_dir / "codex"
         fake.write_text(
             "#!/usr/bin/env python3\n"
-            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-123\"}')\n"
-            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
-            "\"text\":\"DONE\"}}')\n",
+            'print(\'{"type":"thread.started","thread_id":"thread-123"}\')\n'
+            'print(\'{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"DONE"}}\')\n',
             encoding="utf-8",
         )
         fake.chmod(0o755)
@@ -388,12 +403,12 @@ class TestBuildExecutorCommand:
         fake.write_text(
             "#!/usr/bin/env python3\n"
             "import time\n"
-            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-active\"}', flush=True)\n"
+            'print(\'{"type":"thread.started","thread_id":"thread-active"}\', flush=True)\n'
             "time.sleep(0.6)\n"
-            "print('{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}', flush=True)\n"
+            'print(\'{"type":"item.started","item":{"type":"command_execution"}}\', flush=True)\n'
             "time.sleep(0.6)\n"
-            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
-            "\"text\":\"DONE\"}}', flush=True)\n",
+            'print(\'{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"DONE"}}\', flush=True)\n',
             encoding="utf-8",
         )
         fake.chmod(0o755)
@@ -430,9 +445,9 @@ class TestBuildExecutorCommand:
             "for step in range(4):\n"
             "    path.write_text('value = ' + repr('x' * (step + 1)) + '\\n')\n"
             "    time.sleep(0.6)\n"
-            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-worktree\"}', flush=True)\n"
-            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
-            "\"text\":\"DONE\"}}', flush=True)\n",
+            'print(\'{"type":"thread.started","thread_id":"thread-worktree"}\', flush=True)\n'
+            'print(\'{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"DONE"}}\', flush=True)\n',
             encoding="utf-8",
         )
         fake.chmod(0o755)
@@ -477,9 +492,9 @@ class TestBuildExecutorCommand:
             "#!/usr/bin/env python3\n"
             "import time\n"
             "time.sleep(2.4)\n"
-            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-process\"}', flush=True)\n"
-            "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
-            "\"text\":\"DONE\"}}', flush=True)\n",
+            'print(\'{"type":"thread.started","thread_id":"thread-process"}\', flush=True)\n'
+            'print(\'{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"DONE"}}\', flush=True)\n',
             encoding="utf-8",
         )
         fake.chmod(0o755)
@@ -588,31 +603,33 @@ class TestBuildExecutorCommand:
         assert before.digest != after.digest
         assert after.file_count == before.file_count + 1
 
-    def test_workspace_snapshot_ignores_engine_logs_and_activity_sidecars(self, tmp_path):
+    def test_workspace_snapshot_ignores_engine_logs_and_activity_sidecars(
+        self, tmp_path
+    ):
         paths = _workspace_progress_paths(str(tmp_path), ["docs"])
         before = _workspace_progress_snapshot(paths, str(tmp_path))
         log_dir = tmp_path / "state" / "llm_logs"
         log_dir.mkdir(parents=True)
         (log_dir / "review.jsonl").write_text("stream\n", encoding="utf-8")
-        (log_dir / "review.jsonl.activity").write_text(
-            "heartbeat\n", encoding="utf-8"
-        )
+        (log_dir / "review.jsonl.activity").write_text("heartbeat\n", encoding="utf-8")
         (tmp_path / "cycle-01_log.md").write_text("engine\n", encoding="utf-8")
 
         after = _workspace_progress_snapshot(paths, str(tmp_path))
 
         assert after == before
 
-    def test_opt_in_max_wall_stops_even_a_productive_stream(self, tmp_path, monkeypatch):
+    def test_opt_in_max_wall_stops_even_a_productive_stream(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "codex"
         fake.write_text(
             "#!/usr/bin/env python3\n"
             "import time\n"
-            "print('{\"type\":\"thread.started\",\"thread_id\":\"thread-capped\"}', flush=True)\n"
+            'print(\'{"type":"thread.started","thread_id":"thread-capped"}\', flush=True)\n'
             "while True:\n"
-            "    print('{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}', flush=True)\n"
+            '    print(\'{"type":"item.started","item":{"type":"command_execution"}}\', flush=True)\n'
             "    time.sleep(0.2)\n",
             encoding="utf-8",
         )
@@ -642,8 +659,7 @@ class TestBuildExecutorCommand:
         bin_dir.mkdir()
         fake = bin_dir / "claude"
         fake.write_text(
-            "#!/usr/bin/env python3\n"
-            "print('{\"type\":\"result\",\"result\":\"DONE\"}')\n",
+            '#!/usr/bin/env python3\nprint(\'{"type":"result","result":"DONE"}\')\n',
             encoding="utf-8",
         )
         fake.chmod(0o755)
@@ -697,8 +713,10 @@ class TestBuildExecutorCommand:
         assert cmd == [
             "opencode",
             "run",
-            "--dir", "/tmp/proj",
-            "-m", DEFAULT_OPENCODE_MODEL,
+            "--dir",
+            "/tmp/proj",
+            "-m",
+            DEFAULT_OPENCODE_MODEL,
             "--auto",
             "--pure",
             "faça algo",
@@ -715,8 +733,10 @@ class TestBuildExecutorCommand:
         assert cmd == [
             "opencode",
             "run",
-            "--dir", "/tmp/proj",
-            "-m", "anthropic/claude-sonnet-4-5",
+            "--dir",
+            "/tmp/proj",
+            "-m",
+            "anthropic/claude-sonnet-4-5",
             "--auto",
             "--pure",
             "faça algo",
@@ -727,7 +747,9 @@ class TestBuildExecutorCommand:
 
         cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
 
-        assert ["--variant", "low"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
+        assert ["--variant", "low"] == cmd[
+            cmd.index("--variant") : cmd.index("--variant") + 2
+        ]
 
     def test_builds_opencode_command_with_project_effort(self, monkeypatch):
         monkeypatch.delenv("FT_OPENCODE_VARIANT", raising=False)
@@ -736,7 +758,9 @@ class TestBuildExecutorCommand:
             "opencode", "faça algo", "/tmp/proj", 7, effort="high"
         )
 
-        assert ["--variant", "high"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
+        assert ["--variant", "high"] == cmd[
+            cmd.index("--variant") : cmd.index("--variant") + 2
+        ]
 
     def test_opencode_allows_explicit_variant_named_none(self, monkeypatch):
         monkeypatch.delenv("FT_OPENCODE_VARIANT", raising=False)
@@ -745,9 +769,13 @@ class TestBuildExecutorCommand:
             "opencode", "faça algo", "/tmp/proj", 7, effort="none"
         )
 
-        assert ["--variant", "none"] == cmd[cmd.index("--variant"):cmd.index("--variant") + 2]
+        assert ["--variant", "none"] == cmd[
+            cmd.index("--variant") : cmd.index("--variant") + 2
+        ]
 
-    def test_builds_opencode_command_allows_disabling_pure_and_variant(self, monkeypatch):
+    def test_builds_opencode_command_allows_disabling_pure_and_variant(
+        self, monkeypatch
+    ):
         monkeypatch.setenv("FT_OPENCODE_AUTO", "0")
         monkeypatch.setenv("FT_OPENCODE_PURE", "0")
         monkeypatch.setenv("FT_OPENCODE_VARIANT", "off")
@@ -764,7 +792,9 @@ class TestBuildExecutorCommand:
         cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
 
         assert "--print-logs" in cmd
-        assert ["--log-level", "DEBUG"] == cmd[cmd.index("--log-level"):cmd.index("--log-level") + 2]
+        assert ["--log-level", "DEBUG"] == cmd[
+            cmd.index("--log-level") : cmd.index("--log-level") + 2
+        ]
         assert "--thinking" not in cmd
         assert cmd[-1] == "faça algo"
 
@@ -775,7 +805,9 @@ class TestBuildExecutorCommand:
         cmd = _build_executor_command("opencode", "faça algo", "/tmp/proj", 7)
 
         assert "--print-logs" in cmd
-        assert ["--log-level", "INFO"] == cmd[cmd.index("--log-level"):cmd.index("--log-level") + 2]
+        assert ["--log-level", "INFO"] == cmd[
+            cmd.index("--log-level") : cmd.index("--log-level") + 2
+        ]
         assert "--thinking" not in cmd
         assert cmd[-1] == "faça algo"
 
@@ -804,7 +836,7 @@ class TestBuildExecutorCommand:
             return_value=supervised,
         ) as delegated:
             result = delegate_opencode_file_bundle_raw(
-                "<ft_file path=\"docs/out.md\">hello</ft_file>",
+                '<ft_file path="docs/out.md">hello</ft_file>',
                 str(tmp_path),
                 allowed_paths=["docs/out.md"],
             )
@@ -820,11 +852,13 @@ class TestBuildExecutorCommand:
         env = _executor_env(
             "opencode",
             {
-                "OPENCODE_CONFIG_CONTENT": json.dumps({
-                    "permission": {"bash": "ask"},
-                    "compaction": {"reserved": 2000},
-                    "theme": "system",
-                })
+                "OPENCODE_CONFIG_CONTENT": json.dumps(
+                    {
+                        "permission": {"bash": "ask"},
+                        "compaction": {"reserved": 2000},
+                        "theme": "system",
+                    }
+                )
             },
         )
 
@@ -848,7 +882,9 @@ class TestBuildExecutorCommand:
         runtime = tmp_path / "runtime"
         internal_log = runtime / "data" / "opencode" / "log" / "opencode.log"
         internal_log.parent.mkdir(parents=True)
-        internal_log.write_text("timestamp=now level=ERROR message=boom\n", encoding="utf-8")
+        internal_log.write_text(
+            "timestamp=now level=ERROR message=boom\n", encoding="utf-8"
+        )
         step_log = tmp_path / "state" / "llm_logs" / "node.log"
         step_log.parent.mkdir(parents=True)
         step_log.write_text("Preamble\n", encoding="utf-8")
@@ -893,8 +929,16 @@ class TestBuildExecutorCommand:
 
     def test_opencode_capture_command_uses_json_without_debug_logs(self):
         cmd = [
-            "opencode", "run", "--dir", "/tmp/project", "-m", DEFAULT_OPENCODE_MODEL,
-            "--print-logs", "--log-level", "DEBUG", "prompt",
+            "opencode",
+            "run",
+            "--dir",
+            "/tmp/project",
+            "-m",
+            DEFAULT_OPENCODE_MODEL,
+            "--print-logs",
+            "--log-level",
+            "DEBUG",
+            "prompt",
         ]
 
         captured = _opencode_capture_command(cmd)
@@ -904,10 +948,12 @@ class TestBuildExecutorCommand:
         assert captured[-3:] == ["--format", "json", "prompt"]
 
     def test_extracts_opencode_json_text_for_capture(self):
-        raw = "\n".join([
-            '{"type":"step_start","part":{"type":"step-start"}}',
-            '{"type":"text","part":{"type":"text","text":"# Doc\\nbody\\n[tool_calls] (None)"}}',
-        ])
+        raw = "\n".join(
+            [
+                '{"type":"step_start","part":{"type":"step-start"}}',
+                '{"type":"text","part":{"type":"text","text":"# Doc\\nbody\\n[tool_calls] (None)"}}',
+            ]
+        )
 
         extracted = _extract_opencode_json_text(raw)
 
@@ -934,7 +980,10 @@ class TestBuildExecutorCommand:
         assert _clean_opencode_capture_text(text) == "# Doc\n\nbody"
 
     def test_opencode_capture_cleaner_preserves_blocked_only_response(self):
-        assert _clean_opencode_capture_text("BLOCKED: sem contexto") == "BLOCKED: sem contexto"
+        assert (
+            _clean_opencode_capture_text("BLOCKED: sem contexto")
+            == "BLOCKED: sem contexto"
+        )
 
     def test_opencode_capture_cleaner_removes_operational_prelude_before_heading(self):
         text = "I need to create the task list first.\n\n# Task List\n\n- item\n"
@@ -962,23 +1011,27 @@ class TestBuildExecutorCommand:
             "output": DEFAULT_OPENCODE_OUTPUT_LIMIT,
         }
 
-    def test_opencode_env_can_override_context_limit_for_custom_model(self, monkeypatch):
+    def test_opencode_env_can_override_context_limit_for_custom_model(
+        self, monkeypatch
+    ):
         monkeypatch.setenv("FT_OPENCODE_CONTEXT_LIMIT", "123456")
         monkeypatch.setenv("FT_OPENCODE_OUTPUT_LIMIT", "8192")
 
         env = _executor_env(
             "opencode",
             {
-                "OPENCODE_CONFIG_CONTENT": json.dumps({
-                    "provider": {
-                        "pgx": {
-                            "options": {"baseURL": "http://example.test/v1"},
-                            "models": {
-                                "openai/gpt-oss-20b": {"name": "GPT-OSS 20B"}
-                            },
+                "OPENCODE_CONFIG_CONTENT": json.dumps(
+                    {
+                        "provider": {
+                            "pgx": {
+                                "options": {"baseURL": "http://example.test/v1"},
+                                "models": {
+                                    "openai/gpt-oss-20b": {"name": "GPT-OSS 20B"}
+                                },
+                            }
                         }
                     }
-                })
+                )
             },
             opencode_model="pgx/openai/gpt-oss-20b",
         )
@@ -998,16 +1051,18 @@ class TestBuildExecutorCommand:
         env = _executor_env(
             "opencode",
             {
-                "OPENCODE_CONFIG_CONTENT": json.dumps({
-                    "provider": {
-                        "pgx": {
-                            "options": {"baseURL": "http://example.test/v1"},
-                            "models": {
-                                "zai-org_glm-4.7-flash": {"name": "GLM 4.7 Flash"}
-                            },
+                "OPENCODE_CONFIG_CONTENT": json.dumps(
+                    {
+                        "provider": {
+                            "pgx": {
+                                "options": {"baseURL": "http://example.test/v1"},
+                                "models": {
+                                    "zai-org_glm-4.7-flash": {"name": "GLM 4.7 Flash"}
+                                },
+                            }
                         }
                     }
-                })
+                )
             },
             opencode_model=DEFAULT_OPENCODE_MODEL,
         )
@@ -1036,9 +1091,7 @@ class TestBuildExecutorCommand:
             cwd=main,
             check=True,
         )
-        subprocess.run(
-            ["git", "config", "user.name", "Tests"], cwd=main, check=True
-        )
+        subprocess.run(["git", "config", "user.name", "Tests"], cwd=main, check=True)
         (main / "README.md").write_text("test\n", encoding="utf-8")
         subprocess.run(["git", "add", "README.md"], cwd=main, check=True)
         subprocess.run(["git", "commit", "-qm", "init"], cwd=main, check=True)
@@ -1050,14 +1103,16 @@ class TestBuildExecutorCommand:
         settings_dir = main / ".claude"
         settings_dir.mkdir()
         (settings_dir / "settings.local.json").write_text(
-            json.dumps({
-                "env": {
-                    "ANTHROPIC_BASE_URL": (
-                        "https://symgateway.symlabs.ai/p/anthropic-max/s/test"
-                    ),
-                    "ANTHROPIC_API_KEY": "local-test-key",
+            json.dumps(
+                {
+                    "env": {
+                        "ANTHROPIC_BASE_URL": (
+                            "https://symgateway.symlabs.ai/p/anthropic-max/s/test"
+                        ),
+                        "ANTHROPIC_API_KEY": "local-test-key",
+                    }
                 }
-            }),
+            ),
             encoding="utf-8",
         )
 
@@ -1084,7 +1139,9 @@ class TestBuildExecutorCommand:
             ["docs/api_contract.md", "project/frontend/"],
         )
 
-        by_path = {mount.path.relative_to(tmp_path).as_posix(): mount for mount in mounts}
+        by_path = {
+            mount.path.relative_to(tmp_path).as_posix(): mount for mount in mounts
+        }
         assert set(by_path) == {"docs/api_contract.md", "project/frontend"}
         assert by_path["docs/api_contract.md"].is_file is True
         assert by_path["docs/api_contract.md"].placeholder is True
@@ -1099,7 +1156,9 @@ class TestBuildExecutorCommand:
         assert not outside.exists()
 
     def test_opencode_sandbox_wraps_command_with_bwrap(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ft.engine.delegate.shutil.which", lambda name: "/usr/bin/bwrap")
+        monkeypatch.setattr(
+            "ft.engine.delegate.shutil.which", lambda name: "/usr/bin/bwrap"
+        )
         (tmp_path / "state").mkdir()
 
         cmd, mounts = _wrap_opencode_sandbox_command(
@@ -1111,26 +1170,34 @@ class TestBuildExecutorCommand:
 
         assert cmd[:7] == [
             "/usr/bin/bwrap",
-            "--ro-bind", "/", "/",
-            "--dev-bind", "/dev", "/dev",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev-bind",
+            "/dev",
+            "/dev",
         ]
-        assert ["--bind", str(tmp_path / "docs/out.md"), str(tmp_path / "docs/out.md")] in [
-            cmd[i:i + 3] for i in range(len(cmd) - 2)
-        ]
+        assert [
+            "--bind",
+            str(tmp_path / "docs/out.md"),
+            str(tmp_path / "docs/out.md"),
+        ] in [cmd[i : i + 3] for i in range(len(cmd) - 2)]
         assert [
             "--ro-bind",
             str(tmp_path / "runtime" / "hidden-state"),
             str(tmp_path / "state"),
-        ] in [cmd[i:i + 3] for i in range(len(cmd) - 2)]
+        ] in [cmd[i : i + 3] for i in range(len(cmd) - 2)]
         assert cmd[-3:] == ["opencode", "run", "prompt"]
         assert [mount.path for mount in mounts] == [tmp_path / "docs/out.md"]
 
-    def test_delegate_opencode_code_node_materializes_generated_file_bundle(self, tmp_path, monkeypatch):
+    def test_delegate_opencode_code_node_materializes_generated_file_bundle(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         generated = (
-            "<ft_file path=\"project/frontend/package.json\">\n"
-            "{\"scripts\":{\"build\":\"echo ok\"}}\n"
+            '<ft_file path="project/frontend/package.json">\n'
+            '{"scripts":{"build":"echo ok"}}\n'
             "</ft_file>\n"
         )
         fake = bin_dir / "opencode"
@@ -1158,7 +1225,9 @@ class TestBuildExecutorCommand:
         assert "File bundle gerado pelo OpenCode" in result.output
         assert (tmp_path / "project/frontend/package.json").exists()
 
-    def test_delegate_opencode_code_node_uses_tool_mode_by_default(self, tmp_path, monkeypatch):
+    def test_delegate_opencode_code_node_uses_tool_mode_by_default(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         prompt_path = tmp_path / "prompt.txt"
@@ -1187,10 +1256,15 @@ class TestBuildExecutorCommand:
         assert result.success is True
         assert "OBRIGATORIO: antes de dizer DONE, use Bash" in prompt
         assert "Responda SOMENTE com blocos XML" not in prompt
-        assert "NAO use `git checkout`, `git reset`, `git restore`, `git clean` ou `git revert`" in prompt
+        assert (
+            "NAO use `git checkout`, `git reset`, `git restore`, `git clean` ou `git revert`"
+            in prompt
+        )
         assert "NUNCA encerre, mate ou reinicie processos" in prompt
 
-    def test_delegate_opencode_native_write_prompt_uses_path_schema(self, tmp_path, monkeypatch):
+    def test_delegate_opencode_native_write_prompt_uses_path_schema(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         prompt_path = tmp_path / "prompt.txt"
@@ -1220,7 +1294,9 @@ class TestBuildExecutorCommand:
         assert "campos `path`, `oldString`, `newString`" in prompt
         assert "nunca use `filePath`" in prompt
 
-    def test_llm_inactivity_window_stops_a_stagnant_executor(self, tmp_path, monkeypatch):
+    def test_llm_inactivity_window_stops_a_stagnant_executor(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "opencode"
@@ -1247,7 +1323,9 @@ class TestBuildExecutorCommand:
         assert "[INACTIVITY_TIMEOUT]" in result.output
         assert elapsed < 4
 
-    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="requer subreaper Linux"
+    )
     def test_llm_timeout_reaps_detached_executor_writer(self, tmp_path, monkeypatch):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -1256,7 +1334,7 @@ class TestBuildExecutorCommand:
         fake.write_text(
             "#!/bin/sh\n"
             "setsid sh -c \"trap '' TERM HUP; sleep 5; "
-            f"printf late > {str(marker)!r}\" "
+            f'printf late > {str(marker)!r}" '
             "</dev/null >/dev/null 2>&1 &\n"
             "sleep 10\n",
             encoding="utf-8",
@@ -1421,12 +1499,14 @@ class TestBuildExecutorCommand:
         assert output == "ok\n"
         process.communicate.assert_called_once_with(timeout=1800.0)
 
-    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="requer subreaper Linux"
+    )
     def test_opencode_script_reaps_detached_writer_before_success(self, tmp_path):
         marker = tmp_path / "late-script-marker"
         script = (
             "setsid sh -c \"trap '' TERM; sleep 0.3; "
-            f"printf late > {str(marker)!r}\" "
+            f'printf late > {str(marker)!r}" '
             "</dev/null >/dev/null 2>&1 &\n"
             "printf 'ok\\n'\n"
         )
@@ -1446,14 +1526,16 @@ class TestBuildExecutorCommand:
         assert output == "ok\n"
         assert not marker.exists()
 
-    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="requer subreaper Linux"
+    )
     def test_opencode_script_timeout_reaps_detached_writer_with_bounded_cleanup(
         self, tmp_path
     ):
         marker = tmp_path / "late-timeout-marker"
         script = (
             "setsid sh -c \"trap '' TERM; sleep 1; "
-            f"printf late > {str(marker)!r}\" "
+            f'printf late > {str(marker)!r}" '
             "</dev/null >/dev/null 2>&1 &\n"
             "sleep 10\n"
         )
@@ -1476,7 +1558,9 @@ class TestBuildExecutorCommand:
         assert elapsed < 4
         assert not marker.exists()
 
-    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="requer subreaper Linux"
+    )
     def test_delegate_reaps_detached_executor_writer_before_success(
         self, tmp_path, monkeypatch
     ):
@@ -1487,7 +1571,7 @@ class TestBuildExecutorCommand:
         fake.write_text(
             "#!/bin/sh\n"
             "setsid sh -c \"trap '' TERM; sleep 0.3; "
-            f"printf late > {str(marker)!r}\" "
+            f'printf late > {str(marker)!r}" '
             "</dev/null >/dev/null 2>&1 &\n"
             "printf 'DONE\\n'\n",
             encoding="utf-8",
@@ -1507,7 +1591,9 @@ class TestBuildExecutorCommand:
         assert result.success is True
         assert not marker.exists()
 
-    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer subreaper Linux")
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="requer subreaper Linux"
+    )
     def test_transcript_reconciliation_reaps_detached_executor_writer(self, tmp_path):
         marker = tmp_path / "late-reconcile-marker"
         fake = tmp_path / "fake-claude.py"
@@ -1533,7 +1619,9 @@ class TestBuildExecutorCommand:
 
         with (
             patch("ft.engine.delegate._STALL_RECONCILE_SECS", 0),
-            patch("ft.engine.delegate._transcript_terminal_output", return_value="DONE"),
+            patch(
+                "ft.engine.delegate._transcript_terminal_output", return_value="DONE"
+            ),
         ):
             output = _stream_process_output(proc, "claude", stream_prefix="test")
         time.sleep(0.5)
@@ -1541,13 +1629,15 @@ class TestBuildExecutorCommand:
         assert "DONE" in output
         assert not marker.exists()
 
-    def test_delegate_opencode_file_bundle_tolerates_extra_text(self, tmp_path, monkeypatch):
+    def test_delegate_opencode_file_bundle_tolerates_extra_text(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         generated = (
             "I will create the scaffold now.\n"
-            "<ft_file path=\"project/frontend/package.json\">\n"
-            "{\"scripts\":{\"build\":\"echo ok\"}}\n"
+            '<ft_file path="project/frontend/package.json">\n'
+            '{"scripts":{"build":"echo ok"}}\n'
             "</ft_file>\n"
             "The file is ready.\n"
         )
@@ -1576,14 +1666,16 @@ class TestBuildExecutorCommand:
         assert "File bundle gerado pelo OpenCode" in result.output
         assert (tmp_path / "project/frontend/package.json").exists()
 
-    def test_delegate_opencode_file_bundle_prefixes_frontend_orphan_paths(self, tmp_path, monkeypatch):
+    def test_delegate_opencode_file_bundle_prefixes_frontend_orphan_paths(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         generated = (
-            "<ft_file path=\"project/frontend/package.json\">\n"
-            "{\"scripts\":{\"build\":\"node scripts/build.js\"}}\n"
+            '<ft_file path="project/frontend/package.json">\n'
+            '{"scripts":{"build":"node scripts/build.js"}}\n'
             "</ft_file>\n"
-            "<ft_file path=\"scripts/build.js\">\n"
+            '<ft_file path="scripts/build.js">\n'
             "process.exit(0)\n"
             "</ft_file>\n"
         )
@@ -1609,17 +1701,21 @@ class TestBuildExecutorCommand:
         )
 
         assert result.success is True
-        assert (tmp_path / "project/frontend/scripts/build.js").read_text(encoding="utf-8") == "process.exit(0)\n"
+        assert (tmp_path / "project/frontend/scripts/build.js").read_text(
+            encoding="utf-8"
+        ) == "process.exit(0)\n"
         assert "project/frontend/scripts/build.js" in result.output
 
-    def test_delegate_opencode_file_bundle_normalizes_frontend_alias_paths(self, tmp_path, monkeypatch):
+    def test_delegate_opencode_file_bundle_normalizes_frontend_alias_paths(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         generated = (
-            "<ft_file path=\"project/frontend/package.json\">\n"
-            "{\"scripts\":{\"build\":\"node scripts/build.mjs\"}}\n"
+            '<ft_file path="project/frontend/package.json">\n'
+            '{"scripts":{"build":"node scripts/build.mjs"}}\n'
             "</ft_file>\n"
-            "<ft_file path=\"package/frontend/scripts/build.mjs\">\n"
+            '<ft_file path="package/frontend/scripts/build.mjs">\n'
             "process.exit(0)\n"
             "</ft_file>\n"
         )
@@ -1645,17 +1741,17 @@ class TestBuildExecutorCommand:
         )
 
         assert result.success is True
-        assert (tmp_path / "project/frontend/scripts/build.mjs").read_text(encoding="utf-8") == "process.exit(0)\n"
+        assert (tmp_path / "project/frontend/scripts/build.mjs").read_text(
+            encoding="utf-8"
+        ) == "process.exit(0)\n"
         assert "project/frontend/scripts/build.mjs" in result.output
 
-    def test_delegate_opencode_file_bundle_preserves_dotfile_paths(self, tmp_path, monkeypatch):
+    def test_delegate_opencode_file_bundle_preserves_dotfile_paths(
+        self, tmp_path, monkeypatch
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
-        generated = (
-            "<ft_file path=\".build_ok\">\n"
-            "ready\n"
-            "</ft_file>\n"
-        )
+        generated = '<ft_file path=".build_ok">\nready\n</ft_file>\n'
         fake = bin_dir / "opencode"
         fake.write_text(
             "#!/usr/bin/env python3\n"
@@ -1749,7 +1845,9 @@ class TestBuildExecutorCommand:
         assert diagnostics[0]["processes"] == 2
         assert diagnostics[0]["sockets"] == 1
 
-    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requer procfs Linux")
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="requer procfs Linux"
+    )
     def test_process_liveness_snapshot_avoids_command_lines_and_counts_tree(self):
         proc = subprocess.Popen(
             ["bash", "-c", "sleep 10 & wait"],
@@ -1782,23 +1880,31 @@ class TestBuildExecutorCommand:
                 os.killpg(pgid, 9)
 
     def test_extracts_final_codex_message_from_json_stream(self):
-        raw = "\n".join([
-            '{"type":"thread.started","thread_id":"t1"}',
-            '{"type":"turn.started"}',
-            '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"DONE"}}',
-            '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}',
-        ])
+        raw = "\n".join(
+            [
+                '{"type":"thread.started","thread_id":"t1"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"DONE"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}',
+            ]
+        )
         assert _extract_codex_output(raw) == "DONE"
 
     def test_extracts_provider_session_ids(self):
-        assert _extract_provider_session_id(
-            "codex",
-            '{"type":"thread.started","thread_id":"thread-123"}',
-        ) == "thread-123"
-        assert _extract_provider_session_id(
-            "claude",
-            '{"type":"result","session_id":"4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"}',
-        ) == "4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"
+        assert (
+            _extract_provider_session_id(
+                "codex",
+                '{"type":"thread.started","thread_id":"thread-123"}',
+            )
+            == "thread-123"
+        )
+        assert (
+            _extract_provider_session_id(
+                "claude",
+                '{"type":"result","session_id":"4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"}',
+            )
+            == "4f5b71b2-f632-4f07-8ee7-4e8fb9946c39"
+        )
 
 
 class TestDelegateWithFeedback:
@@ -1810,7 +1916,9 @@ class TestDelegateWithFeedback:
             files_modified=[],
         )
 
-        with patch("ft.engine.delegate.delegate_to_llm", return_value=expected) as delegate_mock:
+        with patch(
+            "ft.engine.delegate.delegate_to_llm", return_value=expected
+        ) as delegate_mock:
             result = delegate_with_feedback(
                 original_task="escreva o PRD",
                 feedback="faltaram linhas",
@@ -1851,7 +1959,9 @@ class TestDelegateWithFeedback:
             files_modified=[],
         )
 
-        with patch("ft.engine.delegate.delegate_to_llm", return_value=expected) as delegate_mock:
+        with patch(
+            "ft.engine.delegate.delegate_to_llm", return_value=expected
+        ) as delegate_mock:
             delegate_with_feedback(
                 original_task="escreva o contrato",
                 feedback="faltou arquivo",

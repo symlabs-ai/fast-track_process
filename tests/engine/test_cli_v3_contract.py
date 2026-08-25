@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -205,9 +205,7 @@ def test_project_lifecycle_commands_block_then_close_and_reopen(
         _invoke_cli(monkeypatch, "project-close", project)
     assert ready_close.value.code == 0
     assert "fase alterada para maintenance" in capsys.readouterr().out
-    contract = yaml.safe_load(
-        (project / ".ft/project.yml").read_text(encoding="utf-8")
-    )
+    contract = yaml.safe_load((project / ".ft/project.yml").read_text(encoding="utf-8"))
     assert contract["lifecycle"]["phase"] == "maintenance"
 
     with pytest.raises(SystemExit) as reopened:
@@ -222,9 +220,7 @@ def test_project_lifecycle_commands_block_then_close_and_reopen(
         )
     assert reopened.value.code == 0
     assert "Projeto reaberto" in capsys.readouterr().out
-    contract = yaml.safe_load(
-        (project / ".ft/project.yml").read_text(encoding="utf-8")
-    )
+    contract = yaml.safe_load((project / ".ft/project.yml").read_text(encoding="utf-8"))
     assert contract["objective"]["target"] == "v2"
     assert contract["lifecycle"]["phase"] == "building"
 
@@ -338,9 +334,7 @@ nodes:
     manifest = project / ".ft/manifest.yml"
     manifest.parent.mkdir()
     manifest.write_text(
-        "schema_version: 1\n"
-        "process: process/process.yml\n"
-        "template: feature\n",
+        "schema_version: 1\nprocess: process/process.yml\ntemplate: feature\n",
         encoding="utf-8",
     )
 
@@ -397,7 +391,7 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
         "run",
         project,
         "--template",
-        "feature",
+        "feature-fast",
         "--request",
         "Adicionar busca por telefone",
     )
@@ -415,9 +409,9 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     assert len(started) == 2
     assert [mode for _root, mode in started] == ["mvp", "mvp"]
     worktrees = {root.name: root for root, _mode in started}
-    assert set(worktrees) == {"cycle-01-feature", "cycle-02-tweak"}
+    assert set(worktrees) == {"cycle-01-feature-fast", "cycle-02-tweak"}
 
-    feature_worktree = worktrees["cycle-01-feature"]
+    feature_worktree = worktrees["cycle-01-feature-fast"]
     tweak_worktree = worktrees["cycle-02-tweak"]
     feature_request = feature_worktree / "docs" / "feature-request.md"
     tweak_request = tweak_worktree / "docs" / "feature-request.md"
@@ -431,9 +425,9 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     tweak_state = yaml.safe_load(
         (tweak_worktree / "state" / "engine_state.yml").read_text(encoding="utf-8")
     )
-    assert feature_state["template_id"] == "feature"
+    assert feature_state["template_id"] == "feature-fast"
     assert tweak_state["template_id"] == "tweak"
-    assert feature_state["process_path"] == ".ft/process/feature/process.yml"
+    assert feature_state["process_path"] == ".ft/process/feature-fast/process.yml"
     assert tweak_state["process_path"] == ".ft/process/tweak/process.yml"
     for state in (feature_state, tweak_state):
         assert state["project_id"] == "product"
@@ -450,9 +444,9 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     monkeypatch.chdir(project)
     _invoke_cli(monkeypatch, "status")
     multi_status = capsys.readouterr().out
-    assert "Ciclo: cycle-01-feature" in multi_status
+    assert "Ciclo: cycle-01-feature-fast" in multi_status
     assert "Ciclo: cycle-02-tweak" in multi_status
-    assert "feature v1.4.0" in multi_status
+    assert "feature_fast v1.4.0" in multi_status
     assert "tweak v1.1.0" in multi_status
 
     selected = cli_main._select_cycle_for_command(project, "cycle-02-tweak")

@@ -21,7 +21,9 @@ def test_activity_sidecar_timestamps_lines_without_copying_content(tmp_path):
     assert "molhoespecial" not in raw
     timestamps = recent_activity_timestamps(log)
     assert activity_digest('{"secret":"molhoespecial"}') in timestamps
-    assert timestamps[activity_digest('{"secret":"molhoespecial"}')].tzinfo == timezone.utc
+    assert (
+        timestamps[activity_digest('{"secret":"molhoespecial"}')].tzinfo == timezone.utc
+    )
 
 
 def test_activity_reader_keeps_latest_timestamp_for_a_repeated_line(tmp_path):

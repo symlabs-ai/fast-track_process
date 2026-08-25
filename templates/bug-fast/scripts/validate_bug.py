@@ -4,21 +4,20 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
 import unicodedata
+from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import yaml
-
 
 SCHEMA_VERSION = 1
 BASELINE_PATH = Path("docs/bug-baseline.yml")
@@ -131,9 +130,13 @@ def _read(root: Path, relative: str | Path) -> str:
     try:
         path.resolve().relative_to(root.resolve())
     except (OSError, ValueError) as exc:
-        raise BugValidationError(f"arquivo obrigatório escapa da raiz: {relative}") from exc
+        raise BugValidationError(
+            f"arquivo obrigatório escapa da raiz: {relative}"
+        ) from exc
     if path.is_symlink():
-        raise BugValidationError(f"arquivo obrigatório não pode ser symlink: {relative}")
+        raise BugValidationError(
+            f"arquivo obrigatório não pode ser symlink: {relative}"
+        )
     if not path.is_file():
         raise BugValidationError(f"arquivo obrigatório ausente: {relative}")
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -247,9 +250,7 @@ def _row_value(row: dict[str, str], *names: str) -> str:
 
 def _records_by_id(records: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     return {
-        _row_value(row, "id").upper(): row
-        for row in records
-        if _row_value(row, "id")
+        _row_value(row, "id").upper(): row for row in records if _row_value(row, "id")
     }
 
 
@@ -270,7 +271,9 @@ def _detect_product_root(root: Path) -> str:
     return candidates[0]
 
 
-def _git(root: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess[bytes]:
+def _git(
+    root: Path, *args: str, timeout: int = 30
+) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
             ["git", "-C", str(root), *args],
@@ -280,7 +283,9 @@ def _git(root: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProce
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise BugValidationError(f"falha ao executar git {' '.join(args)}: {exc}") from exc
+        raise BugValidationError(
+            f"falha ao executar git {' '.join(args)}: {exc}"
+        ) from exc
 
 
 def _head(root: Path) -> str:
@@ -315,9 +320,7 @@ def _frontmatter(text: str) -> dict[str, object]:
 
 
 def _section(text: str, name: str) -> str:
-    match = re.search(
-        rf"(?ims)^##\s+{re.escape(name)}\s*$\n(.*?)(?=^##\s+|\Z)", text
-    )
+    match = re.search(rf"(?ims)^##\s+{re.escape(name)}\s*$\n(.*?)(?=^##\s+|\Z)", text)
     return match.group(1).strip() if match else ""
 
 
@@ -378,17 +381,13 @@ def _validate_changelog_insertions(
             "CHANGELOG.md removeu, editou ou reordenou conteúdo histórico"
         )
 
-    inserted_text = [
-        line.strip() for _index, line in inserted_lines if line.strip()
-    ]
+    inserted_text = [line.strip() for _index, line in inserted_lines if line.strip()]
     if inserted_text.count(new_bug_entry) != 1:
         raise BugValidationError(
             "CHANGELOG.md deve inserir exatamente a nova linha #BUG"
         )
 
-    headings = [
-        line for line in inserted_text if line in _BUG_CHANGELOG_HEADINGS
-    ]
+    headings = [line for line in inserted_text if line in _BUG_CHANGELOG_HEADINGS]
     unexpected = [
         line
         for line in inserted_text
@@ -487,7 +486,10 @@ def _baseline(root: Path) -> dict[str, Any]:
         raise BugValidationError(f"baseline YAML inválida: {exc}") from exc
     if not isinstance(payload, dict):
         raise BugValidationError("baseline deve ser mapping")
-    if payload.get("schema_version") != SCHEMA_VERSION or payload.get("kind") != "ft.bug.baseline":
+    if (
+        payload.get("schema_version") != SCHEMA_VERSION
+        or payload.get("kind") != "ft.bug.baseline"
+    ):
         raise BugValidationError("baseline do bug possui schema/kind inválido")
     if payload.get("product_root") not in {"project", "src"}:
         raise BugValidationError("baseline possui product_root inválido")
@@ -502,9 +504,7 @@ def _changed_paths(root: Path, base_commit: str) -> list[str]:
     values: set[str] = set()
     for content in (tracked.stdout, untracked.stdout):
         values.update(
-            raw.decode("utf-8", errors="replace")
-            for raw in content.split(b"\0")
-            if raw
+            raw.decode("utf-8", errors="replace") for raw in content.split(b"\0") if raw
         )
     return sorted(values)
 
@@ -549,9 +549,7 @@ def _validate_change_budget(
     label: str,
 ) -> tuple[int, int]:
     primary = [
-        relative
-        for relative in changed
-        if not _is_derived_artifact_path(relative)
+        relative for relative in changed if not _is_derived_artifact_path(relative)
     ]
     derived_count = len(changed) - len(primary)
     if len(changed) > total_limit:
@@ -613,7 +611,9 @@ def _command_argv(raw: list[str]) -> list[str]:
     return argv
 
 
-def _command_mentions_test(argv: list[str], test_paths: list[str], product_root: str) -> bool:
+def _command_mentions_test(
+    argv: list[str], test_paths: list[str], product_root: str
+) -> bool:
     tokens = {token.replace("\\", "/").lstrip("./") for token in argv[1:]}
     for relative in test_paths:
         product_relative = relative.removeprefix(product_root.rstrip("/") + "/")
@@ -682,9 +682,7 @@ def _validation_paths(root: Path) -> list[str]:
             or path.name in {".serve.pid", ".serve_url", ".serve.log"}
         ):
             continue
-        if path.parts[0] == ".ft" and not relative.startswith(
-            ".ft/process/bug-fast/"
-        ):
+        if path.parts[0] == ".ft" and not relative.startswith(".ft/process/bug-fast/"):
             continue
         selected.append(relative)
     return sorted(set(selected))
@@ -789,7 +787,9 @@ def _validate_red_receipt(root: Path) -> dict[str, Any]:
         or not isinstance(output, str)
         or red.get("output_sha256") != _sha256_bytes(output.encode("utf-8"))
     ):
-        raise BugValidationError("receipt RED possui schema, vínculo ou conteúdo inválido")
+        raise BugValidationError(
+            "receipt RED possui schema, vínculo ou conteúdo inválido"
+        )
     _assert_red_failure_output(output)
     _assert_test_hashes(root, dict(red.get("test_hashes") or {}))
     return red
@@ -809,7 +809,9 @@ def _validate_green_receipt(root: Path, red: dict[str, Any]) -> dict[str, Any]:
         or not isinstance(green.get("output_sha256"), str)
         or not isinstance(green.get("fingerprint"), str)
     ):
-        raise BugValidationError("receipt GREEN possui schema, vínculo ou conteúdo inválido")
+        raise BugValidationError(
+            "receipt GREEN possui schema, vínculo ou conteúdo inválido"
+        )
     return green
 
 
@@ -892,9 +894,9 @@ def _assert_document_structure_preserved(
         raise BugValidationError(
             "PROJECT_BACKLOG alterou estrutura/prosa fora do PB selecionado"
         )
-    if _without_markdown_rows(original_features, {feature_id}) != _without_markdown_rows(
-        current_features_text, {feature_id}
-    ):
+    if _without_markdown_rows(
+        original_features, {feature_id}
+    ) != _without_markdown_rows(current_features_text, {feature_id}):
         raise BugValidationError(
             "FEATURES alterou estrutura/prosa fora da FEAT selecionada"
         )
@@ -1076,9 +1078,7 @@ def validate_implementation(root: Path) -> str:
 
     red = _validate_red_receipt(root)
     green = _validate_green_receipt(root, red)
-    command_lines = re.findall(
-        r"(?mi)^\s*Comando de regressão:\s*(.+?)\s*$", report
-    )
+    command_lines = re.findall(r"(?mi)^\s*Comando de regressão:\s*(.+?)\s*$", report)
     if len(command_lines) != 1:
         raise BugValidationError("bug-report exige um Comando de regressão")
     try:
@@ -1094,7 +1094,9 @@ def validate_implementation(root: Path) -> str:
         raise BugValidationError("Assinatura RED não aparece na falha registrada")
     current_fingerprint = _fingerprint(root)
     if green.get("fingerprint") != current_fingerprint:
-        raise BugValidationError("produto mudou depois do GREEN; execute GREEN novamente")
+        raise BugValidationError(
+            "produto mudou depois do GREEN; execute GREEN novamente"
+        )
 
     changed = _changed_product_paths(root, baseline)
     primary_count, derived_count = _validate_change_budget(
@@ -1111,7 +1113,10 @@ def validate_implementation(root: Path) -> str:
     for relative in changed:
         path = Path(relative)
         lowered = {part.lower() for part in path.parts}
-        if lowered.intersection(FORBIDDEN_PATH_PARTS) or path.name.lower() in FORBIDDEN_FILENAMES:
+        if (
+            lowered.intersection(FORBIDDEN_PATH_PARTS)
+            or path.name.lower() in FORBIDDEN_FILENAMES
+        ):
             raise BugValidationError(
                 f"escopo sensível não permitido em template bug: {relative}"
             )
@@ -1138,7 +1143,16 @@ def command_full(root: Path) -> None:
     for command in commands:
         try:
             result = subprocess.run(
-                ["env", "-u", "MAKEFLAGS", "-u", "MFLAGS", "-u", "GNUMAKEFLAGS", *command],
+                [
+                    "env",
+                    "-u",
+                    "MAKEFLAGS",
+                    "-u",
+                    "MFLAGS",
+                    "-u",
+                    "GNUMAKEFLAGS",
+                    *command,
+                ],
                 cwd=root,
                 timeout=FULL_COMMAND_TIMEOUT_SECONDS,
                 check=False,
@@ -1209,9 +1223,7 @@ def _review_findings(
             raise BugValidationError(f"{label}: finding {index} deve ser mapping")
         identifier = str(item.get("id") or "").upper()
         if not re.fullmatch(r"B-\d{2,}", identifier) or identifier in seen:
-            raise BugValidationError(
-                f"{label}: finding {index} exige ID B-NN único"
-            )
+            raise BugValidationError(f"{label}: finding {index} exige ID B-NN único")
         status = str(item.get("status") or "").upper()
         expected_statuses = {"PASS", "FAIL"} if fix_review else {"OPEN"}
         if status not in expected_statuses:
@@ -1251,15 +1263,13 @@ def _assert_review_paths(
     missing_paths = [path for path in paths if path not in markdown]
     if missing_paths:
         raise BugValidationError(
-            f"{markdown_path}: não menciona path auditado: "
-            + ", ".join(missing_paths)
+            f"{markdown_path}: não menciona path auditado: " + ", ".join(missing_paths)
         )
     upper = markdown.upper()
     missing_tokens = [token for token in required_tokens if token.upper() not in upper]
     if missing_tokens:
         raise BugValidationError(
-            f"{markdown_path}: não contém "
-            + ", ".join(missing_tokens)
+            f"{markdown_path}: não contém " + ", ".join(missing_tokens)
         )
 
 
@@ -1341,9 +1351,7 @@ def validate_review(root: Path) -> dict[str, Any]:
     )
     for finding in findings:
         if finding["id"] not in _read(root, REVIEW_MD_PATH).upper():
-            raise BugValidationError(
-                f"{REVIEW_MD_PATH}: não contém {finding['id']}"
-            )
+            raise BugValidationError(f"{REVIEW_MD_PATH}: não contém {finding['id']}")
     print(f"bug review PASS: {verdict}/{route}")
     return payload
 
@@ -1368,17 +1376,17 @@ def _fix_baseline(
     if payload.get("source_review") != REVIEW_PATH.as_posix():
         raise BugValidationError(f"{FIX_BASELINE_PATH}: source_review inválido")
     source_sha = _sha256_path(root / REVIEW_PATH)
-    if (
-        require_current_review
-        and payload.get("source_review_sha256") != source_sha
-    ):
+    if require_current_review and payload.get("source_review_sha256") != source_sha:
         raise BugValidationError(f"{FIX_BASELINE_PATH}: review fonte mudou")
     findings = payload.get("findings")
     initial_paths = payload.get("initial_product_paths")
     if (
         not isinstance(findings, list)
         or not findings
-        or not all(isinstance(item, str) and re.fullmatch(r"B-\d{2,}", item) for item in findings)
+        or not all(
+            isinstance(item, str) and re.fullmatch(r"B-\d{2,}", item)
+            for item in findings
+        )
         or not isinstance(initial_paths, list)
         or not initial_paths
         or not all(isinstance(item, str) for item in initial_paths)
@@ -1757,9 +1765,7 @@ def _reconciled_features_text(
     if existing is None:
         raise BugValidationError(f"FEATURES baseline não contém {identifier}")
     backlog = _row_value(existing, "backlog")
-    backlog_ids = [
-        match.group(0).upper() for match in PB_RE.finditer(backlog)
-    ]
+    backlog_ids = [match.group(0).upper() for match in PB_RE.finditer(backlog)]
     if metadata["backlog_item"] not in backlog_ids:
         backlog_ids.append(metadata["backlog_item"])
     evidence = (
@@ -1794,8 +1800,7 @@ def _reconciled_changelog_text(
     original = str(dict(baseline["documentation_text"])["CHANGELOG.md"])
     summary = _safe_cell(_section(report, "Correção"), limit=180).rstrip(".")
     entry = (
-        f"- #BUG {metadata['backlog_item']} / {metadata['target_feature']} "
-        f"— {summary}."
+        f"- #BUG {metadata['backlog_item']} / {metadata['target_feature']} — {summary}."
     )
     if entry in original.splitlines():
         return original.rstrip() + "\n"
@@ -1878,9 +1883,7 @@ def command_reconcile_apply(root: Path) -> None:
             baseline, metadata, report
         ),
         Path("docs/FEATURES.md"): _reconciled_features_text(baseline, metadata),
-        Path("CHANGELOG.md"): _reconciled_changelog_text(
-            baseline, metadata, report
-        ),
+        Path("CHANGELOG.md"): _reconciled_changelog_text(baseline, metadata, report),
         RESULT_PATH: _bug_result_text(root, metadata, report),
     }
     originals = dict(baseline["documentation_text"])
@@ -2005,7 +2008,9 @@ def validate_reconcile(root: Path) -> None:
     result = _read(root, RESULT_PATH)
     for required in (backlog_id, feature_id, "RED", "GREEN"):
         if required.upper() not in result.upper():
-            raise BugValidationError(f"bug-result não contém evidência obrigatória: {required}")
+            raise BugValidationError(
+                f"bug-result não contém evidência obrigatória: {required}"
+            )
     print("bug reconcile PASS: PB/FEAT existentes e entrada #BUG única")
 
 

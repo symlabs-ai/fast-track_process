@@ -50,7 +50,13 @@ class AgentPolicy:
             f"Agente '{role.value}' não tem permissão (escopo não permitido): {path}"
         )
 
-    def advance_as(self, role: AgentRole, state_manager: "StateManager", current_node: str, next_node: str) -> None:
+    def advance_as(
+        self,
+        role: AgentRole,
+        state_manager: "StateManager",
+        current_node: str,
+        next_node: str,
+    ) -> None:
         if not self.can_advance_node(role):
             raise PermissionError(
                 f"Apenas ft_manager pode avançar nodes. Role '{role.value}' não tem permissão."

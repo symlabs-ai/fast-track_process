@@ -8,7 +8,6 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
-
 _RUNTIME_STATE_PATHS = [
     "state/",
     "runs/",
@@ -48,10 +47,7 @@ def verify_hooks_from_process_meta(meta: Mapping[str, Any] | None) -> bool:
     if not isinstance(meta, Mapping):
         return True
     policy = meta.get("commit_policy")
-    return not (
-        isinstance(policy, Mapping)
-        and policy.get("verify_hooks") is False
-    )
+    return not (isinstance(policy, Mapping) and policy.get("verify_hooks") is False)
 
 
 def git_command_prefix(verify_hooks: bool) -> list[str]:
@@ -103,7 +99,9 @@ def auto_commit(
     # Verificar se ha algo staged
     status = subprocess.run(
         ["git", "diff", "--cached", "--stat"],
-        cwd=cwd, capture_output=True, text=True,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
     )
     if not status.stdout.strip():
         return True, "auto_commit: nada para commitar"
@@ -117,14 +115,18 @@ def auto_commit(
             "-m",
             message,
         ],
-        cwd=cwd, capture_output=True, text=True,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
     )
 
     if result.returncode == 0:
         # Extrair hash curto
         hash_result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=cwd, capture_output=True, text=True,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
         )
         short_hash = hash_result.stdout.strip()
         return True, f"auto_commit: {short_hash} — {message}"
@@ -253,13 +255,17 @@ def get_changed_files(project_root: str = ".") -> list[str]:
     """Retorna lista de arquivos modificados (staged + unstaged)."""
     result = subprocess.run(
         ["git", "diff", "--name-only", "HEAD"],
-        cwd=project_root, capture_output=True, text=True,
+        cwd=project_root,
+        capture_output=True,
+        text=True,
     )
     modified = result.stdout.strip().splitlines() if result.stdout.strip() else []
 
     untracked = subprocess.run(
         ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=project_root, capture_output=True, text=True,
+        cwd=project_root,
+        capture_output=True,
+        text=True,
     )
     created = untracked.stdout.strip().splitlines() if untracked.stdout.strip() else []
 

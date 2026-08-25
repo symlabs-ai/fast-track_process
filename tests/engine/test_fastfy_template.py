@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 from ft.cli.main import available_templates
 from ft.engine.graph import load_graph
@@ -86,9 +86,13 @@ def _legacy_repo(tmp_path: Path) -> Path:
     _git(tmp_path, "add", "-A")
     _git(
         tmp_path,
-        "-c", "user.name=Test",
-        "-c", "user.email=test@example.com",
-        "commit", "-qm", "legado",
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qm",
+        "legado",
     )
     return tmp_path
 

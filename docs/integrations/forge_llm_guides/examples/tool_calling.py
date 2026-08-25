@@ -3,6 +3,7 @@ Tool Calling Example - Extend LLM capabilities with custom tools.
 
 This example demonstrates how to define and use tools with the chat agent.
 """
+
 import os
 
 from forge_llm import ChatAgent, ToolRegistry

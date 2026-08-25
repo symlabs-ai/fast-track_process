@@ -4,18 +4,18 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 3
@@ -304,9 +304,9 @@ def _snapshot(
         },
         "external_dependencies": sorted(
             item.strip()
-            for item in os.environ.get(
-                "FT_FEATURE_EXTERNAL_DEPENDENCIES", ""
-            ).split(",")
+            for item in os.environ.get("FT_FEATURE_EXTERNAL_DEPENDENCIES", "").split(
+                ","
+            )
             if item.strip()
         ),
         "files": [_file_record(root, relative) for relative in paths],
@@ -335,9 +335,7 @@ def _receipt_path(
         ) from exc
     expected = RECEIPT_RELATIVE_PATHS[validation_kind]
     if relative != expected:
-        raise ReceiptError(
-            f"o receipt deve usar exatamente {expected.as_posix()}"
-        )
+        raise ReceiptError(f"o receipt deve usar exatamente {expected.as_posix()}")
     current = root
     for part in relative.parts:
         current = current / part
@@ -382,9 +380,7 @@ def command_fingerprint(args: argparse.Namespace) -> None:
 
 def command_invalidate(args: argparse.Namespace) -> None:
     product_root = _normalize_product_root(args.root, args.product_root)
-    path = _receipt_path(
-        args.root, args.receipt, product_root, args.validation_kind
-    )
+    path = _receipt_path(args.root, args.receipt, product_root, args.validation_kind)
     path.unlink(missing_ok=True)
 
 
@@ -418,9 +414,7 @@ def command_record(args: argparse.Namespace) -> None:
 
 def command_verify(args: argparse.Namespace) -> None:
     product_root = _normalize_product_root(args.root, args.product_root)
-    path = _receipt_path(
-        args.root, args.receipt, product_root, args.validation_kind
-    )
+    path = _receipt_path(args.root, args.receipt, product_root, args.validation_kind)
     stored = _load_receipt(path)
     if set(stored) != set(RECEIPT_KEYS):
         raise ReceiptError("receipt compacto contém campos ausentes ou não permitidos")
@@ -433,7 +427,11 @@ def command_verify(args: argparse.Namespace) -> None:
     if stored.get("result") != "pass":
         raise ReceiptError("receipt não registra uma validação completa PASS")
     file_count = stored.get("file_count")
-    if isinstance(file_count, bool) or not isinstance(file_count, int) or file_count < 0:
+    if (
+        isinstance(file_count, bool)
+        or not isinstance(file_count, int)
+        or file_count < 0
+    ):
         raise ReceiptError("file_count do receipt compacto é inválido")
     fingerprint = stored.get("fingerprint")
     if not isinstance(fingerprint, str) or not re.fullmatch(

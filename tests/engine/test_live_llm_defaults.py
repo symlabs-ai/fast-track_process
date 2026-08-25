@@ -23,7 +23,6 @@ from ft.engine.parallel import WorktreeResult
 from ft.engine.runner import LLMSelection, StepRunner
 from ft.engine.state import EngineState
 
-
 _TWO_CALL_PROCESS = """\
 id: live_defaults
 version: "1.0.0"
@@ -132,8 +131,7 @@ def test_live_defaults_change_does_not_mutate_in_flight_call_and_reaches_next_ca
 
     assert not thread.is_alive()
     assert [
-        (call["llm_engine"], call["llm_model"], call["llm_effort"])
-        for call in calls
+        (call["llm_engine"], call["llm_model"], call["llm_effort"]) for call in calls
     ] == [
         ("codex", "gpt-old", "high"),
         ("opencode", "provider/new-model", None),
@@ -278,7 +276,9 @@ def test_selection_reports_field_level_provenance_and_provider_resets(
     }
 
 
-def test_selection_reports_manifest_live_and_explicit_effort_clear(tmp_path: Path) -> None:
+def test_selection_reports_manifest_live_and_explicit_effort_clear(
+    tmp_path: Path,
+) -> None:
     runner, owner, _cycle = _runner(tmp_path)
     state = runner.state_mgr.load()
     update_manifest_llm_defaults(
@@ -388,8 +388,12 @@ def test_log_suffix_uses_the_attempt_snapshot_not_a_fresh_resolution(
 ) -> None:
     runner, _owner, _cycle = _runner(tmp_path)
 
-    assert runner._build_llm_log_path("node", "retry", engine="codex").suffix == ".jsonl"
-    assert runner._build_llm_log_path("node", "retry", engine="opencode").suffix == ".log"
+    assert (
+        runner._build_llm_log_path("node", "retry", engine="codex").suffix == ".jsonl"
+    )
+    assert (
+        runner._build_llm_log_path("node", "retry", engine="opencode").suffix == ".log"
+    )
 
 
 def test_parallel_task_captures_defaults_only_after_reaching_worker_slot(
@@ -441,9 +445,7 @@ def test_parallel_task_captures_defaults_only_after_reaching_worker_slot(
             return results
 
     def fake_delegate(**kwargs):
-        calls.append(
-            (kwargs["llm_engine"], kwargs["llm_model"], kwargs["llm_effort"])
-        )
+        calls.append((kwargs["llm_engine"], kwargs["llm_model"], kwargs["llm_effort"]))
         return DelegateResult(True, "DONE", [], [])
 
     with (
@@ -457,6 +459,7 @@ def test_parallel_task_captures_defaults_only_after_reaching_worker_slot(
         ("codex", "gpt-old", "high"),
         ("opencode", "provider/queued", None),
     ]
+
 
 def test_invalid_live_manifest_fails_closed_instead_of_reusing_stale_state(
     tmp_path: Path,
@@ -598,4 +601,6 @@ def test_llm_defaults_from_linked_worktree_updates_only_owner_checkout(
         "llm_model": "gpt-new",
         "llm_effort": "max",
     }
-    assert (worktree / ".ft" / "manifest.yml").read_text(encoding="utf-8") == worktree_before
+    assert (worktree / ".ft" / "manifest.yml").read_text(
+        encoding="utf-8"
+    ) == worktree_before

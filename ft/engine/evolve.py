@@ -10,10 +10,10 @@ depois de todos os YAMLs staged validarem.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
-from pathlib import Path
 import shutil
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import yaml
 
@@ -43,8 +43,10 @@ def _engine_root() -> Path:
 class EvolveTargets:
     """Alvos reais de uma evolução — os diretórios que o apply pode tocar."""
 
-    project_dir: Path | None = None            # <root>/.ft/process
-    global_dirs: dict[str, Path] = field(default_factory=dict)  # nome → templates/<nome>
+    project_dir: Path | None = None  # <root>/.ft/process
+    global_dirs: dict[str, Path] = field(
+        default_factory=dict
+    )  # nome → templates/<nome>
 
     @property
     def labels(self) -> list[str]:
@@ -91,9 +93,9 @@ class EvolveWorkspace:
 
 @dataclass(frozen=True)
 class StagedChange:
-    target: str        # "project" ou "global:<nome>"
-    status: str        # "added" | "modified" | "removed"
-    relative: str      # path relativo dentro do alvo
+    target: str  # "project" ou "global:<nome>"
+    status: str  # "added" | "modified" | "removed"
+    relative: str  # path relativo dentro do alvo
     staged: Path | None
     real: Path | None
 
@@ -106,7 +108,7 @@ def next_workspace_dir(project_root: str | Path) -> Path:
         for item in home.iterdir():
             name = item.name
             if item.is_dir() and name.startswith("evolve-"):
-                suffix = name[len("evolve-"):].split("-")[0]
+                suffix = name[len("evolve-") :].split("-")[0]
                 if suffix.isdigit():
                     existing.append(int(suffix))
     return home / f"evolve-{(max(existing) + 1 if existing else 1):02d}"
@@ -115,6 +117,7 @@ def next_workspace_dir(project_root: str | Path) -> Path:
 # ---------------------------------------------------------------------------
 # Contexto do ciclo
 # ---------------------------------------------------------------------------
+
 
 def _state_is_active(state_file: Path) -> bool:
     try:
@@ -152,7 +155,11 @@ def find_cycle_context(
 
         live = wt_home / cycle
         if (live / "state" / "engine_state.yml").is_file():
-            return f"ciclo {cycle} (worktree)", live, live / "state" / "engine_state.yml"
+            return (
+                f"ciclo {cycle} (worktree)",
+                live,
+                live / "state" / "engine_state.yml",
+            )
         archived = cycles_dir / cycle
         if archived.is_dir():
             return f"ciclo {cycle} (arquivado)", archived, None
@@ -188,8 +195,7 @@ def find_cycle_context(
     if len(candidates) > 1:
         options = ", ".join(sorted(candidates))
         raise EvolveError(
-            "mais de um ciclo está disponível; informe --cycle. "
-            f"Opções: {options}"
+            f"mais de um ciclo está disponível; informe --cycle. Opções: {options}"
         )
     return next(iter(candidates.values()))
 
@@ -219,6 +225,7 @@ def _copy_context_tree(source: Path, destination: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 # Alvos e staging
 # ---------------------------------------------------------------------------
+
 
 def resolve_targets(
     project_root: str | Path,
@@ -368,6 +375,7 @@ def prepare_workspace(
 # ---------------------------------------------------------------------------
 # Validação, diff e apply
 # ---------------------------------------------------------------------------
+
 
 def _staged_pairs(workspace: EvolveWorkspace) -> list[tuple[str, Path, Path]]:
     """(label, staged_dir, real_dir) para cada alvo staged."""

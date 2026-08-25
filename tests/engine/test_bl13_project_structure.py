@@ -35,7 +35,9 @@ class TestFindProjectRoot:
 
         assert find_project_root() == tmp_path
 
-    def test_runtime_like_directory_does_not_identify_workspace(self, tmp_path, monkeypatch):
+    def test_runtime_like_directory_does_not_identify_workspace(
+        self, tmp_path, monkeypatch
+    ):
         from ft.cli.main import find_project_root
 
         nested = tmp_path / "product" / "state"

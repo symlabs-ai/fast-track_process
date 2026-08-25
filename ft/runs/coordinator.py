@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import os
-from pathlib import Path
 import subprocess
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
@@ -107,7 +107,9 @@ def _relative_process_path(project_root: Path, process_path: str | Path) -> str:
     try:
         resolved = candidate.resolve(strict=True)
     except FileNotFoundError as exc:
-        raise RunPreparationError(f"processo local não encontrado: {candidate}") from exc
+        raise RunPreparationError(
+            f"processo local não encontrado: {candidate}"
+        ) from exc
     try:
         relative = resolved.relative_to(project_root)
     except ValueError as exc:
@@ -205,7 +207,9 @@ class RunCoordinator:
         overlap = self._PINNED_FIELDS.intersection(extra_state)
         if overlap:
             fields = ", ".join(sorted(overlap))
-            raise ValueError(f"initial_state não pode sobrescrever campos pinados: {fields}")
+            raise ValueError(
+                f"initial_state não pode sobrescrever campos pinados: {fields}"
+            )
 
         worktree: Path | None = None
         branch: str | None = None

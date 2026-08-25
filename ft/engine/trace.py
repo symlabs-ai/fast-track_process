@@ -8,18 +8,17 @@ is safe to archive with the cycle; the raw journal remains runtime-only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import fcntl
 import json
 import os
-from pathlib import Path
 import tempfile
 import threading
 import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 from uuid import uuid4
-
 
 TRACE_SCHEMA_VERSION = 1
 REPORT_SCHEMA_VERSION = 1
@@ -303,9 +302,9 @@ class TraceRecorder:
             "schema_version": TRACE_SCHEMA_VERSION,
             **{str(key): _json_value(value) for key, value in event.items()},
         }
-        encoded = (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode(
-            "utf-8"
-        )
+        encoded = (
+            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+        ).encode("utf-8")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._thread_lock:
             descriptor = os.open(
@@ -336,7 +335,10 @@ def read_trace_events(path: str | Path) -> list[dict[str, Any]]:
             # A final partial line can survive SIGKILL.  Earlier complete
             # events remain authoritative and the report marks open spans.
             continue
-        if isinstance(payload, dict) and payload.get("schema_version") == TRACE_SCHEMA_VERSION:
+        if (
+            isinstance(payload, dict)
+            and payload.get("schema_version") == TRACE_SCHEMA_VERSION
+        ):
             events.append(payload)
     return events
 
@@ -454,9 +456,7 @@ def _span_rows(
                 "started_at": start.get("started_at"),
                 "ended_at": end.get("ended_at") if end else None,
                 "duration_ms": duration_ms,
-                "duration_source": (
-                    end.get("duration_source") if end else "utc_open"
-                ),
+                "duration_source": (end.get("duration_source") if end else "utc_open"),
                 "status": end.get("status") if end else "open",
                 "result": end.get("result") if end else None,
                 "attributes": attributes,

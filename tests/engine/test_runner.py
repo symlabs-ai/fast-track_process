@@ -1,31 +1,30 @@
 """Unit tests for ft.engine.runner (LLM mocked)."""
 
 import json
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
-from pathlib import Path
-from unittest.mock import patch
 
 from ft.engine import ui
 from ft.engine.api_context import (
     enrich_api_contract_feedback,
     extract_api_endpoint_candidates,
 )
+from ft.engine.delegate import DelegateResult
 from ft.engine.graph import load_graph
 from ft.engine.runner import (
     StepRunner,
-    run_validators,
     ValidationResult,
-    build_task_prompt,
     _brief_cycle_objective,
     _explicit_review_verdicts,
     _llm_progress_snapshot,
     _parse_review_verdict,
+    build_task_prompt,
+    run_validators,
 )
-from ft.engine.delegate import DelegateResult
 from ft.engine.state import EngineState
-
 
 _TEST_PROCESS_V2_YAML = """\
 id: test_process_v2
@@ -111,6 +110,7 @@ def runner_v2(tmp_path):
 # init_state
 # ---------------------------------------------------------------------------
 
+
 class TestInitState:
     def test_init_sets_first_node(self, runner_v2):
         runner_v2.init_state()
@@ -123,9 +123,7 @@ class TestInitState:
         state = runner_v2.state_mgr.load()
         assert state.metrics["steps_total"] == 5
 
-    def test_init_persists_brief_objective_from_template_input(
-        self, tmp_path, capsys
-    ):
+    def test_init_persists_brief_objective_from_template_input(self, tmp_path, capsys):
         root = tmp_path / "project"
         request = root / "docs" / "feature-request.md"
         request.parent.mkdir(parents=True)
@@ -176,8 +174,7 @@ nodes:
         runner.status()
 
         assert (
-            "Objetivo do Ciclo: Adicionar filtro por período ao relatório de "
-            "vendas."
+            "Objetivo do Ciclo: Adicionar filtro por período ao relatório de vendas."
         ) in capsys.readouterr().out
 
     def test_cycle_objective_is_single_line_and_bounded(self):
@@ -420,9 +417,7 @@ class TestRecoverOrphanedDelegation:
         assert state.node_status == "ready"
         assert state.active_llm_log is None
 
-    def test_recovery_uses_resume_command_instead_of_expensive_command(
-        self, runner_v2
-    ):
+    def test_recovery_uses_resume_command_instead_of_expensive_command(self, runner_v2):
         self._orphan_build(runner_v2)
         node = runner_v2.graph.get_node("step.03.implementacao")
         node.validators = [
@@ -543,9 +538,7 @@ class TestRetryBlockedValidation:
         state = runner.state_mgr.load()
         state.current_node = node.id
         state.node_status = "blocked"
-        state.blocked_reason = (
-            "Validacao falhou apos 0 tentativas: ambiente incompleto"
-        )
+        state.blocked_reason = "Validacao falhou apos 0 tentativas: ambiente incompleto"
         runner.state_mgr.save()
         return node
 
@@ -563,9 +556,7 @@ class TestRetryBlockedValidation:
                 ValidationResult(True, False, None, []),
             ]
 
-            handled = runner_v2.retry_blocked_validation_without_llm(
-                mode="step"
-            )
+            handled = runner_v2.retry_blocked_validation_without_llm(mode="step")
 
         assert handled is True
         assert validators.call_count == 2
@@ -591,9 +582,7 @@ class TestRetryBlockedValidation:
                 ValidationResult(False, True, "1 regression failed", []),
             ]
 
-            handled = runner_v2.retry_blocked_validation_without_llm(
-                mode="step"
-            )
+            handled = runner_v2.retry_blocked_validation_without_llm(mode="step")
 
         assert handled is True
         delegate.assert_not_called()
@@ -607,6 +596,7 @@ class TestRetryBlockedValidation:
 # ---------------------------------------------------------------------------
 # approve / reject
 # ---------------------------------------------------------------------------
+
 
 class TestApproveReject:
     def test_approve_advances_node(self, runner_v2):
@@ -623,9 +613,7 @@ class TestApproveReject:
         out = capsys.readouterr().out
         assert "pendente" in out.lower()
 
-    def test_approve_requires_message_when_gate_declares_it(
-        self, runner_v2, capsys
-    ):
+    def test_approve_requires_message_when_gate_declares_it(self, runner_v2, capsys):
         runner_v2.init_state()
         node = runner_v2.graph.get_node("step.01.hipotese")
         node.approval_message_required = True
@@ -1182,7 +1170,9 @@ nodes:
         assert "GET frases soltas sem path" not in feedback
         assert "ARTEFATO INVALIDO ATUAL" not in feedback
 
-    def test_api_contract_candidates_normalize_task_list_paths_without_api_prefix(self, tmp_path):
+    def test_api_contract_candidates_normalize_task_list_paths_without_api_prefix(
+        self, tmp_path
+    ):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
         docs = project_root / "docs"
@@ -1198,9 +1188,17 @@ nodes:
         candidates = extract_api_endpoint_candidates(project_root)
 
         assert ("POST", "/api/clientes", "com validação.") in candidates
-        assert any(method == "GET" and path == "/api/clientes" for method, path, _ in candidates)
-        assert any(method == "POST" and path == "/api/agenda" for method, path, _ in candidates)
-        assert any(method == "GET" and path == "/api/cobrancas" for method, path, _ in candidates)
+        assert any(
+            method == "GET" and path == "/api/clientes"
+            for method, path, _ in candidates
+        )
+        assert any(
+            method == "POST" and path == "/api/agenda" for method, path, _ in candidates
+        )
+        assert any(
+            method == "GET" and path == "/api/cobrancas"
+            for method, path, _ in candidates
+        )
 
     def test_opencode_code_nodes_allow_native_edit_tools_by_default(self, tmp_path):
         project_root = tmp_path / "project"
@@ -1260,7 +1258,9 @@ nodes:
         assert no_capture_options.capture_output_path is None
 
         with patch.dict("os.environ", {"FT_OPENCODE_DENY_EDIT_TOOLS": "0"}):
-            native_build_options = runner._opencode_options_for_node(build_node, "opencode")
+            native_build_options = runner._opencode_options_for_node(
+                build_node, "opencode"
+            )
         assert native_build_options.deny_edit_tools is False
 
     def test_opencode_code_nodes_receive_hyper_mode_docs(self, tmp_path):
@@ -1269,8 +1269,12 @@ nodes:
         docs = project_root / "docs"
         state_dir.mkdir(parents=True)
         docs.mkdir(parents=True)
-        (docs / "PRD.md").write_text("# PRD\n\n" + "\n".join(f"linha {i}" for i in range(45)))
-        (docs / "ui_criteria.md").write_text("# UI\n\n" + "\n".join(f"criterio {i}" for i in range(45)))
+        (docs / "PRD.md").write_text(
+            "# PRD\n\n" + "\n".join(f"linha {i}" for i in range(45))
+        )
+        (docs / "ui_criteria.md").write_text(
+            "# UI\n\n" + "\n".join(f"criterio {i}" for i in range(45))
+        )
 
         process_path = tmp_path / "process.yml"
         process_path.write_text(
@@ -1314,7 +1318,9 @@ nodes:
                 files_modified=[],
             )
 
-        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect):
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+        ):
             runner._run_llm_step(node)
 
     def test_opencode_frontend_delegates_project_content_without_substitution(
@@ -1372,22 +1378,32 @@ nodes:
             (frontend / "scripts").mkdir(parents=True)
             (frontend / "src").mkdir(parents=True)
             (frontend / "package.json").write_text(
-                json.dumps({"type": "module", "scripts": {"build": "node scripts/build.mjs"}}),
+                json.dumps(
+                    {"type": "module", "scripts": {"build": "node scripts/build.mjs"}}
+                ),
                 encoding="utf-8",
             )
-            (frontend / "scripts" / "build.mjs").write_text("console.log('ok')\n", encoding="utf-8")
+            (frontend / "scripts" / "build.mjs").write_text(
+                "console.log('ok')\n", encoding="utf-8"
+            )
             (frontend / "src" / "main.js").write_text(
                 "const title = 'Lunar Atlas';\n"
                 "const html = '<form><button type=\"submit\">Registrar observação</button></form>';\n",
                 encoding="utf-8",
             )
-            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+            return DelegateResult(
+                success=True, output="DONE", files_created=[], files_modified=[]
+            )
 
-        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect) as delegated:
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+        ) as delegated:
             runner._run_llm_step(node)
 
         assert delegated.called
-        main_js = (project_root / "project/frontend/src/main.js").read_text(encoding="utf-8")
+        main_js = (project_root / "project/frontend/src/main.js").read_text(
+            encoding="utf-8"
+        )
         assert "Lunar Atlas" in main_js
         assert "Registrar observação" in main_js
         assert runner.state_mgr.load().current_node == "ft.end"
@@ -1435,9 +1451,13 @@ nodes:
             assert "OpenCode compact bundle" not in kwargs["task"]
             frontend = project_root / "project" / "frontend"
             frontend.mkdir(parents=True)
-            (frontend / "package.json").write_text('{"scripts":{"build":"true"}}\n', encoding="utf-8")
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"true"}}\n', encoding="utf-8"
+            )
             (project_root / ".build_ok").write_text("ok\n", encoding="utf-8")
-            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+            return DelegateResult(
+                success=True, output="DONE", files_created=[], files_modified=[]
+            )
 
         with patch(
             "ft.engine.runner.delegate_to_llm",
@@ -1494,8 +1514,7 @@ nodes:
         tests_dir = project_root / "project" / "tests"
         tests_dir.mkdir(parents=True)
         (tests_dir / "test_client_manager.py").write_text(
-            "def test_stub():\n"
-            "    pass\n",
+            "def test_stub():\n    pass\n",
             encoding="utf-8",
         )
 
@@ -1514,7 +1533,9 @@ nodes:
         state.metrics["steps_completed"] = 1
         runner.state_mgr.save()
 
-        rewound = runner._rewind_invalid_tdd_red(runner.graph.get_node("ft.tdd.02.green"), state)
+        rewound = runner._rewind_invalid_tdd_red(
+            runner.graph.get_node("ft.tdd.02.green"), state
+        )
 
         assert rewound is True
         state = runner.state_mgr.load()
@@ -1523,7 +1544,9 @@ nodes:
         assert "ft.tdd.01.red" not in state.gate_log
         assert "tests" not in state.artifacts
 
-    def test_does_not_rewind_native_quality_sprint_that_reuses_legacy_ids(self, tmp_path):
+    def test_does_not_rewind_native_quality_sprint_that_reuses_legacy_ids(
+        self, tmp_path
+    ):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
         state_dir.mkdir(parents=True)
@@ -1585,7 +1608,9 @@ nodes:
         assert marker.is_file()
         assert runner.state_mgr.load().current_node == "gate.tdd"
 
-    def test_opencode_process_evolve_preserves_named_process_in_worktree(self, tmp_path):
+    def test_opencode_process_evolve_preserves_named_process_in_worktree(
+        self, tmp_path
+    ):
         project_root = tmp_path / "project"
         work_dir = tmp_path / "worktrees" / "sample" / "cycle-01-opencode"
         state_dir = project_root / "state"
@@ -1594,9 +1619,7 @@ nodes:
         (work_dir / ".ft" / "process" / "mvp-builder").mkdir(parents=True)
         state_dir.mkdir(parents=True)
 
-        process_path = (
-            project_root / ".ft" / "process" / "mvp-builder" / "process.yml"
-        )
+        process_path = project_root / ".ft" / "process" / "mvp-builder" / "process.yml"
         process_path.write_text(
             """
 id: test_process
@@ -1620,9 +1643,7 @@ nodes:
 """,
             encoding="utf-8",
         )
-        worktree_process = (
-            work_dir / ".ft" / "process" / "mvp-builder" / "process.yml"
-        )
+        worktree_process = work_dir / ".ft" / "process" / "mvp-builder" / "process.yml"
         worktree_process.write_text(
             process_path.read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -1716,7 +1737,9 @@ nodes:
         assert state.gate_log["skipped.one"] == "SKIPPED"
         assert state.gate_log["skipped.two"] == "SKIPPED"
 
-    def test_decision_false_branch_can_rejoin_main_path_without_skipping_it(self, tmp_path):
+    def test_decision_false_branch_can_rejoin_main_path_without_skipping_it(
+        self, tmp_path
+    ):
         project_root = tmp_path / "project"
         state_dir = project_root / "state"
         (project_root / "docs").mkdir(parents=True)
@@ -1851,9 +1874,7 @@ nodes:
         (project_root / ".ft").mkdir(parents=True)
         state_dir.mkdir(parents=True)
         reason = (
-            "reason: Produto sem superfície visual.\n  "
-            if mode == "disabled"
-            else ""
+            "reason: Produto sem superfície visual.\n  " if mode == "disabled" else ""
         )
         (project_root / ".ft" / "project.yml").write_text(
             f"""
@@ -1992,7 +2013,9 @@ nodes:
         )
         runner._work_dir = str(work_dir)
 
-        assert runner._delegate_allowed_paths(["docs/screenshots/", "docs/screenshot-review.md"]) == [
+        assert runner._delegate_allowed_paths(
+            ["docs/screenshots/", "docs/screenshot-review.md"]
+        ) == [
             "docs/screenshots/",
             "docs/screenshot-review.md",
         ]
@@ -2042,17 +2065,23 @@ nodes:
         def first_delegate(**kwargs):
             assert kwargs["opencode_capture_output_path"] == "docs/out.md"
             (docs / "out.md").write_text("# Missing\n")
-            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+            return DelegateResult(
+                success=True, output="DONE", files_created=[], files_modified=[]
+            )
 
         def retry_delegate(**kwargs):
             assert kwargs["opencode_capture_output_path"] == "docs/out.md"
             assert kwargs["opencode_early_success_paths"] == ["docs/out.md"]
             (docs / "out.md").write_text("# Required\n")
-            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+            return DelegateResult(
+                success=True, output="DONE", files_created=[], files_modified=[]
+            )
 
         with (
             patch("ft.engine.runner.delegate_to_llm", side_effect=first_delegate),
-            patch("ft.engine.runner.delegate_with_feedback", side_effect=retry_delegate) as retry_mock,
+            patch(
+                "ft.engine.runner.delegate_with_feedback", side_effect=retry_delegate
+            ) as retry_mock,
         ):
             runner._run_llm_step(node)
 
@@ -2104,10 +2133,14 @@ nodes:
             assert "Quando terminar, diga DONE" not in task
             assert kwargs["opencode_capture_output_path"] == "docs/out.md"
             (docs / "out.md").write_text("# Fixed\n")
-            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+            return DelegateResult(
+                success=True, output="DONE", files_created=[], files_modified=[]
+            )
 
         with patch("ft.engine.runner.delegate_to_llm", side_effect=auto_fix_delegate):
-            assert runner._run_auto_fix(node, "file_exists FAIL: docs/out.md nao encontrado")
+            assert runner._run_auto_fix(
+                node, "file_exists FAIL: docs/out.md nao encontrado"
+            )
 
         assert runner.state_mgr.load().current_node == "ft.end"
 
@@ -2158,7 +2191,9 @@ nodes:
             (docs / "review.yml").write_text(
                 "review_route: implementation\nverdict: REJECTED\n"
             )
-            return DelegateResult(True, "DONE", ["docs/review.md", "docs/review.yml"], [])
+            return DelegateResult(
+                True, "DONE", ["docs/review.md", "docs/review.yml"], []
+            )
 
         with patch("ft.engine.runner.delegate_to_llm", side_effect=review):
             runner._run_review(runner.graph.get_node("review"))
@@ -2583,10 +2618,15 @@ nodes:
                 files_modified=["docs/broad-review.md"],
             )
 
-        with patch(
-            "ft.engine.runner.delegate_to_llm",
-            side_effect=focal_review,
-        ), patch.object(runner, "_run_validators", wraps=runner._run_validators) as validators:
+        with (
+            patch(
+                "ft.engine.runner.delegate_to_llm",
+                side_effect=focal_review,
+            ),
+            patch.object(
+                runner, "_run_validators", wraps=runner._run_validators
+            ) as validators,
+        ):
             runner._run_review(runner.graph.get_node("broad.review"))
 
         reviewed = runner.state_mgr.load()
@@ -2594,8 +2634,10 @@ nodes:
         assert reviewed.node_status == "ready"
         assert reviewed.active_fix_return is None
         assert validators.call_count == 1
-        assert (docs / "broad-review.md").read_text(encoding="utf-8").startswith(
-            "VERDICT: APPROVED"
+        assert (
+            (docs / "broad-review.md")
+            .read_text(encoding="utf-8")
+            .startswith("VERDICT: APPROVED")
         )
 
     def test_runtime_focal_review_refuses_stale_canonical_report(
@@ -2770,7 +2812,9 @@ nodes:
         node = runner.graph.get_node("review")
 
         (screenshots / "T11-error-state.png").write_bytes(b"expected state")
-        assert runner._review_blocking_evidence_reason(node, require_fresh=False) is None
+        assert (
+            runner._review_blocking_evidence_reason(node, require_fresh=False) is None
+        )
 
         (screenshots / "T11-white-screen.png").write_bytes(b"broken state")
         assert "tela em branco" in runner._review_blocking_evidence_reason(
@@ -2878,8 +2922,9 @@ nodes:
         assert reviewed.current_node == "physical.review"
         assert reviewed.node_status == "ready"
         assert reviewed.pending_fix is None
-        assert "EVIDENCE_FIDELITY_REJECTED" in (
-            reviewed.active_fix_return["focal_evidence_feedback"]
+        assert (
+            "EVIDENCE_FIDELITY_REJECTED"
+            in (reviewed.active_fix_return["focal_evidence_feedback"])
         )
         assert "mock" in (
             reviewed.active_fix_return["focal_evidence_feedback"].casefold()
@@ -3187,8 +3232,12 @@ nodes:
             )
 
         with (
-            patch("ft.engine.runner.delegate_to_llm", return_value=first_result) as delegate_mock,
-            patch("ft.engine.runner.delegate_with_feedback", side_effect=retry_side_effect) as retry_mock,
+            patch(
+                "ft.engine.runner.delegate_to_llm", return_value=first_result
+            ) as delegate_mock,
+            patch(
+                "ft.engine.runner.delegate_with_feedback", side_effect=retry_side_effect
+            ) as retry_mock,
         ):
             runner._run_review(node)
 
@@ -3244,7 +3293,9 @@ nodes:
         node = runner.graph.get_node("ft.review.visual")
 
         def delegate_side_effect(**kwargs):
-            (docs / "visual-review.md").write_text("**STATUS:** BLOCKED\nNao consegui revisar.\n")
+            (docs / "visual-review.md").write_text(
+                "**STATUS:** BLOCKED\nNao consegui revisar.\n"
+            )
             return DelegateResult(
                 success=True,
                 output="DONE",
@@ -3252,7 +3303,9 @@ nodes:
                 files_modified=[],
             )
 
-        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect):
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+        ):
             runner._run_review(node)
 
         state = runner.state_mgr.load()
@@ -3305,7 +3358,7 @@ nodes:
                 "| Critério | Status | Evidência |\n"
                 "|---|---|---|\n"
                 "| C07 | PASS | docs/screenshots/07-confirm-reject.png cobre confirmação. |\n"
-                "| C15 | PASS | Comando `ft reject \"motivo\"` documentado. |\n\n"
+                '| C15 | PASS | Comando `ft reject "motivo"` documentado. |\n\n'
                 "Notas: nenhum estado BLOCKED observado durante a revisão.\n",
                 encoding="utf-8",
             )
@@ -3316,7 +3369,9 @@ nodes:
                 files_modified=[],
             )
 
-        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect):
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+        ):
             runner._run_review(node)
 
         state = runner.state_mgr.load()
@@ -3363,11 +3418,15 @@ nodes:
         node = runner.graph.get_node("ft.review.visual")
 
         def recovery_side_effect(**kwargs):
-            assert "RECUPERACAO DE REVIEW APOS INTERRUPCAO/MAX_TURNS" in kwargs["feedback"]
+            assert (
+                "RECUPERACAO DE REVIEW APOS INTERRUPCAO/MAX_TURNS" in kwargs["feedback"]
+            )
             assert "ANALISE PARCIAL PRESERVADA" in kwargs["feedback"]
             assert "regressão material no contrato" in kwargs["feedback"]
             assert "nao converta um achado parcial" in kwargs["feedback"].lower()
-            (docs / "visual-review.md").write_text("Resultado: APPROVED WITH NOTES\n", encoding="utf-8")
+            (docs / "visual-review.md").write_text(
+                "Resultado: APPROVED WITH NOTES\n", encoding="utf-8"
+            )
             return DelegateResult(
                 success=True,
                 output="DONE",
@@ -3388,7 +3447,10 @@ nodes:
                     files_modified=[],
                 ),
             ),
-            patch("ft.engine.runner.delegate_with_feedback", side_effect=recovery_side_effect) as recovery_mock,
+            patch(
+                "ft.engine.runner.delegate_with_feedback",
+                side_effect=recovery_side_effect,
+            ) as recovery_mock,
             patch(
                 "ft.engine.runner.run_validators", wraps=run_validators
             ) as validator_mock,
@@ -3455,7 +3517,9 @@ nodes:
                 files_modified=[],
             )
 
-        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect) as delegated:
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+        ) as delegated:
             runner._run_review(node)
 
         assert delegated.called
@@ -3572,7 +3636,10 @@ nodes:
 
         with (
             patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect),
-            patch("ft.engine.runner.delegate_with_feedback", side_effect=AssertionError("should not retry report")),
+            patch(
+                "ft.engine.runner.delegate_with_feedback",
+                side_effect=AssertionError("should not retry report"),
+            ),
         ):
             runner._run_review(node)
 
@@ -3650,10 +3717,14 @@ nodes:
             )
 
         with (
-            patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect) as delegated,
+            patch(
+                "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+            ) as delegated,
             patch(
                 "ft.engine.runner.delegate_with_feedback",
-                side_effect=AssertionError("review rejeitado não deve entrar em recovery"),
+                side_effect=AssertionError(
+                    "review rejeitado não deve entrar em recovery"
+                ),
             ),
         ):
             runner._run_review(node)
@@ -3707,7 +3778,9 @@ nodes:
         runner._auto_approve = True
         runner._bypass_human_gates = True
 
-        runner._handle_on_fail(runner.graph.get_node("ft.review.visual"), "Resultado: REJECTED")
+        runner._handle_on_fail(
+            runner.graph.get_node("ft.review.visual"), "Resultado: REJECTED"
+        )
 
         state = runner.state_mgr.load()
         assert state.current_node == "ft.frontend.fix"
@@ -3855,10 +3928,7 @@ nodes:
         resumed = runner.state_mgr.load()
         assert resumed.current_node == "physical.review"
         assert resumed.active_fix_return["review_mode"] == "origin_fallback"
-        assert (
-            resumed.active_fix_return["audit_entry_node"]
-            == "physical.review"
-        )
+        assert resumed.active_fix_return["audit_entry_node"] == "physical.review"
         assert "integrated.verify" in resumed.completed_nodes
         assert "fix" in resumed.completed_nodes
 
@@ -3957,9 +4027,7 @@ nodes:
         }
         runner.state_mgr.save()
 
-        assert runner.reject_with_origin_audit(
-            "S12 ainda diverge do mockup"
-        )
+        assert runner.reject_with_origin_audit("S12 ainda diverge do mockup")
 
         fixing = runner.state_mgr.load()
         assert fixing.current_node == "fix"
@@ -3968,15 +4036,14 @@ nodes:
         assert fixing.active_fix_return["review_node"] == "physical.review"
         assert fixing.active_fix_return["gate_node"] == "visual.gate"
         assert (
-            "S12 ainda diverge do mockup"
-            in fixing.active_fix_return["review_context"]
+            "S12 ainda diverge do mockup" in fixing.active_fix_return["review_context"]
         )
         assert (
-            "S12 ainda diverge do mockup"
-            in fixing.active_fix_return["finding_context"]
+            "S12 ainda diverge do mockup" in fixing.active_fix_return["finding_context"]
         )
-        assert "quando o finding for de UI" not in (
-            fixing.active_fix_return["finding_context"]
+        assert (
+            "quando o finding for de UI"
+            not in (fixing.active_fix_return["finding_context"])
         )
         assert fixing.completed_nodes == [
             "foundation",
@@ -4270,7 +4337,9 @@ nodes:
                 files_modified=[],
             )
 
-        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect):
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+        ):
             runner._run_llm_step(node)
 
         state = runner.state_mgr.load()
@@ -4330,11 +4399,15 @@ nodes:
         with (
             patch(
                 "ft.engine.runner.delegate_to_llm",
-                return_value=DelegateResult(False, "Reached maximum number of turns", [], []),
+                return_value=DelegateResult(
+                    False, "Reached maximum number of turns", [], []
+                ),
             ),
             patch(
                 "ft.engine.runner.delegate_with_feedback",
-                return_value=DelegateResult(False, "Reached maximum number of turns", [], []),
+                return_value=DelegateResult(
+                    False, "Reached maximum number of turns", [], []
+                ),
             ),
         ):
             runner._run_review(node)
@@ -4459,9 +4532,7 @@ nodes:
         )
         runner.init_state()
 
-        runner._clear_no_pre_seed_outputs(
-            runner.graph.get_node("feature.discovery")
-        )
+        runner._clear_no_pre_seed_outputs(runner.graph.get_node("feature.discovery"))
 
         assert draft.read_text() == "# Draft preservado\n"
 
@@ -4528,13 +4599,17 @@ nodes:
         assert state.current_node == "ft.end"
         assert old_task_list.read_text() == "# New Task List\n"
 
-    def test_document_retry_excludes_current_invalid_output_from_hyper_mode(self, tmp_path):
+    def test_document_retry_excludes_current_invalid_output_from_hyper_mode(
+        self, tmp_path
+    ):
         project_root = tmp_path / "project"
         docs = project_root / "docs"
         state_dir = project_root / "state"
         docs.mkdir(parents=True)
         state_dir.mkdir()
-        (docs / "PRD.md").write_text("# PRD\n\n## User Stories\nUS-01 criar clientes.\n")
+        (docs / "PRD.md").write_text(
+            "# PRD\n\n## User Stories\nUS-01 criar clientes.\n"
+        )
         invalid_contract = docs / "api_contract.md"
         invalid_contract.write_text("# BAD API\nOpenSearch hallucination\n")
 
@@ -4576,9 +4651,13 @@ nodes:
             assert "OpenSearch hallucination" not in kwargs["task"]
             assert "PRD.md" in kwargs["task"]
             invalid_contract.write_text("## Base URL\n\n## Endpoints\n")
-            return DelegateResult(success=True, output="DONE", files_created=[], files_modified=[])
+            return DelegateResult(
+                success=True, output="DONE", files_created=[], files_modified=[]
+            )
 
-        with patch("ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect):
+        with patch(
+            "ft.engine.runner.delegate_to_llm", side_effect=delegate_side_effect
+        ):
             runner._run_llm_step(node)
 
         state = runner.state_mgr.load()
@@ -4630,7 +4709,9 @@ nodes:
 
         with patch(
             "ft.engine.runner.delegate_to_llm",
-            return_value=DelegateResult(success=True, output="DONE", files_created=[], files_modified=[]),
+            return_value=DelegateResult(
+                success=True, output="DONE", files_created=[], files_modified=[]
+            ),
         ) as delegate_mock:
             runner._run_llm_step(node)
 
@@ -4868,8 +4949,7 @@ class TestStatus:
         log_path = runner_v2.state_mgr.path.parent / "llm_logs" / "failed.jsonl"
         log_path.parent.mkdir(parents=True)
         log_path.write_text(
-            json.dumps({"type": "turn.failed", "error": {"message": "boom"}})
-            + "\n",
+            json.dumps({"type": "turn.failed", "error": {"message": "boom"}}) + "\n",
             encoding="utf-8",
         )
         state = runner_v2.state_mgr.load()
@@ -4923,7 +5003,9 @@ class TestStatus:
         assert "Agora: executando inspeção em `test_community_business.py`" in out
         assert "Sinais: worktree alterada" in out
 
-    def test_status_preserves_engine_line_and_adds_model_effort(self, runner_v2, capsys):
+    def test_status_preserves_engine_line_and_adds_model_effort(
+        self, runner_v2, capsys
+    ):
         runner_v2.init_state()
         state = runner_v2.state_mgr.load()
         state.llm_engine = "codex"
@@ -5124,7 +5206,9 @@ class TestStatus:
         refreshed = runner_v2.state_mgr.load()
         assert refreshed.version == "0.2.0"
 
-    def test_status_recomputes_progress_without_counting_end_node(self, runner_v2, capsys):
+    def test_status_recomputes_progress_without_counting_end_node(
+        self, runner_v2, capsys
+    ):
         runner_v2.init_state()
         runner_v2._advance_state("step.01.hipotese", "step.02.prd")
         runner_v2._advance_state("step.02.prd", "gate.01.discovery")
@@ -5265,7 +5349,9 @@ nodes:
         assert "33/83 PASS · 50 FAIL · 8 findings" in out
         assert "79/83 PASS · 4 FAIL · 1 finding" in out
 
-    def test_status_backfills_inserted_decision_nodes_when_branch_already_traversed(self, tmp_path, capsys):
+    def test_status_backfills_inserted_decision_nodes_when_branch_already_traversed(
+        self, tmp_path, capsys
+    ):
         project_root = tmp_path / "project_root"
         project_root.mkdir()
 
@@ -5328,7 +5414,12 @@ nodes:
         refreshed = runner.state_mgr.load()
         assert refreshed.version == "0.2.0"
         assert "decision.01" in refreshed.completed_nodes
-        assert refreshed.completed_nodes == ["step.01", "decision.01", "step.02", "ft.end"]
+        assert refreshed.completed_nodes == [
+            "step.01",
+            "decision.01",
+            "step.02",
+            "ft.end",
+        ]
         assert refreshed.gate_log["decision.01"] == "PASS"
         assert refreshed.metrics["steps_completed"] == 3
         assert refreshed.metrics["steps_total"] == 3
@@ -5337,6 +5428,7 @@ nodes:
 # ---------------------------------------------------------------------------
 # _run_gate
 # ---------------------------------------------------------------------------
+
 
 class TestRunGate:
     def test_gate_passes_when_files_exist(self, tmp_path, monkeypatch):
@@ -5455,9 +5547,11 @@ nodes:
 # run_validators
 # ---------------------------------------------------------------------------
 
+
 class TestRunValidators:
     def test_no_validators_passes(self):
         from ft.engine.graph import Node
+
         node = Node(id="x", type="build", title="X")
         result = run_validators(node, ".")
         assert result.passed
@@ -5465,10 +5559,13 @@ class TestRunValidators:
 
     def test_file_exists_validator(self, tmp_path):
         from ft.engine.graph import Node
+
         f = tmp_path / "test.txt"
         f.write_text("content")
         node = Node(
-            id="x", type="build", title="X",
+            id="x",
+            type="build",
+            title="X",
             validators=[{"file_exists": "test.txt"}],
         )
         result = run_validators(node, str(tmp_path))
@@ -5476,8 +5573,11 @@ class TestRunValidators:
 
     def test_failing_validator_not_passed(self, tmp_path):
         from ft.engine.graph import Node
+
         node = Node(
-            id="x", type="build", title="X",
+            id="x",
+            type="build",
+            title="X",
             validators=[{"file_exists": "missing.txt"}],
         )
         result = run_validators(node, str(tmp_path))
@@ -5486,10 +5586,13 @@ class TestRunValidators:
 
     def test_multiple_validators_all_must_pass(self, tmp_path):
         from ft.engine.graph import Node
+
         f = tmp_path / "test.txt"
         f.write_text("line1\nline2")
         node = Node(
-            id="x", type="build", title="X",
+            id="x",
+            type="build",
+            title="X",
             outputs=["test.txt"],
             validators=[
                 {"file_exists": "test.txt"},
@@ -5598,7 +5701,9 @@ class TestRunValidators:
             for event in read_trace_events(trace.path)
             if event["event"] == "span_start"
         ]
-        validation = next(event for event in starts if event["category"] == "validation")
+        validation = next(
+            event for event in starts if event["category"] == "validation"
+        )
         validator = next(event for event in starts if event["category"] == "validator")
         assert validation["parent_span_id"] == "node-parent"
         assert validator["parent_span_id"] == validation["span_id"]
@@ -5677,8 +5782,11 @@ class TestRunValidators:
 
     def test_retryable_when_llm_executor(self, tmp_path):
         from ft.engine.graph import Node
+
         node = Node(
-            id="x", type="build", title="X",
+            id="x",
+            type="build",
+            title="X",
             executor="llm_coder",
             validators=[{"file_exists": "missing.txt"}],
         )
@@ -5687,8 +5795,11 @@ class TestRunValidators:
 
     def test_not_retryable_when_python_executor(self, tmp_path):
         from ft.engine.graph import Node
+
         node = Node(
-            id="x", type="gate", title="X",
+            id="x",
+            type="gate",
+            title="X",
             executor="python",
             validators=[{"file_exists": "missing.txt"}],
         )
@@ -5715,13 +5826,15 @@ class TestRunValidators:
             title="Rewrite",
             executor="llm_coach",
             outputs=["project/docs/PRD.md"],
-            validators=[{
-                "sections_unchanged": {
-                    "path": "project/docs/PRD.md",
-                    "snapshot_path": "project/state/prd_rewrite_baseline.md",
-                    "sections": ["Hipotese", "Visao", "User Stories"],
+            validators=[
+                {
+                    "sections_unchanged": {
+                        "path": "project/docs/PRD.md",
+                        "snapshot_path": "project/state/prd_rewrite_baseline.md",
+                        "sections": ["Hipotese", "Visao", "User Stories"],
+                    }
                 }
-            }],
+            ],
         )
 
         result = run_validators(node, str(tmp_path))
@@ -5732,6 +5845,7 @@ class TestRunValidators:
 # ---------------------------------------------------------------------------
 # build_task_prompt
 # ---------------------------------------------------------------------------
+
 
 class TestBuildTaskPrompt:
     def test_frontend_scaffold_prompt_includes_safe_bash_contract(self):
@@ -5744,7 +5858,9 @@ class TestBuildTaskPrompt:
             outputs=["project/frontend/", ".build_ok"],
             validators=[
                 {"file_exists": "project/frontend/package.json"},
-                {"command_succeeds": "cd project/frontend && npm install --silent && npm run build --silent"},
+                {
+                    "command_succeeds": "cd project/frontend && npm install --silent && npm run build --silent"
+                },
             ],
         )
 

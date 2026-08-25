@@ -31,11 +31,15 @@ def _track(ev: dict) -> dict:
 
 
 def test_system_init_mostra_modelo_e_tools():
-    ctx = _track({
-        "type": "system", "subtype": "init",
-        "model": "claude-opus-4-8", "permissionMode": "acceptEdits",
-        "tools": ["Read", "Edit", "Bash"],
-    })
+    ctx = _track(
+        {
+            "type": "system",
+            "subtype": "init",
+            "model": "claude-opus-4-8",
+            "permissionMode": "acceptEdits",
+            "tools": ["Read", "Edit", "Bash"],
+        }
+    )
     assert "claude-opus-4-8" in ctx["desc"]
     assert "3 tools" in ctx["desc"]
     assert "acceptEdits" in ctx["desc"]
@@ -75,23 +79,43 @@ def test_system_subtype_desconhecido_mostra_subtype():
 
 
 def test_system_thinking_tokens_preservado():
-    ctx = _track({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 1234})
+    ctx = _track(
+        {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 1234}
+    )
     assert "1234" in ctx["desc"]
-    assert ctx["desc"] == "pensando (~1234 tokens)"  # sem trecho quando não há raciocínio
+    assert (
+        ctx["desc"] == "pensando (~1234 tokens)"
+    )  # sem trecho quando não há raciocínio
 
 
 def test_thinking_tokens_anexa_trecho_do_raciocinio():
     ctx = {"desc": ""}
     # primeiro chega o raciocínio (thinking_delta), depois a contagem de tokens
-    _track_heartbeat(json.dumps({
-        "type": "stream_event",
-        "event": {"type": "content_block_delta",
-                  "delta": {"type": "thinking_delta",
-                            "thinking": "analisando o call site do runner"}},
-    }), ctx)
-    _track_heartbeat(json.dumps({
-        "type": "system", "subtype": "thinking_tokens", "estimated_tokens": 5600,
-    }), ctx)
+    _track_heartbeat(
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "thinking_delta",
+                        "thinking": "analisando o call site do runner",
+                    },
+                },
+            }
+        ),
+        ctx,
+    )
+    _track_heartbeat(
+        json.dumps(
+            {
+                "type": "system",
+                "subtype": "thinking_tokens",
+                "estimated_tokens": 5600,
+            }
+        ),
+        ctx,
+    )
     assert ctx["desc"].startswith("pensando (~5600 tokens): …")
     assert "call site do runner" in ctx["desc"]
 
@@ -102,18 +126,30 @@ def test_system_sem_subtype_cai_no_generico():
 
 
 def test_result_sucesso_mostra_turnos_tempo_custo():
-    ctx = _track({
-        "type": "result", "subtype": "success", "is_error": False,
-        "num_turns": 12, "duration_ms": 82763, "total_cost_usd": 0.8166435,
-    })
+    ctx = _track(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "num_turns": 12,
+            "duration_ms": 82763,
+            "total_cost_usd": 0.8166435,
+        }
+    )
     assert ctx["desc"] == "resultado ok — 12 turnos · 82.8s · US$ 0.82"
 
 
 def test_result_erro_mostra_subtype_e_marca_erro():
-    ctx = _track({
-        "type": "result", "subtype": "error_max_turns", "is_error": True,
-        "num_turns": 40, "duration_ms": 120000, "total_cost_usd": 2.5,
-    })
+    ctx = _track(
+        {
+            "type": "result",
+            "subtype": "error_max_turns",
+            "is_error": True,
+            "num_turns": 40,
+            "duration_ms": 120000,
+            "total_cost_usd": 2.5,
+        }
+    )
     assert ctx["desc"].startswith("resultado com erro")
     assert "error_max_turns" in ctx["desc"]
     assert "US$ 2.50" in ctx["desc"]
@@ -125,30 +161,48 @@ def test_result_sem_campos_opcionais_nao_quebra():
 
 
 def _assistant(blocks):
-    return _track({"type": "assistant", "message": {"role": "assistant", "content": blocks}})
+    return _track(
+        {"type": "assistant", "message": {"role": "assistant", "content": blocks}}
+    )
 
 
 def test_assistant_message_model_atualiza_contexto():
-    ctx = _track({
-        "type": "assistant",
-        "message": {
-            "role": "assistant",
-            "model": "claude-fable-5",
-            "content": [{"type": "text", "text": "ok"}],
-        },
-    })
+    ctx = _track(
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": "claude-fable-5",
+                "content": [{"type": "text", "text": "ok"}],
+            },
+        }
+    )
     assert ctx["model"] == "claude-fable-5"
 
 
 def test_assistant_tool_use_arquivo_mostra_basename():
-    ctx = _assistant([{"type": "tool_use", "name": "Edit",
-                       "input": {"file_path": "/home/x/project/app/api/projects.py"}}])
+    ctx = _assistant(
+        [
+            {
+                "type": "tool_use",
+                "name": "Edit",
+                "input": {"file_path": "/home/x/project/app/api/projects.py"},
+            }
+        ]
+    )
     assert ctx["desc"] == "Edit: projects.py"
 
 
 def test_assistant_tool_use_bash_mostra_comando():
-    ctx = _assistant([{"type": "tool_use", "name": "Bash",
-                       "input": {"command": "python -m pytest -q"}}])
+    ctx = _assistant(
+        [
+            {
+                "type": "tool_use",
+                "name": "Bash",
+                "input": {"command": "python -m pytest -q"},
+            }
+        ]
+    )
     assert ctx["desc"] == "Bash: python -m pytest -q"
 
 
@@ -171,20 +225,30 @@ def test_assistant_texto_mostra_trecho():
 
 def test_format_stream_line_claude_texto_longo_nao_trunca():
     text = "The zoom button click is intercepted even on the active graph tab — this could be a real usability bug. Let me probe what is covering it."
-    line = json.dumps({
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": text}]},
-    })
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": text}]},
+        }
+    )
     assert _format_stream_line("claude", line) == f"→ {text}"
 
 
 def test_format_stream_line_claude_bash_longo_nao_trunca():
     command = "python - <<'PY'\nprint('x' * 200)\nPY"
-    line = json.dumps({
-        "type": "assistant",
-        "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": command}}]},
-    })
-    assert _format_stream_line("claude", line) == "$ python - <<'PY' print('x' * 200) PY"
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Bash", "input": {"command": command}}
+                ]
+            },
+        }
+    )
+    assert (
+        _format_stream_line("claude", line) == "$ python - <<'PY' print('x' * 200) PY"
+    )
 
 
 def test_assistant_so_thinking_mostra_trecho():
@@ -204,11 +268,18 @@ def test_assistant_vazio_cai_no_generico():
 
 def test_thinking_delta_retorna_fragmento():
     ctx = {"desc": ""}
-    frag = _track_heartbeat(json.dumps({
-        "type": "stream_event",
-        "event": {"type": "content_block_delta",
-                  "delta": {"type": "thinking_delta", "thinking": "hmm"}},
-    }), ctx)
+    frag = _track_heartbeat(
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "thinking_delta", "thinking": "hmm"},
+                },
+            }
+        ),
+        ctx,
+    )
     assert frag == "hmm"
     assert ctx["desc"] == "raciocinando: …hmm"
 
@@ -238,8 +309,13 @@ def test_fmt_elapsed_nunca_negativo():
 
 
 def test_node_from_log_name_extrai_node():
-    assert _node_from_log_name("20260706-143226__loop.s04.mission_check__review-retry.log") == "loop.s04.mission_check"
-    assert _node_from_log_name("20260706-122637__loop.s06.red__run.log") == "loop.s06.red"
+    assert (
+        _node_from_log_name("20260706-143226__loop.s04.mission_check__review-retry.log")
+        == "loop.s04.mission_check"
+    )
+    assert (
+        _node_from_log_name("20260706-122637__loop.s06.red__run.log") == "loop.s06.red"
+    )
 
 
 def test_node_from_log_name_sem_padrao():
@@ -265,9 +341,9 @@ def test_bloco_bash_branco_so_nas_bordas():
 
 
 def test_transicoes_do_bloco():
-    assert _needs_block_blank(False, True) is True   # abre
-    assert _needs_block_blank(True, False) is True   # fecha
-    assert _needs_block_blank(True, True) is False   # dentro do bloco
+    assert _needs_block_blank(False, True) is True  # abre
+    assert _needs_block_blank(True, False) is True  # fecha
+    assert _needs_block_blank(True, True) is False  # dentro do bloco
     assert _needs_block_blank(False, False) is False  # fora do bloco
 
 
@@ -288,7 +364,9 @@ def test_wait_reason_gate_por_status():
 
 
 def test_wait_reason_blocked():
-    kind, text = _wait_reason("blocked", None, "git_diff_not_empty falhou", "loop.s04.green")
+    kind, text = _wait_reason(
+        "blocked", None, "git_diff_not_empty falhou", "loop.s04.green"
+    )
     assert kind == "blocked"
     assert "loop.s04.green" in text
     assert "git_diff_not_empty falhou" in text
@@ -310,6 +388,7 @@ def test_wait_reason_rodando_e_none():
 
 def test_log_mtime_le_mtime_do_arquivo(tmp_path):
     import os
+
     p = tmp_path / "x.log"
     p.write_text("hi")
     os.utime(p, (1000.0, 1000.0))
@@ -318,15 +397,18 @@ def test_log_mtime_le_mtime_do_arquivo(tmp_path):
 
 def test_log_mtime_arquivo_inexistente_cai_em_now(tmp_path):
     import time
+
     t = _log_mtime(tmp_path / "nao-existe.log")
     assert abs(t - time.time()) < 5
 
 
 # --- ciclo parado: ready/delegated sem orquestrador vivo -------------------
 
+
 def test_wait_reason_stalled_sem_orquestrador():
-    kind, text = _wait_reason("ready", None, None, "loop.s03.mission_check",
-                              orchestrator_alive=False)
+    kind, text = _wait_reason(
+        "ready", None, None, "loop.s03.mission_check", orchestrator_alive=False
+    )
     assert kind == "stalled"
     assert "PARADO" in text and "loop.s03.mission_check" in text
     assert "ft continue" in text
@@ -334,13 +416,17 @@ def test_wait_reason_stalled_sem_orquestrador():
 
 def test_wait_reason_ready_com_orquestrador_e_normal():
     # orquestrador vivo → não é stall, cai no comportamento normal (LLM)
-    assert _wait_reason("ready", None, None, "n1", orchestrator_alive=True) == (None, None)
+    assert _wait_reason("ready", None, None, "n1", orchestrator_alive=True) == (
+        None,
+        None,
+    )
 
 
 def test_wait_reason_gate_vence_orquestrador_morto():
     # um human gate é pausa legítima, não "stalled", mesmo sem orquestrador
-    kind, _ = _wait_reason("awaiting_approval", "gate.final", None, "gate.final",
-                           orchestrator_alive=False)
+    kind, _ = _wait_reason(
+        "awaiting_approval", "gate.final", None, "gate.final", orchestrator_alive=False
+    )
     assert kind == "gate"
 
 
@@ -348,7 +434,10 @@ def test_wait_reason_gate_vence_orquestrador_morto():
 
 
 def test_oneline_colapsa_multilinha():
-    assert _oneline("Review falhou:\n\nNow let's check\nthe tests") == "Review falhou: Now let's check the tests"
+    assert (
+        _oneline("Review falhou:\n\nNow let's check\nthe tests")
+        == "Review falhou: Now let's check the tests"
+    )
 
 
 def test_oneline_tira_ansi():
@@ -366,7 +455,10 @@ def test_oneline_vazio():
 
 def test_wait_reason_blocked_sanitiza_multilinha():
     # o motivo real que vazou a cor: 315 chars com \n
-    reason = "Review falhou: Now let's check the test file\n\nand run the frontend suite\n" * 5
+    reason = (
+        "Review falhou: Now let's check the test file\n\nand run the frontend suite\n"
+        * 5
+    )
     kind, text = _wait_reason("blocked", None, reason, "loop.s03.mission_check")
     assert kind == "blocked"
     assert "\n" not in text  # NUNCA multilinha — senão a cor vaza
@@ -398,10 +490,12 @@ def test_truncate_visible_garante_reset():
 
 # --- ciclo DONE não é 'stalled' (footgun que induziu o restart) ------------
 
+
 def test_wait_reason_done_nao_e_stalled():
     # ciclo concluído: node_status done + orquestrador morto NÃO pode virar
     # 'PARADO — rode ft continue' (isso induziu o restart do zero)
-    kind, text = _wait_reason("done", None, None, "loop.close.retro",
-                              orchestrator_alive=False)
+    kind, text = _wait_reason(
+        "done", None, None, "loop.close.retro", orchestrator_alive=False
+    )
     assert kind == "done"
     assert "COMPLETO" in text

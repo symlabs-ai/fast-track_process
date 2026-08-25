@@ -29,9 +29,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "mypy>=1.20",
+    "pre-commit>=3.5.0",
     "pytest>=7.0",
     "pytest-cov",
     "ruff",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
@@ -57,11 +60,40 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+addopts = "--cov=ft --cov-branch --cov-report=term:skip-covered --cov-fail-under=70"
 
 [tool.ruff]
 target-version = "py311"
+line-length = 88
 
 [tool.ruff.lint]
-# Baseline histórica usada pela CI antes do Ruff 0.16. Regras adicionais
-# entram de forma deliberada, depois de quitar o débito correspondente.
-select = ["E4", "E7", "E9", "F"]
+# Erros de sintaxe/runtime e imports determinísticos. Outras famílias Ruff
+# entram em migrações próprias, com a dívida histórica quitada antes do gate.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+# Gate incremental: estes módulos já têm fronteiras tipadas e críticas para
+# estado, evidência e seleção de executor. Expanda a lista após cada módulo
+# satisfazer o checker, sem mascarar a dívida do restante do engine.
+files = [
+    "ft/engine/agent_policy.py",
+    "ft/engine/api_context.py",
+    "ft/engine/focal_evidence.py",
+    "ft/engine/git_ops.py",
+    "ft/engine/graph.py",
+    "ft/engine/llm_defaults.py",
+    "ft/engine/llm_usage.py",
+    "ft/engine/paths.py",
+    "ft/engine/state.py",
+    "ft/templates/input_policy.py",
+]
+python_version = "3.11"
+follow_imports = "skip"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true

@@ -12,7 +12,9 @@ from ft.templates import (
 )
 
 
-def test_required_policy_accepts_request_file_or_interactive_input(tmp_path: Path) -> None:
+def test_required_policy_accepts_request_file_or_interactive_input(
+    tmp_path: Path,
+) -> None:
     policy = InputPolicy.from_mapping(
         {
             "required": True,
@@ -46,7 +48,9 @@ def test_required_policy_accepts_request_file_or_interactive_input(tmp_path: Pat
     assert seen == ["Descreva a feature"]
 
 
-def test_input_sources_are_exclusive_and_required_input_cannot_be_empty(tmp_path: Path) -> None:
+def test_input_sources_are_exclusive_and_required_input_cannot_be_empty(
+    tmp_path: Path,
+) -> None:
     policy = InputPolicy(
         required=True,
         destination="docs/request.md",

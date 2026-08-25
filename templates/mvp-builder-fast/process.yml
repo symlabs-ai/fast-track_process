@@ -12,7 +12,7 @@
 #        (por exemplo src/, tests/ e examples/ na raiz), sem inventar frontend.
 
 id: mvp_builder_fast
-version: "1.18.0"
+version: "1.19.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -909,7 +909,7 @@ nodes:
     executor: python
     condition: "file_exists:docs/ui_criteria.md"
     branches:
-      "true": ft.start.backlog.route
+      "true": ft.start.01.product_mockups
       "false": ft.hyper.01.ui_criteria
 
   - id: ft.hyper.00.ui_criteria_questions
@@ -1031,7 +1031,7 @@ nodes:
     outputs:
       - docs/ui_criteria.md
     reject_next: ft.hyper.01.ui_criteria
-    next: ft.start.backlog.route
+    next: ft.start.01.product_mockups
 
   - id: ft.start.backlog.route
     type: decision
@@ -1793,25 +1793,24 @@ nodes:
   - id: ft.plan.04.ui_criteria
     type: document
     parallel_group: plan-docs
-    title: "Gerar Critérios Visuais e Contrato de Navegação"
-    description: "Definir critérios objetivos de UI e classificar cada item do backlog entre capacidade visível, com entrada pela UI de produção, ou requisito não visual justificado."
+    title: "Consolidar Contrato de Navegação"
+    description: "Classificar cada item do backlog entre capacidade visível, com entrada pela UI de produção, ou requisito não visual justificado, preservando o contrato visual de mockups já aprovado."
     sprint: sprint-02-planning
     executor: claude
     outputs:
-      - docs/ui_criteria.md
+      - docs/navigation-contract.yml
+    write_scope:
       - docs/navigation-contract.yml
     prompt: |
-      Gere ou reconcilie docs/ui_criteria.md com IDs estáveis e critérios
-      objetivos para telas, estados, componentes, responsividade e navegação.
-      Inclua explicitamente que uma capacidade não está entregue se só puder ser
-      aberta por rota/URL interna direta, deep link de debug, catálogo técnico,
-      montagem isolada de componente ou hook test-only.
-      Inclua também o critério global de rastreabilidade visual: toda tela,
-      página ou janela da UI de produção deve exibir uma marca d'água discreta,
-      legível e não interativa com o identificador exato do mockup associado.
-      Mapeie todas as superfícies; nenhuma pode ficar sem mockup.
+      Os mockups raster, docs/ui_criteria.md e docs/ui-brief.md já foram
+      revisados e aprovados como contrato visual antes deste planejamento.
+      Não os altere, não renumere CIDs/SNNs e não acrescente tela, estado ou
+      requisito visual sem um novo ciclo explícito de mockups. Preserve também
+      docs/mockups/ integralmente. Uma capacidade não está entregue se só puder
+      ser aberta por rota/URL interna direta, deep link de debug, catálogo
+      técnico, montagem isolada de componente ou hook test-only.
 
-      Gere também docs/navigation-contract.yml a partir dos bytes correntes de
+      Gere SOMENTE docs/navigation-contract.yml a partir dos bytes correntes de
       docs/PROJECT_BACKLOG.md, sem assumir stack, domínio ou plataforma:
         schema_version: 1
         scope_sha256: <sha256 dos bytes de docs/PROJECT_BACKLOG.md>
@@ -1861,12 +1860,12 @@ nodes:
           path: docs/test_data.md
       - project_contract_valid:
           path: .ft/project.yml
-    next: ft.plan.06.mockups
+    next: ft.plan.gate
 
-  - id: ft.plan.06.mockups
+  - id: ft.start.01.product_mockups
     type: build
-    title: "Gerar Imagens de Mockup P0"
-    description: "Gerar, antes do frontend, imagens raster reais e revisáveis para todas as telas e estados P0. HTML, CSS, JavaScript, SVG, canvas e screenshots de navegador são entregas proibidas neste step."
+    title: "Gerar Protótipos Raster do Produto"
+    description: "Logo após PRD, brief e critérios visuais, gerar imagens raster reais e revisáveis para todas as telas e estados P0, antes de backlog, stack, API, navegação, massa de testes ou código. HTML, CSS, JavaScript, SVG, canvas e screenshots de navegador são entregas proibidas neste step."
     sprint: sprint-02-planning
     executor: codex
     expert: prototype_png_designer
@@ -1894,17 +1893,22 @@ nodes:
     write_scope:
       - docs/mockups
     prompt: |
-      Gere o pacote obrigatório de IMAGENS DE MOCKUP antes de qualquer código de
-      produto. Este node está fixado em gpt-5.6-sol com reasoning effort max; não
-      troque modelo nem reduza o esforço. O Sol/Max é a autoridade de direção
-      visual, composição dos prompts, seleção, inspeção e iteração dos assets.
-      A skill de imagem escolhe internamente seu modelo de geração; não tente
-      passá-lo pelo campo llm_model nem alterar o executor textual do node.
+      Gere o pacote obrigatório de PROTÓTIPOS RASTER DO PRODUTO imediatamente
+      após PRD, brief e critérios visuais, antes de qualquer planejamento técnico
+      ou código de produto. Este node está fixado em gpt-5.6-sol com reasoning
+      effort max; não troque modelo nem reduza o esforço. O Sol/Max é a
+      autoridade de direção visual, composição dos prompts, seleção, inspeção e
+      iteração dos assets. A skill de imagem escolhe internamente seu modelo de
+      geração; não tente passá-lo pelo campo llm_model nem alterar o executor
+      textual do node.
 
-      Leia integralmente docs/PRD.md, docs/TECH_STACK.md, docs/ui_criteria.md,
-      docs/ui-brief.md quando existir, docs/api_contract.md e
-      docs/navigation-contract.yml. O brief do stakeholder é autoritativo para
-      estética; PRD e critérios são autoritativos para escopo e estados.
+      Leia integralmente e use como únicas fontes de produto docs/PRD.md,
+      docs/ui_criteria.md e docs/ui-brief.md. O brief do stakeholder é
+      autoritativo para estética; PRD e critérios são autoritativos para escopo
+      e estados. Não leia, espere, exija ou invente docs/TECH_STACK.md,
+      docs/api_contract.md, docs/navigation-contract.yml ou docs/test_data.md:
+      esses artefatos são produzidos somente depois deste aceite e devem
+      respeitar o contrato visual aprovado aqui.
 
       Invoque explicitamente `$imagegen` e siga integralmente a skill. Use
       obrigatoriamente sua ferramenta built-in `image_gen`, no caso de uso
@@ -2005,12 +2009,12 @@ nodes:
           assert not bad, 'fontes code-native proibidas: '+', '.join(bad);
           assert all(p.suffix.lower() in {'.png','.md','.yml','.yaml'} for p in files), 'tipo de artefato não permitido'"
       - command_succeeds: "git diff --check"
-    next: ft.plan.06a.mockup_prd_review
+    next: ft.start.01a.product_mockup_review
 
-  - id: ft.plan.06a.mockup_prd_review
+  - id: ft.start.01a.product_mockup_review
     type: review
-    title: "Analisar Mockups Slide a Slide contra o PRD"
-    description: "Revisar de forma independente cada state do screen-map contra PRD e contratos de planejamento, sem alterar imagens ou fontes canônicas."
+    title: "Analisar Protótipos Raster contra o PRD"
+    description: "Revisar de forma independente cada state do screen-map contra PRD, brief e critérios visuais, sem alterar imagens ou fontes canônicas."
     sprint: sprint-02-planning
     executor: codex
     llm_engine: codex
@@ -2025,10 +2029,9 @@ nodes:
       - docs/mockups/prd-coherence-review.md
       - docs/mockups/prd-coherence-review.yml
     prompt: |
-      Faça uma revisão independente, exaustiva e somente de leitura dos mockups.
-      Leia integralmente docs/PRD.md, docs/ui_criteria.md, docs/ui-brief.md quando
-      existir, docs/navigation-contract.yml, docs/test_data.md,
-      docs/mockups/screen-map.yml e
+      Faça uma revisão independente, exaustiva e somente de leitura dos
+      protótipos raster. Leia integralmente docs/PRD.md, docs/ui_criteria.md,
+      docs/ui-brief.md, docs/mockups/screen-map.yml e
       docs/mockups/image-generation-receipt.yml. Para cada state, na ordem exata
       do screen-map, abra o PNG declarado com `view_image` em resolução original
       e compare individualmente conteúdo, estado, hierarquia, navegação, dados,
@@ -2036,10 +2039,9 @@ nodes:
       prosa livre; não o converta em CSV e não trate vírgulas ou ponto e vírgula
       como separadores estruturais.
 
-      Não altere PNGs, screen-map, receipt, PRD, critérios, brief, contrato de
-      navegação nem massa de dados. Escreva SOMENTE os dois relatórios declarados
-      em outputs. Não corrija automaticamente os mockups e não crie outra rota
-      de orquestração.
+      Não altere PNGs, screen-map, receipt, PRD, critérios ou brief. Escreva
+      SOMENTE os dois relatórios declarados em outputs. Não corrija
+      automaticamente os mockups e não crie outra rota de orquestração.
 
       Escreva docs/mockups/prd-coherence-review.yml com este contrato:
         schema_version: 1
@@ -2103,12 +2105,12 @@ nodes:
       - file_exists: docs/mockups/prd-coherence-review.md
       - file_exists: docs/mockups/prd-coherence-review.yml
       - command_succeeds: "python3 .ft/process/mvp-builder-fast/scripts/validate_mockup_prd_review.py"
-    next: ft.plan.06b.mockup_gate
+    next: ft.start.01b.product_mockup_gate
 
-  - id: ft.plan.06b.mockup_gate
+  - id: ft.start.01b.product_mockup_gate
     type: human_gate
-    title: "Revisão das Imagens de Mockup P0"
-    description: "Revise os relatórios de coerência e abra os PNGs em resolução original. Confirme estética, hierarquia, cobertura e aderência ao PRD e ao brief. O frontend não começa sem aprovação explícita e textual; rejeite descrevendo tela, state e ajuste visual."
+    title: "Revisão dos Protótipos Raster do Produto"
+    description: "Revise os relatórios de coerência e abra os PNGs em resolução original. Confirme estética, hierarquia, cobertura e aderência ao PRD e ao brief. Backlog, planejamento técnico e frontend não começam sem aprovação explícita e textual; rejeite descrevendo tela, state e ajuste visual."
     sprint: sprint-02-planning
     executor: python
     approval_message_required: true
@@ -2136,8 +2138,8 @@ nodes:
         - A aprovação cobre somente os mockups e states inventariados para este P0; não amplia PRD, critérios ou escopo de implementação.
         - O relatório independente apoia a decisão, mas não substitui a inspeção humana dos PNGs em resolução original.
       approve_effect: >-
-        Registra os mockups como contrato visual aprovado e avança ao gate de
-        planejamento.
+        Registra os mockups como contrato visual aprovado e avança à fundação do
+        backlog e do planejamento técnico.
       reject_effect: >-
         Retorna à geração focal dos mockups; toda regeneração passa novamente
         pela revisão independente antes de reapresentar este gate.
@@ -2145,8 +2147,8 @@ nodes:
       - docs/mockups/
       - docs/mockups/prd-coherence-review.md
       - docs/mockups/prd-coherence-review.yml
-    reject_next: ft.plan.06.mockups
-    next: ft.plan.gate
+    reject_next: ft.start.01.product_mockups
+    next: ft.start.backlog.route
 
   - id: ft.plan.gate
     type: gate

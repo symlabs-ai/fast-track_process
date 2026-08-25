@@ -4,6 +4,7 @@ Validator: paths_clean
 Verifica que nenhum arquivo fora dos paths permitidos foi modificado no worktree.
 Usa `git diff --name-only` (staged + unstaged) relativo à HEAD.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -41,18 +42,25 @@ def paths_clean(allowed: list[str], project_root: str = ".") -> tuple[bool, str]
     all_changed = modified | untracked
 
     # Remover arquivos gerados pelo engine
-    all_changed = {f for f in all_changed if not any(f.endswith(p) for p in ENGINE_PATTERNS)}
+    all_changed = {
+        f for f in all_changed if not any(f.endswith(p) for p in ENGINE_PATTERNS)
+    }
 
     if not all_changed:
-        return True, "paths_clean: nenhuma modificação detectada (ou apenas arquivos de engine)"
+        return (
+            True,
+            "paths_clean: nenhuma modificação detectada (ou apenas arquivos de engine)",
+        )
 
     violations = [
-        f for f in sorted(all_changed)
-        if not any(f.startswith(p) for p in allowed)
+        f for f in sorted(all_changed) if not any(f.startswith(p) for p in allowed)
     ]
 
     if not violations:
-        return True, f"paths_clean: {len(all_changed)} arquivo(s) dentro dos paths permitidos"
+        return (
+            True,
+            f"paths_clean: {len(all_changed)} arquivo(s) dentro dos paths permitidos",
+        )
 
     preview = "\n".join(f"  - {v}" for v in violations[:10])
     return False, (

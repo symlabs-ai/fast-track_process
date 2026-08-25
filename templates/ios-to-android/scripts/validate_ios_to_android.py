@@ -9,14 +9,13 @@ matriz de validação do Fast Track.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
-
 
 PLACEHOLDERS = {"", "-", "—", "n/a", "na", "none", "null", "tbd", "todo"}
 CAPABILITY_ID = re.compile(r"CAP-\d{3,}")
@@ -68,7 +67,9 @@ def _safe_path(root: Path, raw: object, *, must_exist: bool = False) -> Path:
         raise ContractError(f"path escapa do repositório: {text}") from exc
     if path.is_symlink():
         raise ContractError(f"path não pode ser symlink: {text}")
-    if must_exist and (not path.exists() or (path.is_file() and path.stat().st_size == 0)):
+    if must_exist and (
+        not path.exists() or (path.is_file() and path.stat().st_size == 0)
+    ):
         raise ContractError(f"path ausente ou vazio: {text}")
     return path
 
@@ -142,7 +143,9 @@ def _validate_plan(root: Path) -> dict[str, Any]:
     return plan
 
 
-def _validate_capabilities(root: Path, *, require_implemented: bool) -> list[dict[str, Any]]:
+def _validate_capabilities(
+    root: Path, *, require_implemented: bool
+) -> list[dict[str, Any]]:
     payload = _load_yaml(root, "docs/ios-android-capabilities.yml")
     if payload.get("schema_version") != 1:
         raise ContractError("capabilities.schema_version deve ser 1")
@@ -156,7 +159,9 @@ def _validate_capabilities(root: Path, *, require_implemented: bool) -> list[dic
         item = _mapping(raw, f"capabilities[{index}]")
         capability_id = _text(item.get("id"), f"capabilities[{index}].id")
         if CAPABILITY_ID.fullmatch(capability_id) is None or capability_id in seen_ids:
-            raise ContractError(f"ID de capacidade inválido ou duplicado: {capability_id}")
+            raise ContractError(
+                f"ID de capacidade inválido ou duplicado: {capability_id}"
+            )
         seen_ids.add(capability_id)
         _text(item.get("name"), f"{capability_id}.name")
         parity = _text(item.get("parity"), f"{capability_id}.parity")
@@ -212,7 +217,9 @@ def validate_contract(root: Path) -> None:
     android_root = _safe_path(root, plan["android_root"], must_exist=True)
     nested_git = android_root / ".git"
     if nested_git.exists():
-        raise ContractError("Android deve permanecer no mesmo Git; .git aninhado encontrado")
+        raise ContractError(
+            "Android deve permanecer no mesmo Git; .git aninhado encontrado"
+        )
     signals = [
         android_root / "settings.gradle",
         android_root / "settings.gradle.kts",
@@ -221,7 +228,9 @@ def validate_contract(root: Path) -> None:
         android_root / "gradlew",
     ]
     if not any(path.is_file() for path in signals):
-        raise ContractError("android_root não contém projeto/build Gradle identificável")
+        raise ContractError(
+            "android_root não contém projeto/build Gradle identificável"
+        )
 
     project = _load_yaml(root, ".ft/project.yml")
     validation = _mapping(project.get("validation"), "project.validation")
@@ -277,7 +286,9 @@ def validate_review(root: Path) -> None:
     if failed - finding_refs:
         raise ContractError("toda capacidade FAIL precisa de finding")
     if verdict == "APPROVED" and (failed or findings or route != "approved"):
-        raise ContractError("APPROVED exige cobertura sem FAIL/findings e rota approved")
+        raise ContractError(
+            "APPROVED exige cobertura sem FAIL/findings e rota approved"
+        )
     _safe_path(root, "docs/ios-android-review.md", must_exist=True)
 
 
@@ -287,8 +298,13 @@ def validate_reconcile(root: Path) -> None:
     backlog = _safe_path(root, "docs/PROJECT_BACKLOG.md", must_exist=True).read_text(
         encoding="utf-8"
     )
-    matching = [line for line in backlog.splitlines() if backlog_item in line and "|" in line]
-    if len(matching) != 1 or re.search(r"\|\s*(done|accepted)\s*\|", matching[0], re.I) is None:
+    matching = [
+        line for line in backlog.splitlines() if backlog_item in line and "|" in line
+    ]
+    if (
+        len(matching) != 1
+        or re.search(r"\|\s*(done|accepted)\s*\|", matching[0], re.I) is None
+    ):
         raise ContractError(f"{backlog_item} deve aparecer uma vez como done/accepted")
     summary = _safe_path(root, "docs/ios-android-port-summary.md", must_exist=True)
     text = summary.read_text(encoding="utf-8")

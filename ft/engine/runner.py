@@ -5,9 +5,6 @@ resolve_next() → delegate() → validate() → advance()
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import os
 import re
@@ -15,62 +12,50 @@ import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from ft import __version__
-from ft.engine import paths
+from ft.engine import paths, ui
 from ft.engine.api_context import enrich_api_contract_feedback
 from ft.engine.artifact_ops import remove_declared_outputs
-from ft.engine.graph import Node, load_graph
-from ft.engine.experts import compose_expert_task
 from ft.engine.context_profiles import compose_context_profile
 from ft.engine.decision_gates import build_decision_gate_context
+from ft.engine.delegate import (
+    DelegateResult,
+    delegate_to_llm,
+    delegate_with_feedback,
+)
+from ft.engine.experts import compose_expert_task
 from ft.engine.focal_evidence import (
     FOCAL_EVIDENCE_INSTRUCTIONS,
     FOCAL_REVIEW_ORDERING_INSTRUCTIONS,
     HEADLESS_FOCAL_EVIDENCE_INSTRUCTIONS,
     validate_focal_approval,
 )
-from ft.engine.state import StateManager, _atomic_write_state
-from ft.engine.delegate import (
-    DelegateResult,
-    delegate_to_llm,
-    delegate_with_feedback,
-)
-from ft.engine.validators import artifacts as val
-from ft.engine.validators import gates
-from ft.engine.validators import platforms as platform_val
-from ft.engine.validators import tests as test_val
-from ft.engine.validators import code as code_val
-from ft.engine.validators import review as review_val
-from ft.engine.validators import check_paths as cp_val
 from ft.engine.git_ops import (
     auto_commit,
     commit_knowledge,
     git_command_prefix,
     verify_hooks_from_process_meta,
 )
-from ft.engine.hooks import load_environment, run_hooks, hooks_all_passed
-from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
-from ft.engine.llm_logs import build_llm_log_path, display_log_path
-from ft.engine.llm_activity import activity_digest, recent_activity_timestamps
+from ft.engine.graph import Node, load_graph
+from ft.engine.hooks import hooks_all_passed, load_environment, run_hooks
 from ft.engine.layout import (
     archive_cycle_artifacts,
     is_cycle_artifact,
     process_digest,
     validate_local_process_path,
 )
-from ft.engine.llm_defaults import LLMSelection, LiveLLMSettings, normalize_llm_effort
-from ft.engine.trace import (
-    TraceRecorder,
-    TraceSpan,
-    build_run_report,
-)
-from ft.engine import ui
-from ft.providers.opencode_policy import opencode_deny_edit_tools_enabled
+from ft.engine.llm_activity import activity_digest, recent_activity_timestamps
+from ft.engine.llm_defaults import LiveLLMSettings, LLMSelection, normalize_llm_effort
+from ft.engine.llm_logs import build_llm_log_path, display_log_path
+from ft.engine.llm_usage import format_llm_usage_lines, summarize_llm_usage
 from ft.engine.parallel import (
     ParallelRunner,
     create_worktree,
@@ -79,9 +64,25 @@ from ft.engine.parallel import (
 )
 from ft.engine.stakeholder import (
     DEFAULT_HYPER_MODE_FULL_MAX_LINES,
-    scan_existing_docs, hyper_mode_prompt,
-    scan_kb_lessons, kb_lessons_prompt,
+    hyper_mode_prompt,
+    kb_lessons_prompt,
+    scan_existing_docs,
+    scan_kb_lessons,
 )
+from ft.engine.state import StateManager, _atomic_write_state
+from ft.engine.trace import (
+    TraceRecorder,
+    TraceSpan,
+    build_run_report,
+)
+from ft.engine.validators import artifacts as val
+from ft.engine.validators import check_paths as cp_val
+from ft.engine.validators import code as code_val
+from ft.engine.validators import gates
+from ft.engine.validators import platforms as platform_val
+from ft.engine.validators import review as review_val
+from ft.engine.validators import tests as test_val
+from ft.providers.opencode_policy import opencode_deny_edit_tools_enabled
 
 # Prefixo de blocked_reason que identifica pausa por rate limit da API.
 # Falha de infra ≠ falha de conteúdo: não consome auto-fix e o node volta a
@@ -201,10 +202,14 @@ def _canonical_review_verdict(value: str) -> str | None:
     import unicodedata
 
     upper = unicodedata.normalize("NFKD", value.strip().upper())
-    upper = "".join(character for character in upper if not unicodedata.combining(character))
+    upper = "".join(
+        character for character in upper if not unicodedata.combining(character)
+    )
     upper = re.sub(r"\s+", " ", upper)
     for alias in sorted(_REVIEW_VERDICT_ALIASES, key=len, reverse=True):
-        if upper == alias or re.match(rf"^{re.escape(alias)}(?:\s|[.,;:()\[\]\-\u2013\u2014])", upper):
+        if upper == alias or re.match(
+            rf"^{re.escape(alias)}(?:\s|[.,;:()\[\]\-\u2013\u2014])", upper
+        ):
             return _REVIEW_VERDICT_ALIASES[alias]
     return None
 
@@ -351,8 +356,7 @@ def _review_recovery_feedback(
             + partial[-6_000:]
         )
     preserved_findings = (
-        "\n\nANALISE PARCIAL PRESERVADA DO REVIEW INTERROMPIDO:\n"
-        f"{partial}\n"
+        f"\n\nANALISE PARCIAL PRESERVADA DO REVIEW INTERROMPIDO:\n{partial}\n"
         if partial
         else ""
     )
@@ -671,6 +675,7 @@ def _last_log_activity(log_path: str | Path) -> str | None:
 # Validation
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ValidationItem:
     name: str
@@ -915,7 +920,9 @@ def run_validators(
                     name=name,
                     node_id=node.id,
                     parent_span_id=(
-                        validation_span.span_id if validation_span is not None else parent_span_id
+                        validation_span.span_id
+                        if validation_span is not None
+                        else parent_span_id
                     ),
                     attempt_id=attempt_id,
                     invocation_id=f"{node.id}:validator:{child_ordinal}",
@@ -1095,7 +1102,7 @@ def _build_execution_hints(node: Node) -> str:
                 "- Em modo file bundle, retorne blocos para TODOS estes paths: `project/frontend/package.json` e `project/frontend/scripts/build.mjs`.",
                 "- Se voce retornar somente `package.json`, este node falhara porque `npm run build --silent` precisa de `project/frontend/scripts/build.mjs`.",
                 "- O `package.json` DEVE conter `scripts.build`; sem isso o validador `npm run build --silent` falha.",
-                "- Use exatamente este script no `package.json`: `\"build\": \"node scripts/build.mjs\"`.",
+                '- Use exatamente este script no `package.json`: `"build": "node scripts/build.mjs"`.',
                 "- Crie obrigatoriamente `project/frontend/scripts/build.mjs`; ele pode apenas imprimir sucesso e sair com codigo 0.",
                 "- Comece pelo comando: `mkdir -p project/frontend/scripts`.",
                 "- Nunca use `npm init`, `npm create`, `npx` ou paths absolutos para este scaffold.",
@@ -1103,12 +1110,6 @@ def _build_execution_hints(node: Node) -> str:
             ]
         )
     return "\n".join(lines)
-
-
-
-
-
-
 
 
 def _description_block(node: Node) -> str:
@@ -1503,6 +1504,7 @@ def _copy_close_paths(
 ) -> tuple[bool, list[str]]:
     """Copy close artifacts atomically with respect to project writers."""
     import shutil as _shutil
+
     from ft.engine.layout import (
         _assert_no_exclusive_startup,
         _manifest_write_lock,
@@ -1515,9 +1517,7 @@ def _copy_close_paths(
             _assert_no_exclusive_startup(destination_root)
             for raw in copy_paths:
                 relative = Path(str(raw).strip().rstrip("/"))
-                folded_parts = tuple(
-                    part.casefold() for part in relative.parts
-                )
+                folded_parts = tuple(part.casefold() for part in relative.parts)
                 if (
                     relative.is_absolute()
                     or ".." in relative.parts
@@ -1537,30 +1537,34 @@ def _copy_close_paths(
                     protected=protected_manifest,
                 )
                 if source_issue is not None:
-                    print(ui.fail(f"{label}: origem simbólica recusada — {source_issue}"))
+                    print(
+                        ui.fail(f"{label}: origem simbólica recusada — {source_issue}")
+                    )
                     return False, []
                 destination_issue = _destination_symlink_or_escape(
                     destination_root,
                     destination,
                 )
                 if destination_issue is not None:
-                    print(ui.fail(
-                        f"{label}: destino inseguro recusado — {destination_issue}"
-                    ))
+                    print(
+                        ui.fail(
+                            f"{label}: destino inseguro recusado — {destination_issue}"
+                        )
+                    )
                     return False, []
 
             for raw in copy_paths:
                 source = source_root / raw
                 destination = destination_root / raw
                 relative = Path(str(raw).strip().rstrip("/"))
-                folded_parts = tuple(
-                    part.casefold() for part in relative.parts
-                )
+                folded_parts = tuple(part.casefold() for part in relative.parts)
                 if folded_parts == (".ft", "manifest.yml"):
-                    print(ui.dim(
-                        "  Skip: .ft/manifest.yml "
-                        "(defaults vivem no checkout principal)"
-                    ))
+                    print(
+                        ui.dim(
+                            "  Skip: .ft/manifest.yml "
+                            "(defaults vivem no checkout principal)"
+                        )
+                    )
                     continue
                 if not source.exists():
                     print(ui.dim(f"  Skip: {raw} (não existe)"))
@@ -1637,7 +1641,9 @@ class StepRunner:
                     "processo com runtime_source=local_only deve estar dentro de .ft/process/"
                 ) from exc
         self.state_mgr = StateManager(state_path)
-        defaults_root = llm_defaults_root if llm_defaults_root is not None else self.project_root
+        defaults_root = (
+            llm_defaults_root if llm_defaults_root is not None else self.project_root
+        )
         engine_is_override = (
             llm_engine is not None
             if llm_engine_is_override is None
@@ -1691,8 +1697,8 @@ class StepRunner:
             trace_run_id,
         )
         # Tracking para log enriquecido
-        self._node_start_times: dict[str, datetime] = {}   # node_id → início
-        self._node_attempts: dict[str, int] = {}            # node_id → nº tentativas
+        self._node_start_times: dict[str, datetime] = {}  # node_id → início
+        self._node_attempts: dict[str, int] = {}  # node_id → nº tentativas
         self._active_node_trace: TraceSpan | None = None
         self._active_node_trace_id: str | None = None
         self._active_node_attempt_id: str | None = None
@@ -1700,8 +1706,10 @@ class StepRunner:
         self._active_llm_traces: dict[str, TraceSpan] = {}
         self._active_llm_episodes: dict[str, str] = {}
         self._pending_llm_trace_attributes: dict[str, Any] = {}
-        self._auto_fix_counts: dict[str, int] = {}          # node_id → auto-fix attempts
-        self._auto_fix_prev_error: dict[str, str] = {}     # node_id → último erro (detecção de loop)
+        self._auto_fix_counts: dict[str, int] = {}  # node_id → auto-fix attempts
+        self._auto_fix_prev_error: dict[
+            str, str
+        ] = {}  # node_id → último erro (detecção de loop)
         self._llm_session_lock = threading.RLock()
 
     def _stream_prefix(self, engine: str | None = None) -> str | None:
@@ -1763,22 +1771,22 @@ class StepRunner:
     ) -> dict[str, Any]:
         history = list((previous or {}).get("history", []))
         if previous:
-            history.append({
-                "session_id": previous.get("session_id"),
-                "engine": previous.get("engine"),
-                "model": previous.get("model"),
-                "effort": previous.get("effort"),
-                "codex_auth": previous.get("codex_auth"),
-                "turns": previous.get("turns", 0),
-                "status": "superseded",
-                "reason": reason,
-            })
+            history.append(
+                {
+                    "session_id": previous.get("session_id"),
+                    "engine": previous.get("engine"),
+                    "model": previous.get("model"),
+                    "effort": previous.get("effort"),
+                    "codex_auth": previous.get("codex_auth"),
+                    "turns": previous.get("turns", 0),
+                    "status": "superseded",
+                    "reason": reason,
+                }
+            )
             history = history[-20:]
         record: dict[str, Any] = {
             **self._session_signature(selection, codex_auth),
-            "session_id": (
-                str(uuid.uuid4()) if selection.engine == "claude" else None
-            ),
+            "session_id": (str(uuid.uuid4()) if selection.engine == "claude" else None),
             "established": False,
             "turns": 0,
             "status": "new",
@@ -1819,12 +1827,8 @@ class StepRunner:
                 and lane is None
             )
             identity_fields = ("engine", "model", "codex_auth")
-            identity_changed = (
-                isinstance(record, dict)
-                and any(
-                    record.get(field) != signature[field]
-                    for field in identity_fields
-                )
+            identity_changed = isinstance(record, dict) and any(
+                record.get(field) != signature[field] for field in identity_fields
             )
             if (
                 is_directed_fix
@@ -1911,17 +1915,17 @@ class StepRunner:
             )
             record["updated_at"] = datetime.now(timezone.utc).isoformat()
             metrics = state.metrics
-            metrics["llm_session_turns"] = int(
-                metrics.get("llm_session_turns", 0) or 0
-            ) + 1
+            metrics["llm_session_turns"] = (
+                int(metrics.get("llm_session_turns", 0) or 0) + 1
+            )
             if result.session_resumed:
-                metrics["llm_session_resumes"] = int(
-                    metrics.get("llm_session_resumes", 0) or 0
-                ) + 1
+                metrics["llm_session_resumes"] = (
+                    int(metrics.get("llm_session_resumes", 0) or 0) + 1
+                )
             elif not was_established and result.session_id:
-                metrics["llm_sessions_created"] = int(
-                    metrics.get("llm_sessions_created", 0) or 0
-                ) + 1
+                metrics["llm_sessions_created"] = (
+                    int(metrics.get("llm_sessions_created", 0) or 0) + 1
+                )
             self.state_mgr.save()
 
     def _rehydrate_llm_session(
@@ -1954,9 +1958,9 @@ class StepRunner:
                 reason="provider resume failed; rehydrated from engine state",
             )
             metrics = self.state_mgr.state.metrics
-            metrics["llm_session_recoveries"] = int(
-                metrics.get("llm_session_recoveries", 0) or 0
-            ) + 1
+            metrics["llm_session_recoveries"] = (
+                int(metrics.get("llm_session_recoveries", 0) or 0) + 1
+            )
             self.state_mgr.save()
         delegate_kwargs.pop("llm_session_id", None)
         delegate_kwargs.pop("llm_session_resume", None)
@@ -1979,15 +1983,17 @@ class StepRunner:
                     if isinstance(record, dict):
                         if record.get("session_id"):
                             history = list(record.get("history", []))
-                            history.append({
-                                "session_id": record.get("session_id"),
-                                "engine": record.get("engine"),
-                                "model": record.get("model"),
-                                "effort": record.get("effort"),
-                                "turns": record.get("turns", 0),
-                                "status": "reset",
-                                "reason": reason,
-                            })
+                            history.append(
+                                {
+                                    "session_id": record.get("session_id"),
+                                    "engine": record.get("engine"),
+                                    "model": record.get("model"),
+                                    "effort": record.get("effort"),
+                                    "turns": record.get("turns", 0),
+                                    "status": "reset",
+                                    "reason": reason,
+                                }
+                            )
                             record["history"] = history[-20:]
                         record["established"] = False
                         record["session_id"] = None
@@ -2006,12 +2012,14 @@ class StepRunner:
             if node.type == "end":
                 continue
             sprint = node.sprint or "cycle"
-            grouped.setdefault(sprint, []).append({
-                "id": node.id,
-                "title": node.title,
-                "type": node.type,
-                "outputs": list(node.outputs),
-            })
+            grouped.setdefault(sprint, []).append(
+                {
+                    "id": node.id,
+                    "title": node.title,
+                    "type": node.type,
+                    "outputs": list(node.outputs),
+                }
+            )
         return {
             "schema_version": 1,
             "process": self.graph.meta.get("id"),
@@ -2019,13 +2027,10 @@ class StepRunner:
             "objective": state.cycle_objective,
             "authority": "advisory; process graph and Python gates remain authoritative",
             "selected_route": [
-                node_id
-                for node_id in self.graph.nodes
-                if node_id in selected_route
+                node_id for node_id in self.graph.nodes if node_id in selected_route
             ],
             "sprints": [
-                {"id": sprint, "nodes": nodes}
-                for sprint, nodes in grouped.items()
+                {"id": sprint, "nodes": nodes} for sprint, nodes in grouped.items()
             ],
             "risks": [],
             "unknowns": [],
@@ -2068,16 +2073,13 @@ class StepRunner:
         # para os prompts subsequentes.
         selected_route = self._selected_route_node_ids(state)
         selected_route_has_batch = any(
-            self.graph.get_node(node_id).type == "batch"
-            for node_id in selected_route
+            self.graph.get_node(node_id).type == "batch" for node_id in selected_route
         )
-        explicit_validation_batch = (
-            getattr(state, "run_route", "default") == "validation"
-            and isinstance(self.graph.meta.get("batch_policy"), dict)
-        )
-        if (
-            (selected_route_has_batch or explicit_validation_batch)
-            and isinstance(self.graph.meta.get("batch_policy"), dict)
+        explicit_validation_batch = getattr(
+            state, "run_route", "default"
+        ) == "validation" and isinstance(self.graph.meta.get("batch_policy"), dict)
+        if (selected_route_has_batch or explicit_validation_batch) and isinstance(
+            self.graph.meta.get("batch_policy"), dict
         ):
             relative_path = "llm_execution_plan.yml"
             _atomic_write_state(
@@ -2137,10 +2139,7 @@ class StepRunner:
                     path.name.casefold(),
                 )
             )
-            docs = [
-                path.relative_to(self._work_dir).as_posix()
-                for path in doc_paths
-            ]
+            docs = [path.relative_to(self._work_dir).as_posix() for path in doc_paths]
             context_blocks: list[str] = []
             remaining_context = 48_000
             for path, relative in zip(doc_paths, docs):
@@ -2206,18 +2205,18 @@ class StepRunner:
                 selection=selection,
                 lane="plan",
             )
-            state.metrics["llm_calls"] = int(
-                state.metrics.get("llm_calls", 0) or 0
-            ) + 1
+            state.metrics["llm_calls"] = int(state.metrics.get("llm_calls", 0) or 0) + 1
             self.state_mgr.save()
             try:
                 result = self._delegate_with_stream_retry(**kwargs)
             except Exception as exc:
                 result = None
-                print(ui.warn(
-                    "Plano interno LLM indisponível; usando plano "
-                    f"determinístico ({type(exc).__name__})"
-                ))
+                print(
+                    ui.warn(
+                        "Plano interno LLM indisponível; usando plano "
+                        f"determinístico ({type(exc).__name__})"
+                    )
+                )
             finally:
                 self._clear_active_llm_log(state)
             if result is not None and result.success:
@@ -2339,17 +2338,19 @@ class StepRunner:
             resolved_steps = default_steps
 
         if restrict_tools is None:
-            restrict_tools = node.type == "review" and not self._node_needs_shell_tools(node)
+            restrict_tools = node.type == "review" and not self._node_needs_shell_tools(
+                node
+            )
 
         early_success_paths: list[str] = []
         if node.type in {"discovery", "document", "retro"}:
             early_success_paths = [
-                str(output)
-                for output in node.outputs
-                if not str(output).endswith("/")
+                str(output) for output in node.outputs if not str(output).endswith("/")
             ]
         capture_output_path = None
-        capture_docs = os.environ.get("FT_OPENCODE_CAPTURE_DOCS", "").strip().lower() not in {
+        capture_docs = os.environ.get(
+            "FT_OPENCODE_CAPTURE_DOCS", ""
+        ).strip().lower() not in {
             "0",
             "false",
             "no",
@@ -2357,7 +2358,11 @@ class StepRunner:
             "não",
             "off",
         }
-        if capture_docs and node.type in {"discovery", "document", "retro"} and len(early_success_paths) == 1:
+        if (
+            capture_docs
+            and node.type in {"discovery", "document", "retro"}
+            and len(early_success_paths) == 1
+        ):
             capture_output_path = early_success_paths[0]
 
         return OpenCodeOptions(
@@ -2373,7 +2378,9 @@ class StepRunner:
         )
 
     @staticmethod
-    def _apply_opencode_options(delegate_kwargs: dict, options: OpenCodeOptions) -> None:
+    def _apply_opencode_options(
+        delegate_kwargs: dict, options: OpenCodeOptions
+    ) -> None:
         """Anexa opções OpenCode ao kwargs de delegação."""
         if options.deny_read_paths:
             delegate_kwargs["opencode_deny_read_paths"] = options.deny_read_paths
@@ -2384,9 +2391,13 @@ class StepRunner:
         if options.deny_edit_tools:
             delegate_kwargs["opencode_deny_edit_tools"] = True
         if options.early_success_paths:
-            delegate_kwargs["opencode_early_success_paths"] = options.early_success_paths
+            delegate_kwargs["opencode_early_success_paths"] = (
+                options.early_success_paths
+            )
         if options.capture_output_path:
-            delegate_kwargs["opencode_capture_output_path"] = options.capture_output_path
+            delegate_kwargs["opencode_capture_output_path"] = (
+                options.capture_output_path
+            )
 
     def _enrich_validation_feedback(self, node: Node, feedback: str) -> str:
         return enrich_api_contract_feedback(
@@ -2418,18 +2429,6 @@ class StepRunner:
             parent_span_id=self._active_node_trace_id,
             attempt_id=self._active_node_attempt_id,
         )
-
-
-
-
-
-
-
-
-
-
-
-
 
     def _resolve_work_dir(self) -> str:
         """Resolve o diretório de trabalho (CWD) para delegação ao LLM.
@@ -2464,7 +2463,11 @@ class StepRunner:
         work_root = Path(self._work_dir)
         result = []
         for p in paths:
-            if p.startswith("docs/") or p.startswith(".ft/process/") or p == "CHANGELOG.md":
+            if (
+                p.startswith("docs/")
+                or p.startswith(".ft/process/")
+                or p == "CHANGELOG.md"
+            ):
                 top = p.split("/", 1)[0]
                 if (work_root / top).exists():
                     result.append(p)
@@ -2507,13 +2510,19 @@ class StepRunner:
             manifest_is_active=manifest_is_active,
         )
 
-    def _resolve_llm_engine(self, state: Any | None = None, node: Any | None = None) -> str:
+    def _resolve_llm_engine(
+        self, state: Any | None = None, node: Any | None = None
+    ) -> str:
         return self._resolve_llm_selection(state, node).engine
 
-    def _resolve_llm_model(self, state: Any | None = None, node: Any | None = None) -> str | None:
+    def _resolve_llm_model(
+        self, state: Any | None = None, node: Any | None = None
+    ) -> str | None:
         return self._resolve_llm_selection(state, node).model
 
-    def _resolve_llm_effort(self, state: Any | None = None, node: Any | None = None) -> str | None:
+    def _resolve_llm_effort(
+        self, state: Any | None = None, node: Any | None = None
+    ) -> str | None:
         return self._resolve_llm_selection(state, node).effort
 
     def _persist_llm_selection(
@@ -2643,11 +2652,7 @@ class StepRunner:
             # primeira expansão sem depender da ordem lexical dos IDs.
             pending.extend(reversed(list(dict.fromkeys(targets))))
 
-        return [
-            node_id
-            for node_id in self.graph.nodes
-            if node_id in selected
-        ]
+        return [node_id for node_id in self.graph.nodes if node_id in selected]
 
     def _predecessor_ids(self, node_id: str) -> list[str]:
         """Retorna todos os predecessores imediatos de um node."""
@@ -2691,9 +2696,7 @@ class StepRunner:
     def _decision_next_for_state(self, node: Node, state: Any) -> str | None:
         route_choices = getattr(state, "route_choices", {})
         persisted = (
-            route_choices.get(node.id)
-            if isinstance(route_choices, dict)
-            else None
+            route_choices.get(node.id) if isinstance(route_choices, dict) else None
         )
         if persisted in self.graph.nodes:
             return persisted
@@ -2743,11 +2746,18 @@ class StepRunner:
             return False
         return validation_profiles_active(self._work_dir, payload)
 
-    def _collect_unselected_path(self, start_id: str | None, stop_ids: set[str], completed: set[str]) -> list[str]:
+    def _collect_unselected_path(
+        self, start_id: str | None, stop_ids: set[str], completed: set[str]
+    ) -> list[str]:
         skipped: list[str] = []
         seen: set[str] = set()
         current = start_id
-        while current and current not in stop_ids and current not in completed and current not in seen:
+        while (
+            current
+            and current not in stop_ids
+            and current not in completed
+            and current not in seen
+        ):
             node = self.graph.nodes.get(current)
             if node is None:
                 break
@@ -2786,7 +2796,9 @@ class StepRunner:
         """Marca branches não escolhidos como SKIPPED para progresso refletir o caminho fechado."""
         changed = False
         completed = set(state.completed_nodes)
-        completed_nodes = [completed_node] if completed_node else list(state.completed_nodes)
+        completed_nodes = (
+            [completed_node] if completed_node else list(state.completed_nodes)
+        )
 
         for node_id in completed_nodes:
             node = self.graph.nodes.get(node_id)
@@ -2795,15 +2807,28 @@ class StepRunner:
 
             selected_next = next_node if node_id == completed_node else None
             if selected_next is None:
-                selected_next = self._decision_next_for_state(node, state) if node.type == "decision" else node.next
+                selected_next = (
+                    self._decision_next_for_state(node, state)
+                    if node.type == "decision"
+                    else node.next
+                )
 
             candidates: list[str] = []
             if node.type == "decision" and node.branches:
-                candidates.extend(target for target in node.branches.values() if target != selected_next)
+                candidates.extend(
+                    target
+                    for target in node.branches.values()
+                    if target != selected_next
+                )
 
             gate_result = state.gate_log.get(node.id, "")
             rejected = gate_result.upper().startswith("REJECT")
-            if node.type == "human_gate" and node.reject_next and not rejected and node.reject_next != selected_next:
+            if (
+                node.type == "human_gate"
+                and node.reject_next
+                and not rejected
+                and node.reject_next != selected_next
+            ):
                 candidates.append(node.reject_next)
 
             # Branches podem reconvergir depois de um step intermediário
@@ -2811,7 +2836,9 @@ class StepRunner:
             # Não marque como SKIPPED nodes que ainda são alcançáveis pela branch escolhida.
             stop_ids = {node.id, *self._reachable_ids(selected_next)}
             for candidate in dict.fromkeys(candidates):
-                for skipped_id in self._collect_unselected_path(candidate, stop_ids, completed):
+                for skipped_id in self._collect_unselected_path(
+                    candidate, stop_ids, completed
+                ):
                     state.completed_nodes.append(skipped_id)
                     state.gate_log.setdefault(skipped_id, "SKIPPED")
                     completed.add(skipped_id)
@@ -2851,7 +2878,9 @@ class StepRunner:
             if node.condition and node.condition.startswith("file_exists:"):
                 check_path = node.condition.split(":", 1)[1]
                 full_path = Path(self._work_dir) / check_path
-                decision_state[node.condition] = "true" if full_path.exists() else "false"
+                decision_state[node.condition] = (
+                    "true" if full_path.exists() else "false"
+                )
 
             resolved_next = self.graph.resolve_next(node.id, decision_state)
             if not resolved_next or resolved_next not in progress_frontier:
@@ -2870,8 +2899,14 @@ class StepRunner:
             changed = True
 
         known_ids = {node.id for node in self.graph.nodes.values()}
-        ordered_known = [node.id for node in self.graph.nodes.values() if node.id in state.completed_nodes]
-        unknown_ids = [node_id for node_id in state.completed_nodes if node_id not in known_ids]
+        ordered_known = [
+            node.id
+            for node in self.graph.nodes.values()
+            if node.id in state.completed_nodes
+        ]
+        unknown_ids = [
+            node_id for node_id in state.completed_nodes if node_id not in known_ids
+        ]
         normalized_completed = ordered_known + unknown_ids
         if normalized_completed != state.completed_nodes:
             state.completed_nodes = normalized_completed
@@ -2933,9 +2968,12 @@ class StepRunner:
             return list(dict.fromkeys(node.write_scope))
 
         allowed = []
-        code_node_writes_project = node.type in {"build", "test_red", "test_green", "refactor"} and any(
-            str(output).startswith("project/") for output in node.outputs
-        )
+        code_node_writes_project = node.type in {
+            "build",
+            "test_red",
+            "test_green",
+            "refactor",
+        } and any(str(output).startswith("project/") for output in node.outputs)
         if code_node_writes_project:
             allowed.append("project")
         for output in node.outputs:
@@ -2955,9 +2993,8 @@ class StepRunner:
 
     def _clear_no_pre_seed_outputs(self, node: Node) -> None:
         """Remove only disposable cycle outputs before forced regeneration."""
-        if (
-            not getattr(node, "no_pre_seed", False)
-            or getattr(node, "preserve_outputs_on_reentry", False)
+        if not getattr(node, "no_pre_seed", False) or getattr(
+            node, "preserve_outputs_on_reentry", False
         ):
             return
         root = Path(self.project_root).resolve()
@@ -2978,6 +3015,7 @@ class StepRunner:
                     target.unlink()
                 elif target.is_dir():
                     import shutil as _shutil
+
                     _shutil.rmtree(target)
             except OSError:
                 pass
@@ -3069,9 +3107,7 @@ class StepRunner:
             "context_truncated": result.truncated,
         }
         deny_paths = (
-            list(result.deny_read_paths)
-            if selection.engine == "opencode"
-            else []
+            list(result.deny_read_paths) if selection.engine == "opencode" else []
         )
         return result.prompt, deny_paths
 
@@ -3086,7 +3122,9 @@ class StepRunner:
     ) -> str:
         """Registra no estado o log ativo para a delegação corrente."""
         node = self.graph.nodes.get(node_id)
-        episode = self._reserve_llm_episode_call(state, node) if node is not None else None
+        episode = (
+            self._reserve_llm_episode_call(state, node) if node is not None else None
+        )
         effective_engine = selection.engine if selection is not None else engine
         log_path = self._build_llm_log_path(
             node_id,
@@ -3100,12 +3138,8 @@ class StepRunner:
             "engine": selection.engine if selection is not None else effective_engine,
             "model": selection.model if selection is not None else None,
             "effort": selection.effort if selection is not None else None,
-            "provenance": (
-                dict(selection.provenance) if selection is not None else {}
-            ),
-            "resolution": (
-                list(selection.resolution) if selection is not None else []
-            ),
+            "provenance": (dict(selection.provenance) if selection is not None else {}),
+            "resolution": (list(selection.resolution) if selection is not None else []),
             "log_path": rel,
             "episode_key": node.llm_episode if node is not None else None,
             "episode_ordinal": episode.get("ordinal") if episode else None,
@@ -3134,7 +3168,9 @@ class StepRunner:
         print(f"  LLM log: {rel}")
         return str(log_path)
 
-    def _reserve_llm_episode_call(self, state: Any, node: Node) -> dict[str, Any] | None:
+    def _reserve_llm_episode_call(
+        self, state: Any, node: Node
+    ) -> dict[str, Any] | None:
         key = node.llm_episode
         if not key:
             return None
@@ -3150,7 +3186,10 @@ class StepRunner:
         calls = int(record.get("calls", 0) or 0)
         consumed = float(record.get("consumed_seconds", 0.0) or 0.0)
         exhausted_reason: str | None = None
-        if node.llm_episode_max_calls is not None and calls >= node.llm_episode_max_calls:
+        if (
+            node.llm_episode_max_calls is not None
+            and calls >= node.llm_episode_max_calls
+        ):
             exhausted_reason = f"limite de {node.llm_episode_max_calls} chamada(s)"
         if (
             node.llm_episode_budget_seconds is not None
@@ -3242,13 +3281,13 @@ class StepRunner:
                 if episode_key:
                     elapsed = max(
                         0.0,
-                        (time.monotonic_ns() - span.started_monotonic_ns) / 1_000_000_000,
+                        (time.monotonic_ns() - span.started_monotonic_ns)
+                        / 1_000_000_000,
                     )
                     record = state.llm_episodes.get(episode_key)
                     if isinstance(record, dict):
                         record["consumed_seconds"] = round(
-                            float(record.get("consumed_seconds", 0.0) or 0.0)
-                            + elapsed,
+                            float(record.get("consumed_seconds", 0.0) or 0.0) + elapsed,
                             3,
                         )
                 span.finish(status="returned")
@@ -3331,7 +3370,9 @@ class StepRunner:
 
         branch = _sp.run(
             ["git", "branch", "--show-current"],
-            cwd=work, capture_output=True, text=True,
+            cwd=work,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
 
         return work, original_root, branch
@@ -3462,10 +3503,12 @@ class StepRunner:
                     text=True,
                 )
                 if added.returncode != 0:
-                    print(ui.fail(
-                        "Relatório final do close não pôde ser preparado — "
-                        + (added.stderr.strip() or added.stdout.strip())[:300]
-                    ))
+                    print(
+                        ui.fail(
+                            "Relatório final do close não pôde ser preparado — "
+                            + (added.stderr.strip() or added.stdout.strip())[:300]
+                        )
+                    )
                     return False
                 changed = _sp.run(
                     ["git", "diff", "--cached", "--quiet", "--", relative],
@@ -3476,7 +3519,11 @@ class StepRunner:
                 if changed.returncode == 0:
                     return True
                 if changed.returncode != 1:
-                    print(ui.fail("Não foi possível inspecionar o relatório final do close"))
+                    print(
+                        ui.fail(
+                            "Não foi possível inspecionar o relatório final do close"
+                        )
+                    )
                     return False
                 command = [
                     *git_command_prefix(verify_hooks),
@@ -3500,14 +3547,20 @@ class StepRunner:
                     text=True,
                 )
                 if completed.returncode != 0:
-                    print(ui.fail(
-                        "Commit do relatório final do close falhou — "
-                        + (completed.stderr.strip() or completed.stdout.strip())[:300]
-                    ))
+                    print(
+                        ui.fail(
+                            "Commit do relatório final do close falhou — "
+                            + (completed.stderr.strip() or completed.stdout.strip())[
+                                :300
+                            ]
+                        )
+                    )
                     return False
         return True
 
-    def _merge_on_close_impl(self, strategy: str, paths: list[str] | None = None) -> bool:
+    def _merge_on_close_impl(
+        self, strategy: str, paths: list[str] | None = None
+    ) -> bool:
         """Merge artefatos do worktree de volta para o repo original.
 
         strategy:
@@ -3521,6 +3574,7 @@ class StepRunner:
         a fazer); False se falhou — o chamador NÃO deve destruir worktree/branch.
         """
         import subprocess as _sp
+
         from ft.engine import paths as _engine_paths
 
         work_root = Path(self.project_root)
@@ -3530,10 +3584,12 @@ class StepRunner:
             _, _, active_branch = wt
             expected_branch = getattr(state, "worktree_branch", None)
             if expected_branch and active_branch != expected_branch:
-                print(ui.fail(
-                    "Merge: branch ativa da worktree diverge da branch fixada "
-                    f"no ciclo ({active_branch or '<detached>'} != {expected_branch})"
-                ))
+                print(
+                    ui.fail(
+                        "Merge: branch ativa da worktree diverge da branch fixada "
+                        f"no ciclo ({active_branch or '<detached>'} != {expected_branch})"
+                    )
+                )
                 return False
         cycle_id = (
             work_root.name
@@ -3602,7 +3658,11 @@ class StepRunner:
                             text=True,
                         )
                 if result.returncode == 0:
-                    print(ui.success(f"Merge: branch {branch} mergida em {original_root.name}"))
+                    print(
+                        ui.success(
+                            f"Merge: branch {branch} mergida em {original_root.name}"
+                        )
+                    )
                     return True
                 merging = (original_root / ".git" / "MERGE_HEAD").exists()
                 if merging:
@@ -3621,7 +3681,9 @@ class StepRunner:
                                     "--no-edit",
                                 ]
                                 if not verify_hooks:
-                                    commit_command.extend(["--no-verify", "--no-gpg-sign"])
+                                    commit_command.extend(
+                                        ["--no-verify", "--no-gpg-sign"]
+                                    )
                                 completed = _sp.run(
                                     commit_command,
                                     cwd=original_root,
@@ -3629,29 +3691,40 @@ class StepRunner:
                                     text=True,
                                 )
                                 if completed.returncode == 0:
-                                    print(ui.success(
-                                        "Merge: conflitos canônicos reconciliados "
-                                        f"({', '.join(canonical.resolved)})"
-                                    ))
+                                    print(
+                                        ui.success(
+                                            "Merge: conflitos canônicos reconciliados "
+                                            f"({', '.join(canonical.resolved)})"
+                                        )
+                                    )
                                     return True
-                                print(ui.fail(
-                                    "Merge: documentos reconciliados, mas o commit "
-                                    "de merge falhou — "
-                                    + (completed.stderr.strip() or completed.stdout.strip())[:300]
-                                ))
+                                print(
+                                    ui.fail(
+                                        "Merge: documentos reconciliados, mas o commit "
+                                        "de merge falhou — "
+                                        + (
+                                            completed.stderr.strip()
+                                            or completed.stdout.strip()
+                                        )[:300]
+                                    )
+                                )
                                 return False
-                            print(ui.warn(
-                                "Merge: reconciliação canônica conservadora não se aplica — "
-                                f"{canonical.error}"
-                            ))
+                            print(
+                                ui.warn(
+                                    "Merge: reconciliação canônica conservadora não se aplica — "
+                                    f"{canonical.error}"
+                                )
+                            )
                 # git manda conflitos para o STDOUT; stderr costuma vir vazio
                 reason = (result.stdout.strip() or result.stderr.strip())[:300]
                 print(ui.fail(f"Merge: falha — {reason}"))
                 if merging:
-                    print(ui.warn(
-                        f"Merge em andamento com conflitos em {original_root}. "
-                        f"Resolva-os e conclua com git commit, depois rode ft close de novo."
-                    ))
+                    print(
+                        ui.warn(
+                            f"Merge em andamento com conflitos em {original_root}. "
+                            f"Resolva-os e conclua com git commit, depois rode ft close de novo."
+                        )
+                    )
                 return False
             print(ui.fail("Merge: worktree sem branch — merge manual necessário"))
             return False
@@ -3680,10 +3753,12 @@ class StepRunner:
         if not copied_ok:
             return False
         if copied:
-            print(ui.success(
-                f"Merge: {len(copied)} item(ns) copiado(s) "
-                f"para {original_root.name}/"
-            ))
+            print(
+                ui.success(
+                    f"Merge: {len(copied)} item(ns) copiado(s) "
+                    f"para {original_root.name}/"
+                )
+            )
         return True
 
     def _merge_by_copy(self, strategy: str, paths: list[str] | None = None) -> bool:
@@ -3703,17 +3778,34 @@ class StepRunner:
         work = Path(self._work_dir).resolve()
         root = Path.cwd().resolve()
         if not _paths.is_worktree_path(work):
-            print(ui.warn("Merge: nada a mergear — modo continuous (código já está na raiz)"))
+            print(
+                ui.warn(
+                    "Merge: nada a mergear — modo continuous (código já está na raiz)"
+                )
+            )
             return True
         if root == work or _paths.is_worktree_path(root):
-            print(ui.fail("Merge: rode o ft close a partir da raiz do projeto (cwd atual é o próprio ciclo)"))
+            print(
+                ui.fail(
+                    "Merge: rode o ft close a partir da raiz do projeto (cwd atual é o próprio ciclo)"
+                )
+            )
             return False
         if not ((root / ".git").exists() or _paths.project_manifest(root).is_file()):
-            print(ui.fail(f"Merge: {root} não parece a raiz de um projeto ft — merge manual necessário"))
+            print(
+                ui.fail(
+                    f"Merge: {root} não parece a raiz de um projeto ft — merge manual necessário"
+                )
+            )
             return False
         cycle = work.name  # ex.: cycle-01
         ignore = _shutil.ignore_patterns(
-            "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "*.pyc"
+            "node_modules",
+            "__pycache__",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".venv",
+            "*.pyc",
         )
         if strategy == "selective" and paths:
             requested_paths = list(paths)
@@ -3739,11 +3831,19 @@ class StepRunner:
             return False
 
         if copied:
-            print(ui.success(f"Merge por cópia ({strategy}): {len(copied)} item(ns) → {root.name}/"))
+            print(
+                ui.success(
+                    f"Merge por cópia ({strategy}): {len(copied)} item(ns) → {root.name}/"
+                )
+            )
             for c in copied:
                 print(ui.dim(f"  ✓ {c}"))
             return True
-        print(ui.warn("Merge por cópia: NENHUM artefato encontrado no ciclo — verifique manualmente"))
+        print(
+            ui.warn(
+                "Merge por cópia: NENHUM artefato encontrado no ciclo — verifique manualmente"
+            )
+        )
         return False
 
     # Compatibilidade: alias para código legado que ainda chama _merge_on_end
@@ -3761,7 +3861,9 @@ class StepRunner:
         """Processa o evento on_fail de um node. Pausa para ft fix ou bloqueia."""
         on_fail = node.on_fail or {}
         goto = on_fail.get("goto")
-        gate_msg = on_fail.get("human_gate", "Falha no node — corrija e tente novamente.")
+        gate_msg = on_fail.get(
+            "human_gate", "Falha no node — corrija e tente novamente."
+        )
 
         if not goto:
             self.state_mgr.block(f"on_fail sem goto definido: {feedback}")
@@ -3828,10 +3930,12 @@ class StepRunner:
         state.blocked_reason = None
         state.last_approval_message = None
         self.state_mgr.save()
-        print(ui.info(
-            "Recibo focal inválido; refazendo somente o review "
-            f"({previous + 1}/{limit}), sem encaminhar ao fix de produto"
-        ))
+        print(
+            ui.info(
+                "Recibo focal inválido; refazendo somente o review "
+                f"({previous + 1}/{limit}), sem encaminhar ao fix de produto"
+            )
+        )
         return True
 
     def _clear_focal_evidence_review_retry(self, node_id: str) -> None:
@@ -3903,7 +4007,9 @@ class StepRunner:
             }
         return None
 
-    def _advance_state(self, completed_node: str, next_node: str | None, gate_result: str = "PASS") -> None:
+    def _advance_state(
+        self, completed_node: str, next_node: str | None, gate_result: str = "PASS"
+    ) -> None:
         """Avança o estado após sucesso, resolvendo bloqueios antigos do mesmo node."""
         state = self.state_mgr.state
         directed_return = state.active_fix_return
@@ -3916,10 +4022,12 @@ class StepRunner:
             audit_entry = directed_return.get("audit_entry_node") or review_node
             if audit_entry in self.graph.nodes:
                 next_node = audit_entry
-                print(ui.info(
-                    "↪ Fix focal concluído; executando somente a auditoria "
-                    f"{audit_entry} → {review_node}"
-                ))
+                print(
+                    ui.info(
+                        "↪ Fix focal concluído; executando somente a auditoria "
+                        f"{audit_entry} → {review_node}"
+                    )
+                )
         elif (
             isinstance(directed_return, dict)
             and directed_return.get("review_node") == completed_node
@@ -3927,9 +4035,11 @@ class StepRunner:
             gate_node = directed_return.get("gate_node")
             if gate_node in self.graph.nodes:
                 next_node = gate_node
-                print(ui.info(
-                    f"↪ Auditoria focal aprovada; retornando ao human gate {gate_node}"
-                ))
+                print(
+                    ui.info(
+                        f"↪ Auditoria focal aprovada; retornando ao human gate {gate_node}"
+                    )
+                )
             state.active_fix_return = None
 
         if (
@@ -3989,7 +4099,9 @@ class StepRunner:
             return False
 
         work_root = Path(self._work_dir)
-        tests_dir = "src/tests" if (work_root / "src" / "tests").exists() else "project/tests"
+        tests_dir = (
+            "src/tests" if (work_root / "src" / "tests").exists() else "project/tests"
+        )
         passed, quality_detail = val.pytest_red_quality(
             tests_dir=tests_dir,
             project_root=str(work_root),
@@ -3997,7 +4109,9 @@ class StepRunner:
         if passed:
             return False
 
-        print(ui.warn(f"TDD RED inválido detectado antes de {node.id}: {quality_detail}"))
+        print(
+            ui.warn(f"TDD RED inválido detectado antes de {node.id}: {quality_detail}")
+        )
         print(ui.info("Voltando para ft.tdd.01.red para refazer a suite de testes"))
 
         first_invalid = state.completed_nodes.index(red_id)
@@ -4185,8 +4299,15 @@ class StepRunner:
         with log_path.open("a") as f:
             f.write(entry)
 
-    def _log_activity(self, node_id: str, title: str, node_type: str, result: str,
-                      summary: str, sprint: str | None = None):
+    def _log_activity(
+        self,
+        node_id: str,
+        title: str,
+        node_type: str,
+        result: str,
+        summary: str,
+        sprint: str | None = None,
+    ):
         """Registra atividade no terminal e em <projeto>_log.md.
 
         Colunas extras para análise/ML:
@@ -4377,10 +4498,15 @@ class StepRunner:
         route_total = self.state_mgr.state.metrics["steps_total"]
         self.state_mgr.save()
         self._ensure_run_trace()
-        print(ui.init_banner(
-            self.graph.meta.get("title", "?"), first.id, first.title, route_total,
-            process_file=self.process_path,
-        ))
+        print(
+            ui.init_banner(
+                self.graph.meta.get("title", "?"),
+                first.id,
+                first.title,
+                route_total,
+                process_file=self.process_path,
+            )
+        )
         self._init_log()
         self._log_event(
             "INIT",
@@ -4414,9 +4540,16 @@ class StepRunner:
 
         previous_lock = getattr(self.state_mgr, "_previous_claim_lock", None)
         was_claimed = bool(getattr(self.state_mgr, "_claim_performed", False))
-        lock = previous_lock if isinstance(previous_lock, dict) else (
-            {} if was_claimed else
-            state._lock if isinstance(state._lock, dict) else {}
+        lock = (
+            previous_lock
+            if isinstance(previous_lock, dict)
+            else (
+                {}
+                if was_claimed
+                else state._lock
+                if isinstance(state._lock, dict)
+                else {}
+            )
         )
         pid = lock.get("pid")
         if pid:
@@ -4439,9 +4572,11 @@ class StepRunner:
         node = self.graph.get_node(node_id)
         self._auto_approve = mode == "mvp"
 
-        print(ui.warn(
-            f"Delegação órfã detectada em {node_id} — validando artefatos existentes antes de redelegar"
-        ))
+        print(
+            ui.warn(
+                f"Delegação órfã detectada em {node_id} — validando artefatos existentes antes de redelegar"
+            )
+        )
         self.trace.finish_open_spans(
             category="llm_provider",
             node_id=node_id,
@@ -4471,10 +4606,12 @@ class StepRunner:
         )
         if not validation.passed and has_resume_command:
             self._print_validation(validation)
-            print(ui.warn(
-                "Validação leve de retomada falhou — executando a validação "
-                "normal uma única vez antes de redelegar"
-            ))
+            print(
+                ui.warn(
+                    "Validação leve de retomada falhou — executando a validação "
+                    "normal uma única vez antes de redelegar"
+                )
+            )
             validation = self._run_validators(node)
         self._print_validation(validation)
         if not validation.passed:
@@ -4529,6 +4666,7 @@ class StepRunner:
           "mvp"    — avanca ate o fim ou BLOCK
         """
         from ft.engine.state import StateLockError
+
         try:
             state = self.state_mgr.load(check_lock=True)
         except StateLockError as e:
@@ -4545,10 +4683,12 @@ class StepRunner:
             self.state_mgr.save()
         self._ensure_internal_execution_plan(state)
 
-        self._auto_approve = (mode == "mvp")
+        self._auto_approve = mode == "mvp"
 
         # Determinar sprint de referencia para mode="sprint"
-        start_sprint = self.graph.sprint_of(state.current_node) if state.current_node else None
+        start_sprint = (
+            self.graph.sprint_of(state.current_node) if state.current_node else None
+        )
         if mode == "sprint" and start_sprint:
             print(f"  Sprint: {start_sprint}")
 
@@ -4570,11 +4710,16 @@ class StepRunner:
                     default_model=state.llm_model,
                 )
                 state.metrics["llm_usage"] = usage_summary
-                state.metrics["tokens_used"] = usage_summary["totals"].get("total_all_tokens", 0)
+                state.metrics["tokens_used"] = usage_summary["totals"].get(
+                    "total_all_tokens", 0
+                )
                 self.state_mgr.save()
-                print(ui.process_complete(
-                    state.metrics['steps_completed'], state.metrics['steps_total'],
-                ))
+                print(
+                    ui.process_complete(
+                        state.metrics["steps_completed"],
+                        state.metrics["steps_total"],
+                    )
+                )
                 for line in format_llm_usage_lines(usage_summary):
                     print(ui.dim(line))
                 # Commitar conhecimento produzido pelo ciclo
@@ -4600,11 +4745,18 @@ class StepRunner:
 
             step_num = int(state.metrics.get("steps_completed", 0) or 0) + 1
             step_total = state.metrics.get("steps_total", "?")
-            print(ui.step_card(
-                step_num, step_total, node.title,
-                node_id, node.type, node.executor, node.sprint,
-                description=node.description,
-            ))
+            print(
+                ui.step_card(
+                    step_num,
+                    step_total,
+                    node.title,
+                    node_id,
+                    node.type,
+                    node.executor,
+                    node.sprint,
+                    description=node.description,
+                )
+            )
 
             self._mark_node_start(node_id)
             self._fire_hooks("on_node_start")
@@ -4643,8 +4795,14 @@ class StepRunner:
                 self._run_exploration(node)
                 if mode == "mvp":
                     self.explore_skip()
-                    self._log_activity(node_id, node.title, "exploration", "BYPASSED",
-                                       "exploração pulada (modo mvp/auto)", sprint=node_sprint)
+                    self._log_activity(
+                        node_id,
+                        node.title,
+                        "exploration",
+                        "BYPASSED",
+                        "exploração pulada (modo mvp/auto)",
+                        sprint=node_sprint,
+                    )
                     state = self.state_mgr.load()
                     continue
                 state = self.state_mgr.load()
@@ -4659,11 +4817,23 @@ class StepRunner:
                     break
                 state = self.state_mgr.load()
                 if state.node_status == "awaiting_approval":
-                    self._log_activity(node_id, node.title, "human_gate", "AWAITING_HUMAN",
-                                       "aguardando aprovacao humana (ft approve)", sprint=node_sprint)
+                    self._log_activity(
+                        node_id,
+                        node.title,
+                        "human_gate",
+                        "AWAITING_HUMAN",
+                        "aguardando aprovacao humana (ft approve)",
+                        sprint=node_sprint,
+                    )
                     break
-                self._log_activity(node_id, node.title, "human_gate", "BYPASSED",
-                                   "bypassed (--bypass-human-gates)", sprint=node_sprint)
+                self._log_activity(
+                    node_id,
+                    node.title,
+                    "human_gate",
+                    "BYPASSED",
+                    "bypassed (--bypass-human-gates)",
+                    sprint=node_sprint,
+                )
                 continue
 
             # Gate — validacao pura, sem LLM
@@ -4683,19 +4853,37 @@ class StepRunner:
                         fixed = self._run_auto_fix(node, blocked_reason)
                         state = self.state_mgr.load()
                         if fixed:
-                            self._log_activity(node_id, node.title, "gate", "AUTO_FIXED",
-                                               f"corrigido automaticamente (tentativa {fix_count + 1})", sprint=node_sprint)
+                            self._log_activity(
+                                node_id,
+                                node.title,
+                                "gate",
+                                "AUTO_FIXED",
+                                f"corrigido automaticamente (tentativa {fix_count + 1})",
+                                sprint=node_sprint,
+                            )
                             continue
                         if (state.blocked_reason or "").startswith(RATE_LIMIT_MARKER):
                             # Rate limit durante o auto-fix: devolve a tentativa
                             self._auto_fix_counts[node_id] = fix_count
                             self._pause_for_rate_limit(node, node_sprint)
                             break
-                    self._log_activity(node_id, node.title, "gate", "BLOCKED",
-                                       state.blocked_reason or "gate falhou", sprint=node_sprint)
+                    self._log_activity(
+                        node_id,
+                        node.title,
+                        "gate",
+                        "BLOCKED",
+                        state.blocked_reason or "gate falhou",
+                        sprint=node_sprint,
+                    )
                     break
-                self._log_activity(node_id, node.title, "gate", "PASS",
-                                   f"→ {self.graph.resolve_next(node_id) or 'fim'}", sprint=node_sprint)
+                self._log_activity(
+                    node_id,
+                    node.title,
+                    "gate",
+                    "PASS",
+                    f"→ {self.graph.resolve_next(node_id) or 'fim'}",
+                    sprint=node_sprint,
+                )
                 continue
 
             # Decision node — avaliar condicao e seguir branch
@@ -4704,8 +4892,14 @@ class StepRunner:
                 if mode == "step":
                     break
                 state = self.state_mgr.load()
-                self._log_activity(node_id, node.title, "decision", "ROUTED",
-                                   f"→ {state.current_node}", sprint=node_sprint)
+                self._log_activity(
+                    node_id,
+                    node.title,
+                    "decision",
+                    "ROUTED",
+                    f"→ {state.current_node}",
+                    sprint=node_sprint,
+                )
                 continue
 
             # Batch dinâmico do builder — foundation já foi consolidado no
@@ -4770,36 +4964,65 @@ class StepRunner:
                     fixed = self._run_auto_fix(node, blocked_reason)
                     state = self.state_mgr.load()
                     if fixed:
-                        self._log_activity(node_id, node.title, node.type, "AUTO_FIXED",
-                                           f"corrigido automaticamente (tentativa {fix_count + 1})", sprint=node_sprint)
+                        self._log_activity(
+                            node_id,
+                            node.title,
+                            node.type,
+                            "AUTO_FIXED",
+                            f"corrigido automaticamente (tentativa {fix_count + 1})",
+                            sprint=node_sprint,
+                        )
                         continue
                     if (state.blocked_reason or "").startswith(RATE_LIMIT_MARKER):
                         # Rate limit durante o auto-fix: devolve a tentativa
                         self._auto_fix_counts[node_id] = fix_count
                         self._pause_for_rate_limit(node, node_sprint)
                         break
-                self._log_activity(node_id, node.title, node.type, "BLOCKED",
-                                   state.blocked_reason or "bloqueado", sprint=node_sprint)
+                self._log_activity(
+                    node_id,
+                    node.title,
+                    node.type,
+                    "BLOCKED",
+                    state.blocked_reason or "bloqueado",
+                    sprint=node_sprint,
+                )
                 break
             if state.node_status == "awaiting_approval":
                 if self._auto_approve:
                     print(ui.awaiting_approval(auto=True))
-                    self._log_activity(node_id, node.title, node.type, "AUTO_APPROVED",
-                                       "auto-aprovado (modo MVP)", sprint=node_sprint)
+                    self._log_activity(
+                        node_id,
+                        node.title,
+                        node.type,
+                        "AUTO_APPROVED",
+                        "auto-aprovado (modo MVP)",
+                        sprint=node_sprint,
+                    )
                     next_id = self.graph.resolve_next(state.current_node)
                     self._advance_state(state.current_node, next_id)
                     state = self.state_mgr.load()
                 else:
                     self._present_decision_gate(node)
                     self._start_human_wait(node, "node_requires_approval")
-                    self._log_activity(node_id, node.title, node.type, "AWAITING_APPROVAL",
-                                       "aguardando aprovacao humana", sprint=node_sprint)
+                    self._log_activity(
+                        node_id,
+                        node.title,
+                        node.type,
+                        "AWAITING_APPROVAL",
+                        "aguardando aprovacao humana",
+                        sprint=node_sprint,
+                    )
                     break
             else:
                 self._fire_hooks("on_node_end")
-                self._log_activity(node_id, node.title, node.type, "PASS",
-                                   f"concluido → {self.graph.resolve_next(node_id) or 'fim'}",
-                                   sprint=node_sprint)
+                self._log_activity(
+                    node_id,
+                    node.title,
+                    node.type,
+                    "PASS",
+                    f"concluido → {self.graph.resolve_next(node_id) or 'fim'}",
+                    sprint=node_sprint,
+                )
 
             if mode == "step":
                 break
@@ -4820,7 +5043,12 @@ class StepRunner:
                     result=trace_result,
                     summary=state.blocked_reason,
                 )
-            if state.node_status not in ("blocked", "awaiting_approval", "done", "completed"):
+            if state.node_status not in (
+                "blocked",
+                "awaiting_approval",
+                "done",
+                "completed",
+            ):
                 print(ui.dim("  → ft continue   para continuar o próximo step"))
 
     _MAX_STREAM_RETRIES = 2
@@ -4924,11 +5152,13 @@ class StepRunner:
             if provider_span is not None:
                 provider_span.finish(
                     status="ok" if result.success else "error",
-                    result="success" if result.success else "died" if result.died else "failed",
+                    result="success"
+                    if result.success
+                    else "died"
+                    if result.died
+                    else "failed",
                     attributes=(
-                        {"timings": dict(result.timings)}
-                        if result.timings
-                        else None
+                        {"timings": dict(result.timings)} if result.timings else None
                     ),
                 )
             if (
@@ -4939,10 +5169,12 @@ class StepRunner:
             ):
                 session_recovered = True
                 self._rehydrate_llm_session(delegate_kwargs, session_context)
-                print(ui.warn(
-                    "Sessão LLM não pôde ser retomada — reidratando uma "
-                    "conversa nova com o estado e os artefatos atuais"
-                ))
+                print(
+                    ui.warn(
+                        "Sessão LLM não pôde ser retomada — reidratando uma "
+                        "conversa nova com o estado e os artefatos atuais"
+                    )
+                )
                 continue
             if result.success or not getattr(result, "died", False):
                 return result
@@ -4954,10 +5186,12 @@ class StepRunner:
                 delegate_kwargs["llm_session_id"] = result.session_id
                 delegate_kwargs["llm_session_resume"] = True
             attempt += 1
-            print(ui.warn(
-                "Delegação morreu sem veredito (stream/crash/timeout) — "
-                f"retry automático {attempt}/{self._MAX_STREAM_RETRIES}"
-            ))
+            print(
+                ui.warn(
+                    "Delegação morreu sem veredito (stream/crash/timeout) — "
+                    f"retry automático {attempt}/{self._MAX_STREAM_RETRIES}"
+                )
+            )
 
     def _run_llm_step(self, node: Node):
         """Wrapper: garante env_teardown em qualquer saída (PASS, retry, block)."""
@@ -4982,9 +5216,7 @@ class StepRunner:
         product bundles for the node task.
         """
         state_dict = {**state.__dict__, "_project_root": self.project_root}
-        task_prompt = self._inject_execution_plan(
-            build_task_prompt(node, state_dict)
-        )
+        task_prompt = self._inject_execution_plan(build_task_prompt(node, state_dict))
         # Modo autônomo: com --bypass-human-gates não há humano para responder
         # perguntas. A LLM decide no lugar do humano — responde as perguntas com
         # o default mais razoável, documenta a decisão, e nunca deixa o fluxo
@@ -5018,13 +5250,14 @@ class StepRunner:
             )
             print(ui.info("Contexto: mensagem do stakeholder injetada no prompt"))
 
-        opencode_code_node = (
-            selection.engine == "opencode"
-            and node.type in {"build", "test_red", "test_green", "refactor"}
-        )
-        if (
-            not node.context_profile
-            and (node.type in ("discovery", "document", "retro") or opencode_code_node)
+        opencode_code_node = selection.engine == "opencode" and node.type in {
+            "build",
+            "test_red",
+            "test_green",
+            "refactor",
+        }
+        if not node.context_profile and (
+            node.type in ("discovery", "document", "retro") or opencode_code_node
         ):
             existing = self._filter_no_pre_seed_docs(
                 node,
@@ -5043,10 +5276,9 @@ class StepRunner:
                 print(f"  {label}: {len(existing)} docs existentes carregados")
 
         if node.type in ("build", "refactor", "retro"):
-            interface_type = (
-                state_dict.get("artifacts", {}).get("interface_type")
-                or state_dict.get("interface_type")
-            )
+            interface_type = state_dict.get("artifacts", {}).get(
+                "interface_type"
+            ) or state_dict.get("interface_type")
             lessons = (
                 scan_kb_lessons(self._kb_path, interface_type=interface_type)
                 if self._kb_path
@@ -5098,7 +5330,9 @@ class StepRunner:
                         f"outputs={', '.join(node.outputs)}",
                     )
                     for output_path in node.outputs:
-                        self.state_mgr.record_artifact(Path(output_path).stem, output_path)
+                        self.state_mgr.record_artifact(
+                            Path(output_path).stem, output_path
+                        )
                     # Inputs copiados e checkpoints externos válidos precisam
                     # virar um baseline Git antes de um fan-out por worktree.
                     # Sem isso, o batch bloqueia apesar de zero trabalho LLM.
@@ -5138,10 +5372,7 @@ class StepRunner:
                 f"EXPERT:{node.id}",
                 "Expert pinado para delegação",
                 "PINNED",
-                (
-                    f"id={pinned.id} version={pinned.version} "
-                    f"digest={pinned.digest}"
-                ),
+                (f"id={pinned.id} version={pinned.version} digest={pinned.digest}"),
             )
         expert_label = f", expert: {node.expert}" if node.expert else ""
         print(ui.info(f"Delegando ao LLM ({effective_engine}{expert_label})..."))
@@ -5191,12 +5422,18 @@ class StepRunner:
             validation = self._run_validators(node)
             self._print_validation(validation)
             if validation.passed:
-                print(ui.success("LLM encerrou com erro, mas validadores passaram — aceitando artefatos"))
+                print(
+                    ui.success(
+                        "LLM encerrou com erro, mas validadores passaram — aceitando artefatos"
+                    )
+                )
                 for output_path in node.outputs:
                     name = Path(output_path).stem
                     self.state_mgr.record_artifact(name, output_path)
                 self._maybe_auto_commit(node)
-                self._record_node_summary(node, getattr(result, "output", None) or str(result))
+                self._record_node_summary(
+                    node, getattr(result, "output", None) or str(result)
+                )
 
                 if node.requires_approval and not self._auto_approve:
                     self.state_mgr.set_pending_approval(node.id)
@@ -5223,7 +5460,9 @@ class StepRunner:
         if validation.passed:
             # Auto-commit para nodes de build/test
             self._maybe_auto_commit(node)
-            self._record_node_summary(node, getattr(result, "output", None) or str(result))
+            self._record_node_summary(
+                node, getattr(result, "output", None) or str(result)
+            )
 
             if node.requires_approval and not self._auto_approve:
                 self.state_mgr.set_pending_approval(node.id)
@@ -5239,13 +5478,19 @@ class StepRunner:
             previous_feedback = validation.feedback or ""
             for retry in range(1, self._max_node_retries + 1):
                 current_feedback = validation.feedback or "validação falhou"
-                enriched_feedback = self._enrich_validation_feedback(node, current_feedback)
+                enriched_feedback = self._enrich_validation_feedback(
+                    node, current_feedback
+                )
                 print(ui.retry(retry, self._max_node_retries))
                 print(ui.info(f"Corrigindo automaticamente: {current_feedback}"))
 
                 # Se o erro é idêntico ao da tentativa anterior, parar cedo
                 if retry > 1 and current_feedback == previous_feedback:
-                    print(ui.fail("Erro idêntico ao da tentativa anterior — bloqueio estrutural detectado"))
+                    print(
+                        ui.fail(
+                            "Erro idêntico ao da tentativa anterior — bloqueio estrutural detectado"
+                        )
+                    )
                     break
 
                 previous_feedback = current_feedback
@@ -5305,7 +5550,9 @@ class StepRunner:
 
                 if validation.passed:
                     self._maybe_auto_commit(node)
-                    self._record_node_summary(node, getattr(result, "output", None) or str(result))
+                    self._record_node_summary(
+                        node, getattr(result, "output", None) or str(result)
+                    )
 
                     if node.requires_approval:
                         self.state_mgr.set_pending_approval(node.id)
@@ -5316,8 +5563,12 @@ class StepRunner:
                     return
 
         # Esgotou retries
-        self.state_mgr.block(f"Validacao falhou apos {self._max_node_retries} tentativas: {validation.feedback}")
-        print(ui.step_block(f"validação falhou após {self._max_node_retries} tentativas"))
+        self.state_mgr.block(
+            f"Validacao falhou apos {self._max_node_retries} tentativas: {validation.feedback}"
+        )
+        print(
+            ui.step_block(f"validação falhou após {self._max_node_retries} tentativas")
+        )
 
     @staticmethod
     def _has_validator_resume_command(node: Node) -> bool:
@@ -5357,9 +5608,11 @@ class StepRunner:
             return False
 
         self._auto_approve = mode == "mvp"
-        print(ui.warn(
-            f"Retry de {node_id}: validando artefatos preservados sem nova chamada LLM"
-        ))
+        print(
+            ui.warn(
+                f"Retry de {node_id}: validando artefatos preservados sem nova chamada LLM"
+            )
+        )
         state.node_status = "validating"
         state.blocked_reason = None
         self.state_mgr.save()
@@ -5367,10 +5620,12 @@ class StepRunner:
         validation = self._run_validators(node, resume=True)
         if not validation.passed:
             self._print_validation(validation)
-            print(ui.warn(
-                "Validação leve não foi suficiente — executando a validação "
-                "normal uma única vez, ainda sem LLM"
-            ))
+            print(
+                ui.warn(
+                    "Validação leve não foi suficiente — executando a validação "
+                    "normal uma única vez, ainda sem LLM"
+                )
+            )
             validation = self._run_validators(node)
         self._print_validation(validation)
 
@@ -5451,10 +5706,12 @@ class StepRunner:
         self._clear_focal_evidence_review_retry(node.id)
         next_id = self.graph.resolve_next(node.id)
         self._advance_state(node.id, next_id, verdict)
-        print(ui.success(
-            "Recibo focal corrente revalidado após correção da engine — "
-            "nenhuma nova chamada LLM"
-        ))
+        print(
+            ui.success(
+                "Recibo focal corrente revalidado após correção da engine — "
+                "nenhuma nova chamada LLM"
+            )
+        )
         return True
 
     def _run_bypass_prompt(self, node: Node) -> None:
@@ -5470,17 +5727,13 @@ class StepRunner:
         state = self.state_mgr.state
         engine = (state.llm_engine or "claude").strip()
         model = (state.llm_model or "").strip()
-        llm_label = " ".join(
-            part.capitalize() for part in [engine, model] if part
-        )
+        llm_label = " ".join(part.capitalize() for part in [engine, model] if part)
         task = node.bypass_prompt.replace("{llm_label}", llm_label)
         log_path = self._llm_log_dir() / (
             f"{datetime.now().strftime('%Y%m%d-%H%M%S')}__{node.id}__bypass.log"
         )
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        print(ui.info(
-            f"Human gate em bypass: delegando resposta ao LLM ({llm_label})"
-        ))
+        print(ui.info(f"Human gate em bypass: delegando resposta ao LLM ({llm_label})"))
         result = delegate_to_llm(
             task=task,
             project_root=self._work_dir,
@@ -5494,9 +5747,11 @@ class StepRunner:
             workflow_id=state.template_id,
         )
         if not result.success:
-            print(ui.warn(
-                f"Bypass LLM não concluiu em {node.id}; o gate segue sem respostas"
-            ))
+            print(
+                ui.warn(
+                    f"Bypass LLM não concluiu em {node.id}; o gate segue sem respostas"
+                )
+            )
 
     def _present_decision_gate(
         self,
@@ -5517,14 +5772,16 @@ class StepRunner:
             state=self.state_mgr.load(),
             project_root=self.project_root,
         )
-        print(ui.human_gate_card(
-            title=node.title,
-            description=node.description,
-            url=url,
-            artifact=artifact,
-            context=decision_context,
-            approval_message_required=node.approval_message_required,
-        ))
+        print(
+            ui.human_gate_card(
+                title=node.title,
+                description=node.description,
+                url=url,
+                artifact=artifact,
+                context=decision_context,
+                approval_message_required=node.approval_message_required,
+            )
+        )
 
     def _presented_artifact(self) -> str | None:
         """Resolve the product artifact opened by a non-web presentation hook."""
@@ -5571,11 +5828,13 @@ class StepRunner:
                 except OSError:
                     content = ""
                 if re.search(str(reject_when["pattern"]), content):
-                    print(ui.warn(
-                        f"Human gate BYPASSED com rejeição: {node.title} — "
-                        f"'{reject_when['pattern']}' casou em {reject_when['path']}; "
-                        f"seguindo por reject_next ({node.reject_next})"
-                    ))
+                    print(
+                        ui.warn(
+                            f"Human gate BYPASSED com rejeição: {node.title} — "
+                            f"'{reject_when['pattern']}' casou em {reject_when['path']}; "
+                            f"seguindo por reject_next ({node.reject_next})"
+                        )
+                    )
                     self._advance_state(node.id, node.reject_next)
                     self.state_mgr.save()
                     return
@@ -5595,10 +5854,12 @@ class StepRunner:
         if serve_url_path.exists():
             url = serve_url_path.read_text().strip() or None
         if not url and not self._presented_artifact() and not env_ok:
-            print(ui.warn(
-                "env_setup falhou e nenhuma URL ou aplicação apresentada foi "
-                "encontrada"
-            ))
+            print(
+                ui.warn(
+                    "env_setup falhou e nenhuma URL ou aplicação apresentada foi "
+                    "encontrada"
+                )
+            )
 
         self._present_decision_gate(node, url=url)
         self.state_mgr.set_pending_approval(node.id)
@@ -5612,11 +5873,20 @@ class StepRunner:
         do mesmo node quando a API normalizar.
         """
         self.state_mgr.unblock()
-        self._log_activity(node.id, node.title, node.type, "RATE_LIMITED",
-                           "pausado por rate limit da API — auto-fix não consumido",
-                           sprint=node_sprint)
+        self._log_activity(
+            node.id,
+            node.title,
+            node.type,
+            "RATE_LIMITED",
+            "pausado por rate limit da API — auto-fix não consumido",
+            sprint=node_sprint,
+        )
         print(ui.fail("Rate limit da API persistiu após todo o backoff."))
-        print(ui.info("Node preservado como 'ready' — rode 'ft continue --auto' quando a API normalizar."))
+        print(
+            ui.info(
+                "Node preservado como 'ready' — rode 'ft continue --auto' quando a API normalizar."
+            )
+        )
 
     def _run_auto_fix(self, node: Node, blocked_reason: str) -> bool:
         """Tenta corrigir automaticamente um node bloqueado (modo MVP).
@@ -5630,12 +5900,20 @@ class StepRunner:
         # Detectar erro idêntico ao anterior — bloqueio estrutural
         prev_reason = self._auto_fix_prev_error.get(node.id)
         if prev_reason and prev_reason == blocked_reason:
-            print(ui.fail("Auto-fix: erro idêntico ao da tentativa anterior — bloqueio estrutural"))
+            print(
+                ui.fail(
+                    "Auto-fix: erro idêntico ao da tentativa anterior — bloqueio estrutural"
+                )
+            )
             return False
         self._auto_fix_prev_error[node.id] = blocked_reason
 
         state = self.state_mgr.load()
-        print(ui.info(f"Auto-fix: aplicando correção automática (tentativa {fix_count + 1}/{self._max_auto_fix})"))
+        print(
+            ui.info(
+                f"Auto-fix: aplicando correção automática (tentativa {fix_count + 1}/{self._max_auto_fix})"
+            )
+        )
         print(ui.dim(f"  Motivo: {blocked_reason[:200]}"))
 
         # Incluir histórico de erros para evitar que o LLM repita a mesma abordagem
@@ -5653,13 +5931,14 @@ class StepRunner:
         opencode_options = self._opencode_options_for_node(node, effective_engine)
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         original_task = build_task_prompt(node, state_dict)
-        opencode_code_node = (
-            effective_engine == "opencode"
-            and node.type in {"build", "test_red", "test_green", "refactor"}
-        )
-        if (
-            not node.context_profile
-            and (node.type in ("discovery", "document", "retro") or opencode_code_node)
+        opencode_code_node = effective_engine == "opencode" and node.type in {
+            "build",
+            "test_red",
+            "test_green",
+            "refactor",
+        }
+        if not node.context_profile and (
+            node.type in ("discovery", "document", "retro") or opencode_code_node
         ):
             existing = self._filter_no_pre_seed_docs(
                 node,
@@ -5789,7 +6068,8 @@ class StepRunner:
         _engine_errors = ("node sem outputs", "Validador desconhecido")
         is_engine_error = any(
             marker in (item.detail or "")
-            for item in validation.items if not item.passed
+            for item in validation.items
+            if not item.passed
             for marker in _engine_errors
         )
 
@@ -5808,7 +6088,10 @@ class StepRunner:
                 if attempt > 1:
                     history_block = (
                         "\n\nTENTATIVAS ANTERIORES QUE NÃO RESOLVERAM:\n"
-                        + "\n".join(f"  - Tentativa {i+1}: {e}" for i, e in enumerate(previous_errors[:-1]))
+                        + "\n".join(
+                            f"  - Tentativa {i + 1}: {e}"
+                            for i, e in enumerate(previous_errors[:-1])
+                        )
                         + "\n\nNÃO repita a mesma abordagem. Tente algo diferente.\n"
                     )
 
@@ -5888,7 +6171,9 @@ class StepRunner:
                     return
 
             # Esgotou retries
-            print(ui.fail(f"Gate não corrigido após {self._max_gate_retries} tentativas"))
+            print(
+                ui.fail(f"Gate não corrigido após {self._max_gate_retries} tentativas")
+            )
 
         if is_engine_error:
             # Tentar autofix antes de desistir
@@ -5911,7 +6196,8 @@ class StepRunner:
         # Autofix: "node sem outputs" + tem file_exists no mesmo gate → copiar path
         has_missing_outputs = any(
             "node sem outputs" in (item.detail or "")
-            for item in validation.items if not item.passed
+            for item in validation.items
+            if not item.passed
         )
         if has_missing_outputs and not node.outputs:
             # Procurar path no file_exists do mesmo node
@@ -5919,9 +6205,11 @@ class StepRunner:
                 if "file_exists" in spec and isinstance(spec["file_exists"], str):
                     inferred_path = spec["file_exists"]
                     node.outputs = [inferred_path]
-                    print(ui.autofix_applied(
-                        f"outputs inferido de file_exists → [{inferred_path}]"
-                    ))
+                    print(
+                        ui.autofix_applied(
+                            f"outputs inferido de file_exists → [{inferred_path}]"
+                        )
+                    )
                     fixed = True
                     break
 
@@ -5949,7 +6237,7 @@ class StepRunner:
 
         if "node sem outputs" in detail:
             what = (
-                f"O gate \"{node.title}\" precisa verificar o conteúdo de um arquivo, "
+                f'O gate "{node.title}" precisa verificar o conteúdo de um arquivo, '
                 f"mas não sabe qual arquivo verificar."
             )
             alternatives = [
@@ -5960,7 +6248,7 @@ class StepRunner:
         elif "Validador desconhecido" in detail:
             validator_name = detail.split(":")[-1].strip() if ":" in detail else "?"
             what = (
-                f"O gate \"{node.title}\" usa uma verificação chamada \"{validator_name}\" "
+                f'O gate "{node.title}" usa uma verificação chamada "{validator_name}" '
                 f"que o sistema não reconhece. Pode ser um erro de digitação."
             )
             alternatives = [
@@ -5969,7 +6257,9 @@ class StepRunner:
                 "Pular este gate e continuar o processo",
             ]
         else:
-            what = f"O gate \"{node.title}\" encontrou um problema de configuração: {detail}"
+            what = (
+                f'O gate "{node.title}" encontrou um problema de configuração: {detail}'
+            )
             alternatives = [
                 "Investigar e corrigir o problema",
                 "Pular este gate e continuar o processo",
@@ -6052,8 +6342,11 @@ class StepRunner:
             print(f"    $ {cmd}")
             try:
                 proc = subprocess.Popen(
-                    cmd, shell=True, cwd=self._work_dir,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    cmd,
+                    shell=True,
+                    cwd=self._work_dir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
                 proc.wait(timeout=60)
             except Exception as exc:  # noqa: BLE001 — teardown nunca derruba o node
@@ -6072,11 +6365,18 @@ class StepRunner:
             # comando inicia processos em background (&) — proc.wait() retorna
             # assim que o shell pai sai, independente dos filhos backgrounded.
             import tempfile
-            with tempfile.TemporaryFile(mode="w+") as out_f, \
-                 tempfile.TemporaryFile(mode="w+") as err_f:
+
+            with (
+                tempfile.TemporaryFile(mode="w+") as out_f,
+                tempfile.TemporaryFile(mode="w+") as err_f,
+            ):
                 proc = subprocess.Popen(
-                    cmd, shell=True, cwd=self._work_dir,
-                    stdout=out_f, stderr=err_f, text=True,
+                    cmd,
+                    shell=True,
+                    cwd=self._work_dir,
+                    stdout=out_f,
+                    stderr=err_f,
+                    text=True,
                 )
                 try:
                     rc = proc.wait(timeout=300)
@@ -6192,10 +6492,10 @@ class StepRunner:
             chosen = next_id
             print(f"  DECISION: condicao='{node.condition}' → {chosen}")
         else:
-            self.state_mgr.block(f"Decision sem branch valido: condicao={node.condition}")
+            self.state_mgr.block(
+                f"Decision sem branch valido: condicao={node.condition}"
+            )
             print("  DECISION BLOCK: nenhum branch valido")
-
-
 
     def _read_review_output(self, node: Node) -> str:
         documents = self._review_output_documents(node)
@@ -6259,11 +6559,7 @@ class StepRunner:
             verdicts = _explicit_review_verdicts(content)
             signals.extend((source, verdict) for verdict in verdicts)
             rejected_verdict = next(
-                (
-                    verdict
-                    for verdict in verdicts
-                    if verdict in _REVIEW_REJECT_VERDICTS
-                ),
+                (verdict for verdict in verdicts if verdict in _REVIEW_REJECT_VERDICTS),
                 None,
             )
             if rejected_verdict:
@@ -6290,9 +6586,7 @@ class StepRunner:
         if not rejected:
             return None
         approved = [
-            source
-            for source, verdict in signals
-            if verdict in _REVIEW_APPROVE_VERDICTS
+            source for source, verdict in signals if verdict in _REVIEW_APPROVE_VERDICTS
         ]
         rejection_sources = ", ".join(
             dict.fromkeys(f"{source}={verdict}" for source, verdict in rejected)
@@ -6422,7 +6716,9 @@ class StepRunner:
             mtimes.extend(p.stat().st_mtime for p in base.rglob("*") if p.is_file())
         return max(mtimes, default=0.0)
 
-    def _review_blocking_evidence_reason(self, node: Node, *, require_fresh: bool = True) -> str | None:
+    def _review_blocking_evidence_reason(
+        self, node: Node, *, require_fresh: bool = True
+    ) -> str | None:
         markers = {
             "overflow": "evidencia visual indica overflow/layout quebrado",
             "blank": "evidencia visual indica tela em branco",
@@ -6448,7 +6744,11 @@ class StepRunner:
 
     def _write_review_rejection_report(self, node: Node, reason: str) -> None:
         report_path = next(
-            (Path(self._work_dir) / output for output in node.outputs if output.endswith(".md")),
+            (
+                Path(self._work_dir) / output
+                for output in node.outputs
+                if output.endswith(".md")
+            ),
             None,
         )
         if not report_path:
@@ -6469,10 +6769,7 @@ class StepRunner:
         node: Node,
     ) -> tuple[str, str] | None:
         directed = self.state_mgr.state.active_fix_return
-        if (
-            not isinstance(directed, dict)
-            or directed.get("review_node") != node.id
-        ):
+        if not isinstance(directed, dict) or directed.get("review_node") != node.id:
             return None
         context = directed.get("review_context")
         if not isinstance(context, str) or not context.strip():
@@ -6521,9 +6818,10 @@ class StepRunner:
             self._ui_evidence_validation_enabled() if focal_review else True
         )
         if focal_review and focal_review[0] == "origin_fallback":
-            focal_outputs = "\n".join(
-                f"- {output}" for output in node.outputs
-            ) or "- (nenhum output declarado; emita somente o veredito focal)"
+            focal_outputs = (
+                "\n".join(f"- {output}" for output in node.outputs)
+                or "- (nenhum output declarado; emita somente o veredito focal)"
+            )
             focal_node = replace(
                 node,
                 description=(
@@ -6569,12 +6867,12 @@ class StepRunner:
                     "seguida de evidência curta e verificável."
                 ),
             )
-            task_prompt = self._inject_execution_plan(
-                build_task_prompt(focal_node, {})
+            task_prompt = self._inject_execution_plan(build_task_prompt(focal_node, {}))
+            print(
+                ui.info(
+                    f"Review {node.id}: prompt amplo suspenso; auditoria somente do fix"
+                )
             )
-            print(ui.info(
-                f"Review {node.id}: prompt amplo suspenso; auditoria somente do fix"
-            ))
         else:
             task_prompt = self._inject_execution_plan(build_task_prompt(node, {}))
             if focal_review:
@@ -6596,7 +6894,10 @@ class StepRunner:
                 if isinstance(directed, dict)
                 else None
             )
-            if isinstance(focal_evidence_feedback, str) and focal_evidence_feedback.strip():
+            if (
+                isinstance(focal_evidence_feedback, str)
+                and focal_evidence_feedback.strip()
+            ):
                 task_prompt = (
                     f"{task_prompt}\n\n"
                     "CORREÇÃO DO RECIBO FOCAL\n"
@@ -6639,7 +6940,9 @@ class StepRunner:
                     allow_followup_reads=False,
                 )
                 deny_read_paths.extend(f"docs/{name}" for name in existing)
-                print(f"  Hyper-mode review: {len(existing)} docs existentes carregados")
+                print(
+                    f"  Hyper-mode review: {len(existing)} docs existentes carregados"
+                )
         else:
             return task_prompt, deny_read_paths
 
@@ -6666,7 +6969,6 @@ class StepRunner:
                 "- A primeira escrita deve criar/atualizar o relatorio .md canonico.\n"
             )
         return task_prompt, deny_read_paths
-
 
     def _feature_fast_v1_delta_review_context(
         self,
@@ -6739,9 +7041,7 @@ class StepRunner:
             or ""
         ).strip()
         supplemental_evidence = ""
-        supplemental_path = (
-            Path(self._work_dir) / "docs" / "security-gate-receipt.json"
-        )
+        supplemental_path = Path(self._work_dir) / "docs" / "security-gate-receipt.json"
         if supplemental_path.is_file() and not supplemental_path.is_symlink():
             try:
                 supplemental_evidence = supplemental_path.read_text(
@@ -6778,7 +7078,6 @@ class StepRunner:
         self._feature_fast_v1_fix_review_context = compatibility_context
         print(ui.info("Review feature-fast v1: auditoria focal do delta de correção"))
         return f"{task_prompt}\n\n{compatibility_context}"
-
 
     def _run_review(self, node: Node):
         """Executa reviews com o mesmo lifecycle de ambiente dos demais nodes LLM."""
@@ -6869,10 +7168,12 @@ class StepRunner:
                 self._clear_focal_evidence_review_retry(node.id)
                 next_id = self.graph.resolve_next(node.id)
                 self._advance_state(node.id, next_id, canonical_verdict)
-                print(ui.success(
-                    "Recibo canônico focal já válido — retry de formatação "
-                    "encerrado sem nova chamada LLM"
-                ))
+                print(
+                    ui.success(
+                        "Recibo canônico focal já válido — retry de formatação "
+                        "encerrado sem nova chamada LLM"
+                    )
+                )
                 return
         correction_policy = self.graph.meta.get("correction_policy", {})
         mandatory_reviews = (
@@ -6894,7 +7195,11 @@ class StepRunner:
                     structured_review=structured_review,
                 )
                 return
-            print(ui.success("Expert Review: artefatos já existem e validação OK — pulando etapa"))
+            print(
+                ui.success(
+                    "Expert Review: artefatos já existem e validação OK — pulando etapa"
+                )
+            )
             for output_path in node.outputs:
                 self.state_mgr.record_artifact(Path(output_path).stem, output_path)
             next_id = node.next
@@ -6902,15 +7207,19 @@ class StepRunner:
             return
         if early_check.passed:
             if runtime_focal_review:
-                print(ui.warn(
-                    "Expert Review: auditoria focal obrigatória — preservando "
-                    "o relatório amplo como baseline"
-                ))
+                print(
+                    ui.warn(
+                        "Expert Review: auditoria focal obrigatória — preservando "
+                        "o relatório amplo como baseline"
+                    )
+                )
             else:
-                print(ui.warn(
-                    "Expert Review: review deve rodar de novo "
-                    "(mandatory/no_pre_seed) — regenerando"
-                ))
+                print(
+                    ui.warn(
+                        "Expert Review: review deve rodar de novo "
+                        "(mandatory/no_pre_seed) — regenerando"
+                    )
+                )
             if not runtime_focal_review and not getattr(
                 node,
                 "preserve_outputs_on_reentry",
@@ -6930,7 +7239,9 @@ class StepRunner:
                 if node.on_fail:
                     self._handle_on_fail(node, blocking_reason)
                 else:
-                    self.state_mgr.block(f"Expert Review REJECTED:\n{blocking_reason[:500]}")
+                    self.state_mgr.block(
+                        f"Expert Review REJECTED:\n{blocking_reason[:500]}"
+                    )
                 return
 
         print(f"  Expert Review ({node.executor})...")
@@ -6979,7 +7290,9 @@ class StepRunner:
             # foram produzidos e os validators passam — o LLM pode ter concluído antes de parar.
             pre_check = run_review_validators()
             if pre_check.passed:
-                print("  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram")
+                print(
+                    "  REVIEW: LLM encerrou com erro mas artefatos OK — validadores passaram"
+                )
                 result.success = True  # tratamos como sucesso
                 post_delegation_validation = pre_check
             else:
@@ -7026,7 +7339,9 @@ class StepRunner:
                 )
                 return
             elif pre_check.retryable:
-                print("  REVIEW: LLM falhou mas validadores deram feedback recuperável — finalizando relatório...")
+                print(
+                    "  REVIEW: LLM falhou mas validadores deram feedback recuperável — finalizando relatório..."
+                )
                 recovery_selection, retry_log_path = self._start_delegation_attempt(
                     state,
                     node,
@@ -7090,10 +7405,14 @@ class StepRunner:
                         if node.on_fail:
                             self._handle_on_fail(node, blocking_reason)
                         else:
-                            self.state_mgr.block(f"Expert Review REJECTED:\n{blocking_reason[:500]}")
+                            self.state_mgr.block(
+                                f"Expert Review REJECTED:\n{blocking_reason[:500]}"
+                            )
                         return
                     self._print_validation(recovery_check)
-                    self.state_mgr.block(f"Review falhou: {recovery_result.output[:300] or result.output[:300]}")
+                    self.state_mgr.block(
+                        f"Review falhou: {recovery_result.output[:300] or result.output[:300]}"
+                    )
                     print("  REVIEW BLOCK: LLM nao conseguiu revisar")
                     return
             elif not pre_check.passed:
@@ -7129,18 +7448,30 @@ class StepRunner:
             rejected_review_output = (
                 "" if structured_review else self._read_review_output(node)
             )
-            rejected_verdict = _parse_review_verdict(rejected_review_output) if rejected_review_output else None
+            rejected_verdict = (
+                _parse_review_verdict(rejected_review_output)
+                if rejected_review_output
+                else None
+            )
             if rejected_verdict in _REVIEW_REJECT_VERDICTS:
-                reason = _extract_review_rejection_reason(rejected_review_output, rejected_verdict)
+                reason = _extract_review_rejection_reason(
+                    rejected_review_output, rejected_verdict
+                )
                 print(ui.fail("REVIEW REJECTED"))
                 print(ui.dim(f"  Motivo: {reason[:300]}"))
                 if node.on_fail:
-                    self._handle_on_fail(node, reason or (validation.feedback or "review rejeitado"))
+                    self._handle_on_fail(
+                        node, reason or (validation.feedback or "review rejeitado")
+                    )
                 else:
-                    self.state_mgr.block(f"Expert Review {rejected_verdict}:\n{reason[:500]}")
+                    self.state_mgr.block(
+                        f"Expert Review {rejected_verdict}:\n{reason[:500]}"
+                    )
                 return
             if validation.retryable:
-                print(f"  REVIEW: validadores falharam — {validation.feedback or 'sem detalhes'} — retentando...")
+                print(
+                    f"  REVIEW: validadores falharam — {validation.feedback or 'sem detalhes'} — retentando..."
+                )
                 review_retry_selection, retry_log_path = self._start_delegation_attempt(
                     state,
                     node,
@@ -7159,7 +7490,9 @@ class StepRunner:
                         node=node,
                         selection=review_retry_selection,
                         original_task=review_retry_task,
-                        feedback=self._enrich_validation_feedback(node, validation.feedback or ""),
+                        feedback=self._enrich_validation_feedback(
+                            node, validation.feedback or ""
+                        ),
                         project_root=self._work_dir,
                         allowed_paths=self._delegate_allowed_paths(allowed),
                         llm_engine=review_retry_selection.engine,
@@ -7167,7 +7500,9 @@ class StepRunner:
                         llm_effort=review_retry_selection.effort,
                         max_turns=node.max_turns or 50,
                         log_path=retry_log_path,
-                        stream_prefix=self._stream_prefix(review_retry_selection.engine),
+                        stream_prefix=self._stream_prefix(
+                            review_retry_selection.engine
+                        ),
                         opencode_deny_read_paths=review_retry_options.deny_read_paths,
                         opencode_restrict_tools=review_retry_options.restrict_tools,
                         opencode_steps=review_retry_options.steps,
@@ -7273,8 +7608,7 @@ class StepRunner:
                 return
             if focal_verdict not in _REVIEW_APPROVE_VERDICTS:
                 self.state_mgr.block(
-                    "Auditoria focal não emitiu VERDICT: APPROVED ou "
-                    "VERDICT: REJECTED."
+                    "Auditoria focal não emitiu VERDICT: APPROVED ou VERDICT: REJECTED."
                 )
                 print(ui.fail("FOCAL REVIEW BLOCK: veredito explícito ausente"))
                 return
@@ -7324,10 +7658,12 @@ class StepRunner:
                 state.blocked_reason = None
                 state.last_approval_message = None
                 self.state_mgr.save()
-                print(ui.info(
-                    "↪ Auditoria focal aprovada; cobertura ampla ainda "
-                    "pendente — reabrindo o review completo"
-                ))
+                print(
+                    ui.info(
+                        "↪ Auditoria focal aprovada; cobertura ampla ainda "
+                        "pendente — reabrindo o review completo"
+                    )
+                )
                 return
             next_id = self.graph.resolve_next(node.id)
             self._advance_state(node.id, next_id, focal_verdict)
@@ -7375,11 +7711,15 @@ class StepRunner:
             return
 
         import time as _time
+
         ts = _time.strftime("%H:%M")
         print(ui.exploration_item(len(state.exploration_log) + 1, request))
 
         allowed = self._resolve_allowed_paths(self.graph.nodes.get(state.current_node))
-        log_path = str(self._llm_log_dir() / f"exploration_{len(state.exploration_log) + 1:02d}.log")
+        log_path = str(
+            self._llm_log_dir()
+            / f"exploration_{len(state.exploration_log) + 1:02d}.log"
+        )
         llm_selection = self._capture_delegation_llm_selection(
             state,
             node=self.graph.nodes.get(state.current_node),
@@ -7393,11 +7733,13 @@ class StepRunner:
         exploration_options: OpenCodeOptions | None = None
         if node := self.graph.nodes.get(state.current_node):
             if node.context_profile:
-                exploration_prompt, exploration_deny_paths = self._compose_profile_context(
-                    node,
-                    exploration_prompt,
-                    state,
-                    llm_selection,
+                exploration_prompt, exploration_deny_paths = (
+                    self._compose_profile_context(
+                        node,
+                        exploration_prompt,
+                        state,
+                        llm_selection,
+                    )
                 )
                 exploration_options = self._opencode_options_for_node(
                     node,
@@ -7423,6 +7765,7 @@ class StepRunner:
             selection=llm_selection,
         )
         from ft.engine import delegate as delegate_module
+
         result = self._delegate_once_with_attached_session(
             delegate_module.delegate_to_llm,
             exploration_kwargs,
@@ -7454,28 +7797,32 @@ class StepRunner:
 
         log = state.exploration_log
         if not log:
-            print(ui.info("Nenhum pedido registrado — encerrando exploração sem relatório."))
+            print(
+                ui.info(
+                    "Nenhum pedido registrado — encerrando exploração sem relatório."
+                )
+            )
         else:
             # Gera exploration-report.md via LLM
-            log_text = "\n".join(f"{i+1}. {entry}" for i, entry in enumerate(log))
+            log_text = "\n".join(f"{i + 1}. {entry}" for i, entry in enumerate(log))
             allowed = self._resolve_allowed_paths(node)
             llm_selection = self._capture_delegation_llm_selection(
                 state,
                 node=node,
             )
             report_prompt = (
-                    f"Gere docs/exploration-report.md com o relatório da sessão de exploração.\n\n"
-                    f"Pedidos realizados:\n{log_text}\n\n"
-                    f"O relatório deve ter:\n"
-                    f"## Sessão de Exploração\n"
-                    f"Data, total de pedidos.\n\n"
-                    f"## Pedidos Realizados\n"
-                    f"Lista numerada com cada pedido e resultado.\n\n"
-                    f"## Descobertas\n"
-                    f"O que funcionou bem, o que foi descartado, observações.\n\n"
-                    f"## Sugestões para o Próximo Ciclo\n"
-                    f"Itens que o stakeholder pode querer levar adiante (em aberto — stakeholder decide).\n\n"
-                    f"Diga DONE ao terminar."
+                f"Gere docs/exploration-report.md com o relatório da sessão de exploração.\n\n"
+                f"Pedidos realizados:\n{log_text}\n\n"
+                f"O relatório deve ter:\n"
+                f"## Sessão de Exploração\n"
+                f"Data, total de pedidos.\n\n"
+                f"## Pedidos Realizados\n"
+                f"Lista numerada com cada pedido e resultado.\n\n"
+                f"## Descobertas\n"
+                f"O que funcionou bem, o que foi descartado, observações.\n\n"
+                f"## Sugestões para o Próximo Ciclo\n"
+                f"Itens que o stakeholder pode querer levar adiante (em aberto — stakeholder decide).\n\n"
+                f"Diga DONE ao terminar."
             )
             report_prompt = self._inject_execution_plan(report_prompt)
             report_options: OpenCodeOptions | None = None
@@ -7509,6 +7856,7 @@ class StepRunner:
                 selection=llm_selection,
             )
             from ft.engine import delegate as delegate_module
+
             report_result = self._delegate_once_with_attached_session(
                 delegate_module.delegate_to_llm,
                 report_kwargs,
@@ -7517,7 +7865,9 @@ class StepRunner:
                 report_path = Path(self._work_dir) / "docs" / "exploration-report.md"
                 print(ui.success(f"Relatório de exploração gerado: {report_path}"))
             else:
-                print(ui.warn("Não foi possível gerar o relatório — avançando sem ele."))
+                print(
+                    ui.warn("Não foi possível gerar o relatório — avançando sem ele.")
+                )
 
         state.exploration_log = []
         next_id = self.graph.resolve_next(node.id)
@@ -7562,12 +7912,8 @@ class StepRunner:
             return
 
         work_root = Path(self._work_dir).resolve()
-        plan_path = work_root / str(
-            policy.get("plan_path", "docs/mvp-batch-plan.yml")
-        )
-        request_path = work_root / str(
-            policy.get("request_path", "docs/demanda.md")
-        )
+        plan_path = work_root / str(policy.get("plan_path", "docs/mvp-batch-plan.yml"))
+        request_path = work_root / str(policy.get("request_path", "docs/demanda.md"))
         report_path = work_root / str(
             policy.get("report_path", "docs/mvp-batch-report.md")
         )
@@ -7778,7 +8124,9 @@ class StepRunner:
                     errors="replace",
                 )[:8_000]
             except OSError:
-                foundation_context = "(relatório indisponível; inspecione somente se necessário)"
+                foundation_context = (
+                    "(relatório indisponível; inspecione somente se necessário)"
+                )
             return f"""Você implementa uma lane isolada do mvp-builder-fast.
 
 LANE: {lane.id} — {lane.title}
@@ -7795,7 +8143,7 @@ CRITÉRIOS DE ACEITAÇÃO:
 
 OWNERSHIP EXCLUSIVO (únicos prefixes editáveis):
 {areas}
-- {policy.get('evidence_root', 'docs/batches/mvp-builder-fast')}/{lane.id}/
+- {policy.get("evidence_root", "docs/batches/mvp-builder-fast")}/{lane.id}/
 
 DEPENDÊNCIAS JÁ INTEGRADAS: {dependencies}
 
@@ -7907,10 +8255,12 @@ próprias sob o namespace permitido acima. Encerre DONE.
             }
 
         if runtime.get("status") not in {"integrated", "done"}:
-            print(ui.info(
-                f"Batch: {len(plan.lanes)} lanes · {len(waves)} waves · "
-                f"máximo {max_slots} simultâneas"
-            ))
+            print(
+                ui.info(
+                    f"Batch: {len(plan.lanes)} lanes · {len(waves)} waves · "
+                    f"máximo {max_slots} simultâneas"
+                )
+            )
             for wave_index, wave_ids in enumerate(waves):
                 if all(
                     runtime["lanes"][lane_id].get("status") == "merged"
@@ -7921,10 +8271,11 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 runtime["status"] = "running"
                 self.state_mgr.state.node_status = "delegated"
                 self.state_mgr.save()
-                print(ui.highlight(
-                    f"Wave {wave_index + 1}/{len(waves)}: "
-                    + ", ".join(wave_ids)
-                ))
+                print(
+                    ui.highlight(
+                        f"Wave {wave_index + 1}/{len(waves)}: " + ", ".join(wave_ids)
+                    )
+                )
 
                 tasks: list[dict[str, Any]] = []
                 try:
@@ -8056,8 +8407,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                         if diff_check.returncode != 0:
                             lane_state["status"] = "failed"
                             lane_state["last_error"] = (
-                                diff_check.stderr.strip()
-                                or diff_check.stdout.strip()
+                                diff_check.stderr.strip() or diff_check.stdout.strip()
                             )[:2000]
                             continue
                         try:
@@ -8133,9 +8483,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                         )
                         return
                     lane_state["status"] = "merged"
-                    lane_state["merged_at"] = datetime.now(
-                        timezone.utc
-                    ).isoformat()
+                    lane_state["merged_at"] = datetime.now(timezone.utc).isoformat()
                     lane_state["integration_sha"] = git(
                         ["rev-parse", "HEAD"],
                         cwd=integration_worktree,
@@ -8189,9 +8537,9 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 ff = git(["merge", "--ff-only", integration_branch])
                 if ff.returncode != 0:
                     runtime["status"] = "blocked"
-                    runtime["last_error"] = (
-                        ff.stderr.strip() or ff.stdout.strip()
-                    )[:2000]
+                    runtime["last_error"] = (ff.stderr.strip() or ff.stdout.strip())[
+                        :2000
+                    ]
                     persist()
                     self.state_mgr.block(
                         "Fast-forward final do batch falhou; integração privada "
@@ -8229,9 +8577,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
             "|---:|---|---|---:|---:|",
         ]
         wave_lookup = {
-            lane_id: index + 1
-            for index, wave in enumerate(waves)
-            for lane_id in wave
+            lane_id: index + 1 for index, wave in enumerate(waves) for lane_id in wave
         }
         for lane in plan.lanes:
             lane_state = runtime["lanes"][lane.id]
@@ -8296,13 +8642,15 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 ordinal=queue_ordinal,
                 attributes={"max_slots": self.state_mgr.state.parallel_max_slots},
             )
-            tasks.append({
-                "node_id": n.id,
-                "task_prompt": build_task_prompt(n, {}),
-                "allowed_paths": allowed,
-                "outputs": n.outputs,
-                "delegate_kwargs": {"selection_node_id": n.id},
-            })
+            tasks.append(
+                {
+                    "node_id": n.id,
+                    "task_prompt": build_task_prompt(n, {}),
+                    "allowed_paths": allowed,
+                    "outputs": n.outputs,
+                    "delegate_kwargs": {"selection_node_id": n.id},
+                }
+            )
 
         max_slots = max(1, int(self.state_mgr.state.parallel_max_slots or 2))
         par = ParallelRunner(
@@ -8451,15 +8799,26 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 next_id = self.graph.resolve_next(node.id)
                 self._advance_state(node.id, next_id)
                 print(f"  PARALLEL PASS: {node.id} → {next_id}")
-                self._log_activity(node.id, node.title, "parallel", "PASS",
-                                   f"→ {next_id or 'fim'}", sprint=node.sprint)
+                self._log_activity(
+                    node.id,
+                    node.title,
+                    "parallel",
+                    "PASS",
+                    f"→ {next_id or 'fim'}",
+                    sprint=node.sprint,
+                )
             else:
                 self.state_mgr.block(
                     f"Validacao falhou apos merge: {node.id}: {validation.feedback}"
                 )
-                self._log_activity(node.id, node.title, "parallel", "BLOCKED",
-                                   validation.feedback or "validação falhou após merge",
-                                   sprint=node.sprint)
+                self._log_activity(
+                    node.id,
+                    node.title,
+                    "parallel",
+                    "BLOCKED",
+                    validation.feedback or "validação falhou após merge",
+                    sprint=node.sprint,
+                )
                 return
 
     def _generate_sprint_report(self, sprint: str, state):
@@ -8470,7 +8829,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
         done = [n for n in sprint_nodes if n.id in completed]
         pending = [n for n in sprint_nodes if n.id not in completed]
 
-        print(f"\n{'━'*50}")
+        print(f"\n{'━' * 50}")
         print(f"  Sprint Report: {sprint}")
         print(f"  Done: {len(done)}/{len(sprint_nodes)}")
         for n in done:
@@ -8488,7 +8847,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
         )
         if sprint_sessions:
             print(f"  LLM sessions: {sprint_sessions}")
-        print(f"{'━'*50}")
+        print(f"{'━' * 50}")
 
     def approve(self, message: str | None = None):
         """Stakeholder aprova artefato pendente.
@@ -8517,8 +8876,14 @@ próprias sob o namespace permitido acima. Encerre DONE.
         if message:
             log_msg += f" | nota: {message}"
         print(f"  {log_msg}")
-        self._log_activity(node_id, node.title, node.type, "APPROVED",
-                           message or "aprovado pelo stakeholder", sprint=node.sprint)
+        self._log_activity(
+            node_id,
+            node.title,
+            node.type,
+            "APPROVED",
+            message or "aprovado pelo stakeholder",
+            sprint=node.sprint,
+        )
         # Guardar mensagem para o próximo nó LLM injetar como contexto
         if message:
             state.last_approval_message = message
@@ -8536,11 +8901,13 @@ próprias sob o namespace permitido acima. Encerre DONE.
         except ValueError:
             return False
         removed = [
-            n for n in state.completed_nodes
+            n
+            for n in state.completed_nodes
             if n in ordered and ordered.index(n) >= target_idx
         ]
         state.completed_nodes = [
-            n for n in state.completed_nodes
+            n
+            for n in state.completed_nodes
             if n in ordered and ordered.index(n) < target_idx
         ]
         for node_id in removed:
@@ -8573,9 +8940,6 @@ próprias sob o namespace permitido acima. Encerre DONE.
         )
         print(ui.info(f"↩ Voltando para {goto} com contexto de correção"))
         return True
-
-
-
 
     def _invalidate_focal_evidence(
         self,
@@ -8682,8 +9046,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
             reopened_order = (goto, *audit_nodes)
             reopened = set(reopened_order)
             state.completed_nodes = [
-                n for n in state.completed_nodes
-                if n not in reopened
+                n for n in state.completed_nodes if n not in reopened
             ]
             self._invalidate_focal_evidence(state, reopened_order)
             try:
@@ -8739,7 +9102,8 @@ próprias sob o namespace permitido acima. Encerre DONE.
             # Compatibilidade: o processo controla a rota posterior ao fix e
             # todos os nodes a partir do alvo são reabertos.
             state.completed_nodes = [
-                n for n in state.completed_nodes
+                n
+                for n in state.completed_nodes
                 if n in ordered and ordered.index(n) < target_idx
             ]
             state.active_fix_return = None
@@ -8771,10 +9135,12 @@ próprias sob o namespace permitido acima. Encerre DONE.
         # própria chave de sessão.
         print(ui.info(f"↩ Voltando para {goto} com instrução injetada"))
         if audit_origin:
-            print(ui.info(
-                "Após o fix, somente a auditoria focal "
-                f"{audit_entry} → {review_node} será executada"
-            ))
+            print(
+                ui.info(
+                    "Após o fix, somente a auditoria focal "
+                    f"{audit_entry} → {review_node} será executada"
+                )
+            )
         return True
 
     def reject_with_origin_audit(self, reason: str) -> bool:
@@ -8796,9 +9162,11 @@ próprias sob o namespace permitido acima. Encerre DONE.
         gate = self.graph.get_node(gate_id)
         fix_id = gate.reject_next
         if not fix_id or fix_id not in self.graph.nodes:
-            print(ui.fail(
-                f"Gate {gate_id} não declara reject_next válido para correção focal."
-            ))
+            print(
+                ui.fail(
+                    f"Gate {gate_id} não declara reject_next válido para correção focal."
+                )
+            )
             return False
 
         completed = set(state.completed_nodes)
@@ -8861,10 +9229,12 @@ próprias sob o namespace permitido acima. Encerre DONE.
             }
             state.gate_log[gate_id] = "REJECTED"
             self.state_mgr.save()
-            print(ui.info(
-                "Gate sem review predecessor; seguindo a rota declarada "
-                f"{gate_id} → {fix_id} → {gate_id}."
-            ))
+            print(
+                ui.info(
+                    "Gate sem review predecessor; seguindo a rota declarada "
+                    f"{gate_id} → {fix_id} → {gate_id}."
+                )
+            )
             return self.apply_fix(reason, audit_origin=False)
 
         self._finish_human_wait(gate_id, "rejected")
@@ -8878,9 +9248,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
         state.blocked_reason = None
         state.pending_fix = {
             "goto": fix_id,
-            "feedback": (
-                f"REJEITADO PELO STAKEHOLDER no gate {gate_id}:\n{reason}"
-            ),
+            "feedback": (f"REJEITADO PELO STAKEHOLDER no gate {gate_id}:\n{reason}"),
             "origin": review_id,
             "return_gate": gate_id,
         }
@@ -8965,7 +9333,9 @@ próprias sob o namespace permitido acima. Encerre DONE.
             for nid in (retry_node.id, node_id):
                 if nid in state.completed_nodes:
                     state.completed_nodes.remove(nid)
-                    state.metrics["steps_completed"] = max(0, state.metrics.get("steps_completed", 1) - 1)
+                    state.metrics["steps_completed"] = max(
+                        0, state.metrics.get("steps_completed", 1) - 1
+                    )
 
             # Desbloquear estado para retry — posicionar no node LLM
             state.current_node = retry_node.id
@@ -9031,7 +9401,9 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 if validation.passed:
                     # Marcar retry_node como concluído e avançar ao gate
                     state.completed_nodes.append(retry_node.id)
-                    state.metrics["steps_completed"] = state.metrics.get("steps_completed", 0) + 1
+                    state.metrics["steps_completed"] = (
+                        state.metrics.get("steps_completed", 0) + 1
+                    )
                     state.current_node = node_id
                     self.state_mgr.save()
 
@@ -9041,8 +9413,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                     summary_lines = [
                         line.strip()
                         for line in (result.output or "").splitlines()
-                        if line.strip()
-                        and not line.strip().startswith(("[", "⟳", "#"))
+                        if line.strip() and not line.strip().startswith(("[", "⟳", "#"))
                     ][-5:]
                     if summary_lines:
                         for sl in summary_lines:
@@ -9147,9 +9518,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
             normalized = started_at
             if normalized.tzinfo is None:
                 normalized = normalized.replace(tzinfo=timezone.utc)
-            return self._format_elapsed(
-                max(0.0, now - normalized.timestamp())
-            )
+            return self._format_elapsed(max(0.0, now - normalized.timestamp()))
 
         cache = self.state_mgr.path.parent / ".status_action_seen.json"
         try:
@@ -9222,9 +9591,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                     for line in f:
                         m = self._LOG_TS_RE.match(line)
                         if m:
-                            started = datetime.strptime(
-                                m.group(1), "%Y-%m-%d %H:%M:%S"
-                            )
+                            started = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
                             break
             except OSError:
                 started = None
@@ -9232,17 +9599,13 @@ próprias sob o namespace permitido acima. Encerre DONE.
         mtimes: list[float] = []
         llm_dir = self._llm_log_dir()
         if llm_dir.is_dir():
-            mtimes.extend(
-                p.stat().st_mtime for p in llm_dir.iterdir() if p.is_file()
-            )
+            mtimes.extend(p.stat().st_mtime for p in llm_dir.iterdir() if p.is_file())
         for extra in (self.state_mgr.path, log_path):
             if extra.is_file():
                 mtimes.append(extra.stat().st_mtime)
 
         runtime_label = (
-            self._format_elapsed((now - started).total_seconds())
-            if started
-            else None
+            self._format_elapsed((now - started).total_seconds()) if started else None
         )
         activity_label = None
         if mtimes:
@@ -9343,15 +9706,17 @@ próprias sob o namespace permitido acima. Encerre DONE.
         runtime: dict[str, Any] = {}
         if runtime_path.is_file():
             try:
-                loaded_runtime = yaml.safe_load(
-                    runtime_path.read_text(encoding="utf-8")
-                ) or {}
+                loaded_runtime = (
+                    yaml.safe_load(runtime_path.read_text(encoding="utf-8")) or {}
+                )
             except (OSError, UnicodeError, yaml.YAMLError):
                 loaded_runtime = {}
             if isinstance(loaded_runtime, dict):
                 runtime = loaded_runtime
 
-        if not runtime and not any(node_id in selected_nodes for node_id in batch_nodes):
+        if not runtime and not any(
+            node_id in selected_nodes for node_id in batch_nodes
+        ):
             return None
 
         plan_lanes: dict[str, dict[str, str]] = {}
@@ -9931,13 +10296,17 @@ próprias sob o namespace permitido acima. Encerre DONE.
             cached_input = usage_totals.get("cached_input_tokens", 0)
             cache_read = usage_totals.get("cache_read_input_tokens", 0)
             cached_total = cached_input + cache_read
-            print(ui.info(
-                f"Tokens no ciclo: {tokens_all:,} brutos · "
-                f"{tokens_without_cache:,} sem cache "
-                f"(output {tokens_output:,} · cache {cached_total:,})"
-            ))
+            print(
+                ui.info(
+                    f"Tokens no ciclo: {tokens_all:,} brutos · "
+                    f"{tokens_without_cache:,} sem cache "
+                    f"(output {tokens_output:,} · cache {cached_total:,})"
+                )
+            )
         # Mostrar URL se node atual é human_gate
-        current_node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
+        current_node_obj = (
+            self.graph.nodes.get(state.current_node) if state.current_node else None
+        )
         if current_node_obj and current_node_obj.type == "human_gate":
             serve_url_file = Path(self._work_dir) / ".serve_url"
             if serve_url_file.exists():
@@ -9957,9 +10326,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
             print(ui.dim(f"LLM log ativo: {state.active_llm_log}"))
             if progress_snapshot is None:
                 active_path = self._resolve_llm_log_path(state.active_llm_log)
-                last_activity = _last_log_activity(
-                    active_path or state.active_llm_log
-                )
+                last_activity = _last_log_activity(active_path or state.active_llm_log)
                 if last_activity:
                     print(ui.dim(f"  Última atividade: {last_activity}"))
         elif state.last_llm_log:
@@ -9975,8 +10342,16 @@ próprias sob o namespace permitido acima. Encerre DONE.
             pf = state.pending_fix
             goto = pf.get("goto", "?")
             feedback = pf.get("feedback", "")
-            node_obj = self.graph.nodes.get(state.current_node) if state.current_node else None
-            gate_msg = (node_obj.on_fail or {}).get("human_gate", "Falha — correção necessária.") if node_obj else "Falha — correção necessária."
+            node_obj = (
+                self.graph.nodes.get(state.current_node) if state.current_node else None
+            )
+            gate_msg = (
+                (node_obj.on_fail or {}).get(
+                    "human_gate", "Falha — correção necessária."
+                )
+                if node_obj
+                else "Falha — correção necessária."
+            )
             print(ui.fix_gate(gate_msg, feedback, goto))
         if state.pending_approval:
             pending_node = self.graph.nodes.get(state.pending_approval)
@@ -9986,6 +10361,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 print(ui.warn(f"AGUARDANDO APROVAÇÃO: {state.pending_approval}"))
 
         if full:
+
             def _graph_node_line(node: Node, status: str) -> str:
                 gate_result = str(state.gate_log.get(node.id, "") or "")
                 gate_status = gate_result.upper()
@@ -10005,7 +10381,14 @@ próprias sob o namespace permitido acima. Encerre DONE.
                     current
                     and (
                         current_status
-                        in {"block", "blocked", "error", "fail", "failed", "pending_fix"}
+                        in {
+                            "block",
+                            "blocked",
+                            "error",
+                            "fail",
+                            "failed",
+                            "pending_fix",
+                        }
                         or bool(state.blocked_reason)
                     )
                 ):
@@ -10059,7 +10442,9 @@ próprias sob o namespace permitido acima. Encerre DONE.
             if state.artifacts:
                 print("\n  Artefatos:")
                 for name, path in state.artifacts.items():
-                    exists = "✓" if path and Path(self.project_root, path).exists() else "✗"
+                    exists = (
+                        "✓" if path and Path(self.project_root, path).exists() else "✗"
+                    )
                     print(f"    {exists} {name}: {path}")
 
         # Rodapé propositalmente final: no modo --watch, o redesenho substitui
@@ -10087,7 +10472,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 f"  {'Node / operação':<48} {'Tipo':<10} {'Tent.':>6} "
                 f"{'Tempo':>9} {'Out tok':>10}"
             )
-            print(f"  {'-'*48} {'-'*10} {'-'*6} {'-'*9} {'-'*10}")
+            print(f"  {'-' * 48} {'-' * 10} {'-' * 6} {'-' * 9} {'-' * 10}")
             visible = {"llm", "validator", "human", "queue", "close"}
             for span in trace_report["spans"]:
                 category = span.get("category")
@@ -10102,7 +10487,9 @@ próprias sob o namespace permitido acima. Encerre DONE.
                 ordinal = span.get("ordinal") or "—"
                 metrics = span.get("metrics") or {}
                 output_tokens = metrics.get("output_tokens")
-                token_text = f"{output_tokens:,}" if isinstance(output_tokens, int) else "—"
+                token_text = (
+                    f"{output_tokens:,}" if isinstance(output_tokens, int) else "—"
+                )
                 print(
                     f"  {node_name:<48.48} {str(category):<10} {str(ordinal):>6} "
                     f"{elapsed:>9} {token_text:>10}"
@@ -10153,7 +10540,11 @@ próprias sob o namespace permitido acima. Encerre DONE.
             return
 
         files = sorted(
-            [p for p in logs_dir.iterdir() if p.is_file() and p.suffix in {".jsonl", ".log"}],
+            [
+                p
+                for p in logs_dir.iterdir()
+                if p.is_file() and p.suffix in {".jsonl", ".log"}
+            ],
             key=lambda f: f.stat().st_mtime,
         )
         if not files:
@@ -10192,8 +10583,12 @@ próprias sob o namespace permitido acima. Encerre DONE.
                     seen_message_ids.add(message_id)
                 usage = message.get("usage") or d.get("usage") or {}
                 if isinstance(usage, dict):
-                    input_tok += usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
-                    output_tok += usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+                    input_tok += usage.get("input_tokens", 0) or usage.get(
+                        "prompt_tokens", 0
+                    )
+                    output_tok += usage.get("output_tokens", 0) or usage.get(
+                        "completion_tokens", 0
+                    )
 
             rows.append((node_id, kind, dur, turns, input_tok, output_tok))
 
@@ -10206,28 +10601,34 @@ próprias sob o namespace permitido acima. Encerre DONE.
         print()
 
         col = 44
-        print(f"  {'Node':<{col}} {'Tempo':>7}  {'Turns':>5}  {'In tok':>9}  {'Out tok':>8}")
-        print(f"  {'-'*col} {'-'*7}  {'-'*5}  {'-'*9}  {'-'*8}")
+        print(
+            f"  {'Node':<{col}} {'Tempo':>7}  {'Turns':>5}  {'In tok':>9}  {'Out tok':>8}"
+        )
+        print(f"  {'-' * col} {'-' * 7}  {'-' * 5}  {'-' * 9}  {'-' * 8}")
 
         total_dur = total_in = total_out = total_turns = 0
         for node_id, kind, dur, turns, in_tok, out_tok in rows:
             m, s = dur // 60, dur % 60
             tag = f" [{kind}]" if kind != "run" else ""
             label = f"{node_id}{tag}"
-            print(f"  {label:<{col}} {m:>3}m{s:02d}s  {turns:>5}  {in_tok:>9,}  {out_tok:>8,}")
+            print(
+                f"  {label:<{col}} {m:>3}m{s:02d}s  {turns:>5}  {in_tok:>9,}  {out_tok:>8,}"
+            )
             total_dur += dur
             total_in += in_tok
             total_out += out_tok
             total_turns += turns
 
-        print(f"  {'-'*col} {'-'*7}  {'-'*5}  {'-'*9}  {'-'*8}")
+        print(f"  {'-' * col} {'-' * 7}  {'-' * 5}  {'-' * 9}  {'-' * 8}")
         td_m, td_s = total_dur // 60, total_dur % 60
-        print(f"  {'TOTAL':<{col}} {td_m:>3}m{td_s:02d}s  {total_turns:>5}  {total_in:>9,}  {total_out:>8,}")
+        print(
+            f"  {'TOTAL':<{col}} {td_m:>3}m{td_s:02d}s  {total_turns:>5}  {total_in:>9,}  {total_out:>8,}"
+        )
         print()
         steps_done = state.metrics.get("steps_completed", 0)
         steps_total = state.metrics.get("steps_total", 0)
         print(f"  Progresso : {steps_done}/{steps_total} nodes")
-        print(f"  Tempo LLM observado: {td_m}m{td_s:02d}s  ({total_dur/3600:.1f}h)")
+        print(f"  Tempo LLM observado: {td_m}m{td_s:02d}s  ({total_dur / 3600:.1f}h)")
         usage_summary = summarize_llm_usage(
             logs_dir,
             default_engine=state.llm_engine,

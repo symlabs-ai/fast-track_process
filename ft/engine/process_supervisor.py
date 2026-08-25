@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import ctypes
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 
 def _enable_subreaper() -> None:

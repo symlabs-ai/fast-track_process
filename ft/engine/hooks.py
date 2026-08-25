@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+
 def _selected_process_dir(
     project_root: str | Path,
     process_path: str | Path | None = None,
@@ -124,7 +125,9 @@ def run_hooks(
                 print(f"  HOOK {event} OK: {script}")
             else:
                 detail = proc.stderr.strip()[:200] or proc.stdout.strip()[:200]
-                results.append((script, False, f"exit code {proc.returncode}: {detail}"))
+                results.append(
+                    (script, False, f"exit code {proc.returncode}: {detail}")
+                )
                 print(f"  HOOK {event} FAIL: {script} — exit code {proc.returncode}")
         except subprocess.TimeoutExpired:
             results.append((script, False, "timeout (300s)"))

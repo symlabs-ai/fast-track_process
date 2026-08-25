@@ -321,8 +321,7 @@ class ParallelRunner:
                 preserved = ""
                 if worktree_path:
                     preserved = (
-                        f" Worktree preservado em {worktree_path}"
-                        f" (branch {branch})."
+                        f" Worktree preservado em {worktree_path} (branch {branch})."
                     )
                 wt_result = WorktreeResult(
                     node_id=node_id,

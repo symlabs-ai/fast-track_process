@@ -133,8 +133,7 @@ class ProcessGraph:
         for node in self.nodes.values():
             if node.codex_auth not in {None, "chatgpt"}:
                 raise ValueError(
-                    f"Node '{node.id}' possui codex_auth invalido: "
-                    f"{node.codex_auth!r}"
+                    f"Node '{node.id}' possui codex_auth invalido: {node.codex_auth!r}"
                 )
             if node.codex_auth is not None and not (
                 node.executor == "llm_codex" or node.llm_engine == "codex"
@@ -157,24 +156,18 @@ class ProcessGraph:
                     f"Node '{node.id}' possui validation_mode invalido: "
                     f"{node.validation_mode!r}"
                 )
-            if (
-                node.llm_episode_budget_seconds is not None
-                and (
-                    isinstance(node.llm_episode_budget_seconds, bool)
-                    or not isinstance(node.llm_episode_budget_seconds, int)
-                    or node.llm_episode_budget_seconds <= 0
-                )
+            if node.llm_episode_budget_seconds is not None and (
+                isinstance(node.llm_episode_budget_seconds, bool)
+                or not isinstance(node.llm_episode_budget_seconds, int)
+                or node.llm_episode_budget_seconds <= 0
             ):
                 raise ValueError(
                     f"Node '{node.id}' possui llm_episode_budget_seconds invalido"
                 )
-            if (
-                node.llm_episode_max_calls is not None
-                and (
-                    isinstance(node.llm_episode_max_calls, bool)
-                    or not isinstance(node.llm_episode_max_calls, int)
-                    or node.llm_episode_max_calls <= 0
-                )
+            if node.llm_episode_max_calls is not None and (
+                isinstance(node.llm_episode_max_calls, bool)
+                or not isinstance(node.llm_episode_max_calls, int)
+                or node.llm_episode_max_calls <= 0
             ):
                 raise ValueError(
                     f"Node '{node.id}' possui llm_episode_max_calls invalido"
@@ -183,15 +176,11 @@ class ProcessGraph:
                 node.llm_episode_budget_seconds is not None
                 or node.llm_episode_max_calls is not None
             ) and not node.llm_episode:
-                raise ValueError(
-                    f"Node '{node.id}' define orçamento sem llm_episode"
-                )
+                raise ValueError(f"Node '{node.id}' define orçamento sem llm_episode")
             if node.episode_restart is not None and not isinstance(
                 node.episode_restart, dict
             ):
-                raise ValueError(
-                    f"Node '{node.id}' possui episode_restart invalido"
-                )
+                raise ValueError(f"Node '{node.id}' possui episode_restart invalido")
             if node.episode_restart:
                 if node.type != "decision":
                     raise ValueError(
@@ -218,7 +207,9 @@ class ProcessGraph:
                     f"Node '{node.id}' usa review_route_path mas nao e review"
                 )
             if node.next and node.next not in ids:
-                raise ValueError(f"Node '{node.id}' aponta para '{node.next}' que nao existe")
+                raise ValueError(
+                    f"Node '{node.id}' aponta para '{node.next}' que nao existe"
+                )
             if node.branches:
                 for target in node.branches.values():
                     if target not in ids:
@@ -265,7 +256,9 @@ class ProcessGraph:
         # Verificar que existe exatamente 1 end node
         end_nodes = [n for n in self.nodes.values() if n.type == "end"]
         if len(end_nodes) != 1:
-            raise ValueError(f"Processo deve ter exatamente 1 node type=end, encontrados: {len(end_nodes)}")
+            raise ValueError(
+                f"Processo deve ter exatamente 1 node type=end, encontrados: {len(end_nodes)}"
+            )
 
     def get_node(self, node_id: str) -> Node:
         if node_id not in self.nodes:
@@ -279,7 +272,9 @@ class ProcessGraph:
     def all_node_ids(self) -> list[str]:
         return list(self.nodes.keys())
 
-    def resolve_next(self, current_id: str, state: dict[str, Any] | None = None) -> str | None:
+    def resolve_next(
+        self, current_id: str, state: dict[str, Any] | None = None
+    ) -> str | None:
         """Determina o proximo node. Puramente deterministico."""
         node = self.get_node(current_id)
 
@@ -342,7 +337,9 @@ class ProcessGraph:
                         return False
             if other_node.reject_next == node_id and other_id not in completed:
                 return False
-            if (other_node.on_fail or {}).get("goto") == node_id and other_id not in completed:
+            if (other_node.on_fail or {}).get(
+                "goto"
+            ) == node_id and other_id not in completed:
                 return False
         # Se ninguem aponta para ele, e o primeiro — ready
         return True
@@ -388,59 +385,61 @@ def load_graph(path: str | Path) -> ProcessGraph:
                 expert_definition = resolve_process_expert(path, expert_id)
                 expert_cache[expert_definition.id] = expert_definition
 
-        nodes.append(Node(
-            id=node_raw["id"],
-            type=node_raw.get("type", "build"),
-            title=node_raw.get("title", node_raw["id"]),
-            executor=executor,
-            outputs=node_raw.get("outputs", []),
-            write_scope=node_raw.get("write_scope", []),
-            requires_approval=node_raw.get("requires_approval", False),
-            validators=validators,
-            validation_mode=node_raw.get("validation_mode", "aggregate"),
-            next=node_raw.get("next"),
-            branches=node_raw.get("branches"),
-            condition=node_raw.get("condition"),
-            sprint=node_raw.get("sprint"),
-            prompt=node_raw.get("prompt"),
-            expert=expert_definition.id if expert_definition else None,
-            expert_definition=expert_definition,
-            parallel_group=node_raw.get("parallel_group"),
-            max_turns=node_raw.get("max_turns"),
-            env_setup=node_raw.get("env_setup", []),
-            env_teardown=node_raw.get("env_teardown", []),
-            llm_engine=node_raw.get("llm_engine"),
-            llm_model=node_raw.get("llm_model"),
-            codex_auth=node_raw.get("codex_auth"),
-            llm_effort=node_raw.get("llm_effort"),
-            approval_message_required=node_raw.get(
-                "approval_message_required", False
-            ),
-            decision_context=node_raw.get("decision_context"),
-            llm_timeout_seconds=node_raw.get("llm_timeout_seconds"),
-            llm_episode=node_raw.get("llm_episode"),
-            llm_episode_budget_seconds=node_raw.get("llm_episode_budget_seconds"),
-            llm_episode_max_calls=node_raw.get("llm_episode_max_calls"),
-            episode_restart=node_raw.get("episode_restart"),
-            review_route_path=node_raw.get("review_route_path"),
-            no_pre_seed=node_raw.get("no_pre_seed", False),
-            allow_pre_seed=node_raw.get("allow_pre_seed", False),
-            preserve_outputs_on_reentry=node_raw.get(
-                "preserve_outputs_on_reentry", False
-            ),
-            description=node_raw.get("description"),
-            reject_next=node_raw.get("reject_next"),
-            fix_review=node_raw.get("fix_review"),
-            bypass_prompt=node_raw.get("bypass_prompt"),
-            bypass_reject_when=node_raw.get("bypass_reject_when"),
-            on_fail=node_raw.get("on_fail"),
-            optional=node_raw.get("optional", False),
-            hyper_mode_docs=node_raw.get("hyper_mode_docs"),
-            hyper_mode_full_docs=node_raw.get("hyper_mode_full_docs"),
-            hyper_mode_preview_lines=node_raw.get("hyper_mode_preview_lines"),
-            hyper_mode_full_max_lines=node_raw.get("hyper_mode_full_max_lines"),
-            context_profile=node_raw.get("context_profile"),
-        ))
+        nodes.append(
+            Node(
+                id=node_raw["id"],
+                type=node_raw.get("type", "build"),
+                title=node_raw.get("title", node_raw["id"]),
+                executor=executor,
+                outputs=node_raw.get("outputs", []),
+                write_scope=node_raw.get("write_scope", []),
+                requires_approval=node_raw.get("requires_approval", False),
+                validators=validators,
+                validation_mode=node_raw.get("validation_mode", "aggregate"),
+                next=node_raw.get("next"),
+                branches=node_raw.get("branches"),
+                condition=node_raw.get("condition"),
+                sprint=node_raw.get("sprint"),
+                prompt=node_raw.get("prompt"),
+                expert=expert_definition.id if expert_definition else None,
+                expert_definition=expert_definition,
+                parallel_group=node_raw.get("parallel_group"),
+                max_turns=node_raw.get("max_turns"),
+                env_setup=node_raw.get("env_setup", []),
+                env_teardown=node_raw.get("env_teardown", []),
+                llm_engine=node_raw.get("llm_engine"),
+                llm_model=node_raw.get("llm_model"),
+                codex_auth=node_raw.get("codex_auth"),
+                llm_effort=node_raw.get("llm_effort"),
+                approval_message_required=node_raw.get(
+                    "approval_message_required", False
+                ),
+                decision_context=node_raw.get("decision_context"),
+                llm_timeout_seconds=node_raw.get("llm_timeout_seconds"),
+                llm_episode=node_raw.get("llm_episode"),
+                llm_episode_budget_seconds=node_raw.get("llm_episode_budget_seconds"),
+                llm_episode_max_calls=node_raw.get("llm_episode_max_calls"),
+                episode_restart=node_raw.get("episode_restart"),
+                review_route_path=node_raw.get("review_route_path"),
+                no_pre_seed=node_raw.get("no_pre_seed", False),
+                allow_pre_seed=node_raw.get("allow_pre_seed", False),
+                preserve_outputs_on_reentry=node_raw.get(
+                    "preserve_outputs_on_reentry", False
+                ),
+                description=node_raw.get("description"),
+                reject_next=node_raw.get("reject_next"),
+                fix_review=node_raw.get("fix_review"),
+                bypass_prompt=node_raw.get("bypass_prompt"),
+                bypass_reject_when=node_raw.get("bypass_reject_when"),
+                on_fail=node_raw.get("on_fail"),
+                optional=node_raw.get("optional", False),
+                hyper_mode_docs=node_raw.get("hyper_mode_docs"),
+                hyper_mode_full_docs=node_raw.get("hyper_mode_full_docs"),
+                hyper_mode_preview_lines=node_raw.get("hyper_mode_preview_lines"),
+                hyper_mode_full_max_lines=node_raw.get("hyper_mode_full_max_lines"),
+                context_profile=node_raw.get("context_profile"),
+            )
+        )
 
     meta = {k: v for k, v in raw.items() if k != "nodes"}
     return ProcessGraph(nodes, meta)

@@ -6,10 +6,8 @@ from ft.engine.graph import ProcessGraph, load_graph
 from ft.engine.process_validator import validate_process
 from ft.templates.catalog import TemplateCatalog
 
-
 ROOT = Path(__file__).resolve().parents[2]
 FAST_PROCESS = ROOT / "templates" / "mvp-builder-fast" / "process.yml"
-BASE_PROCESS = ROOT / "templates" / "mvp-builder" / "process.yml"
 
 
 def _new_product_path(graph: ProcessGraph) -> list[str]:
@@ -71,15 +69,11 @@ def test_fast_graph_and_session_policy_are_valid() -> None:
     assert _reachable(graph) == set(graph.nodes)
 
 
-def test_fast_path_reduces_llm_turns_and_preserves_human_gates() -> None:
-    baseline = load_graph(BASE_PROCESS)
+def test_fast_path_bounds_llm_turns_and_preserves_human_gates() -> None:
+    # O baseline mvp-builder foi removido do catálogo; o teto absoluto de
+    # turns preserva o contrato de economia que a comparação garantia.
     fast = load_graph(FAST_PROCESS)
-    baseline_path = _new_product_path(baseline)
     fast_path = _new_product_path(fast)
-    baseline_turns = sum(
-        baseline.get_node(node_id).executor.startswith("llm")
-        for node_id in baseline_path
-    )
     # Include the internal planning turn that precedes the graph.
     fast_turns = 1 + sum(
         fast.get_node(node_id).executor.startswith("llm") for node_id in fast_path
@@ -88,12 +82,8 @@ def test_fast_path_reduces_llm_turns_and_preserves_human_gates() -> None:
     # A auditoria operacional final acrescenta um único review independente
     # para impedir falso aceite baseado em demo seed/mocks.
     assert fast_turns <= 26
-    # O helper agora percorre corretamente `_default` desde o route_mode; a
-    # comparação anterior parava no primeiro decision e não media o caminho.
-    assert fast_turns <= baseline_turns * 0.82
     # O gate de plano é determinístico; mockups têm aceite humano próprio.
     assert sum(node.type == "human_gate" for node in fast.nodes.values()) == 8
-    assert sum(node.type == "human_gate" for node in baseline.nodes.values()) == 7
 
 
 def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
@@ -122,8 +112,17 @@ def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
         "_default": "ft.start.ui_criteria.route",
     }
 
-    mockups = graph.get_node("ft.plan.06.mockups")
-    assert graph.get_node("ft.plan.05.test_data").next == mockups.id
+    ui_route = graph.get_node("ft.start.ui_criteria.route")
+    assert ui_route.branches == {
+        "true": "ft.start.01.product_mockups",
+        "false": "ft.hyper.01.ui_criteria",
+    }
+    assert graph.get_node("ft.hyper.01b.ui_criteria_gate").next == (
+        "ft.start.01.product_mockups"
+    )
+
+    mockups = graph.get_node("ft.start.01.product_mockups")
+    assert graph.get_node("ft.plan.05.test_data").next == "ft.plan.gate"
     assert mockups.executor == "llm_codex"
     assert mockups.expert == "prototype_png_designer"
     assert mockups.expert_definition is not None
@@ -144,8 +143,7 @@ def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
     assert "docs/mockups/image-generation-receipt.yml" in mockups.outputs
     assert "docs/mockups/images/" in mockups.outputs
     assert not any(
-        output.endswith((".html", ".css", ".js", ".svg"))
-        for output in mockups.outputs
+        output.endswith((".html", ".css", ".js", ".svg")) for output in mockups.outputs
     )
     assert any("image_generation" in command for command in mockups.env_setup)
     assert "built-in \u0060image_gen\u0060" in mockups.prompt
@@ -165,9 +163,14 @@ def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
     )
     assert "Crie HTML/CSS/JS code-native" not in mockups.prompt
     assert "renderize PNGs reais com Chromium/Playwright" not in mockups.prompt
-    assert mockups.next == "ft.plan.06a.mockup_prd_review"
+    assert (
+        "use como únicas fontes de produto docs/PRD.md,\n"
+        "docs/ui_criteria.md e docs/ui-brief.md" in mockups.prompt
+    )
+    assert "Não leia, espere, exija ou invente docs/TECH_STACK.md" in mockups.prompt
+    assert mockups.next == "ft.start.01a.product_mockup_review"
 
-    review = graph.get_node("ft.plan.06a.mockup_prd_review")
+    review = graph.get_node("ft.start.01a.product_mockup_review")
     assert review.type == "review"
     assert review.llm_engine == "codex"
     assert review.llm_model == "gpt-5.6-sol"
@@ -176,19 +179,29 @@ def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
         "docs/mockups/prd-coherence-review.md",
         "docs/mockups/prd-coherence-review.yml",
     ]
-    assert "abra o PNG declarado com `view_image` em resolução original" in review.prompt
+    assert (
+        "abra o PNG declarado com `view_image` em resolução original" in review.prompt
+    )
     assert "Nunca infira TNN a partir de SNN" in review.prompt
     assert "Um relatório REJECTED também segue ao human gate" in review.prompt
+    assert "docs/navigation-contract.yml" not in review.prompt
+    assert "docs/test_data.md" not in review.prompt
     assert "validate_mockup_prd_review.py" in str(review.validators)
-    assert review.next == "ft.plan.06b.mockup_gate"
+    assert review.next == "ft.start.01b.product_mockup_gate"
 
-    mockup_gate = graph.get_node("ft.plan.06b.mockup_gate")
+    mockup_gate = graph.get_node("ft.start.01b.product_mockup_gate")
     assert mockup_gate.type == "human_gate"
     assert mockup_gate.approval_message_required is True
-    assert "docs/mockups/prd-coherence-review.md" in mockup_gate.decision_context["review_paths"]
-    assert "docs/mockups/prd-coherence-review.yml" in mockup_gate.decision_context["review_paths"]
+    assert (
+        "docs/mockups/prd-coherence-review.md"
+        in mockup_gate.decision_context["review_paths"]
+    )
+    assert (
+        "docs/mockups/prd-coherence-review.yml"
+        in mockup_gate.decision_context["review_paths"]
+    )
     assert mockup_gate.reject_next == mockups.id
-    assert mockup_gate.next == "ft.plan.gate"
+    assert mockup_gate.next == "ft.start.backlog.route"
     assert "docs/mockups/" in graph.meta["artifact_policy"]["canonical"]
     assert "docs/mockups/" in graph.get_node("ft.frontend.01.build").prompt
 
@@ -250,9 +263,7 @@ def test_headless_route_has_no_visual_or_http_delivery_dependency() -> None:
     assert "path relativo existente" in acceptance.prompt
     assert "versão do pacote continua igual ao baseline" in acceptance.prompt
     assert acceptance.next == "ft.headless.06.stakeholder"
-    assert graph.get_node("ft.headless.06.stakeholder").next == (
-        "ft.handoff.01.retro"
-    )
+    assert graph.get_node("ft.headless.06.stakeholder").next == ("ft.handoff.01.retro")
 
 
 def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
@@ -343,14 +354,20 @@ def test_macro_nodes_keep_deterministic_checkpoints() -> None:
     assert "PENDING/NOT_RUN" in integrated_review.prompt
     assert "yaml.safe_load" in integrated_review.prompt
     assert "exclusivamente no gate alcançado com 0 FAIL" in integrated_review.prompt
-    assert not any("command_succeeds" in validator for validator in integrated_review.validators)
+    assert not any(
+        "command_succeeds" in validator for validator in integrated_review.validators
+    )
     assert "review_outcome_valid" in str(integrated_review.validators)
     integrated_fix = graph.get_node("ft.frontend.05.integrated_fix")
     assert integrated_fix.fix_review == integrated_review.id
     assert integrated_fix.next == integrated_review.id
     assert "0 FAIL" in integrated_fix.prompt
-    assert not any("command_succeeds" in validator for validator in integrated_fix.validators)
-    assert graph.get_node("gate.frontend_integrated").next == "ft.delivery.01.entrypoint"
+    assert not any(
+        "command_succeeds" in validator for validator in integrated_fix.validators
+    )
+    assert (
+        graph.get_node("gate.frontend_integrated").next == "ft.delivery.01.entrypoint"
+    )
 
     assert graph.get_node("ft.handoff.02.backlog_update").executor == "python"
     assert graph.get_node("ft.handoff.02b.features_update").executor == "python"
@@ -475,7 +492,9 @@ def test_navigation_reachability_is_gated_before_user_delivery() -> None:
     )
 
     planning = graph.get_node("ft.plan.04.ui_criteria")
-    assert "docs/navigation-contract.yml" in planning.outputs
+    assert planning.outputs == ["docs/navigation-contract.yml"]
+    assert planning.write_scope == ["docs/navigation-contract.yml"]
+    assert "Não os altere" in planning.prompt
     assert "navigation_contract_valid" in str(planning.validators)
 
     e2e = graph.get_node("ft.e2e.01.browser")

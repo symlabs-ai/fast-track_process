@@ -205,9 +205,7 @@ def test_run_hooks_rejects_relative_and_absolute_escape(tmp_path):
     results = run_hooks(
         "on_init",
         tmp_path,
-        environment={
-            "hooks": {"on_init": [relative_escape, str(outside.resolve())]}
-        },
+        environment={"hooks": {"on_init": [relative_escape, str(outside.resolve())]}},
         process_path=".ft/process/feature/process.yml",
     )
 

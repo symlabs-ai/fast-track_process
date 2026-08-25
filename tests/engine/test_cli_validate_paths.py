@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
 from ft.cli import main as cli_main
-
 
 PROCESS = """\
 id: sandbox

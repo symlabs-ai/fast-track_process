@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
 import json
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -84,9 +84,7 @@ class LiveLLMSettings:
     @property
     def has_command_override(self) -> bool:
         return bool(
-            self.engine_override
-            or self.model_override
-            or self.effort_override_set
+            self.engine_override or self.model_override or self.effort_override_set
         )
 
     def read_live_defaults(self) -> dict[str, Any]:
@@ -96,7 +94,9 @@ class LiveLLMSettings:
         try:
             manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError) as exc:
-            raise ValueError(f"manifest de defaults LLM inválido: {manifest_path}") from exc
+            raise ValueError(
+                f"manifest de defaults LLM inválido: {manifest_path}"
+            ) from exc
         if not isinstance(manifest, dict):
             raise ValueError(
                 f"manifest de defaults LLM inválido: raiz deve ser mapping em {manifest_path}"
@@ -130,7 +130,9 @@ class LiveLLMSettings:
         return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def recorded_digest(self, state: Any | None) -> str | None:
-        recorded = getattr(state, "llm_defaults_digest", None) if state is not None else None
+        recorded = (
+            getattr(state, "llm_defaults_digest", None) if state is not None else None
+        )
         if recorded:
             return str(recorded)
         if state is None:
@@ -160,7 +162,11 @@ class LiveLLMSettings:
         manifest_defaults: dict[str, Any] | None = None,
         manifest_is_active: bool | None = None,
     ) -> LLMSelection:
-        defaults = self.read_live_defaults() if manifest_defaults is None else manifest_defaults
+        defaults = (
+            self.read_live_defaults()
+            if manifest_defaults is None
+            else manifest_defaults
+        )
         current_digest = self.defaults_digest(defaults)
         if manifest_is_active is None:
             manifest_is_active = (

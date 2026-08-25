@@ -144,9 +144,7 @@ overall_verdict: supported
 
 
 def test_reentry_persists_stakeholder_answers_and_forbids_same_question_loop() -> None:
-    process = yaml.safe_load(
-        (TEMPLATE_DIR / "process.yml").read_text(encoding="utf-8")
-    )
+    process = yaml.safe_load((TEMPLATE_DIR / "process.yml").read_text(encoding="utf-8"))
     nodes = {node["id"]: node for node in process["nodes"]}
     market = nodes["innovation.research_market"]
     validation = nodes["innovation.validation"]
@@ -164,9 +162,7 @@ def test_reentry_persists_stakeholder_answers_and_forbids_same_question_loop() -
 
 
 def test_go_handoff_declares_delivery_boundary_and_durable_paths() -> None:
-    process = yaml.safe_load(
-        (TEMPLATE_DIR / "process.yml").read_text(encoding="utf-8")
-    )
+    process = yaml.safe_load((TEMPLATE_DIR / "process.yml").read_text(encoding="utf-8"))
     nodes = {node["id"]: node for node in process["nodes"]}
     go_nogo = nodes["innovation.go_nogo"]
     prd = nodes["innovation.prd"]

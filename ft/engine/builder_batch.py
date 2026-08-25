@@ -8,19 +8,18 @@ used by the runner.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 import hashlib
 import os
-from pathlib import Path, PurePosixPath
 import re
 import stat
 import subprocess
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
-
 
 __all__ = [
     "BatchLane",
@@ -266,9 +265,7 @@ def _validate_area(
     area = _normalize_path(value, field)
     for protected_path in protected:
         if _paths_overlap(area, protected_path):
-            raise _fail(
-                f"{field} invade path protegido {protected_path!r}: {area!r}"
-            )
+            raise _fail(f"{field} invade path protegido {protected_path!r}: {area!r}")
     if allowed_roots and not any(
         area == root or area.startswith(f"{root}/") for root in allowed_roots
     ):
@@ -289,10 +286,7 @@ def _text_items(
         allow_empty=allow_empty,
         maximum=maximum,
     )
-    normalized = [
-        _text(item, f"{field}[{index}]")
-        for index, item in enumerate(raw)
-    ]
+    normalized = [_text(item, f"{field}[{index}]") for index, item in enumerate(raw)]
     return _unique(normalized, field)
 
 
@@ -346,9 +340,7 @@ def _requirement_items(
             requirement_id = _identifier(item["id"], f"{item_field}.id")
             requirement_text = _text(item["text"], f"{item_field}.text")
         else:
-            raise _fail(
-                f"{item_field} deve ser um ID ou mapping com id/text"
-            )
+            raise _fail(f"{item_field} deve ser um ID ou mapping com id/text")
         if representation is not None and current_representation != representation:
             raise _fail(f"{field} mistura representações de requirements")
         representation = current_representation
@@ -413,13 +405,9 @@ def validate_batch_plan(
     ).lower()
     if not re.fullmatch(r"[0-9a-f]{64}", request_sha256):
         raise _fail("request_sha256 deve ser um SHA-256 hexadecimal")
-    expected_request_sha256 = hashlib.sha256(
-        request_text.encode("utf-8")
-    ).hexdigest()
+    expected_request_sha256 = hashlib.sha256(request_text.encode("utf-8")).hexdigest()
     if request_sha256 != expected_request_sha256:
-        raise _fail(
-            "request_sha256 não corresponde ao input natural autorizado"
-        )
+        raise _fail("request_sha256 não corresponde ao input natural autorizado")
 
     max_requirements = _policy_int(
         normalized_policy,
@@ -460,10 +448,7 @@ def validate_batch_plan(
             evidence_root,
             "policy.evidence_root",
         )
-        if any(
-            _paths_overlap(normalized_evidence_root, item)
-            for item in protected
-        ):
+        if any(_paths_overlap(normalized_evidence_root, item) for item in protected):
             raise _fail("policy.evidence_root invade path protegido")
 
     foundation_raw = _mapping(root["foundation"], "foundation")
@@ -562,7 +547,9 @@ def validate_batch_plan(
             raise _fail(f"lane {lane.id!r} depende de si própria")
         unknown = sorted(set(lane.depends_on) - known_lanes)
         if unknown:
-            raise _fail(f"lane {lane.id!r} possui dependências desconhecidas: {unknown}")
+            raise _fail(
+                f"lane {lane.id!r} possui dependências desconhecidas: {unknown}"
+            )
 
     owners: dict[str, str] = {}
     declared_requirements = set(requirements)
@@ -692,8 +679,7 @@ def compute_waves(
         unknown = set(lane.depends_on) - known
         if unknown:
             raise _fail(
-                f"lane {lane.id!r} possui dependências desconhecidas: "
-                f"{sorted(unknown)}"
+                f"lane {lane.id!r} possui dependências desconhecidas: {sorted(unknown)}"
             )
         if lane.id in lane.depends_on:
             raise _fail(f"lane {lane.id!r} depende de si própria")
@@ -842,9 +828,7 @@ def changed_paths(repo: str | Path, base_ref: str) -> list[str]:
             f"falha ao listar arquivos não rastreados: {_git_error(untracked)}"
         )
     paths.update(
-        _decode_git_path(item)
-        for item in untracked.stdout.split(b"\0")
-        if item
+        _decode_git_path(item) for item in untracked.stdout.split(b"\0") if item
     )
     return sorted(paths)
 

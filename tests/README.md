@@ -71,4 +71,3 @@ pytest tests/ -v
 
 - Templates: `tests/e2e/template/`
 - Guia de testes: `docs/integrations/forgebase_guides/usuarios/guia-de-testes.md`
-- Fast Track V2 distribuído: `templates/fast-track-v2/FAST_TRACK_PROCESS.yml`

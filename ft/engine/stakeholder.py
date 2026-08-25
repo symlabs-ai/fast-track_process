@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_HYPER_MODE_FULL_DOCS = (
     "plano_de_voo.md",
     "hipotese.md",
@@ -41,6 +40,7 @@ def _normalize_doc_reference(value: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Hyper-mode
 # ---------------------------------------------------------------------------
+
 
 def scan_existing_docs(
     project_root: str,
@@ -102,7 +102,10 @@ def should_skip_node(node_id: str, existing_docs: dict[str, str]) -> bool:
     for key, filenames in doc_map.items():
         if key in node_id.lower():
             for fname in filenames:
-                if fname in existing_docs and len(existing_docs[fname].splitlines()) >= 10:
+                if (
+                    fname in existing_docs
+                    and len(existing_docs[fname].splitlines()) >= 10
+                ):
                     return True
     return False
 
@@ -126,9 +129,7 @@ def hyper_mode_prompt(
     # os demais entram como preview — o worker le o resto do disco se precisar.
     effective_full_docs = {
         normalized
-        for value in (
-            DEFAULT_HYPER_MODE_FULL_DOCS if full_docs is None else full_docs
-        )
+        for value in (DEFAULT_HYPER_MODE_FULL_DOCS if full_docs is None else full_docs)
         if (normalized := _normalize_doc_reference(value)) is not None
     }
     preview_limit = max(0, int(preview_lines))
@@ -145,17 +146,13 @@ def hyper_mode_prompt(
         if fname in effective_full_docs:
             body = "\n".join(lines[:full_limit])
             suffix = (
-                ""
-                if len(lines) <= full_limit
-                else f"\n... (truncado; {read_hint})"
+                "" if len(lines) <= full_limit else f"\n... (truncado; {read_hint})"
             )
             context_parts.append(f"\n### {fname} (INTEGRAL)\n{body}{suffix}")
         else:
             preview = "\n".join(lines[:preview_limit])
             suffix = (
-                ""
-                if len(lines) <= preview_limit
-                else f"\n... (preview; {read_hint})"
+                "" if len(lines) <= preview_limit else f"\n... (preview; {read_hint})"
             )
             context_parts.append(f"\n### {fname}\n{preview}{suffix}")
 
@@ -174,6 +171,7 @@ Foque em complementar e refinar, nao em reescrever do zero.
 # ---------------------------------------------------------------------------
 # KB Lessons
 # ---------------------------------------------------------------------------
+
 
 def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
     """
@@ -219,7 +217,9 @@ def scan_kb_lessons(ft_root: str, interface_type: str | None = None) -> str:
         section_lines: list[str] = []
 
         for line in lines:
-            if any(s.lower() in line.lower() for s in sections_to_extract) and line.startswith("##"):
+            if any(
+                s.lower() in line.lower() for s in sections_to_extract
+            ) and line.startswith("##"):
                 if section_lines:
                     extracted.extend(section_lines[:15])
                 in_section = True
@@ -267,6 +267,7 @@ Consulte as lições acima para evitar replicar erros de runs anteriores.
 # Approval context
 # ---------------------------------------------------------------------------
 
+
 def build_approval_context(
     node_id: str,
     node_title: str,
@@ -302,6 +303,7 @@ def build_approval_context(
 # Rejection with feedback
 # ---------------------------------------------------------------------------
 
+
 def build_rejection_prompt(
     original_prompt: str,
     rejection_reason: str,
@@ -320,17 +322,21 @@ def build_rejection_prompt(
 
     if artifact_content:
         preview = "\n".join(artifact_content.splitlines()[:20])
-        parts.extend([
-            "",
-            "ARTEFATO REJEITADO (primeiras linhas):",
-            preview,
-        ])
+        parts.extend(
+            [
+                "",
+                "ARTEFATO REJEITADO (primeiras linhas):",
+                preview,
+            ]
+        )
 
-    parts.extend([
-        "",
-        "Corrija especificamente o que foi apontado no motivo da rejeicao.",
-        "Nao modifique o que ja foi aprovado ou que nao foi mencionado.",
-    ])
+    parts.extend(
+        [
+            "",
+            "Corrija especificamente o que foi apontado no motivo da rejeicao.",
+            "Nao modifique o que ja foi aprovado ou que nao foi mencionado.",
+        ]
+    )
 
     return "\n".join(parts)
 
@@ -339,14 +345,17 @@ def build_rejection_prompt(
 # Stakeholder state helpers
 # ---------------------------------------------------------------------------
 
+
 def get_pending_items(state: Any) -> list[dict[str, str]]:
     """Retorna lista de itens pendentes de aprovacao."""
     items = []
     if state.pending_approval:
-        items.append({
-            "node_id": state.pending_approval,
-            "type": "approval",
-        })
+        items.append(
+            {
+                "node_id": state.pending_approval,
+                "type": "approval",
+            }
+        )
     return items
 
 

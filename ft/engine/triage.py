@@ -13,7 +13,6 @@ from typing import Any
 
 from ft.engine import ui
 
-
 TRIAGE_PROMPT = """Você é um analista de requisitos do Fast Track engine.
 
 O usuário forneceu uma DEMANDA BRUTA — texto livre que pode conter:
@@ -95,6 +94,7 @@ Comece com "id:" (a primeira linha do YAML)."""
 def summarize_process(yaml_content: str) -> str:
     """Gera resumo legível dos nodes do processo para o prompt de triage."""
     import yaml
+
     data = yaml.safe_load(yaml_content)
     nodes = data.get("nodes", [])
     lines = []
@@ -205,16 +205,22 @@ def present_triage(classification: dict[str, Any]) -> str:
 
     # Processo
     if process.get("detected"):
-        lines.append(f"\n  {ui.BOLD_YELLOW}Requisitos de processo detectados:{ui.RESET}")
+        lines.append(
+            f"\n  {ui.BOLD_YELLOW}Requisitos de processo detectados:{ui.RESET}"
+        )
         for req in process.get("requirements", []):
             lines.append(f"    {ui.YELLOW}!{ui.RESET} {req}")
         if process.get("conflicts"):
             lines.append(f"\n  {ui.BOLD_RED}Conflitos com o processo atual:{ui.RESET}")
             for conflict in process["conflicts"]:
                 lines.append(f"    {ui.RED}✗{ui.RESET} {conflict}")
-        lines.append(f"\n  {ui.BOLD_WHITE}O processo precisa ser adaptado antes de iniciar.{ui.RESET}")
+        lines.append(
+            f"\n  {ui.BOLD_WHITE}O processo precisa ser adaptado antes de iniciar.{ui.RESET}"
+        )
     else:
-        lines.append(f"\n  {ui.BOLD_GREEN}Processo:{ui.RESET} compatível (sem adaptações necessárias)")
+        lines.append(
+            f"\n  {ui.BOLD_GREEN}Processo:{ui.RESET} compatível (sem adaptações necessárias)"
+        )
 
     # Perguntas
     if questions:
@@ -314,8 +320,7 @@ def diff_process(original_yaml: str, adapted_yaml: str) -> dict[str, Any]:
             new_type = adapt_nodes[new_id].get("type", "")
             # Mesmo tipo e título similar → provável renomeação
             if old_type == new_type and (
-                old_title == new_title
-                or old_id.split(".")[-1] == new_id.split(".")[-1]
+                old_title == new_title or old_id.split(".")[-1] == new_id.split(".")[-1]
             ):
                 renames[old_id] = new_id
                 unmatched_removed.discard(old_id)
@@ -345,8 +350,12 @@ def diff_process(original_yaml: str, adapted_yaml: str) -> dict[str, Any]:
     if reordered:
         summary.append("Ordem dos nodes foi alterada")
 
-    orig_sprints = set(n.get("sprint", "") for n in original.get("nodes", []) if n.get("sprint"))
-    adapt_sprints = set(n.get("sprint", "") for n in adapted.get("nodes", []) if n.get("sprint"))
+    orig_sprints = set(
+        n.get("sprint", "") for n in original.get("nodes", []) if n.get("sprint")
+    )
+    adapt_sprints = set(
+        n.get("sprint", "") for n in adapted.get("nodes", []) if n.get("sprint")
+    )
     new_sprints = adapt_sprints - orig_sprints
     if new_sprints:
         summary.append(f"Sprints novos: {', '.join(sorted(new_sprints))}")
@@ -412,10 +421,16 @@ def present_adaptation_proposal(
         for nid in diff["removed"]:
             lines.append(f"    {ui.RED}-{ui.RESET} {nid}")
 
-    lines.append(f"\n  {ui.DIM}Processo: {original_node_count} → {adapted_node_count} nodes{ui.RESET}")
+    lines.append(
+        f"\n  {ui.DIM}Processo: {original_node_count} → {adapted_node_count} nodes{ui.RESET}"
+    )
     lines.append(f"\n  {ui.BOLD_WHITE}Aprovar adaptação?{ui.RESET}")
-    lines.append(f"    {ui.BOLD_CYAN}ft approve{ui.RESET} — aplicar adaptação e iniciar")
-    lines.append(f"    {ui.BOLD_CYAN}ft reject{ui.RESET}  — manter o template selecionado sem mudanças")
+    lines.append(
+        f"    {ui.BOLD_CYAN}ft approve{ui.RESET} — aplicar adaptação e iniciar"
+    )
+    lines.append(
+        f"    {ui.BOLD_CYAN}ft reject{ui.RESET}  — manter o template selecionado sem mudanças"
+    )
     lines.append("")
 
     return "\n".join(lines)
@@ -424,8 +439,9 @@ def present_adaptation_proposal(
 def validate_adapted_yaml(yaml_content: str) -> tuple[bool, str]:
     """Valida o YAML adaptado usando o validador do engine."""
     import tempfile
+
     from ft.engine.graph import load_graph
-    from ft.engine.process_validator import validate_process, format_report
+    from ft.engine.process_validator import format_report, validate_process
     from ft.engine.runner import VALIDATOR_REGISTRY
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:

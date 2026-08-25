@@ -6,14 +6,13 @@ the correction workflow once a runner has been selected.
 
 from __future__ import annotations
 
-from pathlib import Path
 import py_compile
 import re
+from pathlib import Path
 from typing import Any
 
 from ft.engine import ui
 from ft.engine.llm_logs import activate_external_llm_log, clear_external_llm_log
-
 
 DEFAULT_FIX_PATHS = (
     "project/",
@@ -207,9 +206,8 @@ def execute_fix(args: Any, runner: Any) -> None:
             selection=selection,
         )
     try:
-        if (
-            "_ft_session_context" in kwargs
-            and hasattr(runner, "_delegate_once_with_attached_session")
+        if "_ft_session_context" in kwargs and hasattr(
+            runner, "_delegate_once_with_attached_session"
         ):
             result = runner._delegate_once_with_attached_session(
                 delegate_to_llm,
@@ -232,7 +230,9 @@ def execute_fix(args: Any, runner: Any) -> None:
         try:
             validate_fix_capture(runner, capture_path)
         except Exception as exc:
-            print(ui.fail(f"Correção aplicada, mas artefato capturado é inválido: {exc}"))
+            print(
+                ui.fail(f"Correção aplicada, mas artefato capturado é inválido: {exc}")
+            )
             return
 
     print(ui.success("Correção aplicada"))
@@ -288,8 +288,7 @@ def execute_fix(args: Any, runner: Any) -> None:
         failed_state = runner.state_mgr.load()
         failed_state.node_status = "blocked"
         failed_state.blocked_reason = (
-            "Correção dirigida não passou nos validators do node: "
-            f"{feedback}"
+            f"Correção dirigida não passou nos validators do node: {feedback}"
         )
         runner.state_mgr.save()
         print(

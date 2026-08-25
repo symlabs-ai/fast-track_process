@@ -13,8 +13,15 @@ def test_sem_cor_string_volta_intacta():
     """Propriedade de segurança: em pipe/NO_COLOR as constantes ANSI são
     vazias, então o realce nunca injeta lixo — a saída é idêntica à entrada."""
     # No ambiente de teste stdout não é tty, então ui._COLOR é False.
-    for s in ["$ pytest -q", "✻ pensando", "→ resposta", "result: ok",
-              "Edit app.py", "event system", "linha solta"]:
+    for s in [
+        "$ pytest -q",
+        "✻ pensando",
+        "→ resposta",
+        "result: ok",
+        "Edit app.py",
+        "event system",
+        "linha solta",
+    ]:
         assert ui.paint_stream_line(s) == s
 
 
@@ -26,10 +33,19 @@ def test_string_vazia():
 def cores(monkeypatch):
     """Força constantes ANSI para sentinelas legíveis, simulando terminal."""
     marks = {
-        "RESET": "[/]", "DIM": "[dim]", "ITALIC": "[it]", "GREEN": "[grn]",
-        "BLUE": "[blu]", "WHITE": "[wht]", "RED": "[red]", "YELLOW": "[ylw]",
-        "BOLD_GREEN": "[BGRN]", "BOLD_WHITE": "[BWHT]",
-        "BOLD_YELLOW": "[BYLW]", "BOLD_CYAN": "[BCYN]", "BOLD": "[B]",
+        "RESET": "[/]",
+        "DIM": "[dim]",
+        "ITALIC": "[it]",
+        "GREEN": "[grn]",
+        "BLUE": "[blu]",
+        "WHITE": "[wht]",
+        "RED": "[red]",
+        "YELLOW": "[ylw]",
+        "BOLD_GREEN": "[BGRN]",
+        "BOLD_WHITE": "[BWHT]",
+        "BOLD_YELLOW": "[BYLW]",
+        "BOLD_CYAN": "[BCYN]",
+        "BOLD": "[B]",
         "CYAN": "[cyn]",
     }
     for name, val in marks.items():
@@ -59,20 +75,34 @@ def test_result_ciano(cores):
     assert out == "[BCYN]result: 96 testes verdes[/]"
 
 
-@pytest.mark.parametrize("linha", ["Read app.py", "Edit x.ts", "Write y.md",
-                                    "Grep foo", "Glob **/*.py", "NotebookEdit"])
+@pytest.mark.parametrize(
+    "linha",
+    [
+        "Read app.py",
+        "Edit x.ts",
+        "Write y.md",
+        "Grep foo",
+        "Glob **/*.py",
+        "NotebookEdit",
+    ],
+)
 def test_ferramentas_azul(cores, linha):
     out = ui.paint_stream_line(linha)
     assert out == f"[blu]{linha}[/]"
 
 
 def test_evento_generico_apagado(cores):
-    assert ui.paint_stream_line("event compact_boundary") == "[dim]event compact_boundary[/]"
+    assert (
+        ui.paint_stream_line("event compact_boundary")
+        == "[dim]event compact_boundary[/]"
+    )
     assert ui.paint_stream_line("[CustomTool]") == "[dim][CustomTool][/]"
 
 
 def test_linha_desconhecida_intacta(cores):
-    assert ui.paint_stream_line("NODE_SUMMARY: - fiz: impl") == "NODE_SUMMARY: - fiz: impl"
+    assert (
+        ui.paint_stream_line("NODE_SUMMARY: - fiz: impl") == "NODE_SUMMARY: - fiz: impl"
+    )
 
 
 @pytest.mark.parametrize(
@@ -102,6 +132,7 @@ def test_status_node_respeita_no_color_mesmo_com_constantes_ansi(
 
 # --- markdown leve na prosa (o prompt do nó) -------------------------------
 
+
 def test_md_sem_cor_texto_cru():
     # Sem cor (pipe), a sintaxe markdown é preservada — não corrompe captura.
     assert ui.render_md("## Output") == "## Output"
@@ -127,7 +158,10 @@ def test_md_negrito_e_codigo_inline(cores):
 def test_md_linha_de_prosa_no_paint(cores):
     # prosa cai no fallback do paint_stream_line → render_md
     assert ui.paint_stream_line("## Output") == "[BWHT]Output[/]"
-    assert ui.paint_stream_line("- Escreva APENAS nos paths permitidos") == "[cyn]•[/] Escreva APENAS nos paths permitidos"
+    assert (
+        ui.paint_stream_line("- Escreva APENAS nos paths permitidos")
+        == "[cyn]•[/] Escreva APENAS nos paths permitidos"
+    )
 
 
 def test_md_nao_toca_comando_bash(cores):

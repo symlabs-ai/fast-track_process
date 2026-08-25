@@ -9,9 +9,9 @@ fallback assembled from the graph and existing artifacts.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any, Mapping
 
 from ft.engine.graph import Node, ProcessGraph
@@ -223,7 +223,9 @@ def build_decision_gate_context(
     raw_config = node.decision_context
     config: Mapping[str, Any] = raw_config if isinstance(raw_config, Mapping) else {}
     completed = getattr(state, "completed_nodes", [])
-    completed_nodes = [str(value) for value in completed] if isinstance(completed, list) else []
+    completed_nodes = (
+        [str(value) for value in completed] if isinstance(completed, list) else []
+    )
 
     last_completed = graph.nodes.get(completed_nodes[-1]) if completed_nodes else None
     next_label = _target_label(graph, node.next, "a próxima etapa")

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from ft.engine.canonical_merge import (
     _merge_changelog,
     resolve_canonical_conflicts,
 )
-
 
 CHANGELOG = """# Changelog
 
@@ -37,7 +36,9 @@ FEATURES = """# FEATURES
 """
 
 
-def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
+def _git(
+    root: Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[bytes]:
     result = subprocess.run(
         ["git", *args],
         cwd=root,
@@ -160,7 +161,9 @@ def test_resolves_two_parallel_bugs_with_distinct_pbs_on_same_feature(tmp_path):
         theirs=_bug_b_changes,
     )
     assert set(
-        _git(root, "diff", "--name-only", "--diff-filter=U").stdout.decode().splitlines()
+        _git(root, "diff", "--name-only", "--diff-filter=U")
+        .stdout.decode()
+        .splitlines()
     ) == {
         "CHANGELOG.md",
         "docs/FEATURES.md",
@@ -273,10 +276,7 @@ def test_requires_all_three_index_stages_for_modify_delete_conflict(tmp_path):
 def test_changelog_imports_only_unique_additive_lines():
     base = "# Changelog\n\n## Histórico\n\n- antiga\n"
     ours = "# Changelog\n\n## Histórico\n\n- #BUG PB-101\n- antiga\n"
-    theirs = (
-        "# Changelog\n\n## Histórico\n\n"
-        "- #BUG PB-101\n- #BUG PB-102\n- antiga\n"
-    )
+    theirs = "# Changelog\n\n## Histórico\n\n- #BUG PB-101\n- #BUG PB-102\n- antiga\n"
 
     merged = _merge_changelog(base, ours, theirs)
 

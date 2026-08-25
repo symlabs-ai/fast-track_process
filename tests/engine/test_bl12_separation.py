@@ -47,7 +47,9 @@ class TestGateKbReviewKbPath:
         from ft.engine.validators.gates import gate_kb_review
 
         (tmp_path / "docs").mkdir()
-        clean_env = {key: value for key, value in os.environ.items() if key != "FT_KB_PATH"}
+        clean_env = {
+            key: value for key, value in os.environ.items() if key != "FT_KB_PATH"
+        }
 
         with patch.dict(os.environ, clean_env, clear=True):
             passed, _msg = gate_kb_review(project_root=str(tmp_path))
@@ -90,7 +92,9 @@ nodes:
 
         process = self._process(tmp_path / "process.yml")
         state_path = tmp_path / "state" / "engine_state.yml"
-        clean_env = {key: value for key, value in os.environ.items() if key != "FT_KB_PATH"}
+        clean_env = {
+            key: value for key, value in os.environ.items() if key != "FT_KB_PATH"
+        }
 
         with patch.dict(os.environ, clean_env, clear=True):
             runner = StepRunner(

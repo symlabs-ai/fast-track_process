@@ -4,44 +4,49 @@ import pytest
 
 from ft.engine.graph import Node, ProcessGraph, load_graph
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def make_graph(nodes_data: list[dict]) -> ProcessGraph:
     """Helper: build a ProcessGraph from raw node dicts."""
     nodes = []
     for n in nodes_data:
-        nodes.append(Node(
-            id=n["id"],
-            type=n.get("type", "build"),
-            title=n.get("title", n["id"]),
-            executor=n.get("executor", "python"),
-            outputs=n.get("outputs", []),
-            write_scope=n.get("write_scope", []),
-            next=n.get("next"),
-            sprint=n.get("sprint"),
-            parallel_group=n.get("parallel_group"),
-            branches=n.get("branches"),
-            condition=n.get("condition"),
-            reject_next=n.get("reject_next"),
-            fix_review=n.get("fix_review"),
-        ))
+        nodes.append(
+            Node(
+                id=n["id"],
+                type=n.get("type", "build"),
+                title=n.get("title", n["id"]),
+                executor=n.get("executor", "python"),
+                outputs=n.get("outputs", []),
+                write_scope=n.get("write_scope", []),
+                next=n.get("next"),
+                sprint=n.get("sprint"),
+                parallel_group=n.get("parallel_group"),
+                branches=n.get("branches"),
+                condition=n.get("condition"),
+                reject_next=n.get("reject_next"),
+                fix_review=n.get("fix_review"),
+            )
+        )
     return ProcessGraph(nodes, {"id": "test", "title": "Test"})
 
 
 def simple_graph() -> ProcessGraph:
-    return make_graph([
-        {"id": "a", "type": "build", "next": "b"},
-        {"id": "b", "type": "gate", "next": "c"},
-        {"id": "c", "type": "end"},
-    ])
+    return make_graph(
+        [
+            {"id": "a", "type": "build", "next": "b"},
+            {"id": "b", "type": "gate", "next": "c"},
+            {"id": "c", "type": "end"},
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
 # ProcessGraph — resolve_next
 # ---------------------------------------------------------------------------
+
 
 class TestResolveNext:
     def test_linear_chain(self):
@@ -55,30 +60,45 @@ class TestResolveNext:
         assert g.resolve_next("c") is None
 
     def test_decision_with_matching_branch(self):
-        g = make_graph([
-            {"id": "d", "type": "decision", "condition": "status",
-             "branches": {"pass": "ok", "fail": "err"}, "next": "ok"},
-            {"id": "ok", "type": "build", "next": "done"},
-            {"id": "err", "type": "build", "next": "done"},
-            {"id": "done", "type": "end"},
-        ])
+        g = make_graph(
+            [
+                {
+                    "id": "d",
+                    "type": "decision",
+                    "condition": "status",
+                    "branches": {"pass": "ok", "fail": "err"},
+                    "next": "ok",
+                },
+                {"id": "ok", "type": "build", "next": "done"},
+                {"id": "err", "type": "build", "next": "done"},
+                {"id": "done", "type": "end"},
+            ]
+        )
         assert g.resolve_next("d", {"status": "pass"}) == "ok"
         assert g.resolve_next("d", {"status": "fail"}) == "err"
 
     def test_decision_fallback_to_next(self):
-        g = make_graph([
-            {"id": "d", "type": "decision", "condition": "status",
-             "branches": {"pass": "ok"}, "next": "fallback"},
-            {"id": "ok", "type": "build", "next": "done"},
-            {"id": "fallback", "type": "build", "next": "done"},
-            {"id": "done", "type": "end"},
-        ])
+        g = make_graph(
+            [
+                {
+                    "id": "d",
+                    "type": "decision",
+                    "condition": "status",
+                    "branches": {"pass": "ok"},
+                    "next": "fallback",
+                },
+                {"id": "ok", "type": "build", "next": "done"},
+                {"id": "fallback", "type": "build", "next": "done"},
+                {"id": "done", "type": "end"},
+            ]
+        )
         assert g.resolve_next("d", {"status": "unknown"}) == "fallback"
 
 
 # ---------------------------------------------------------------------------
 # ProcessGraph — get_status
 # ---------------------------------------------------------------------------
+
 
 class TestGetStatus:
     def test_first_node_is_ready(self):
@@ -105,14 +125,17 @@ class TestGetStatus:
 # ProcessGraph — sprint helpers
 # ---------------------------------------------------------------------------
 
+
 class TestSprintHelpers:
     def setup_method(self):
-        self.g = make_graph([
-            {"id": "a", "sprint": "s1", "next": "b"},
-            {"id": "b", "sprint": "s1", "next": "c"},
-            {"id": "c", "sprint": "s2", "next": "d"},
-            {"id": "d", "type": "end"},
-        ])
+        self.g = make_graph(
+            [
+                {"id": "a", "sprint": "s1", "next": "b"},
+                {"id": "b", "sprint": "s1", "next": "c"},
+                {"id": "c", "sprint": "s2", "next": "d"},
+                {"id": "d", "type": "end"},
+            ]
+        )
 
     def test_get_sprints(self):
         assert self.g.get_sprints() == ["s1", "s2"]
@@ -130,6 +153,7 @@ class TestSprintHelpers:
 # ---------------------------------------------------------------------------
 # ProcessGraph — validation
 # ---------------------------------------------------------------------------
+
 
 class TestGraphValidation:
     def test_codex_auth_requires_known_route_and_codex_executor(self):
@@ -183,71 +207,90 @@ class TestGraphValidation:
 
     def test_missing_next_target_raises(self):
         with pytest.raises(ValueError, match="nao existe"):
-            make_graph([
-                {"id": "a", "next": "nonexistent"},
-                {"id": "b", "type": "end"},
-            ])
+            make_graph(
+                [
+                    {"id": "a", "next": "nonexistent"},
+                    {"id": "b", "type": "end"},
+                ]
+            )
 
     def test_missing_reject_next_target_raises(self):
         with pytest.raises(ValueError, match="reject_next.*nao existe"):
-            make_graph([
-                {"id": "a", "type": "human_gate", "next": "b", "reject_next": "missing"},
-                {"id": "b", "type": "end"},
-            ])
+            make_graph(
+                [
+                    {
+                        "id": "a",
+                        "type": "human_gate",
+                        "next": "b",
+                        "reject_next": "missing",
+                    },
+                    {"id": "b", "type": "end"},
+                ]
+            )
 
     def test_fix_review_must_be_a_reachable_review(self):
-        graph = make_graph([
-            {
-                "id": "fix",
-                "type": "build",
-                "next": "check",
-                "fix_review": "audit",
-            },
-            {"id": "check", "type": "gate", "next": "audit"},
-            {"id": "audit", "type": "review", "next": "done"},
-            {"id": "done", "type": "end"},
-        ])
-
-        assert graph.get_node("fix").fix_review == "audit"
-
-        with pytest.raises(ValueError, match="fix_review.*nao e review"):
-            make_graph([
+        graph = make_graph(
+            [
                 {
                     "id": "fix",
                     "type": "build",
                     "next": "check",
-                    "fix_review": "check",
-                },
-                {"id": "check", "type": "gate", "next": "done"},
-                {"id": "done", "type": "end"},
-            ])
-
-        with pytest.raises(ValueError, match="nao e alcancavel"):
-            make_graph([
-                {
-                    "id": "fix",
-                    "type": "build",
-                    "next": "done",
                     "fix_review": "audit",
                 },
+                {"id": "check", "type": "gate", "next": "audit"},
                 {"id": "audit", "type": "review", "next": "done"},
                 {"id": "done", "type": "end"},
-            ])
+            ]
+        )
+
+        assert graph.get_node("fix").fix_review == "audit"
+
+        with pytest.raises(ValueError, match="fix_review.*nao e review"):
+            make_graph(
+                [
+                    {
+                        "id": "fix",
+                        "type": "build",
+                        "next": "check",
+                        "fix_review": "check",
+                    },
+                    {"id": "check", "type": "gate", "next": "done"},
+                    {"id": "done", "type": "end"},
+                ]
+            )
+
+        with pytest.raises(ValueError, match="nao e alcancavel"):
+            make_graph(
+                [
+                    {
+                        "id": "fix",
+                        "type": "build",
+                        "next": "done",
+                        "fix_review": "audit",
+                    },
+                    {"id": "audit", "type": "review", "next": "done"},
+                    {"id": "done", "type": "end"},
+                ]
+            )
 
     def test_no_end_node_raises(self):
         with pytest.raises(ValueError, match="exatamente 1 node type=end"):
-            make_graph([
-                {"id": "a", "next": "b"},
-                {"id": "b", "type": "build"},
-            ])
+            make_graph(
+                [
+                    {"id": "a", "next": "b"},
+                    {"id": "b", "type": "build"},
+                ]
+            )
 
     def test_multiple_end_nodes_raises(self):
         with pytest.raises(ValueError, match="exatamente 1 node type=end"):
-            make_graph([
-                {"id": "a", "next": "b"},
-                {"id": "b", "type": "end"},
-                {"id": "c", "type": "end"},
-            ])
+            make_graph(
+                [
+                    {"id": "a", "next": "b"},
+                    {"id": "b", "type": "end"},
+                    {"id": "c", "type": "end"},
+                ]
+            )
 
     def test_invalid_validation_mode_raises(self):
         nodes = [
@@ -295,6 +338,7 @@ class TestGraphValidation:
 # ---------------------------------------------------------------------------
 # load_graph — YAML file
 # ---------------------------------------------------------------------------
+
 
 class TestLoadGraph:
     def test_loads_codex_auth(self, tmp_path):
@@ -405,31 +449,6 @@ class TestLoadGraph:
         )
 
         assert load_graph(p).get_node("implement").llm_timeout_seconds == 600
-
-    def test_load_fast_track_v2(self):
-        g = load_graph("templates/fast-track-v2/FAST_TRACK_PROCESS.yml")
-        assert len(g.nodes) >= 42  # May grow as process evolves
-        assert len(g.get_sprints()) == 11
-
-    def test_load_fast_track_v2_routes_ui_around_acceptance_cli(self):
-        g = load_graph("templates/fast-track-v2/FAST_TRACK_PROCESS.yml")
-        assert g.resolve_next("decision.acceptance.cli", {"interface_type": "ui"}) == "ft.smoke.01.cli_run"
-        assert g.resolve_next("decision.acceptance.cli", {"interface_type": "api"}) == "ft.acceptance.01.cli"
-
-    def test_load_fast_track_v2_audit_has_explicit_write_scope(self):
-        g = load_graph("templates/fast-track-v2/FAST_TRACK_PROCESS.yml")
-        audit = g.get_node("ft.audit.01.forgebase")
-        assert "main.py" in audit.write_scope
-        assert "docs/" in audit.write_scope
-
-    def test_load_fast_track_v2_prd_rewrite_preserves_immutable_sections(self):
-        g = load_graph("templates/fast-track-v2/FAST_TRACK_PROCESS.yml")
-        rewrite = g.get_node("ft.prd.rewrite")
-        validator = next(v["sections_unchanged"] for v in rewrite.validators if "sections_unchanged" in v)
-
-        assert validator["path"] == "docs/PRD.md"
-        assert validator["snapshot_path"] == "prd_rewrite_baseline.md"
-        assert validator["sections"] == ["Hipotese", "Visao", "User Stories"]
 
     def test_missing_file_raises(self):
         with pytest.raises(FileNotFoundError):

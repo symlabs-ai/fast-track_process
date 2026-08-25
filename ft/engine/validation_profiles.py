@@ -9,16 +9,15 @@ process YAML.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
-
 
 VALIDATION_CONFIG_VERSION = 1
 VALIDATION_MATRIX_VERSION = 1

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from ft.engine.context_profiles import (
     BUG_DIRECT_PROFILE,
@@ -60,9 +60,7 @@ def _init_repository(root: Path) -> str:
 
 def test_bug_profiles_are_registered_with_explicit_caps() -> None:
     assert {BUG_DIRECT_PROFILE, BUG_RECONCILE_PROFILE} <= KNOWN_CONTEXT_PROFILES
-    assert {
-        name: profile.max_chars for name, profile in BUG_PROFILES.items()
-    } == {
+    assert {name: profile.max_chars for name, profile in BUG_PROFILES.items()} == {
         BUG_DIRECT_PROFILE: 40_000,
         BUG_RECONCILE_PROFILE: 40_000,
     }

@@ -189,7 +189,9 @@ def test_catalog_has_mobile_web_and_native_desktop_profiles():
     )
 
 
-def test_explicit_android_physical_matrix_carries_physical_validation_learnings(tmp_path):
+def test_explicit_android_physical_matrix_carries_physical_validation_learnings(
+    tmp_path,
+):
     config = _explicit_config(
         "android",
         "physical",

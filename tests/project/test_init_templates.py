@@ -11,8 +11,8 @@ import pytest
 from ft.project import bootstrap_project
 from ft.project.bootstrap import DEFAULT_INIT_TEMPLATE
 from ft.project.init_scripts import (
-    execute_and_record_init_template,
     InitScriptError,
+    execute_and_record_init_template,
     init_marker_path,
     read_init_marker,
     record_init_template,
@@ -57,6 +57,7 @@ def _write_init_template(catalog_root: Path, name: str, *, script_body: str) -> 
 # ---------------------------------------------------------------------------
 # Catálogo
 # ---------------------------------------------------------------------------
+
 
 def test_engine_ships_init_default_template():
     catalog = TemplateCatalog()
@@ -114,6 +115,7 @@ def test_init_names_lists_only_init_templates(tmp_path):
 # ---------------------------------------------------------------------------
 # Execução e marker
 # ---------------------------------------------------------------------------
+
 
 def test_run_init_template_executes_scripts_with_env(tmp_path):
     catalog_root = tmp_path / "catalog"
@@ -200,6 +202,7 @@ def test_marker_records_and_reads_applied_templates(tmp_path):
 # Bootstrap: roda uma única vez, marker gitignored
 # ---------------------------------------------------------------------------
 
+
 def test_bootstrap_records_marker_and_keeps_it_out_of_git(tmp_path):
     project = tmp_path / "new-project"
     bootstrap_project(project)
@@ -218,7 +221,9 @@ def test_bootstrap_creates_project_base_files(tmp_path):
     gitignore = (project / ".gitignore").read_text(encoding="utf-8")
     assert ".env" in gitignore
     assert (project / ".env.example").is_file()
-    assert (project / "README.md").read_text(encoding="utf-8").startswith("# new-project")
+    assert (
+        (project / "README.md").read_text(encoding="utf-8").startswith("# new-project")
+    )
     assert (project / "AGENTS.md").is_file()
 
 
@@ -232,8 +237,14 @@ def test_bootstrap_skips_init_scripts_after_marker(tmp_path):
     _git(project, "add", "-u", ".")
     _git(
         project,
-        "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-        "commit", "-q", "-m", "remove env example",
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "remove env example",
     )
 
     rerun = bootstrap_project(project)

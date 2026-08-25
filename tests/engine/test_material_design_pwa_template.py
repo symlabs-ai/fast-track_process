@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 from ft.cli.main import available_templates
 from ft.engine.graph import load_graph
@@ -184,7 +184,11 @@ def test_audit_requires_questions_or_complete_plan(tmp_path):
     _write(root, "docs/mdpwa-audit.md", AUDIT.format(clarification="clear"))
     assert _run_validator(root, "audit").returncode == 0
 
-    _write(root, "docs/mdpwa-plan.md", PLAN.format(offline="public/offline.html").replace("PB-010", "sem-pb"))
+    _write(
+        root,
+        "docs/mdpwa-plan.md",
+        PLAN.format(offline="public/offline.html").replace("PB-010", "sem-pb"),
+    )
     result = _run_validator(root, "audit")
     assert result.returncode == 1
     assert "backlog_item" in result.stderr
@@ -192,7 +196,11 @@ def test_audit_requires_questions_or_complete_plan(tmp_path):
 
 def test_audit_requires_backlog_item_registered(tmp_path):
     root = _base_project(tmp_path)
-    _write(root, "docs/PROJECT_BACKLOG.md", BACKLOG.format(status="in_progress").replace("PB-010", "PB-099"))
+    _write(
+        root,
+        "docs/PROJECT_BACKLOG.md",
+        BACKLOG.format(status="in_progress").replace("PB-010", "PB-099"),
+    )
     result = _run_validator(root, "audit")
     assert result.returncode == 1
     assert "PB-010" in result.stderr

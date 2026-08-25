@@ -11,24 +11,44 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ft.engine.graph import ProcessGraph, Node
 from ft.engine.context_profiles import HYPER_MODE_FIELDS, KNOWN_CONTEXT_PROFILES
+from ft.engine.graph import Node, ProcessGraph
 
-
-VALID_NODE_TYPES = frozenset({
-    "discovery", "document", "build", "test_red", "test_green",
-    "refactor", "review", "retro", "gate", "decision", "sync", "end",
-    "human_gate", "exploration", "batch",
-})
+VALID_NODE_TYPES = frozenset(
+    {
+        "discovery",
+        "document",
+        "build",
+        "test_red",
+        "test_green",
+        "refactor",
+        "review",
+        "retro",
+        "gate",
+        "decision",
+        "sync",
+        "end",
+        "human_gate",
+        "exploration",
+        "batch",
+    }
+)
 
 # Nomes PÓS-normalização do graph loader (claude→llm_claude etc.) — o validator
 # roda sobre o ProcessGraph carregado, nunca sobre o YAML cru. llm_coder/llm_coach
 # são os nomes legados da V2, mantidos por compatibilidade.
-VALID_EXECUTORS = frozenset({
-    "python", "human",
-    "llm_claude", "llm_codex", "llm_gemini", "llm_opencode",
-    "llm_coder", "llm_coach",
-})
+VALID_EXECUTORS = frozenset(
+    {
+        "python",
+        "human",
+        "llm_claude",
+        "llm_codex",
+        "llm_gemini",
+        "llm_opencode",
+        "llm_coder",
+        "llm_coach",
+    }
+)
 
 _DECISION_CONTEXT_TEXT_FIELDS = frozenset(
     {
@@ -77,7 +97,9 @@ class ValidationReport:
         self.issues.append(Issue("warning", node_id, message))
 
 
-def validate_process(graph: ProcessGraph, validator_registry: dict[str, Any] | None = None) -> ValidationReport:
+def validate_process(
+    graph: ProcessGraph, validator_registry: dict[str, Any] | None = None
+) -> ValidationReport:
     """Valida um ProcessGraph completo. Retorna ValidationReport."""
     report = ValidationReport()
 
@@ -158,8 +180,7 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
             if unknown:
                 report.add_error(
                     None,
-                    "session_policy contém campos desconhecidos: "
-                    + ", ".join(unknown),
+                    "session_policy contém campos desconhecidos: " + ", ".join(unknown),
                 )
             if session_policy.get("mode") != "sprint":
                 report.add_error(
@@ -248,13 +269,8 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
                 "max_acceptance_criteria_per_lane",
             ):
                 value = batch_policy.get(field_name)
-                if (
-                    value is not None
-                    and (
-                        isinstance(value, bool)
-                        or not isinstance(value, int)
-                        or value <= 0
-                    )
+                if value is not None and (
+                    isinstance(value, bool) or not isinstance(value, int) or value <= 0
                 ):
                     report.add_error(
                         None,
@@ -262,8 +278,7 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
                     )
             protected = batch_policy.get("protected_paths", [])
             if not isinstance(protected, list) or any(
-                not isinstance(path, str) or not path.strip()
-                for path in protected
+                not isinstance(path, str) or not path.strip() for path in protected
             ):
                 report.add_error(
                     None,
@@ -290,9 +305,7 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
             backlog_policy = close_policy.get("backlog")
             if backlog_policy is not None:
                 if not isinstance(backlog_policy, dict):
-                    report.add_error(
-                        None, "close_policy.backlog deve ser um mapping"
-                    )
+                    report.add_error(None, "close_policy.backlog deve ser um mapping")
                 else:
                     backlog_mode = backlog_policy.get("mode", "global")
                     if not isinstance(backlog_mode, str) or backlog_mode not in {
@@ -320,9 +333,19 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
         if not node.title:
             report.add_error(node.id, "nó sem title")
         if node.type not in VALID_NODE_TYPES:
-            report.add_error(node.id, f"type '{node.type}' inválido (válidos: {', '.join(sorted(VALID_NODE_TYPES))})")
-        if node.type != "end" and node.executor and node.executor not in VALID_EXECUTORS:
-            report.add_error(node.id, f"executor '{node.executor}' não reconhecido (válidos: {', '.join(sorted(VALID_EXECUTORS))})")
+            report.add_error(
+                node.id,
+                f"type '{node.type}' inválido (válidos: {', '.join(sorted(VALID_NODE_TYPES))})",
+            )
+        if (
+            node.type != "end"
+            and node.executor
+            and node.executor not in VALID_EXECUTORS
+        ):
+            report.add_error(
+                node.id,
+                f"executor '{node.executor}' não reconhecido (válidos: {', '.join(sorted(VALID_EXECUTORS))})",
+            )
         if node.expert is not None:
             if not isinstance(node.expert, str) or not node.expert.strip():
                 report.add_error(node.id, "expert deve ser um id não vazio")
@@ -347,10 +370,7 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
                     "decision_context deve ser um mapping",
                 )
             else:
-                allowed = (
-                    _DECISION_CONTEXT_TEXT_FIELDS
-                    | _DECISION_CONTEXT_LIST_FIELDS
-                )
+                allowed = _DECISION_CONTEXT_TEXT_FIELDS | _DECISION_CONTEXT_LIST_FIELDS
                 unknown = sorted(set(node.decision_context) - allowed)
                 if unknown:
                     report.add_error(
@@ -427,8 +447,13 @@ def _check_structure(graph: ProcessGraph, report: ValidationReport) -> None:
                     f"{field_name} deve ser um inteiro maior ou igual a zero",
                 )
         if node.context_profile is not None:
-            if not isinstance(node.context_profile, str) or not node.context_profile.strip():
-                report.add_error(node.id, "context_profile deve ser uma string não vazia")
+            if (
+                not isinstance(node.context_profile, str)
+                or not node.context_profile.strip()
+            ):
+                report.add_error(
+                    node.id, "context_profile deve ser uma string não vazia"
+                )
             elif node.context_profile not in KNOWN_CONTEXT_PROFILES:
                 report.add_error(
                     node.id,
@@ -512,7 +537,9 @@ def _check_graph_integrity(graph: ProcessGraph, report: ValidationReport) -> Non
 _ENGINE_LEVEL_VALIDATOR_KEYS = frozenset({"stop_on_failure", "resume_command"})
 
 
-def _check_validators(graph: ProcessGraph, registry: dict[str, Any], report: ValidationReport) -> None:
+def _check_validators(
+    graph: ProcessGraph, registry: dict[str, Any], report: ValidationReport
+) -> None:
     """Verifica que validators existem no registry e, na forma dict, que os
     kwargs batem com a assinatura da função — um kwarg errado passava silencioso
     aqui e explodia em TypeError só quando o gate rodava."""
@@ -527,7 +554,9 @@ def _check_validators(graph: ProcessGraph, registry: dict[str, Any], report: Val
                     continue
                 fn = registry.get(name)
                 if fn is None:
-                    report.add_warning(node.id, f"validator '{name}' não encontrado no registry")
+                    report.add_warning(
+                        node.id, f"validator '{name}' não encontrado no registry"
+                    )
                     continue
                 if not isinstance(args, dict):
                     continue
@@ -542,9 +571,7 @@ def _check_validators(graph: ProcessGraph, registry: dict[str, Any], report: Val
                 if not accepts_var_kw:
                     unknown = sorted(provided - set(params))
                     if unknown:
-                        accepted = ", ".join(
-                            k for k in params if k != "project_root"
-                        )
+                        accepted = ", ".join(k for k in params if k != "project_root")
                         report.add_error(
                             node.id,
                             f"validator '{name}' não aceita argumento(s): "
@@ -654,7 +681,7 @@ def _check_parallel_groups(graph: ProcessGraph, report: ValidationReport) -> Non
                     "(usados na checagem de independência do fan-out)",
                 )
         for i, a in enumerate(members):
-            for b in members[i + 1:]:
+            for b in members[i + 1 :]:
                 overlaps = outputs_overlap(a.outputs, b.outputs)
                 if overlaps:
                     report.add_error(

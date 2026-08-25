@@ -12,7 +12,6 @@ from ft.engine.process_validator import validate_process
 from ft.engine.runner import StepRunner, ValidationResult
 from ft.engine.state import EngineState, StateManager
 
-
 PROCESS = """
 id: session_test
 version: "1"
@@ -134,14 +133,17 @@ def test_review_and_parallel_lanes_are_isolated(tmp_path: Path) -> None:
 
     assert base["_ft_session_context"]["key"] == "sprint:sprint-01"
     assert review["_ft_session_context"]["key"] == "sprint:sprint-01:lane:review"
-    assert parallel["_ft_session_context"]["key"] == (
-        "sprint:sprint-01:lane:docs:api"
+    assert parallel["_ft_session_context"]["key"] == ("sprint:sprint-01:lane:docs:api")
+    assert (
+        len(
+            {
+                base["llm_session_id"],
+                review["llm_session_id"],
+                parallel["llm_session_id"],
+            }
+        )
+        == 3
     )
-    assert len({
-        base["llm_session_id"],
-        review["llm_session_id"],
-        parallel["llm_session_id"],
-    }) == 3
 
 
 def test_model_change_supersedes_session(tmp_path: Path) -> None:

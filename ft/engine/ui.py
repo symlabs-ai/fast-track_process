@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 # ANSI colors (desabilitado se NO_COLOR ou pipe)
 # ---------------------------------------------------------------------------
 
+
 def _supports_color() -> bool:
     if os.environ.get("NO_COLOR"):
         return False
@@ -59,6 +60,7 @@ BOLD_WHITE = _ansi("1;37")
 # Formatadores
 # ---------------------------------------------------------------------------
 
+
 def header(text: str) -> str:
     """Header grande para inicio de processo."""
     w = 55
@@ -66,10 +68,16 @@ def header(text: str) -> str:
     return f"\n{BOLD_CYAN}{line}{RESET}\n{BOLD_WHITE}  {text}{RESET}\n{BOLD_CYAN}{line}{RESET}"
 
 
-def step_card(step_num: int | str, step_total: int | str, title: str,
-              node_id: str, node_type: str, executor: str,
-              sprint: str | None = None,
-              description: str | None = None) -> str:
+def step_card(
+    step_num: int | str,
+    step_total: int | str,
+    title: str,
+    node_id: str,
+    node_type: str,
+    executor: str,
+    sprint: str | None = None,
+    description: str | None = None,
+) -> str:
     """Card visual para cada step."""
     w = 54
     top = f"{'┌' + '─' * (w - 2) + '┐'}"
@@ -208,17 +216,21 @@ def human_gate_card(
     del work_dir  # kept for API compatibility with older callers
     w = 78
     sep = f"  {DIM}{'─' * (w - 2)}{RESET}"
-    decision = getattr(context, "decision", None) or description or (
-        f"Decidir se o gate “{title}” pode avançar."
+    decision = (
+        getattr(context, "decision", None)
+        or description
+        or (f"Decidir se o gate “{title}” pode avançar.")
     )
     why_now = getattr(context, "why_now", None) or (
         "O processo chegou a um checkpoint que exige decisão humana explícita."
     )
     checklist = list(getattr(context, "checklist", ()) or ())
     if not checklist:
-        checklist = [description] if description else [
-            "Examine o produto e as evidências antes de decidir."
-        ]
+        checklist = (
+            [description]
+            if description
+            else ["Examine o produto e as evidências antes de decidir."]
+        )
     limitations = list(getattr(context, "limitations", ()) or ()) or [
         "A aprovação cobre somente o escopo apresentado neste gate.",
         "Evidência ausente ou ambígua é motivo para não aprovar.",
@@ -248,71 +260,85 @@ def human_gate_card(
     ]
     review_index = 1
     if url:
-        lines.extend(_wrapped_card_lines(
-            f"{review_index}. Produto em execução: {url}",
-            prefix="    ",
-            continuation_prefix="       ",
-        ))
+        lines.extend(
+            _wrapped_card_lines(
+                f"{review_index}. Produto em execução: {url}",
+                prefix="    ",
+                continuation_prefix="       ",
+            )
+        )
         review_index += 1
     if artifact:
-        lines.extend(_wrapped_card_lines(
-            f"{review_index}. Aplicativo desktop aberto: {artifact}",
-            prefix="    ",
-            continuation_prefix="       ",
-        ))
+        lines.extend(
+            _wrapped_card_lines(
+                f"{review_index}. Aplicativo desktop aberto: {artifact}",
+                prefix="    ",
+                continuation_prefix="       ",
+            )
+        )
         review_index += 1
     for path in review_paths:
-        lines.extend(_wrapped_card_lines(
-            f"{review_index}. Evidência/artefato: {path}",
-            prefix="    ",
-            continuation_prefix="       ",
-        ))
+        lines.extend(
+            _wrapped_card_lines(
+                f"{review_index}. Evidência/artefato: {path}",
+                prefix="    ",
+                continuation_prefix="       ",
+            )
+        )
         review_index += 1
     if review_index == 1:
-        lines.extend(_wrapped_card_lines(
-            "Nenhum produto ou artefato foi localizado. Não aprove sem pedir "
-            "uma evidência acessível.",
-            prefix="    ! ",
-        ))
+        lines.extend(
+            _wrapped_card_lines(
+                "Nenhum produto ou artefato foi localizado. Não aprove sem pedir "
+                "uma evidência acessível.",
+                prefix="    ! ",
+            )
+        )
 
     lines.extend(["", f"  {BOLD_WHITE}CHECKLIST DE DECISÃO{RESET}"])
     for item in checklist:
-        lines.extend(_wrapped_card_lines(
-            item,
-            prefix="    [ ] ",
-            continuation_prefix="        ",
-            width=68,
-        ))
+        lines.extend(
+            _wrapped_card_lines(
+                item,
+                prefix="    [ ] ",
+                continuation_prefix="        ",
+                width=68,
+            )
+        )
 
     lines.extend(["", f"  {BOLD_WHITE}LIMITES CONHECIDOS{RESET}"])
     for item in limitations:
-        lines.extend(_wrapped_card_lines(
-            item,
-            prefix="    - ",
-            continuation_prefix="      ",
-            width=70,
-        ))
+        lines.extend(
+            _wrapped_card_lines(
+                item,
+                prefix="    - ",
+                continuation_prefix="      ",
+                width=70,
+            )
+        )
 
-    lines.extend([
-        "",
-        f"  {BOLD_GREEN}SE APROVAR{RESET}",
-        *_wrapped_card_lines(approve_effect),
-        f"  {BOLD_RED}SE REJEITAR{RESET}",
-        *_wrapped_card_lines(reject_effect),
-        sep,
-        f"  Contexto:  {BOLD}ft status --full{RESET}",
-    ])
+    lines.extend(
+        [
+            "",
+            f"  {BOLD_GREEN}SE APROVAR{RESET}",
+            *_wrapped_card_lines(approve_effect),
+            f"  {BOLD_RED}SE REJEITAR{RESET}",
+            *_wrapped_card_lines(reject_effect),
+            sep,
+            f"  Contexto:  {BOLD}ft status --full{RESET}",
+        ]
+    )
     approve_command = (
-        'ft approve "decisão/ressalvas"'
-        if approval_message_required
-        else "ft approve"
+        'ft approve "decisão/ressalvas"' if approval_message_required else "ft approve"
     )
     lines.append(f"  Aprovar:   {BOLD}{approve_command}{RESET}")
     if reject_hint:
-        lines.append(f"  Rejeitar:  {BOLD}ft reject \"{RESET}{reject_hint}{BOLD}\"{RESET}")
+        lines.append(
+            f'  Rejeitar:  {BOLD}ft reject "{RESET}{reject_hint}{BOLD}"{RESET}'
+        )
     else:
         lines.append(
-            f"  Rejeitar:  {BOLD}ft reject \"onde; passos; esperado; observado\"{RESET}"
+            f'  Rejeitar:  {BOLD}ft reject "onde; passos; esperado; observado"{RESET}'
         )
     return "\n".join(lines)
 
@@ -327,7 +353,7 @@ def exploration_start(title: str, count: int = 0) -> str:
         sep,
         f"  {DIM}Faça pedidos livres ao LLM. Tudo fica no worktree (descartável).{RESET}",
         sep,
-        f"  Explorar:  {BOLD}ft explore \"seu pedido\"{RESET}",
+        f'  Explorar:  {BOLD}ft explore "seu pedido"{RESET}',
         f"  Pular:     {BOLD}ft explore --skip{RESET}",
         f"  Encerrar:  {BOLD}ft explore --finish{RESET}",
     ]
@@ -354,7 +380,7 @@ def fix_gate(message: str, feedback: str, goto: str) -> str:
         sep,
         f"  {DIM}Destino após correção: {goto}{RESET}",
         sep,
-        f"  Para corrigir:  {BOLD}ft fix \"sua instrução\"{RESET}",
+        f'  Para corrigir:  {BOLD}ft fix "sua instrução"{RESET}',
         f"  Para cancelar:  {BOLD}ft reject{RESET}",
     ]
     return "\n".join(lines)
@@ -375,7 +401,9 @@ def sprint_complete(sprint_name: str) -> str:
     return f"\n  {BOLD_YELLOW}Sprint {sprint_name} completa{RESET}"
 
 
-def init_banner(title: str, first_node: str, first_title: str, total: int, process_file: str = "") -> str:
+def init_banner(
+    title: str, first_node: str, first_title: str, total: int, process_file: str = ""
+) -> str:
     w = 54
     line = "━" * w
     file_line = f"  {DIM}Processo: {process_file}{RESET}\n" if process_file else ""
@@ -414,6 +442,7 @@ class Spinner:
 
     def __enter__(self):
         import threading
+
         self._running = True
         self._thread = threading.Thread(target=self._spin, daemon=True)
         self._thread.start()
@@ -429,11 +458,14 @@ class Spinner:
 
     def _spin(self):
         import time
+
         i = 0
         while self._running:
             frame = self.FRAMES[i % len(self.FRAMES)]
             if _COLOR:
-                sys.stdout.write(f"\r  {CYAN}{frame}{RESET} {DIM}{self._message}...{RESET}")
+                sys.stdout.write(
+                    f"\r  {CYAN}{frame}{RESET} {DIM}{self._message}...{RESET}"
+                )
             else:
                 sys.stdout.write(f"\r  {frame} {self._message}...")
             sys.stdout.flush()
@@ -471,10 +503,14 @@ def problem_explanation(
         lines.append(f"    {BOLD_YELLOW}{i}.{RESET} {alt}")
     lines.append("")
     lines.append(f"  {BOLD_WHITE}Para aplicar, use:{RESET}")
-    lines.append(f"    {BOLD_CYAN}ft fix \"{RESET}aplique a alternativa 1{BOLD_CYAN}\"{RESET}")
+    lines.append(
+        f'    {BOLD_CYAN}ft fix "{RESET}aplique a alternativa 1{BOLD_CYAN}"{RESET}'
+    )
     lines.append("")
     lines.append(f"  {DIM}Ou descreva sua própria solução:{RESET}")
-    lines.append(f"    {BOLD_CYAN}ft fix \"{RESET}faça X e Y em vez disso{BOLD_CYAN}\"{RESET}")
+    lines.append(
+        f'    {BOLD_CYAN}ft fix "{RESET}faça X e Y em vez disso{BOLD_CYAN}"{RESET}'
+    )
     lines.append("")
     return "\n".join(lines)
 

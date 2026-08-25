@@ -19,7 +19,12 @@ import yaml
 
 def _normalize(text: str) -> str:
     """Remove diacritics for accent-insensitive matching."""
-    return unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode("ascii").lower()
+    return (
+        unicodedata.normalize("NFD", text)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+    )
 
 
 def _normalize_block(text: str) -> str:
@@ -150,7 +155,10 @@ def test_identity_ready(
 
     if contains_sensitive_key(payload):
         return False, "test_identity_ready FAIL: recibo contém campo sensível"
-    return True, f"test_identity_ready: {identity_ref} ready em {payload['environment']}"
+    return (
+        True,
+        f"test_identity_ready: {identity_ref} ready em {payload['environment']}",
+    )
 
 
 _NAVIGATION_ENTRY_POLICIES = {"public", "entitled", "contextual", "first_launch"}
@@ -209,7 +217,9 @@ def _navigation_repo_file(
         try:
             resolved.relative_to(under.resolve())
         except ValueError as exc:
-            raise ValueError(f"{label} deve ficar sob {under.relative_to(root)}") from exc
+            raise ValueError(
+                f"{label} deve ficar sob {under.relative_to(root)}"
+            ) from exc
     if not resolved.is_file() or resolved.stat().st_size == 0:
         raise ValueError(f"{label} não existe ou está vazio: {relative.as_posix()}")
     return resolved
@@ -265,7 +275,9 @@ def _load_navigation_contract(
         raise ValueError("o escopo não contém referências identificáveis")
 
     targets: dict[str, dict] = {}
-    for index, raw_target in enumerate(_navigation_list(payload.get("targets"), "targets")):
+    for index, raw_target in enumerate(
+        _navigation_list(payload.get("targets"), "targets")
+    ):
         target = _navigation_mapping(raw_target, f"targets[{index}]")
         target_id = _navigation_text(target.get("id"), f"targets[{index}].id").upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_.:-]{2,63}", target_id):
@@ -283,7 +295,9 @@ def _load_navigation_contract(
             )
         targets[target_id] = target
     if len(targets) < min_targets:
-        raise ValueError(f"targets possui {len(targets)} item(ns); mínimo {min_targets}")
+        raise ValueError(
+            f"targets possui {len(targets)} item(ns); mínimo {min_targets}"
+        )
 
     scope_rows: dict[str, dict] = {}
     used_targets: set[str] = set()
@@ -298,9 +312,7 @@ def _load_navigation_contract(
             row.get("disposition"), f"scope_refs[{index}].disposition"
         )
         if disposition not in {"ui", "non_ui"}:
-            raise ValueError(
-                f"scope_refs[{index}].disposition deve ser ui ou non_ui"
-            )
+            raise ValueError(f"scope_refs[{index}].disposition deve ser ui ou non_ui")
         raw_targets = _navigation_list(
             row.get("targets", []), f"scope_refs[{index}].targets"
         )
@@ -316,7 +328,9 @@ def _load_navigation_contract(
             _navigation_text(row.get("reason"), f"scope_refs[{index}].reason")
         unknown_targets = sorted(row_targets - set(targets))
         if unknown_targets:
-            raise ValueError(f"scope ref {ref} aponta targets inexistentes: {unknown_targets}")
+            raise ValueError(
+                f"scope ref {ref} aponta targets inexistentes: {unknown_targets}"
+            )
         used_targets.update(row_targets)
         scope_rows[ref] = row
 
@@ -409,9 +423,7 @@ def navigation_reachability(
         if require_approved and verdict != "APPROVED":
             raise ValueError("este gate exige verdict APPROVED")
 
-        candidate_ref = _navigation_text(
-            report.get("candidate_ref"), "candidate_ref"
-        )
+        candidate_ref = _navigation_text(report.get("candidate_ref"), "candidate_ref")
         observed_ref = _navigation_text(
             report.get("observed_candidate_ref"), "observed_candidate_ref"
         )
@@ -463,9 +475,7 @@ def navigation_reachability(
                 for step_index, step in enumerate(raw_steps)
             ]
 
-            raw_targets = _navigation_list(
-                journey.get("targets"), f"{prefix}.targets"
-            )
+            raw_targets = _navigation_list(journey.get("targets"), f"{prefix}.targets")
             if not raw_targets:
                 raise ValueError(f"{prefix}.targets não pode ser vazio")
             journey_targets = {
@@ -516,8 +526,7 @@ def navigation_reachability(
                     f"{sorted(_NAVIGATION_ACCESS_CONTEXTS)}"
                 )
             policies = {
-                str(targets[target_id]["entry_policy"])
-                for target_id in journey_targets
+                str(targets[target_id]["entry_policy"]) for target_id in journey_targets
             }
             if "public" in policies and access_context != "public":
                 raise ValueError(f"{prefix} não comprova acesso público")
@@ -715,8 +724,7 @@ def _validate_review_outcome_payload(
             )
         if pending_refs:
             raise ValueError(
-                "verdict APPROVED contém resultados pendentes: "
-                f"{sorted(pending_refs)}"
+                f"verdict APPROVED contém resultados pendentes: {sorted(pending_refs)}"
             )
         if findings:
             raise ValueError("verdict APPROVED exige findings vazio")
@@ -845,9 +853,7 @@ def review_chain_approved(
                 return True, "review_chain_approved: review original aprovado"
             raise ValueError("review rejeitado ainda não possui fix review aprovado")
 
-        fix_scope_file = _navigation_repo_file(
-            root, fix_scope_path, "fix review scope"
-        )
+        fix_scope_file = _navigation_repo_file(root, fix_scope_path, "fix review scope")
         fix_refs = _navigation_scope_ids(fix_scope_file, fix_scope_pattern)
         if verdict == "REJECTED":
             if not finding_ids:
@@ -921,7 +927,9 @@ def min_lines(path: str, n: int, project_root: str = ".") -> tuple[bool, str]:
     return False, f"min_lines FAIL: {path} tem {lines} linhas (min {n})"
 
 
-def has_sections(path: str = "", sections: list[str] = None, project_root: str = ".", file: str = "") -> tuple[bool, str]:
+def has_sections(
+    path: str = "", sections: list[str] = None, project_root: str = ".", file: str = ""
+) -> tuple[bool, str]:
     """Verifica se arquivo contem as secoes esperadas.
     Aceita 'path' ou 'file' como nome do argumento (aliases).
     """
@@ -935,7 +943,10 @@ def has_sections(path: str = "", sections: list[str] = None, project_root: str =
     norm_content = _normalize(content)
     missing = [s for s in sections if _normalize(s) not in norm_content]
     if not missing:
-        return True, f"has_sections: {effective_path} tem todas as {len(sections)} secoes"
+        return (
+            True,
+            f"has_sections: {effective_path} tem todas as {len(sections)} secoes",
+        )
     return False, f"has_sections FAIL: {effective_path} faltam secoes: {missing}"
 
 
@@ -983,13 +994,22 @@ def document_quality(
         "as an ai",
     ]
     norm_content = _normalize(content)
-    found_forbidden = [term for term in forbidden_terms if _normalize(term) in norm_content]
+    found_forbidden = [
+        term for term in forbidden_terms if _normalize(term) in norm_content
+    ]
     if found_forbidden:
-        return False, f"document_quality FAIL: {effective_path} contem ruido de execucao: {found_forbidden[:5]}"
+        return (
+            False,
+            f"document_quality FAIL: {effective_path} contem ruido de execucao: {found_forbidden[:5]}",
+        )
 
     if required_terms:
         matched = [term for term in required_terms if _normalize(term) in norm_content]
-        minimum = min_required_terms if min_required_terms is not None else len(required_terms)
+        minimum = (
+            min_required_terms
+            if min_required_terms is not None
+            else len(required_terms)
+        )
         if len(matched) < minimum:
             missing = [term for term in required_terms if term not in matched]
             return False, (
@@ -1052,14 +1072,17 @@ def expert_review_report_valid(
     if verdict != "BLOCKED":
         placeholder_markers.append("nao verificado")
     evidence_is_placeholder = any(
-        marker in evidence_norm
-        for marker in placeholder_markers
+        marker in evidence_norm for marker in placeholder_markers
     )
     has_source = bool(
-        re.search(r"\b(fonte|path|arquivo|linha|comando|command|teste)\b", evidence_norm)
+        re.search(
+            r"\b(fonte|path|arquivo|linha|comando|command|teste)\b", evidence_norm
+        )
     )
     has_observation = bool(
-        re.search(r"\b(observado|resultado|exit|pass|fail|aprov|reprov)\w*\b", evidence_norm)
+        re.search(
+            r"\b(observado|resultado|exit|pass|fail|aprov|reprov)\w*\b", evidence_norm
+        )
     )
     mentions_prd = "prd" in evidence_norm
     if (
@@ -1131,7 +1154,9 @@ def api_contract_complete(
                 normalized = normalized.rstrip("/")
             endpoint_matches.add((method.upper(), normalized))
 
-    root_methods = sorted({method for method, endpoint in endpoint_matches if endpoint == "/"})
+    root_methods = sorted(
+        {method for method, endpoint in endpoint_matches if endpoint == "/"}
+    )
     if root_methods:
         return False, (
             "api_contract_complete FAIL: endpoint '/' nao e contrato acionavel; "
@@ -1139,14 +1164,20 @@ def api_contract_complete(
             f"para produto (methods={root_methods})"
         )
 
-    non_health = {(method, endpoint) for method, endpoint in endpoint_matches if endpoint != "/health"}
+    non_health = {
+        (method, endpoint)
+        for method, endpoint in endpoint_matches
+        if endpoint != "/health"
+    }
     if len(non_health) < min_endpoints:
         return False, (
             f"api_contract_complete FAIL: {path} tem {len(non_health)} endpoint(s) de produto "
             f"(min {min_endpoints})"
         )
 
-    if require_health and not any(endpoint == "/health" for _, endpoint in endpoint_matches):
+    if require_health and not any(
+        endpoint == "/health" for _, endpoint in endpoint_matches
+    ):
         return False, "api_contract_complete FAIL: falta endpoint /health"
 
     if require_post_for_create:
@@ -1154,14 +1185,30 @@ def api_contract_complete(
         for name in ("PRD.md", "ui_criteria.md", "task_list.md"):
             candidate = Path(project_root) / "docs" / name
             if candidate.exists():
-                docs_text += "\n" + candidate.read_text(encoding="utf-8", errors="ignore")
-        create_terms = ["criar", "cadastrar", "adicionar", "novo", "nova", "create", "add"]
+                docs_text += "\n" + candidate.read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+        create_terms = [
+            "criar",
+            "cadastrar",
+            "adicionar",
+            "novo",
+            "nova",
+            "create",
+            "add",
+        ]
         if any(term in _normalize(docs_text) for term in create_terms) and not any(
             method == "POST" for method, _ in endpoint_matches
         ):
-            return False, "api_contract_complete FAIL: produto exige criacao mas contrato nao tem POST"
+            return (
+                False,
+                "api_contract_complete FAIL: produto exige criacao mas contrato nao tem POST",
+            )
 
-    return True, f"api_contract_complete: {len(non_health)} endpoint(s), methods={sorted({m for m, _ in endpoint_matches})}"
+    return (
+        True,
+        f"api_contract_complete: {len(non_health)} endpoint(s), methods={sorted({m for m, _ in endpoint_matches})}",
+    )
 
 
 def library_contract_complete(
@@ -1190,8 +1237,7 @@ def library_contract_complete(
     ]
     if missing:
         return False, (
-            "library_contract_complete FAIL: "
-            f"{path} faltam secoes: {missing}"
+            f"library_contract_complete FAIL: {path} faltam secoes: {missing}"
         )
 
     expected_columns = {
@@ -1201,11 +1247,15 @@ def library_contract_complete(
         "description": {"description", "descricao"},
         "errors": {"errors", "erros"},
     }
-    table_lines = [line.strip() for line in content.splitlines() if line.strip().startswith("|")]
+    table_lines = [
+        line.strip() for line in content.splitlines() if line.strip().startswith("|")
+    ]
     header_index: int | None = None
     column_indexes: dict[str, int] = {}
     for index, line in enumerate(table_lines):
-        cells = [_normalize(cell.strip().strip("`")) for cell in line.strip("|").split("|")]
+        cells = [
+            _normalize(cell.strip().strip("`")) for cell in line.strip("|").split("|")
+        ]
         resolved: dict[str, int] = {}
         for canonical, aliases in expected_columns.items():
             for cell_index, cell in enumerate(cells):
@@ -1249,7 +1299,9 @@ def library_contract_complete(
     )
 
 
-def relative_dates_only(path: str = "docs/test_data.md", project_root: str = ".") -> tuple[bool, str]:
+def relative_dates_only(
+    path: str = "docs/test_data.md", project_root: str = "."
+) -> tuple[bool, str]:
     """Garante que massa de dados use datas relativas em vez de hardcode absoluto."""
     full = Path(project_root) / path
     if not full.exists():
@@ -1262,7 +1314,10 @@ def relative_dates_only(path: str = "docs/test_data.md", project_root: str = "."
     for pattern in absolute_patterns:
         match = re.search(pattern, content)
         if match:
-            return False, f"relative_dates_only FAIL: {path} contem data absoluta: {match.group(0)}"
+            return (
+                False,
+                f"relative_dates_only FAIL: {path} contem data absoluta: {match.group(0)}",
+            )
     norm = _normalize(content)
     relative_terms = ["hoje", "today", "amanha", "ontem", "d+", "d-", "semana atual"]
     if not any(term in norm for term in relative_terms):
@@ -1299,8 +1354,18 @@ def _extract_ui_criteria(content: str) -> list[tuple[str, str]]:
 
 
 _REPORT_STATUS_MARKERS = (
-    "pass", "ok", "approved", "aprov", "atendid", "conforme",
-    "fail", "reprov", "nao atend", "pendente", "missing", "ausente",
+    "pass",
+    "ok",
+    "approved",
+    "aprov",
+    "atendid",
+    "conforme",
+    "fail",
+    "reprov",
+    "nao atend",
+    "pendente",
+    "missing",
+    "ausente",
 )
 
 _REPORT_STATUS_CELL_RE = re.compile(
@@ -1350,7 +1415,7 @@ def _criterion_report_status_text(line: str, code: str) -> str:
     canonical_code = _canonical_ui_criterion_code(code)
     for index, cell in enumerate(cells):
         if canonical_code in _extract_criterion_codes(cell):
-            rest = cells[index + 1:]
+            rest = cells[index + 1 :]
             # A célula de status pode não ser a imediatamente seguinte ao ID
             # (formato "| ID | descrição | PASS | evidência |"): usar a
             # primeira célula que parece um veredito.
@@ -1384,7 +1449,9 @@ def _source_criteria_codes(source_text: str) -> set[str]:
         re.IGNORECASE | re.DOTALL,
     ):
         codes.update(_extract_criterion_codes(match.group(2)))
-    for match in re.finditer(r"ui-criteria\s*:\s*([^\n\r<]+)", source_text, re.IGNORECASE):
+    for match in re.finditer(
+        r"ui-criteria\s*:\s*([^\n\r<]+)", source_text, re.IGNORECASE
+    ):
         codes.update(_extract_criterion_codes(match.group(1)))
     return codes
 
@@ -1398,7 +1465,9 @@ def ui_criteria_ids(
     criteria_file = Path(project_root) / path
     if not criteria_file.exists():
         return False, f"ui_criteria_ids FAIL: {path} nao encontrado"
-    criteria = _extract_ui_criteria(criteria_file.read_text(encoding="utf-8", errors="ignore"))
+    criteria = _extract_ui_criteria(
+        criteria_file.read_text(encoding="utf-8", errors="ignore")
+    )
     if len(criteria) < min_count:
         return False, (
             f"ui_criteria_ids FAIL: {path} tem {len(criteria)} criterios identificados "
@@ -1476,7 +1545,11 @@ def _ui_component_requirements(criteria_text: str) -> list[tuple[str, re.Pattern
             (r"\btoggle\b", r"\bswitch\b", r"alternador"),
             r"role=[\"']switch|type=[\"']checkbox|toggle|switch",
         ),
-        ("checkbox", (r"checkbox", r"caixa de selecao"), r"type=[\"']checkbox|checkbox"),
+        (
+            "checkbox",
+            (r"checkbox", r"caixa de selecao"),
+            r"type=[\"']checkbox|checkbox",
+        ),
         ("radio", (r"\bradio\b", r"opcao unica"), r"type=[\"']radio|\bradio\b"),
         (
             "slider",
@@ -1485,7 +1558,11 @@ def _ui_component_requirements(criteria_text: str) -> list[tuple[str, re.Pattern
         ),
         ("tooltip", (r"\btooltip\b", r"dica de contexto"), r"tooltip|aria-describedby"),
         ("ícone SVG", (r"icone svg", r"icones svg", r"svg"), r"<svg\b|\.svg\b"),
-        ("estado vazio", (r"estado vazio", r"empty state"), r"estado vazio|empty state|\bvazio\b|\bempty\b"),
+        (
+            "estado vazio",
+            (r"estado vazio", r"empty state"),
+            r"estado vazio|empty state|\bvazio\b|\bempty\b",
+        ),
     ]
     requirements: list[tuple[str, re.Pattern[str]]] = []
     for label, triggers, source_pattern in specs:
@@ -1519,7 +1596,9 @@ def ui_criteria_coverage(
     if not criteria_file.exists():
         return False, f"ui_criteria_coverage FAIL: {criteria_path} nao encontrado"
 
-    criteria = _extract_ui_criteria(criteria_file.read_text(encoding="utf-8", errors="ignore"))
+    criteria = _extract_ui_criteria(
+        criteria_file.read_text(encoding="utf-8", errors="ignore")
+    )
     if exclude_pattern:
         try:
             excluded = re.compile(exclude_pattern, re.IGNORECASE)
@@ -1534,7 +1613,10 @@ def ui_criteria_coverage(
 
     mode = _normalize(evidence or "any").strip()
     if mode not in {"any", "report", "code", "both"}:
-        return False, "ui_criteria_coverage FAIL: evidence deve ser any, report, code ou both"
+        return (
+            False,
+            "ui_criteria_coverage FAIL: evidence deve ser any, report, code ou both",
+        )
 
     needs_report = mode in {"report", "both"}
     needs_code = mode in {"code", "both"}
@@ -1561,7 +1643,10 @@ def ui_criteria_coverage(
     if source_dir:
         source_root = root / source_dir
         if not source_root.exists():
-            return False, f"ui_criteria_coverage FAIL: source_dir {source_dir} nao encontrado"
+            return (
+                False,
+                f"ui_criteria_coverage FAIL: source_dir {source_dir} nao encontrado",
+            )
         source_text = "\n".join(
             p.read_text(encoding="utf-8", errors="ignore")
             for p in source_root.rglob("*")
@@ -1597,7 +1682,9 @@ def ui_criteria_coverage(
             if not pattern.search(source_text)
         ]
         if missing_components:
-            return False, "componentes sem evidencia no fonte: " + ", ".join(missing_components)
+            return False, "componentes sem evidencia no fonte: " + ", ".join(
+                missing_components
+            )
         return True, "codigo"
 
     failures: list[str] = []
@@ -1644,7 +1731,11 @@ def min_user_stories(path: str, n: int, project_root: str = ".") -> tuple[bool, 
     if not full.exists():
         return False, f"min_user_stories FAIL: {path} nao existe"
     content = full.read_text()
-    count = len(re.findall(r'(?:###?\s+US[-\s]|\*\*US-|^US-\d)', content, re.IGNORECASE | re.MULTILINE))
+    count = len(
+        re.findall(
+            r"(?:###?\s+US[-\s]|\*\*US-|^US-\d)", content, re.IGNORECASE | re.MULTILINE
+        )
+    )
     if count >= n:
         return True, f"min_user_stories: {path} tem {count} user stories (min {n})"
     return False, f"min_user_stories FAIL: {path} tem {count} user stories (min {n})"
@@ -1661,10 +1752,14 @@ def tests_pass(project_root: str = ".") -> tuple[bool, str]:
     )
     if result.returncode == 0:
         # Extrair contagem de testes
-        last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        last_line = (
+            result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        )
         return True, f"tests_pass: {last_line}"
     # Extrair resumo de falhas
-    last_lines = result.stdout.strip().splitlines()[-3:] if result.stdout.strip() else []
+    last_lines = (
+        result.stdout.strip().splitlines()[-3:] if result.stdout.strip() else []
+    )
     summary = " | ".join(last_lines)
     return False, f"tests_pass FAIL: {summary}"
 
@@ -1759,7 +1854,9 @@ def pytest_red_quality(
     syntax_errors: list[str] = []
     for path in files:
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"), filename=str(path))
+            tree = ast.parse(
+                path.read_text(encoding="utf-8", errors="ignore"), filename=str(path)
+            )
         except SyntaxError as exc:
             syntax_errors.append(f"{path.relative_to(root)}:{exc.lineno}: {exc.msg}")
             continue
@@ -1781,16 +1878,23 @@ def pytest_red_quality(
                     stub_tests.append(f"{path.relative_to(root)}::{node.name}")
 
     if syntax_errors:
-        return False, "pytest_red_quality FAIL: syntax error: " + "; ".join(syntax_errors[:5])
+        return False, "pytest_red_quality FAIL: syntax error: " + "; ".join(
+            syntax_errors[:5]
+        )
     if test_count < min_tests:
-        return False, f"pytest_red_quality FAIL: {test_count} teste(s) encontrado(s) (min {min_tests})"
+        return (
+            False,
+            f"pytest_red_quality FAIL: {test_count} teste(s) encontrado(s) (min {min_tests})",
+        )
     if assertion_count < min_assertions:
         return False, (
             f"pytest_red_quality FAIL: {assertion_count} assert/pytest.raises encontrado(s) "
             f"(min {min_assertions})"
         )
     if stub_tests:
-        return False, "pytest_red_quality FAIL: testes stub/pass-only: " + "; ".join(stub_tests[:5])
+        return False, "pytest_red_quality FAIL: testes stub/pass-only: " + "; ".join(
+            stub_tests[:5]
+        )
     return (
         True,
         f"pytest_red_quality: {len(files)} arquivo(s), {test_count} teste(s), "
@@ -1810,7 +1914,7 @@ def coverage_min(min_pct: int, project_root: str = ".") -> tuple[bool, str]:
     # Procurar linha TOTAL no output
     for line in result.stdout.splitlines():
         if "TOTAL" in line:
-            match = re.search(r'(\d+)%', line)
+            match = re.search(r"(\d+)%", line)
             if match:
                 pct = int(match.group(1))
                 if pct >= min_pct:
@@ -1819,9 +1923,12 @@ def coverage_min(min_pct: int, project_root: str = ".") -> tuple[bool, str]:
     return False, "coverage_min FAIL: nao consegui extrair cobertura do output"
 
 
-def read_artifact(path: str, key: str, pattern: str, project_root: str = ".") -> tuple[bool, str]:
+def read_artifact(
+    path: str, key: str, pattern: str, project_root: str = "."
+) -> tuple[bool, str]:
     """Le arquivo e extrai valor via regex. Detail tem formato 'read_artifact: key=value'."""
     import re as _re
+
     full = Path(project_root) / path
     if not full.exists():
         return False, f"read_artifact FAIL: {path} nao encontrado"
@@ -1861,7 +1968,10 @@ def sections_unchanged(
                 f"sections_unchanged FAIL: secao '{section}' ausente no baseline {snapshot_path}"
             )
         if current_section is None:
-            return False, f"sections_unchanged FAIL: secao '{section}' ausente em {path}"
+            return (
+                False,
+                f"sections_unchanged FAIL: secao '{section}' ausente em {path}",
+            )
 
         if _normalize_block(current_section) != _normalize_block(snapshot_section):
             changed.append(section)
@@ -1872,10 +1982,7 @@ def sections_unchanged(
             f"{changed}"
         )
 
-    return True, (
-        "sections_unchanged: secoes preservadas "
-        f"({', '.join(sections)})"
-    )
+    return True, (f"sections_unchanged: secoes preservadas ({', '.join(sections)})")
 
 
 _BACKLOG_ID_RE = re.compile(r"\b(?:PB|BL|US|DV)-\d+[A-Z]?\b", re.IGNORECASE)
@@ -1949,7 +2056,9 @@ def _backlog_rows(content: str) -> list[dict[str, str]]:
         normalized = dict(row)
         normalized["_id"] = match.group(0).upper()
         normalized["_priority"] = _row_value(row, "prioridade", "priority").upper()
-        normalized["_status"] = _normalize(_row_value(row, "status", "estado")).replace("-", "_")
+        normalized["_status"] = _normalize(_row_value(row, "status", "estado")).replace(
+            "-", "_"
+        )
         normalized["_decision"] = _row_value(
             row,
             "decisao",
@@ -1969,7 +2078,11 @@ def project_backlog_summary(
 ) -> dict[str, object]:
     """Return deterministic counters for PROJECT_BACKLOG.md."""
     backlog_file = Path(project_root) / path
-    rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore")) if backlog_file.exists() else []
+    rows = (
+        _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+        if backlog_file.exists()
+        else []
+    )
     by_status: dict[str, int] = {}
     by_priority: dict[str, int] = {}
     undecided_p0_p1: list[str] = []
@@ -2010,13 +2123,26 @@ def project_backlog_valid(
     ids = [row["_id"] for row in rows]
     duplicated = sorted({item for item in ids if ids.count(item) > 1})
     if duplicated:
-        return False, f"project_backlog_valid FAIL: IDs duplicados: {', '.join(duplicated)}"
-    bad_priority = [row["_id"] for row in rows if row.get("_priority") not in _BACKLOG_PRIORITIES]
+        return (
+            False,
+            f"project_backlog_valid FAIL: IDs duplicados: {', '.join(duplicated)}",
+        )
+    bad_priority = [
+        row["_id"] for row in rows if row.get("_priority") not in _BACKLOG_PRIORITIES
+    ]
     if bad_priority:
-        return False, f"project_backlog_valid FAIL: prioridade invalida em {', '.join(bad_priority[:8])}"
-    bad_status = [row["_id"] for row in rows if row.get("_status") not in _BACKLOG_STATUSES]
+        return (
+            False,
+            f"project_backlog_valid FAIL: prioridade invalida em {', '.join(bad_priority[:8])}",
+        )
+    bad_status = [
+        row["_id"] for row in rows if row.get("_status") not in _BACKLOG_STATUSES
+    ]
     if bad_status:
-        return False, f"project_backlog_valid FAIL: status invalido em {', '.join(bad_status[:8])}"
+        return (
+            False,
+            f"project_backlog_valid FAIL: status invalido em {', '.join(bad_status[:8])}",
+        )
     return True, f"project_backlog_valid: {len(rows)} item(ns) validos em {path}"
 
 
@@ -2068,19 +2194,33 @@ def task_list_references_backlog(
     if not task_file.exists():
         return False, f"task_list_references_backlog FAIL: {task_path} nao encontrado"
     if not backlog_file.exists():
-        return False, f"task_list_references_backlog FAIL: {backlog_path} nao encontrado"
-    backlog_rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+        return (
+            False,
+            f"task_list_references_backlog FAIL: {backlog_path} nao encontrado",
+        )
+    backlog_rows = _backlog_rows(
+        backlog_file.read_text(encoding="utf-8", errors="ignore")
+    )
     backlog_ids = {row["_id"] for row in backlog_rows}
     if not backlog_ids:
-        return False, f"task_list_references_backlog FAIL: nenhum ID de backlog em {backlog_path}"
+        return (
+            False,
+            f"task_list_references_backlog FAIL: nenhum ID de backlog em {backlog_path}",
+        )
     text = task_file.read_text(encoding="utf-8", errors="ignore").upper()
-    referenced = sorted({match.group(0).upper() for match in _BACKLOG_ID_RE.finditer(text)} & backlog_ids)
+    referenced = sorted(
+        {match.group(0).upper() for match in _BACKLOG_ID_RE.finditer(text)}
+        & backlog_ids
+    )
     if len(referenced) < min_refs:
         return False, (
             f"task_list_references_backlog FAIL: {task_path} referencia "
             f"{len(referenced)} item(ns) de backlog, min {min_refs}"
         )
-    return True, f"task_list_references_backlog: {len(referenced)} item(ns) referenciados"
+    return (
+        True,
+        f"task_list_references_backlog: {len(referenced)} item(ns) referenciados",
+    )
 
 
 def backlog_pending_decisions(
@@ -2113,21 +2253,29 @@ def backlog_referenced_decisions(
     root = Path(project_root)
     relative = Path(references_path)
     if relative.is_absolute() or ".." in relative.parts:
-        return False, f"backlog_referenced_decisions FAIL: path inseguro: {references_path}"
+        return (
+            False,
+            f"backlog_referenced_decisions FAIL: path inseguro: {references_path}",
+        )
     reference_file = root / relative
     backlog_file = root / backlog_path
     try:
         reference_file.resolve().relative_to(root.resolve())
         backlog_file.resolve().relative_to(root.resolve())
     except ValueError:
-        return False, "backlog_referenced_decisions FAIL: artefato escapa da raiz do projeto"
+        return (
+            False,
+            "backlog_referenced_decisions FAIL: artefato escapa da raiz do projeto",
+        )
     if not reference_file.is_file():
         return False, (
-            "backlog_referenced_decisions FAIL: "
-            f"{references_path} nao encontrado"
+            f"backlog_referenced_decisions FAIL: {references_path} nao encontrado"
         )
     if not backlog_file.is_file():
-        return False, f"backlog_referenced_decisions FAIL: {backlog_path} nao encontrado"
+        return (
+            False,
+            f"backlog_referenced_decisions FAIL: {backlog_path} nao encontrado",
+        )
 
     reference_text = reference_file.read_text(encoding="utf-8", errors="ignore")
     if reference_field:
@@ -2139,7 +2287,10 @@ def backlog_referenced_decisions(
         referenced = [match.group(1).upper()] if match else []
     else:
         referenced = sorted(
-            {match.group(0).upper() for match in _FEATURE_BACKLOG_ID_RE.finditer(reference_text)}
+            {
+                match.group(0).upper()
+                for match in _FEATURE_BACKLOG_ID_RE.finditer(reference_text)
+            }
         )
     if not referenced:
         field_hint = f" no campo {reference_field}" if reference_field else ""
@@ -2164,10 +2315,7 @@ def backlog_referenced_decisions(
     raw_statuses = accepted_statuses or {"done", "accepted"}
     if isinstance(raw_statuses, str):
         raw_statuses = [raw_statuses]
-    allowed = {
-        _normalize(str(status)).replace("-", "_")
-        for status in raw_statuses
-    }
+    allowed = {_normalize(str(status)).replace("-", "_") for status in raw_statuses}
     unfinished = sorted(
         backlog_id
         for backlog_id in referenced
@@ -2179,9 +2327,7 @@ def backlog_referenced_decisions(
             + ", ".join(unfinished)
         )
     return True, (
-        "backlog_referenced_decisions: "
-        + ", ".join(referenced)
-        + " concluido(s)"
+        "backlog_referenced_decisions: " + ", ".join(referenced) + " concluido(s)"
     )
 
 
@@ -2227,8 +2373,7 @@ def _feature_table_records(content: str) -> tuple[list[dict[str, str]], str | No
             separator is None
             or len(separator) != len(_FEATURE_TABLE_HEADERS)
             or not all(
-                re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
-                for cell in separator
+                re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in separator
             )
         ):
             return [], "separador da tabela invalido"
@@ -2239,7 +2384,10 @@ def _feature_table_records(content: str) -> tuple[list[dict[str, str]], str | No
             if row_cells is None:
                 break
             if len(row_cells) != len(_FEATURE_TABLE_HEADERS):
-                return [], f"linha {row_number} tem {len(row_cells)} coluna(s), esperado 9"
+                return (
+                    [],
+                    f"linha {row_number} tem {len(row_cells)} coluna(s), esperado 9",
+                )
             records.append(dict(zip(_FEATURE_TABLE_HEADERS, row_cells)))
         return records, None
     return [], (
@@ -2256,12 +2404,17 @@ def _feature_rows(content: str) -> tuple[list[dict[str, object]], str | None]:
         raw_id = record.get("id", "").strip().strip("`")
         id_match = _FEATURE_ID_RE.fullmatch(raw_id)
         backlog_ids = sorted(
-            {match.group(0).upper() for match in _FEATURE_BACKLOG_ID_RE.finditer(record.get("backlog", ""))}
+            {
+                match.group(0).upper()
+                for match in _FEATURE_BACKLOG_ID_RE.finditer(record.get("backlog", ""))
+            }
         )
         normalized: dict[str, object] = dict(record)
         normalized["_id"] = id_match.group(0).upper() if id_match else ""
         normalized["_raw_id"] = raw_id
-        normalized["_status"] = _normalize(record.get("status", "")).replace("-", "_").strip()
+        normalized["_status"] = (
+            _normalize(record.get("status", "")).replace("-", "_").strip()
+        )
         normalized["_backlog_ids"] = backlog_ids
         rows.append(normalized)
     return rows, schema_error
@@ -2309,26 +2462,43 @@ def features_catalog_valid(
     if not backlog_file.exists():
         return False, f"features_catalog_valid FAIL: {backlog_path} nao encontrado"
 
-    rows, schema_error = _feature_rows(feature_file.read_text(encoding="utf-8", errors="ignore"))
+    rows, schema_error = _feature_rows(
+        feature_file.read_text(encoding="utf-8", errors="ignore")
+    )
     if schema_error:
-        return False, f"features_catalog_valid FAIL: schema invalido em {path}: {schema_error}"
+        return (
+            False,
+            f"features_catalog_valid FAIL: schema invalido em {path}: {schema_error}",
+        )
     if len(rows) < min_items:
         return False, (
             f"features_catalog_valid FAIL: {path} tem {len(rows)} item(ns), "
             f"min {min_items}"
         )
 
-    invalid_ids = [str(row.get("_raw_id") or "<vazio>") for row in rows if not row.get("_id")]
+    invalid_ids = [
+        str(row.get("_raw_id") or "<vazio>") for row in rows if not row.get("_id")
+    ]
     if invalid_ids:
-        return False, "features_catalog_valid FAIL: IDs invalidos: " + ", ".join(invalid_ids[:8])
+        return False, "features_catalog_valid FAIL: IDs invalidos: " + ", ".join(
+            invalid_ids[:8]
+        )
     ids = [str(row["_id"]) for row in rows]
     duplicated = sorted({item for item in ids if ids.count(item) > 1})
     if duplicated:
-        return False, f"features_catalog_valid FAIL: IDs duplicados: {', '.join(duplicated)}"
+        return (
+            False,
+            f"features_catalog_valid FAIL: IDs duplicados: {', '.join(duplicated)}",
+        )
 
-    bad_status = [str(row["_id"]) for row in rows if row.get("_status") not in _FEATURE_STATUSES]
+    bad_status = [
+        str(row["_id"]) for row in rows if row.get("_status") not in _FEATURE_STATUSES
+    ]
     if bad_status:
-        return False, f"features_catalog_valid FAIL: status invalido em {', '.join(bad_status[:8])}"
+        return (
+            False,
+            f"features_catalog_valid FAIL: status invalido em {', '.join(bad_status[:8])}",
+        )
 
     required_fields = {
         "titulo": "Título",
@@ -2354,16 +2524,23 @@ def features_catalog_valid(
             + ", ".join(without_backlog[:8])
         )
 
-    backlog_rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
-    backlog_by_id = {str(row["_id"]): row for row in backlog_rows if str(row["_id"]).startswith("PB-")}
+    backlog_rows = _backlog_rows(
+        backlog_file.read_text(encoding="utf-8", errors="ignore")
+    )
+    backlog_by_id = {
+        str(row["_id"]): row
+        for row in backlog_rows
+        if str(row["_id"]).startswith("PB-")
+    }
     referenced = {
-        str(backlog_id)
-        for row in rows
-        for backlog_id in row.get("_backlog_ids", [])
+        str(backlog_id) for row in rows for backlog_id in row.get("_backlog_ids", [])
     }
     unknown = sorted(referenced - set(backlog_by_id))
     if unknown:
-        return False, f"features_catalog_valid FAIL: PBs desconhecidos: {', '.join(unknown[:12])}"
+        return (
+            False,
+            f"features_catalog_valid FAIL: PBs desconhecidos: {', '.join(unknown[:12])}",
+        )
     not_implemented = sorted(
         backlog_id
         for backlog_id in referenced
@@ -2388,9 +2565,15 @@ def implemented_backlog_covered_by_features(
     feature_file = root / features_path
     backlog_file = root / backlog_path
     if not feature_file.exists():
-        return False, f"implemented_backlog_covered_by_features FAIL: {features_path} nao encontrado"
+        return (
+            False,
+            f"implemented_backlog_covered_by_features FAIL: {features_path} nao encontrado",
+        )
     if not backlog_file.exists():
-        return False, f"implemented_backlog_covered_by_features FAIL: {backlog_path} nao encontrado"
+        return (
+            False,
+            f"implemented_backlog_covered_by_features FAIL: {backlog_path} nao encontrado",
+        )
 
     feature_rows, schema_error = _feature_rows(
         feature_file.read_text(encoding="utf-8", errors="ignore")
@@ -2412,7 +2595,9 @@ def implemented_backlog_covered_by_features(
         raw_types = [feature_types] if isinstance(feature_types, str) else feature_types
         allowed_types = {_normalize(str(value)).strip() for value in raw_types}
 
-    backlog_rows = _backlog_rows(backlog_file.read_text(encoding="utf-8", errors="ignore"))
+    backlog_rows = _backlog_rows(
+        backlog_file.read_text(encoding="utf-8", errors="ignore")
+    )
     implemented = {
         str(row["_id"])
         for row in backlog_rows
@@ -2503,27 +2688,106 @@ def demand_coverage(
     prd_text = prd_file.read_text()
 
     stop_words = {
-        "como", "quero", "preciso", "para", "que", "com", "sem", "por", "uma",
-        "um", "de", "do", "da", "dos", "das", "no", "na", "nos", "nas", "ao",
-        "em", "os", "as", "se", "ou", "ter", "ser", "ver", "usar", "deve",
-        "devem", "deveria", "produto", "sistema", "usuario", "usuaria",
-        "eu", "meu", "minha", "us",
-        "the", "a", "an", "in", "on", "of", "to", "and", "or", "is", "with",
-        "from", "for", "by", "at", "be", "have", "this", "that", "user",
-        "system", "should", "must", "can", "want", "need",
+        "como",
+        "quero",
+        "preciso",
+        "para",
+        "que",
+        "com",
+        "sem",
+        "por",
+        "uma",
+        "um",
+        "de",
+        "do",
+        "da",
+        "dos",
+        "das",
+        "no",
+        "na",
+        "nos",
+        "nas",
+        "ao",
+        "em",
+        "os",
+        "as",
+        "se",
+        "ou",
+        "ter",
+        "ser",
+        "ver",
+        "usar",
+        "deve",
+        "devem",
+        "deveria",
+        "produto",
+        "sistema",
+        "usuario",
+        "usuaria",
+        "eu",
+        "meu",
+        "minha",
+        "us",
+        "the",
+        "a",
+        "an",
+        "in",
+        "on",
+        "of",
+        "to",
+        "and",
+        "or",
+        "is",
+        "with",
+        "from",
+        "for",
+        "by",
+        "at",
+        "be",
+        "have",
+        "this",
+        "that",
+        "user",
+        "system",
+        "should",
+        "must",
+        "can",
+        "want",
+        "need",
     }
     short_requirement_tokens = {
-        "ai", "ia", "ui", "ux", "api", "csv", "pdf", "xml", "sms", "sso",
-        "mfa", "2fa", "otp", "pix", "cpf",
+        "ai",
+        "ia",
+        "ui",
+        "ux",
+        "api",
+        "csv",
+        "pdf",
+        "xml",
+        "sms",
+        "sso",
+        "mfa",
+        "2fa",
+        "otp",
+        "pix",
+        "cpf",
     }
 
     def _is_significant_short_token(raw_word: str, word: str) -> bool:
         if not 2 <= len(word) <= 3:
             return False
-        raw_ascii = unicodedata.normalize("NFD", raw_word).encode("ascii", "ignore").decode("ascii")
+        raw_ascii = (
+            unicodedata.normalize("NFD", raw_word)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+        )
         if not any(char.isalpha() for char in raw_ascii):
             return False
-        return any(char.isdigit() for char in word) or word in short_requirement_tokens or raw_ascii.isupper()
+        return (
+            any(char.isdigit() for char in word)
+            or word in short_requirement_tokens
+            or raw_ascii.isupper()
+        )
 
     def _tokens(text: str) -> list[str]:
         tokens: list[str] = []
@@ -2542,23 +2806,53 @@ def demand_coverage(
             if len(line) < 12:
                 continue
             lower = _normalize(line)
-            explicit = raw_line.lstrip().startswith(("-", "*", "•")) or re.match(r"^\s*\d+[.)]", raw_line)
+            explicit = raw_line.lstrip().startswith(("-", "*", "•")) or re.match(
+                r"^\s*\d+[.)]", raw_line
+            )
             intent = any(
                 marker in lower
                 for marker in (
-                    "quero", "preciso", "deve", "devem", "permitir", "visualizar",
-                    "criar", "editar", "remover", "listar", "filtrar", "buscar",
-                    "acompanhar", "exportar", "importar", "validar", "mostrar",
-                    "i want", "i need", "should", "must", "allow", "create",
-                    "edit", "delete", "list", "filter", "search", "export",
-                    "import", "validate", "show",
+                    "quero",
+                    "preciso",
+                    "deve",
+                    "devem",
+                    "permitir",
+                    "visualizar",
+                    "criar",
+                    "editar",
+                    "remover",
+                    "listar",
+                    "filtrar",
+                    "buscar",
+                    "acompanhar",
+                    "exportar",
+                    "importar",
+                    "validar",
+                    "mostrar",
+                    "i want",
+                    "i need",
+                    "should",
+                    "must",
+                    "allow",
+                    "create",
+                    "edit",
+                    "delete",
+                    "list",
+                    "filter",
+                    "search",
+                    "export",
+                    "import",
+                    "validate",
+                    "show",
                 )
             )
             if explicit or intent:
                 candidates.append(line)
         if candidates:
             return candidates[:20]
-        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if len(p.strip()) >= 40]
+        paragraphs = [
+            p.strip() for p in re.split(r"\n\s*\n", text) if len(p.strip()) >= 40
+        ]
         return paragraphs[:10]
 
     prd_tokens = set(_tokens(prd_text))
@@ -2572,11 +2866,12 @@ def demand_coverage(
         if not req_tokens:
             continue
         missing_short = [
-            tok for tok in req_tokens
-            if len(tok) <= 3 and tok not in prd_tokens
+            tok for tok in req_tokens if len(tok) <= 3 and tok not in prd_tokens
         ]
         if missing_short:
-            missing.append(f"{requirement[:120]} (faltam termos: {', '.join(missing_short)})")
+            missing.append(
+                f"{requirement[:120]} (faltam termos: {', '.join(missing_short)})"
+            )
             continue
         hits = [tok for tok in req_tokens if tok in prd_tokens]
         ratio = len(hits) / len(req_tokens)
@@ -2589,17 +2884,28 @@ def demand_coverage(
     if total == 0:
         demand_tokens = set(_tokens(demand_text))
         if not demand_tokens:
-            return True, "demand_coverage: demanda sem requisitos verificáveis — pulando"
-        missing_short = [tok for tok in demand_tokens if len(tok) <= 3 and tok not in prd_tokens]
+            return (
+                True,
+                "demand_coverage: demanda sem requisitos verificáveis — pulando",
+            )
+        missing_short = [
+            tok for tok in demand_tokens if len(tok) <= 3 and tok not in prd_tokens
+        ]
         if missing_short:
-            return False, f"demand_coverage FAIL: faltam termos curtos: {', '.join(sorted(missing_short))}"
+            return (
+                False,
+                f"demand_coverage FAIL: faltam termos curtos: {', '.join(sorted(missing_short))}",
+            )
         overlap = len(demand_tokens & prd_tokens) / len(demand_tokens)
         if overlap >= 0.35:
             return True, f"demand_coverage: PASS — overlap global {overlap:.0%}"
         return False, f"demand_coverage FAIL: overlap global {overlap:.0%} < 35%"
 
     if not missing:
-        return True, f"demand_coverage: PASS — {covered}/{total} requisito(s) coberto(s)"
+        return (
+            True,
+            f"demand_coverage: PASS — {covered}/{total} requisito(s) coberto(s)",
+        )
 
     missing_str = "; ".join(missing[:5])
     return False, (
@@ -2639,15 +2945,26 @@ def prd_coverage(
         output_dirs = ["frontend/src", "src", "backend"]
     search_dirs = [root / d for d in output_dirs if (root / d).is_dir()]
     if not search_dirs:
-        return False, f"prd_coverage FAIL: nenhum diretório de output encontrado ({output_dirs})"
+        return (
+            False,
+            f"prd_coverage FAIL: nenhum diretório de output encontrado ({output_dirs})",
+        )
 
     # Coletar todo o texto dos arquivos de código
     code_text = []
     for d in search_dirs:
         for f in d.rglob("*"):
             if f.is_file() and f.suffix in (
-                ".js", ".ts", ".jsx", ".tsx", ".svelte", ".vue",
-                ".py", ".css", ".html", ".json",
+                ".js",
+                ".ts",
+                ".jsx",
+                ".tsx",
+                ".svelte",
+                ".vue",
+                ".py",
+                ".css",
+                ".html",
+                ".json",
             ):
                 try:
                     code_text.append(f.read_text(encoding="utf-8", errors="ignore"))
@@ -2656,28 +2973,92 @@ def prd_coverage(
     all_code = "\n".join(code_text).lower()
 
     if not all_code.strip():
-        return False, "prd_coverage FAIL: nenhum código encontrado nos diretórios de output"
+        return (
+            False,
+            "prd_coverage FAIL: nenhum código encontrado nos diretórios de output",
+        )
 
     # Verificar cada US
     STOP_WORDS = {
-        "como", "quero", "para", "que", "com", "sem", "por", "uma", "um",
-        "de", "do", "da", "dos", "das", "no", "na", "nos", "nas", "ao",
-        "em", "os", "as", "se", "ou", "ter", "ser", "ver", "usar",
-        "the", "a", "an", "in", "on", "of", "to", "and", "or", "is",
-        "with", "from", "for", "by", "at", "be", "have", "this", "that",
+        "como",
+        "quero",
+        "para",
+        "que",
+        "com",
+        "sem",
+        "por",
+        "uma",
+        "um",
+        "de",
+        "do",
+        "da",
+        "dos",
+        "das",
+        "no",
+        "na",
+        "nos",
+        "nas",
+        "ao",
+        "em",
+        "os",
+        "as",
+        "se",
+        "ou",
+        "ter",
+        "ser",
+        "ver",
+        "usar",
+        "the",
+        "a",
+        "an",
+        "in",
+        "on",
+        "of",
+        "to",
+        "and",
+        "or",
+        "is",
+        "with",
+        "from",
+        "for",
+        "by",
+        "at",
+        "be",
+        "have",
+        "this",
+        "that",
     }
     # Mapeamento PT→EN para keywords comuns em UI/dev
     PT_EN = {
-        "grafo": "graph", "visualizar": "graph", "diagrama": "diagram",
-        "navegar": "navigate", "navegação": "nav", "estado": "state",
-        "progresso": "progress", "terminal": "terminal", "editor": "editor",
-        "validação": "validat", "validar": "validat", "árvore": "tree",
-        "arquivo": "file", "arquivos": "file", "processo": "process",
-        "dados": "data", "reais": "real", "acompanhar": "progress",
-        "sprint": "sprint", "sprints": "sprint", "nodes": "node",
-        "embutido": "embed", "painel": "panel", "abas": "tab",
-        "tabs": "tab", "yaml": "yaml", "linhas": "line",
-        "sidebar": "sidebar", "explorer": "explorer",
+        "grafo": "graph",
+        "visualizar": "graph",
+        "diagrama": "diagram",
+        "navegar": "navigate",
+        "navegação": "nav",
+        "estado": "state",
+        "progresso": "progress",
+        "terminal": "terminal",
+        "editor": "editor",
+        "validação": "validat",
+        "validar": "validat",
+        "árvore": "tree",
+        "arquivo": "file",
+        "arquivos": "file",
+        "processo": "process",
+        "dados": "data",
+        "reais": "real",
+        "acompanhar": "progress",
+        "sprint": "sprint",
+        "sprints": "sprint",
+        "nodes": "node",
+        "embutido": "embed",
+        "painel": "panel",
+        "abas": "tab",
+        "tabs": "tab",
+        "yaml": "yaml",
+        "linhas": "line",
+        "sidebar": "sidebar",
+        "explorer": "explorer",
     }
     covered = []
     missing = []
@@ -2730,7 +3111,10 @@ def unique_screenshots(
     root = Path(project_root)
     sdir = root / screenshots_dir
     if not sdir.exists():
-        return False, f"unique_screenshots FAIL: diretório {screenshots_dir} não encontrado"
+        return (
+            False,
+            f"unique_screenshots FAIL: diretório {screenshots_dir} não encontrado",
+        )
 
     IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
     images = [f for f in sdir.rglob("*") if f.suffix.lower() in IMAGE_EXTS]
@@ -2760,7 +3144,10 @@ def unique_screenshots(
             f"— {'; '.join(examples)}"
         )
 
-    return True, f"unique_screenshots: {len(images)} screenshots únicos em {screenshots_dir}"
+    return (
+        True,
+        f"unique_screenshots: {len(images)} screenshots únicos em {screenshots_dir}",
+    )
 
 
 def bash_passes(script: str, project_root: str = ".") -> tuple[bool, str]:
@@ -2786,12 +3173,17 @@ def bash_passes(script: str, project_root: str = ".") -> tuple[bool, str]:
         return False, f"bash_passes FAIL: erro ao executar {script}: {e}"
 
     if result.returncode == 0:
-        last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
+        last_line = (
+            result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
+        )
         return True, f"bash_passes: {script} → {last_line}"
 
     output = (result.stdout + result.stderr).strip()
     preview = "\n".join(output.splitlines()[-5:]) if output else "(sem saída)"
-    return False, f"bash_passes FAIL: {script} saiu com código {result.returncode}\n{preview}"
+    return (
+        False,
+        f"bash_passes FAIL: {script} saiu com código {result.returncode}\n{preview}",
+    )
 
 
 def _stop_command_process_group(
@@ -2930,10 +3322,15 @@ def command_succeeds(
         and "no tests ran" in output.lower()
     ):
         preview = _preview(output, limit=8)
-        return False, f"command_succeeds FAIL: pytest nao executou nenhum teste\n{preview}"
+        return (
+            False,
+            f"command_succeeds FAIL: pytest nao executou nenhum teste\n{preview}",
+        )
 
     if result.returncode == 0:
-        last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
+        last_line = (
+            result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok"
+        )
         return True, f"command_succeeds: {command[:60]} → {last_line}"
 
     if not output and "--silent" in command:
@@ -2951,7 +3348,10 @@ def command_succeeds(
             pass
 
     preview = _preview(output, limit=12)
-    return False, f"command_succeeds FAIL: saiu com código {result.returncode}\n{preview}"
+    return (
+        False,
+        f"command_succeeds FAIL: saiu com código {result.returncode}\n{preview}",
+    )
 
 
 def git_diff_not_empty(path: str = ".", project_root: str = ".") -> tuple[bool, str]:
@@ -2987,10 +3387,16 @@ def git_diff_not_empty(path: str = ".", project_root: str = ".") -> tuple[bool, 
         changed = _git("diff", "--name-only", base, "HEAD", "--", path).stdout.strip()
         if changed:
             n = len(changed.splitlines())
-            return True, f"git_diff_not_empty: {path} tem {n} arquivo(s) alterado(s) desde {base[:7]}"
+            return (
+                True,
+                f"git_diff_not_empty: {path} tem {n} arquivo(s) alterado(s) desde {base[:7]}",
+            )
         return False, (
             f"git_diff_not_empty FAIL: nenhuma mudança em {path} neste ciclo "
             f"(nem uncommitted, nem commits desde {base[:7]}) — node de build ocioso?"
         )
 
-    return True, f"git_diff_not_empty: {path} sem branch base (main/master) — não verificável, AVISO"
+    return (
+        True,
+        f"git_diff_not_empty: {path} sem branch base (main/master) — não verificável, AVISO",
+    )

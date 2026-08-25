@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import stat
 
 import pytest
 import yaml
@@ -85,7 +85,9 @@ def test_catalog_lists_only_universal_run_templates(tmp_path: Path) -> None:
         catalog.require("missing")
 
 
-def test_materialization_is_copy_once_and_excludes_product_seeds(tmp_path: Path) -> None:
+def test_materialization_is_copy_once_and_excludes_product_seeds(
+    tmp_path: Path,
+) -> None:
     root = _project(tmp_path / "project")
     catalog_root = tmp_path / "templates"
     source = _global_template(catalog_root, "feature")
@@ -107,8 +109,7 @@ def test_materialization_is_copy_once_and_excludes_product_seeds(tmp_path: Path)
     fork = local.read_text(encoding="utf-8") + "\n# fork local\n"
     local.write_text(fork, encoding="utf-8")
     (source / "process.yml").write_text(
-        (source / "process.yml").read_text(encoding="utf-8")
-        + "\n# catálogo novo\n",
+        (source / "process.yml").read_text(encoding="utf-8") + "\n# catálogo novo\n",
         encoding="utf-8",
     )
 
@@ -202,7 +203,9 @@ def test_registered_broken_fork_fails_without_recopying(tmp_path: Path) -> None:
     assert not local.exists()
 
 
-def test_registration_failure_rolls_back_new_bundle(tmp_path: Path, monkeypatch) -> None:
+def test_registration_failure_rolls_back_new_bundle(
+    tmp_path: Path, monkeypatch
+) -> None:
     root = _project(tmp_path / "project")
     catalog_root = tmp_path / "templates"
     _global_template(catalog_root, "feature")
@@ -251,7 +254,9 @@ def test_concurrent_materialization_publishes_one_complete_fork(tmp_path: Path) 
     materializer = TemplateMaterializer(root, catalog=TemplateCatalog(catalog_root))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _index: materializer.resolve("feature"), range(2)))
+        results = list(
+            pool.map(lambda _index: materializer.resolve("feature"), range(2))
+        )
 
     assert {result.process_file for result in results} == {
         (root / ".ft/process/feature/process.yml").resolve()
@@ -276,7 +281,7 @@ def test_materializer_requires_initialized_project(tmp_path: Path) -> None:
 def test_real_catalog_has_no_feature_entrypoint() -> None:
     catalog = TemplateCatalog()
 
-    assert {"feature", "bug", "tweak"} <= set(catalog.names())
+    assert {"feature-fast", "bug-fast", "tweak"} <= set(catalog.names())
     for name in catalog.names():
         descriptor = catalog.get(name)
         payload = yaml.safe_load(descriptor.process_file.read_text(encoding="utf-8"))

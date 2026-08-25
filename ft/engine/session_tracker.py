@@ -35,7 +35,10 @@ class SessionTracker:
         }
 
         # Save at root level (for glob("*.yml")) and in agent subdir
-        for file_path in [self.sessions_dir / f"{session_id}.yml", agent_dir / f"{session_id}.yml"]:
+        for file_path in [
+            self.sessions_dir / f"{session_id}.yml",
+            agent_dir / f"{session_id}.yml",
+        ]:
             with open(file_path, "w") as f:
                 yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 

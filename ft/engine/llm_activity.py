@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
-
 
 ACTIVITY_SCHEMA_VERSION = 1
 ACTIVITY_SUFFIX = ".activity"

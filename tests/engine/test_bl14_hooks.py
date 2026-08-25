@@ -13,10 +13,10 @@ from pathlib import Path
 import yaml
 
 from ft.engine.hooks import (
-    load_environment,
     get_hooks,
-    run_hooks,
     hooks_all_passed,
+    load_environment,
+    run_hooks,
 )
 
 
@@ -45,6 +45,7 @@ def _register_process(root: Path, name: str = "test-hooks") -> Path:
 # ---------------------------------------------------------------------------
 # load_environment
 # ---------------------------------------------------------------------------
+
 
 class TestLoadEnvironment:
     def test_returns_empty_when_no_file(self, tmp_path):
@@ -79,6 +80,7 @@ class TestLoadEnvironment:
 # get_hooks
 # ---------------------------------------------------------------------------
 
+
 class TestGetHooks:
     def test_extracts_hooks_from_environment(self):
         env = {"hooks": {"on_init": ["./a.sh", "./b.sh"], "on_deliver": ["./c.sh"]}}
@@ -102,6 +104,7 @@ class TestGetHooks:
 # ---------------------------------------------------------------------------
 # run_hooks
 # ---------------------------------------------------------------------------
+
 
 class TestRunHooks:
     def test_returns_empty_when_no_hooks(self, tmp_path):
@@ -193,6 +196,7 @@ class TestRunHooks:
 # hooks_all_passed
 # ---------------------------------------------------------------------------
 
+
 class TestHooksAllPassed:
     def test_all_passed(self):
         assert hooks_all_passed([("a.sh", True, "ok"), ("b.sh", True, "ok")])
@@ -208,6 +212,7 @@ class TestHooksAllPassed:
 # Runner integration — hooks fire at correct moments
 # ---------------------------------------------------------------------------
 
+
 class TestRunnerHooksIntegration:
     def _make_project(self, tmp_path):
         """Create minimal project with environment.yml and a simple process."""
@@ -220,9 +225,14 @@ class TestRunnerHooksIntegration:
             "version": "1.0.0",
             "title": "Hook Test Process",
             "nodes": [
-                {"id": "gate1", "type": "gate", "title": "Gate 1",
-                 "executor": "python", "validators": [{"file_exists": "docs/test.md"}],
-                 "next": "end"},
+                {
+                    "id": "gate1",
+                    "type": "gate",
+                    "title": "Gate 1",
+                    "executor": "python",
+                    "validators": [{"file_exists": "docs/test.md"}],
+                    "next": "end",
+                },
                 {"id": "end", "type": "end", "title": "End"},
             ],
         }
@@ -233,6 +243,7 @@ class TestRunnerHooksIntegration:
 
     def test_runner_loads_environment(self, tmp_path):
         from ft.engine.runner import StepRunner
+
         project = self._make_project(tmp_path)
 
         env_file = project / ".ft" / "process" / "test-hooks" / "environment.yml"
@@ -247,6 +258,7 @@ class TestRunnerHooksIntegration:
 
     def test_fire_hooks_returns_true_when_no_hooks(self, tmp_path):
         from ft.engine.runner import StepRunner
+
         project = self._make_project(tmp_path)
         runner = StepRunner(
             process_path=project / ".ft" / "process" / "test-hooks" / "process.yml",
@@ -257,6 +269,7 @@ class TestRunnerHooksIntegration:
 
     def test_on_init_fires_during_init_state(self, tmp_path):
         from ft.engine.runner import StepRunner
+
         project = self._make_project(tmp_path)
 
         # Create a hook that writes a marker file
@@ -280,6 +293,7 @@ class TestRunnerHooksIntegration:
 
     def test_on_gate_pass_fires(self, tmp_path):
         from ft.engine.runner import StepRunner
+
         project = self._make_project(tmp_path)
 
         # Create the file that the gate expects
@@ -303,10 +317,13 @@ class TestRunnerHooksIntegration:
         runner.init_state()
         runner.run(mode="step")
 
-        assert (tmp_path / "gate_pass_fired").exists(), "on_gate_pass hook should have fired"
+        assert (tmp_path / "gate_pass_fired").exists(), (
+            "on_gate_pass hook should have fired"
+        )
 
     def test_on_deliver_fires_at_process_end(self, tmp_path):
         from ft.engine.runner import StepRunner
+
         project = self._make_project(tmp_path)
 
         # Create the file that the gate expects
@@ -330,4 +347,6 @@ class TestRunnerHooksIntegration:
         runner.init_state()
         runner.run(mode="mvp")
 
-        assert (tmp_path / "deliver_fired").exists(), "on_deliver hook should have fired"
+        assert (tmp_path / "deliver_fired").exists(), (
+            "on_deliver hook should have fired"
+        )

@@ -1,12 +1,12 @@
-from pathlib import Path
 from argparse import Namespace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-import subprocess
 
 import pytest
 import yaml
 
+from ft.cli import main as cli_main
 from ft.engine.process_improvements import (
     ProcessImprovementError,
     load_process_improvement_review,
@@ -15,7 +15,6 @@ from ft.engine.process_improvements import (
 )
 from ft.engine.runner import VALIDATOR_REGISTRY
 from ft.engine.validators.artifacts import process_improvements_classified
-from ft.cli import main as cli_main
 
 
 def _criteria(**overrides):
@@ -174,7 +173,7 @@ def test_promoted_candidate_requires_reference_and_unblocks_close(tmp_path):
         "PI-001",
         status="promoted",
         reason="Aplicado no template e validado pela suíte do engine.",
-        reference="commit abc123 templates/mvp-builder/process.yml",
+        reference="commit abc123 templates/mvp-builder-fast/process.yml",
     )
 
     assert review.global_candidates[0].status == "promoted"
@@ -261,13 +260,12 @@ def test_process_candidates_reads_active_worktree_from_project_root(tmp_path, ca
 def test_global_template_declares_structured_process_governance():
     root = Path(__file__).resolve().parents[2]
     data = yaml.safe_load(
-        (root / "templates/mvp-builder/process.yml").read_text(encoding="utf-8")
+        (root / "templates/mvp-builder-fast/process.yml").read_text(encoding="utf-8")
     )
     node = next(
         item for item in data["nodes"] if item["id"] == "ft.handoff.05.process_evolve"
     )
 
-    assert data["version"] == "1.3.0"
     assert "docs/process-improvements.yml" in data["artifact_policy"]["cycle"]
     assert "docs/process-improvements.yml" in node["outputs"]
     assert "docs/process-improvements.yml" in node["write_scope"]
@@ -281,18 +279,11 @@ def test_global_template_declares_structured_process_governance():
         for item in red["validators"]
     )
 
+    # O mvp-builder-fast serve a superfície via scripts/serve.sh (validado em
+    # test_template_serve); o contrato de env_setup do smoke era do mvp-builder.
     smoke = by_id["ft.smoke.01.run"]
     smoke_yaml = yaml.safe_dump(smoke, sort_keys=False)
-    assert ".smoke_started_process" in smoke_yaml
     assert "fuser -k" not in smoke_yaml
-    assert "PORT=" in smoke_yaml
-    for script in [*smoke["env_setup"], *smoke["env_teardown"]]:
-        result = subprocess.run(
-            ["sh", "-n", "-c", script],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stderr
 
     acceptance = by_id["ft.acceptance.01.cli"]
     assert "p0_blockers" in yaml.safe_dump(acceptance, sort_keys=False)

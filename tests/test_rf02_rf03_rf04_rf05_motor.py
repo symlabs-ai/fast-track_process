@@ -9,14 +9,14 @@ RF-05: métricas acumuladas (steps, cobertura, tokens)
 
 import pytest
 
-from ft.engine.state import StateManager
 from ft.engine.cycle_manager import CycleManager
 from ft.engine.metrics import MetricsTracker
-
+from ft.engine.state import StateManager
 
 # ---------------------------------------------------------------------------
 # RF-02: Motor avança somente após gate PASS
 # ---------------------------------------------------------------------------
+
 
 class TestGatePassRequired:
     def test_advance_without_pass_raises(self, tmp_path):
@@ -56,6 +56,7 @@ class TestGatePassRequired:
 # ---------------------------------------------------------------------------
 # RF-03: blocked_reason preenchido em gate BLOCK
 # ---------------------------------------------------------------------------
+
 
 class TestBlockedReason:
     def test_block_sets_reason(self, tmp_path):
@@ -97,6 +98,7 @@ class TestBlockedReason:
 # ---------------------------------------------------------------------------
 # RF-04: Suporte a múltiplos ciclos
 # ---------------------------------------------------------------------------
+
 
 class TestMultipleCycles:
     def test_cycle_manager_initial_cycle(self, tmp_path):
@@ -156,6 +158,7 @@ class TestMultipleCycles:
 # ---------------------------------------------------------------------------
 # RF-05: Métricas acumuladas (steps, cobertura, tokens)
 # ---------------------------------------------------------------------------
+
 
 class TestMetricsAccumulation:
     def test_steps_completed_increments_on_advance(self, tmp_path):

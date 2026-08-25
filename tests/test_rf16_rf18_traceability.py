@@ -8,13 +8,13 @@ RF-18: sessões de agentes salvas em project/docs/sessions/
 
 import pytest
 
-from ft.engine.state import StateManager
 from ft.engine.session_tracker import SessionTracker
-
+from ft.engine.state import StateManager
 
 # ---------------------------------------------------------------------------
 # RF-16: Artifacts registrados no estado
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactRegistry:
     def test_record_artifact_persists(self, tmp_path):
@@ -84,6 +84,7 @@ class TestArtifactRegistry:
 # ---------------------------------------------------------------------------
 # RF-17: gate_log preserva histórico acumulado
 # ---------------------------------------------------------------------------
+
 
 class TestGateLogHistory:
     def test_gate_log_records_pass(self, tmp_path):
@@ -163,6 +164,7 @@ class TestGateLogHistory:
 # ---------------------------------------------------------------------------
 # RF-18: Sessões de agentes em project/docs/sessions/
 # ---------------------------------------------------------------------------
+
 
 class TestSessionTracker:
     def test_session_saved_on_delegate(self, tmp_path):

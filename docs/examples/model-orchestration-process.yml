@@ -1,0 +1,226 @@
+# Exemplo didático — orquestração de modelos por node no Fast Track
+#
+# Demonstra o mecanismo de troca de engine/modelo/effort POR ETAPA do grafo:
+# cada node declara a rota de LLM adequada ao seu papel, e os gates continuam
+# determinísticos (executor: python). Política completa e matriz de decisão:
+# docs/ft_model_orchestration.md.
+#
+# Regras demonstradas:
+#   1. Python antes de LLM — gates e decisões nunca gastam modelo.
+#   2. Roteamento por papel — discovery barato, implementação equilibrada,
+#      revisão de risco no modelo mais forte.
+#   3. Diversidade de fornecedor — a auditoria independente usa OUTRO provider
+#      (Claude) para não herdar os vieses do modelo que implementou (Codex).
+#   4. Modelo não substitui controle — todo node LLM tem outputs, write_scope
+#      e validators; a "confiança" no modelo nunca é o mecanismo de segurança.
+#
+# IMPORTANTE: os identificadores de modelo abaixo são exemplos. Antes de rodar,
+# confirme as combinações disponíveis no SEU ambiente com:
+#   ft llm-capabilities --json
+# Uma rota indisponível não pode ser inventada nem substituída silenciosamente.
+
+id: model_orchestration_demo
+version: "1.0.0"
+title: "Demo — Troca de Modelo por Etapa"
+
+execution_policy:
+  entrypoint: run
+  template: model-orchestration-demo
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: true
+  requires_worktree: true
+  local_process_path: .ft/process/model-orchestration-demo/process.yml
+  merge_command: ft close --merge full
+
+input_policy:
+  required: true
+  destination: docs/feature-request.md
+  prompt: "Descreva a mudança a implementar"
+
+close_policy:
+  backlog:
+    mode: none
+  merge: full
+
+artifact_policy:
+  canonical: []
+  cycle:
+    - docs/feature-request.md
+    - docs/feature-map.md
+    - docs/plan.md
+    - docs/review/security.md
+    - docs/review/independent.md
+
+nodes:
+  # ---------------------------------------------------------------
+  # Gate de entrada: determinístico, sem LLM. Custo zero de modelo.
+  # ---------------------------------------------------------------
+  - id: demo.gate.preflight
+    type: gate
+    title: "Preflight — demanda registrada"
+    executor: python
+    validators:
+      - file_exists: docs/feature-request.md
+      - min_lines: 3
+    next: demo.discovery
+
+  # ---------------------------------------------------------------
+  # Discovery: leitura e inventário com saída delimitada.
+  # Rota ECONÔMICA — modelo pequeno, effort baixo. O write_scope
+  # restrito e o formato exigido tornam a delegação barata e segura.
+  # ---------------------------------------------------------------
+  - id: demo.discovery
+    type: discovery
+    title: "Mapear pontos de entrada e testes existentes"
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-luna
+    llm_effort: low
+    outputs:
+      - docs/feature-map.md
+    write_scope:
+      - docs/feature-map.md
+    prompt: |
+      Leia docs/feature-request.md e mapeie em docs/feature-map.md:
+      arquivos afetados, pontos de entrada, invariantes e testes existentes.
+      Cite arquivos e símbolos. NÃO proponha nem altere arquitetura.
+    validators:
+      - file_exists: docs/feature-map.md
+      - has_sections:
+          - Arquivos Afetados
+          - Testes Existentes
+    next: demo.plan
+
+  # ---------------------------------------------------------------
+  # Plano: documento estruturado. Rota INTERMEDIÁRIA em OUTRO
+  # provider (Claude) — mostra que a troca de engine é por node.
+  # ---------------------------------------------------------------
+  - id: demo.plan
+    type: document
+    title: "Plano de implementação"
+    executor: claude
+    llm_engine: claude
+    llm_model: claude-sonnet-5
+    llm_effort: medium
+    outputs:
+      - docs/plan.md
+    write_scope:
+      - docs/plan.md
+    prompt: |
+      Com base em docs/feature-map.md, escreva docs/plan.md com as seções
+      "Abordagem", "Passos" e "Riscos". Passos verificáveis, sem código.
+    validators:
+      - file_exists: docs/plan.md
+      - has_sections:
+          - Abordagem
+          - Passos
+          - Riscos
+    next: demo.gate.plan
+
+  # Gate intermediário: valida o plano sem gastar modelo.
+  - id: demo.gate.plan
+    type: gate
+    title: "Gate — plano completo"
+    executor: python
+    validators:
+      - file_exists: docs/plan.md
+      - min_lines: 15
+    next: demo.implement
+
+  # ---------------------------------------------------------------
+  # Implementação: escopo conhecido após o plano. Rota EQUILIBRADA
+  # (Terra/Medium). Os testes — não o modelo — provam a entrega.
+  # ---------------------------------------------------------------
+  - id: demo.implement
+    type: build
+    title: "Implementar com testes"
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-terra
+    llm_effort: medium
+    outputs:
+      - src/
+    write_scope:
+      - src/
+    prompt: |
+      Implemente exatamente o que docs/plan.md descreve, com testes.
+      Rode a suíte antes de encerrar; não deixe testes falhando.
+    validators:
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
+    next: demo.review.security
+
+  # ---------------------------------------------------------------
+  # Revisão de risco: leitura-apenas no modelo MAIS FORTE do
+  # provider (Sol/High). Escalar aqui é barato comparado ao custo
+  # de um defeito de segurança passar. write_scope restrito ao
+  # parecer: o revisor não corrige o produto.
+  # ---------------------------------------------------------------
+  - id: demo.review.security
+    type: review
+    title: "Revisão de segurança (read-only)"
+    executor: codex
+    llm_engine: codex
+    llm_model: gpt-5.6-sol
+    llm_effort: high
+    outputs:
+      - docs/review/security.md
+    write_scope:
+      - docs/review/security.md
+    prompt: |
+      Revise o diff de src/ contra docs/plan.md procurando problemas de
+      segurança, autorização e validação de entrada. Registre o parecer em
+      docs/review/security.md terminando com "Resultado: APPROVED" ou
+      "Resultado: REJECTED" e a lista de problemas. NÃO altere src/.
+    validators:
+      - file_exists: docs/review/security.md
+      - command_succeeds: "grep -qE 'Resultado: (APPROVED|REJECTED)' docs/review/security.md"
+    next: demo.review.independent
+
+  # ---------------------------------------------------------------
+  # Auditoria independente: OUTRO provider e modelo topo de linha
+  # (Claude Opus/High). Diversidade de fornecedor evita que o
+  # auditor compartilhe os pontos cegos de quem implementou.
+  # É diversidade adicional — não prova de correção: o gate final
+  # continua sendo os testes.
+  # ---------------------------------------------------------------
+  - id: demo.review.independent
+    type: review
+    title: "Auditoria independente cross-provider"
+    executor: claude
+    llm_engine: claude
+    llm_model: claude-opus-5
+    llm_effort: high
+    outputs:
+      - docs/review/independent.md
+    write_scope:
+      - docs/review/independent.md
+    prompt: |
+      Audite src/ de forma independente: correção em relação a docs/plan.md,
+      casos de borda não testados e regressões prováveis. Registre em
+      docs/review/independent.md com "Resultado: APPROVED" ou "REJECTED".
+      NÃO altere src/.
+    validators:
+      - file_exists: docs/review/independent.md
+      - command_succeeds: "grep -qE 'Resultado: (APPROVED|REJECTED)' docs/review/independent.md"
+    next: demo.gate.delivery
+
+  # ---------------------------------------------------------------
+  # Gate final: determinístico. Re-executa a suíte e exige os dois
+  # pareceres — o modelo forte opina, mas quem aprova é o gate.
+  # ---------------------------------------------------------------
+  - id: demo.gate.delivery
+    type: gate
+    title: "Gate de entrega"
+    executor: python
+    validators:
+      - file_exists: docs/review/security.md
+      - file_exists: docs/review/independent.md
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - command_succeeds: "grep -q 'Resultado: APPROVED' docs/review/security.md"
+      - command_succeeds: "grep -q 'Resultado: APPROVED' docs/review/independent.md"
+    next: demo.end
+
+  - id: demo.end
+    type: end
+    title: "Fim"

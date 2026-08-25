@@ -1,9 +1,9 @@
 """Regressions for ft run pre-seed inputs and exploration mode."""
 
-from argparse import Namespace
 import os
-from pathlib import Path
 import subprocess
+from argparse import Namespace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -71,7 +71,7 @@ def _args(project: Path, **overrides) -> Namespace:
         "request": None,
         "bypass_human_gates": False,
         "cycle_name": None,
-        "template": "base",
+        "template": "tweak",
         "run_route": None,
         "auto": True,
         "parallel": False,
@@ -89,9 +89,7 @@ def _args(project: Path, **overrides) -> Namespace:
 
 def _bootstrap_run_project(project: Path) -> None:
     bootstrap_project(project)
-    subprocess.run(
-        ["git", "config", "user.name", "Test"], cwd=project, check=True
-    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=project, check=True)
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"],
         cwd=project,
@@ -159,7 +157,7 @@ class TestRunInputs:
             cli_main.cmd_run(
                 _args(
                     project,
-                    template="feature",
+                    template="feature-fast",
                     request=request,
                     codex=True,
                     effort="max",
@@ -170,7 +168,9 @@ class TestRunInputs:
         assert runner.llm_engine == "codex"
         assert runner.llm_effort == "max"
         assert runner.run_mode == "mvp"
-        assert (runner.project_root / "docs" / "feature-request.md").read_text() == request
+        assert (
+            runner.project_root / "docs" / "feature-request.md"
+        ).read_text() == request
         assert not (project / "docs" / "feature-request.md").exists()
 
     def test_run_input_file_is_staged_and_uses_opencode_model(
@@ -190,7 +190,7 @@ class TestRunInputs:
             cli_main.cmd_run(
                 _args(
                     project,
-                    template="bug",
+                    template="bug-fast",
                     demand_input=str(demand),
                     opencode="pgx/zai-org_glm-4.7-flash",
                 )
@@ -220,7 +220,7 @@ class TestRunInputs:
             cli_main.cmd_run(
                 _args(
                     project,
-                    template="feature",
+                    template="feature-fast",
                     demand_input=str(demand),
                     request="Demanda inline.",
                 )
@@ -286,13 +286,17 @@ nodes:
         runner._run_exploration(runner.graph.get_node("explore"))
 
         result = DelegateResult(True, "DONE", [], [])
-        with patch("ft.engine.delegate.delegate_to_llm", return_value=result) as delegate:
+        with patch(
+            "ft.engine.delegate.delegate_to_llm", return_value=result
+        ) as delegate:
             runner.explore_request("ajuste rápido")
             runner.explore_finish()
 
         log_paths = [call.kwargs["log_path"] for call in delegate.call_args_list]
         assert str(tmp_path / "state" / "llm_logs" / "exploration_01.log") in log_paths
-        assert str(tmp_path / "state" / "llm_logs" / "exploration_report.log") in log_paths
+        assert (
+            str(tmp_path / "state" / "llm_logs" / "exploration_report.log") in log_paths
+        )
         state = runner.state_mgr.load()
         assert state.current_node == "end"
 
@@ -315,8 +319,8 @@ class TestSetupEnv:
         script.chmod(0o755)
 
     def _point_catalog_to(self, monkeypatch, catalog_root: Path) -> None:
-        from ft.templates.catalog import TemplateCatalog
         import ft.project.bootstrap as bootstrap_mod
+        from ft.templates.catalog import TemplateCatalog
 
         monkeypatch.setattr(
             bootstrap_mod,
@@ -339,7 +343,9 @@ class TestSetupEnv:
 
         assert "setup" in read_init_marker(project)
 
-    def test_setup_env_resolves_relative_project_from_parent_cwd(self, tmp_path, monkeypatch):
+    def test_setup_env_resolves_relative_project_from_parent_cwd(
+        self, tmp_path, monkeypatch
+    ):
         catalog_root = tmp_path / "catalog"
         self._write_catalog_init_template(catalog_root, "setup")
         self._point_catalog_to(monkeypatch, catalog_root)
@@ -387,7 +393,9 @@ class TestActiveRunDetection:
             "  tokens_used: 0\n"
         )
 
-    def test_pristine_init_state_is_not_active_and_is_cleaned(self, tmp_path, monkeypatch):
+    def test_pristine_init_state_is_not_active_and_is_cleaned(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "service_mate_15"
         project.mkdir()
@@ -404,13 +412,17 @@ class TestActiveRunDetection:
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "service_mate_15"
         project.mkdir()
-        cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01-opencode"
+        cycle = (
+            tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01-opencode"
+        )
         (cycle / "state").mkdir(parents=True)
 
         assert cli_main._cleanup_pristine_runs(project) == 1
         assert not cycle.exists()
 
-    def test_state_with_completed_nodes_still_counts_as_active(self, tmp_path, monkeypatch):
+    def test_state_with_completed_nodes_still_counts_as_active(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
         project.mkdir()
@@ -432,7 +444,9 @@ class TestActiveRunDetection:
         cycle = tmp_path / "ft-home" / "worktrees" / "project" / "cycle-01"
         self._write_state(cycle / "state" / "engine_state.yml", completed=True)
         state = cycle / "state" / "engine_state.yml"
-        state.write_text(state.read_text().replace("node_status: ready", "node_status: cancelled"))
+        state.write_text(
+            state.read_text().replace("node_status: ready", "node_status: cancelled")
+        )
 
         assert cli_main._active_run_records(project) == []
 
@@ -448,7 +462,9 @@ class TestActiveRunDetection:
         self._write_state(cancelled / "state" / "engine_state.yml", completed=True)
         cancelled_state = cancelled / "state" / "engine_state.yml"
         cancelled_state.write_text(
-            cancelled_state.read_text().replace("node_status: ready", "node_status: cancelled")
+            cancelled_state.read_text().replace(
+                "node_status: ready", "node_status: cancelled"
+            )
         )
 
         with pytest.raises(AmbiguousCycleError):
@@ -537,9 +553,7 @@ class TestStatusMultipleCycles:
         assert "Ciclo: cycle-13-f-01" in output
         assert "Ciclo: cycle-14-f-03" in output
 
-    def test_status_report_targets_one_explicit_runtime(
-        self, tmp_path, monkeypatch
-    ):
+    def test_status_report_targets_one_explicit_runtime(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
         project.mkdir()
@@ -549,7 +563,9 @@ class TestStatusMultipleCycles:
 
         with (
             patch.object(cli_main, "find_project_root", return_value=project),
-            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
+            patch.object(
+                cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)
+            ),
         ):
             cli_main.cmd_status(self._args(cycle="cycle-14-f-03", report=True))
 
@@ -567,15 +583,15 @@ class TestStatusMultipleCycles:
 
         with (
             patch.object(cli_main, "find_project_root", return_value=project),
-            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
+            patch.object(
+                cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)
+            ),
         ):
             cli_main.cmd_status(self._args(cycle="cycle-13-f-01"))
 
         output = capsys.readouterr().out
         assert "Ciclo:" not in output
-        assert calls == [
-            {"cycle": "cycle-13-f-01", "method": "status", "full": False}
-        ]
+        assert calls == [{"cycle": "cycle-13-f-01", "method": "status", "full": False}]
 
     def test_status_single_runtime_preserves_unlabelled_output(
         self, tmp_path, monkeypatch, capsys
@@ -588,7 +604,9 @@ class TestStatusMultipleCycles:
 
         with (
             patch.object(cli_main, "find_project_root", return_value=project),
-            patch.object(cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)),
+            patch.object(
+                cli_main, "get_runner", side_effect=self._fake_runner_factory(calls)
+            ),
         ):
             cli_main.cmd_status(self._args())
 
@@ -596,9 +614,7 @@ class TestStatusMultipleCycles:
         assert "Ciclo:" not in output
         assert calls == [{"cycle": None, "method": "status", "full": False}]
 
-    def test_status_without_runtime_is_an_error(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_status_without_runtime_is_an_error(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "project"
         project.mkdir()
@@ -610,6 +626,7 @@ class TestStatusMultipleCycles:
         output = capsys.readouterr().out
         assert excinfo.value.code == 2
         assert "nenhum ciclo" in output
+
 
 class TestApiHealthCheck:
     def test_opencode_skips_anthropic_health_check(self, tmp_path, monkeypatch):
@@ -631,7 +648,9 @@ class TestAbort:
         ensure_project_layout(project)
         monkeypatch.chdir(project)
 
-        cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01-opencode"
+        cycle = (
+            tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-01-opencode"
+        )
         state = cycle / "state" / "engine_state.yml"
         state.parent.mkdir(parents=True)
         state.write_text(
@@ -641,7 +660,9 @@ class TestAbort:
         )
         other_cycle = tmp_path / "ft-home" / "worktrees" / "demo" / "cycle-01-opencode"
         (other_cycle / "state").mkdir(parents=True)
-        (other_cycle / "state" / "engine_state.yml").write_text("node_status: blocked\n")
+        (other_cycle / "state" / "engine_state.yml").write_text(
+            "node_status: blocked\n"
+        )
 
         args = Namespace(
             process=None,
@@ -780,7 +801,9 @@ class TestClose:
 
         assert runner.merge_called is False
 
-    def test_close_blocks_declared_features_catalog_without_delivered_coverage(self, tmp_path):
+    def test_close_blocks_declared_features_catalog_without_delivered_coverage(
+        self, tmp_path
+    ):
         work = tmp_path / "cycle"
         docs = work / "docs"
         docs.mkdir(parents=True)
@@ -828,13 +851,17 @@ class TestClose:
 
 
 class TestCancel:
-    def test_cancel_external_worktree_writes_report_in_cycle_dir(self, tmp_path, monkeypatch):
+    def test_cancel_external_worktree_writes_report_in_cycle_dir(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("FT_HOME", str(tmp_path / "ft-home"))
         project = tmp_path / "service_mate_15"
         (project / "process").mkdir(parents=True)
         monkeypatch.chdir(project)
 
-        cycle = tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-02-opencode"
+        cycle = (
+            tmp_path / "ft-home" / "worktrees" / "service_mate_15" / "cycle-02-opencode"
+        )
         state = cycle / "state" / "engine_state.yml"
         state.parent.mkdir(parents=True)
         state.write_text(
@@ -1230,12 +1257,17 @@ nodes:
             patch("ft.cli.main.get_runner", return_value=Runner()),
             patch("ft.engine.delegate.delegate_to_llm") as delegate,
         ):
-            delegate.return_value = DelegateResult(True, "DONE", [], ["project/tests/e2e/test_navigation.py"])
+            delegate.return_value = DelegateResult(
+                True, "DONE", [], ["project/tests/e2e/test_navigation.py"]
+            )
             cli_main.cmd_fix(args)
 
         kwargs = delegate.call_args.kwargs
         assert kwargs["allowed_paths"] == ["project/tests/e2e/test_navigation.py"]
-        assert kwargs["opencode_capture_output_path"] == "project/tests/e2e/test_navigation.py"
+        assert (
+            kwargs["opencode_capture_output_path"]
+            == "project/tests/e2e/test_navigation.py"
+        )
         assert "CONTEUDO ATUAL" in kwargs["task"]
         assert "def test_old" in kwargs["task"]
 
@@ -1390,7 +1422,9 @@ nodes:
             patch("ft.engine.delegate.delegate_to_llm") as delegate,
             patch("ft.engine.runner.run_validators") as validate,
         ):
-            delegate.return_value = DelegateResult(True, "DONE", [], ["docs/api_contract.md"])
+            delegate.return_value = DelegateResult(
+                True, "DONE", [], ["docs/api_contract.md"]
+            )
             validate.return_value = ValidationResult(True, False, None, [])
             cli_main.cmd_fix(args)
 
@@ -1399,7 +1433,9 @@ nodes:
         assert kwargs["llm_model"] == "pgx/zai-org_glm-4.7-flash"
         assert kwargs["allowed_paths"] == ["docs/api_contract.md"]
         assert kwargs["opencode_capture_output_path"] == "docs/api_contract.md"
-        assert runner.advanced == [("ft.plan.03.api_contract", "ft.plan.04.ui_criteria", "PASS")]
+        assert runner.advanced == [
+            ("ft.plan.03.api_contract", "ft.plan.04.ui_criteria", "PASS")
+        ]
         assert runner.run_mode is None
         assert runner.state_mgr.artifacts == {"api_contract": "docs/api_contract.md"}
         assert state.current_node == "ft.plan.04.ui_criteria"
@@ -1425,7 +1461,9 @@ nodes:
             patch("ft.engine.delegate.delegate_to_llm") as delegate,
             patch("ft.engine.runner.run_validators") as validate,
         ):
-            delegate.return_value = DelegateResult(True, "DONE", [], ["docs/api_contract.md"])
+            delegate.return_value = DelegateResult(
+                True, "DONE", [], ["docs/api_contract.md"]
+            )
             validate.return_value = ValidationResult(False, True, "ainda falha", [])
             cli_main.cmd_fix(args)
 

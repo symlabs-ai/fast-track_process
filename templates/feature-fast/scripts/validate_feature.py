@@ -13,16 +13,15 @@ import fnmatch
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import unicodedata
+from pathlib import Path
 from typing import Iterable
 
 import yaml
-
 
 AC_RE = re.compile(r"\bAC-\d{2,3}\b", re.IGNORECASE)
 FINDING_RE = re.compile(r"\bF-\d{2,3}\b", re.IGNORECASE)
@@ -173,9 +172,7 @@ def _workset_contract(
 ) -> tuple[list[str], list[dict[str, object]]]:
     payload = _read_yaml(root, "docs/feature-workset.yml")
     if payload.get("schema_version") != 1:
-        raise FeatureValidationError(
-            "docs/feature-workset.yml exige schema_version: 1"
-        )
+        raise FeatureValidationError("docs/feature-workset.yml exige schema_version: 1")
     raw_paths = payload.get("paths")
     if not isinstance(raw_paths, list) or not raw_paths:
         raise FeatureValidationError(
@@ -210,9 +207,7 @@ def _workset_contract(
         identifiers.add(identifier)
         mode = str(item.get("mode") or "").strip().lower()
         if mode not in {"automated", "physical"}:
-            raise FeatureValidationError(
-                f"{label}: mode deve ser automated|physical"
-            )
+            raise FeatureValidationError(f"{label}: mode deve ser automated|physical")
         receipt = _safe_relative_path(item.get("receipt"), f"{label}:receipt")
         raw_patterns = item.get("depends_on")
         if not isinstance(raw_patterns, list) or not raw_patterns:
@@ -247,7 +242,9 @@ def _frontmatter(text: str, path: str) -> dict[str, object]:
     try:
         data = yaml.safe_load(parts[1]) or {}
     except yaml.YAMLError as exc:
-        raise FeatureValidationError(f"{path}: frontmatter YAML inválido: {exc}") from exc
+        raise FeatureValidationError(
+            f"{path}: frontmatter YAML inválido: {exc}"
+        ) from exc
     if not isinstance(data, dict):
         raise FeatureValidationError(f"{path}: frontmatter deve ser um mapping")
     return data
@@ -266,13 +263,21 @@ def _require_sections(text: str, path: str) -> None:
     expected = {
         "Objetivo": ("Objetivo", "Objective"),
         "Comportamento Esperado": ("Comportamento Esperado", "Expected Behavior"),
-        "Critérios de Aceite": ("Critérios de Aceite", "Criterios de Aceite", "Acceptance Criteria"),
+        "Critérios de Aceite": (
+            "Critérios de Aceite",
+            "Criterios de Aceite",
+            "Acceptance Criteria",
+        ),
         "Fora do Escopo": ("Fora do Escopo", "Out of Scope"),
         "Restrições": ("Restrições", "Restricoes", "Constraints"),
     }
-    missing = [label for label, aliases in expected.items() if not _section(text, aliases)]
+    missing = [
+        label for label, aliases in expected.items() if not _section(text, aliases)
+    ]
     if missing:
-        raise FeatureValidationError(f"{path}: seções ausentes/vazias: {', '.join(missing)}")
+        raise FeatureValidationError(
+            f"{path}: seções ausentes/vazias: {', '.join(missing)}"
+        )
 
 
 def _acceptance_ids(feature_text: str) -> list[str]:
@@ -328,7 +333,9 @@ def _row_value(row: dict[str, str], *names: str) -> str:
 def _find_row(records: list[dict[str, str]], identifier: str) -> dict[str, str] | None:
     wanted = identifier.upper()
     for row in records:
-        match = re.search(r"\b(?:PB-\d+[A-Z]?|FEAT-\d{3})\b", _row_value(row, "id"), re.I)
+        match = re.search(
+            r"\b(?:PB-\d+[A-Z]?|FEAT-\d{3})\b", _row_value(row, "id"), re.I
+        )
         if match and match.group(0).upper() == wanted:
             return row
     return None
@@ -358,8 +365,7 @@ def _detect_product_root(root: Path) -> str:
         )
     if len(candidates) > 1:
         raise FeatureValidationError(
-            "mais de um diretório de produto possui Makefile: "
-            + ", ".join(candidates)
+            "mais de um diretório de produto possui Makefile: " + ", ".join(candidates)
         )
     return candidates[0]
 
@@ -380,8 +386,7 @@ def _write_baseline(root: Path, product_root: str) -> None:
         "project_backlog": _markdown_records(_read(root, "docs/PROJECT_BACKLOG.md")),
         "features": _markdown_records(_read(root, "docs/FEATURES.md")),
         "documentation_sha256": {
-            relative: _sha256(root / relative)
-            for relative in DOCUMENTATION_PATHS
+            relative: _sha256(root / relative) for relative in DOCUMENTATION_PATHS
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -407,7 +412,9 @@ def _load_baseline(
     if not isinstance(backlog, list) or not isinstance(features, list):
         raise FeatureValidationError(f"{BASELINE_PATH}: tabelas da baseline ausentes")
     if product_root not in {"project", "src", "."}:
-        raise FeatureValidationError(f"{BASELINE_PATH}: product_root ausente ou inválido")
+        raise FeatureValidationError(
+            f"{BASELINE_PATH}: product_root ausente ou inválido"
+        )
     if not all(isinstance(row, dict) for row in [*backlog, *features]):
         raise FeatureValidationError(f"{BASELINE_PATH}: registros inválidos")
     return backlog, features, str(product_root)
@@ -423,9 +430,7 @@ def _baseline_documentation(root: Path) -> dict[str, str | None]:
     if values is None:
         return {}
     if not isinstance(values, dict):
-        raise FeatureValidationError(
-            f"{BASELINE_PATH}: documentation_sha256 inválido"
-        )
+        raise FeatureValidationError(f"{BASELINE_PATH}: documentation_sha256 inválido")
     return {
         str(path): str(digest) if digest is not None else None
         for path, digest in values.items()
@@ -444,7 +449,8 @@ def _assert_unrelated_records_unchanged(
     changed = sorted(
         identifier
         for identifier in before.keys() | after.keys()
-        if identifier not in allowed_ids and before.get(identifier) != after.get(identifier)
+        if identifier not in allowed_ids
+        and before.get(identifier) != after.get(identifier)
     )
     if changed:
         raise FeatureValidationError(
@@ -473,11 +479,17 @@ def _feature_contract(root: Path) -> tuple[dict[str, str], str, list[str]]:
     if priority not in {"P0", "P1", "P2"}:
         raise FeatureValidationError(f"docs/feature.md: priority inválida: {priority}")
     if interface not in {"ui", "api", "internal", "mixed"}:
-        raise FeatureValidationError(f"docs/feature.md: interface inválida: {interface}")
+        raise FeatureValidationError(
+            f"docs/feature.md: interface inválida: {interface}"
+        )
     if not PB_RE.fullmatch(backlog):
-        raise FeatureValidationError(f"docs/feature.md: backlog_item inválido: {backlog}")
+        raise FeatureValidationError(
+            f"docs/feature.md: backlog_item inválido: {backlog}"
+        )
     if feature_type == "new" and target != "NEW":
-        raise FeatureValidationError("docs/feature.md: type=new exige target_feature: new")
+        raise FeatureValidationError(
+            "docs/feature.md: type=new exige target_feature: new"
+        )
     if feature_type != "new" and not FEAT_RE.fullmatch(target):
         raise FeatureValidationError(
             "docs/feature.md: evolution/improvement exige target_feature FEAT-NNN"
@@ -518,9 +530,12 @@ def _feature_contract(root: Path) -> tuple[dict[str, str], str, list[str]]:
 def _assert_ac_pass(report: str, acceptance_ids: list[str], path: str) -> None:
     failures: list[str] = []
     for acceptance_id in acceptance_ids:
-        evidence = [line for line in report.splitlines() if acceptance_id in line.upper()]
+        evidence = [
+            line for line in report.splitlines() if acceptance_id in line.upper()
+        ]
         if not evidence or not any(
-            re.search(r"\bPASS(?:ED)?\b", line, re.I) and not re.search(r"\bFAIL(?:ED)?\b", line, re.I)
+            re.search(r"\bPASS(?:ED)?\b", line, re.I)
+            and not re.search(r"\bFAIL(?:ED)?\b", line, re.I)
             for line in evidence
         ):
             failures.append(acceptance_id)
@@ -550,7 +565,9 @@ def _review_ac_statuses(
     instead of scanning the whole evidence line for PASS/FAIL words.
     """
     expected = set(acceptance_ids)
-    found: dict[str, set[str]] = {acceptance_id: set() for acceptance_id in acceptance_ids}
+    found: dict[str, set[str]] = {
+        acceptance_id: set() for acceptance_id in acceptance_ids
+    }
 
     for line in report.splitlines():
         if "|" in line:
@@ -578,11 +595,11 @@ def _review_ac_statuses(
             if match:
                 found[acceptance_id].add(match.group(1))
 
-    missing = [acceptance_id for acceptance_id, statuses in found.items() if not statuses]
+    missing = [
+        acceptance_id for acceptance_id, statuses in found.items() if not statuses
+    ]
     ambiguous = [
-        acceptance_id
-        for acceptance_id, statuses in found.items()
-        if len(statuses) > 1
+        acceptance_id for acceptance_id, statuses in found.items() if len(statuses) > 1
     ]
     if missing or ambiguous:
         details: list[str] = []
@@ -593,8 +610,7 @@ def _review_ac_statuses(
         raise FeatureValidationError(f"{path}: " + "; ".join(details))
 
     return {
-        acceptance_id: next(iter(statuses))
-        for acceptance_id, statuses in found.items()
+        acceptance_id: next(iter(statuses)) for acceptance_id, statuses in found.items()
     }
 
 
@@ -604,10 +620,7 @@ def validate_baseline(root: Path) -> None:
     backlog_text = _read(root, "docs/PROJECT_BACKLOG.md")
     _read(root, "docs/FEATURES.md")
     request_backlogs = sorted(
-        {
-            match.group(0).upper()
-            for match in PB_RE.finditer(request)
-        }
+        {match.group(0).upper() for match in PB_RE.finditer(request)}
     )
     if len(request_backlogs) != 1:
         raise FeatureValidationError(
@@ -629,7 +642,8 @@ def validate_baseline(root: Path) -> None:
     makefile_path = f"{product_root}/Makefile"
     makefile = _read(root, makefile_path)
     missing_targets = [
-        target for target in ("test", "build")
+        target
+        for target in ("test", "build")
         if not re.search(rf"(?m)^{re.escape(target)}\s*:", makefile)
     ]
     if missing_targets:
@@ -671,7 +685,9 @@ def validate_discovery(root: Path) -> None:
     required_refs = [metadata["backlog_item"], *acceptance_ids]
     if metadata["target_feature"] != "NEW":
         required_refs.append(metadata["target_feature"])
-    missing = [reference for reference in required_refs if reference not in plan.upper()]
+    missing = [
+        reference for reference in required_refs if reference not in plan.upper()
+    ]
     if missing:
         raise FeatureValidationError(
             "docs/feature-plan.md sem referências obrigatórias: " + ", ".join(missing)
@@ -690,7 +706,9 @@ def _git_common_dir(root: Path) -> Path:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise FeatureValidationError(f"não foi possível localizar git common dir: {exc}") from exc
+        raise FeatureValidationError(
+            f"não foi possível localizar git common dir: {exc}"
+        ) from exc
     if result.returncode != 0 or not result.stdout.strip():
         raise FeatureValidationError(
             "reserva de IDs exige worktree Git: "
@@ -721,20 +739,28 @@ def validate_reserve(root: Path) -> None:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             try:
-                registry = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+                registry = (
+                    yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+                )
             except FileNotFoundError:
                 registry = {}
             except yaml.YAMLError as exc:
-                raise FeatureValidationError(f"registry de IDs inválido: {exc}") from exc
+                raise FeatureValidationError(
+                    f"registry de IDs inválido: {exc}"
+                ) from exc
             if not isinstance(registry, dict):
                 raise FeatureValidationError("registry de IDs deve ser mapping")
             if registry.get("schema_version") not in {None, 1}:
-                raise FeatureValidationError("registry de IDs possui schema_version inválido")
+                raise FeatureValidationError(
+                    "registry de IDs possui schema_version inválido"
+                )
             reservations = registry.get("reservations", [])
             if not isinstance(reservations, list) or not all(
                 isinstance(item, dict) for item in reservations
             ):
-                raise FeatureValidationError("registry de IDs possui reservations inválidas")
+                raise FeatureValidationError(
+                    "registry de IDs possui reservations inválidas"
+                )
 
             request_type = metadata["type"]
             own = next(
@@ -831,10 +857,13 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise FeatureValidationError(f"não foi possível consultar git status: {exc}") from exc
+        raise FeatureValidationError(
+            f"não foi possível consultar git status: {exc}"
+        ) from exc
     if result.returncode != 0:
         raise FeatureValidationError(
-            "git status falhou: " + (result.stderr.strip() or f"exit {result.returncode}")
+            "git status falhou: "
+            + (result.stderr.strip() or f"exit {result.returncode}")
         )
     raw_paths: list[str] = []
     for line in result.stdout.splitlines():
@@ -850,18 +879,28 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
         try:
             mb = subprocess.run(
                 ["git", "merge-base", "HEAD", base_ref],
-                cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=20, check=False,
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+                check=False,
             )
             if mb.returncode != 0 or not mb.stdout.strip():
                 continue
             diff = subprocess.run(
                 ["git", "diff", "--name-only", f"{mb.stdout.strip()}..HEAD"],
-                cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=20, check=False,
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+                check=False,
             )
             if diff.returncode == 0:
-                raw_paths.extend(p.strip() for p in diff.stdout.splitlines() if p.strip())
+                raw_paths.extend(
+                    p.strip() for p in diff.stdout.splitlines() if p.strip()
+                )
             break
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -943,10 +982,7 @@ def _dependency_snapshot(
         for path in files
         if any(_dependency_matches(path, pattern) for pattern in patterns)
     )
-    records = [
-        {"path": path, "sha256": _sha256(root / path)}
-        for path in matched
-    ]
+    records = [{"path": path, "sha256": _sha256(root / path)} for path in matched]
     return {
         "fingerprint": _canonical_digest(records),
         "file_count": len(records),
@@ -1022,23 +1058,20 @@ def _receipt_baseline(root: Path) -> dict[str, object]:
         raise FeatureValidationError(
             f"{RECEIPT_BASELINE_PATH}: contrato mudou após a baseline de receipts"
         )
-    if payload.get("workset_sha256") != _sha256(
-        root / "docs/feature-workset.yml"
-    ):
+    if payload.get("workset_sha256") != _sha256(root / "docs/feature-workset.yml"):
         raise FeatureValidationError(
             f"{RECEIPT_BASELINE_PATH}: workset mudou após a baseline de receipts"
         )
     lanes = payload.get("lanes")
-    if not isinstance(lanes, list) or not lanes or not all(
-        isinstance(item, dict) for item in lanes
+    if (
+        not isinstance(lanes, list)
+        or not lanes
+        or not all(isinstance(item, dict) for item in lanes)
     ):
         raise FeatureValidationError(f"{RECEIPT_BASELINE_PATH}: lanes inválidas")
     current_contract = _receipt_lanes(root)
     baseline_contract = [
-        {
-            key: item.get(key)
-            for key in ("id", "mode", "receipt", "depends_on")
-        }
+        {key: item.get(key) for key in ("id", "mode", "receipt", "depends_on")}
         for item in lanes
     ]
     if baseline_contract != current_contract:
@@ -1077,11 +1110,7 @@ def _related_product_paths(
     else:
         prefix = f"{product_root}/"
         candidates = [path for path in visible_files if path.startswith(prefix)]
-    return sorted(
-        path
-        for path in candidates
-        if _semantic_key(path) in keys
-    )
+    return sorted(path for path in candidates if _semantic_key(path) in keys)
 
 
 def _build_impact(root: Path) -> dict[str, object]:
@@ -1144,8 +1173,7 @@ def _build_impact(root: Path) -> dict[str, object]:
         "plan_sha256": _sha256(root / "docs/feature-plan.md"),
         "workset_sha256": _sha256(root / "docs/feature-workset.yml"),
         "product_files": [
-            {"path": path, "sha256": _sha256(root / path)}
-            for path in changed
+            {"path": path, "sha256": _sha256(root / path)} for path in changed
         ],
         "impact_paths": impact_paths,
         "impact_keys": impact_keys,
@@ -1185,11 +1213,15 @@ def validate_implementation(root: Path) -> None:
             f"implementação não alterou nenhum arquivo em {product_root}/"
         )
     if not any("test" in path.lower() or "spec" in path.lower() for path in changed):
-        raise FeatureValidationError("implementação não alterou nenhum arquivo de teste")
+        raise FeatureValidationError(
+            "implementação não alterou nenhum arquivo de teste"
+        )
 
 
 def _existing_relative_paths(root: Path, values: object, label: str) -> list[str]:
-    if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+    if not isinstance(values, list) or not all(
+        isinstance(item, str) for item in values
+    ):
         raise FeatureValidationError(f"{label}: esperado lista de paths")
     normalized: list[str] = []
     for raw in values:
@@ -1200,7 +1232,9 @@ def _existing_relative_paths(root: Path, values: object, label: str) -> list[str
         try:
             path.resolve(strict=True).relative_to(root)
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            raise FeatureValidationError(f"{label}: path ausente/fora da raiz: {raw}") from exc
+            raise FeatureValidationError(
+                f"{label}: path ausente/fora da raiz: {raw}"
+            ) from exc
         if not path.is_file():
             raise FeatureValidationError(f"{label}: evidência deve ser arquivo: {raw}")
         normalized.append(candidate.as_posix())
@@ -1228,7 +1262,9 @@ def validate_evidence(root: Path) -> None:
             f"{EVIDENCE_PATH}: commands devem corresponder exatamente ao receipt"
         )
     acceptance = payload.get("acceptance")
-    if not isinstance(acceptance, list) or not all(isinstance(item, dict) for item in acceptance):
+    if not isinstance(acceptance, list) or not all(
+        isinstance(item, dict) for item in acceptance
+    ):
         raise FeatureValidationError(f"{EVIDENCE_PATH}: acceptance deve ser lista")
     indexed = {str(item.get("id") or "").upper(): item for item in acceptance}
     if set(indexed) != set(acceptance_ids) or len(indexed) != len(acceptance):
@@ -1272,24 +1308,16 @@ def validate_pre_review(root: Path) -> None:
     review_route = route.get("review_route")
     verdict = route.get("verdict")
     if review_route not in {"approved", "implementation", "scope"}:
-        raise FeatureValidationError(
-            f"{PRE_REVIEW_ROUTE_PATH}: review_route inválida"
-        )
+        raise FeatureValidationError(f"{PRE_REVIEW_ROUTE_PATH}: review_route inválida")
     if verdict not in {"APPROVED", "REJECTED"}:
-        raise FeatureValidationError(
-            f"{PRE_REVIEW_ROUTE_PATH}: verdict inválido"
-        )
+        raise FeatureValidationError(f"{PRE_REVIEW_ROUTE_PATH}: verdict inválido")
     if (review_route == "approved") != (verdict == "APPROVED"):
         raise FeatureValidationError(
             f"{PRE_REVIEW_ROUTE_PATH}: approved exige APPROVED; "
             "demais rotas exigem REJECTED"
         )
-    if not isinstance(route.get("summary"), str) or not str(
-        route["summary"]
-    ).strip():
-        raise FeatureValidationError(
-            f"{PRE_REVIEW_ROUTE_PATH}: summary obrigatório"
-        )
+    if not isinstance(route.get("summary"), str) or not str(route["summary"]).strip():
+        raise FeatureValidationError(f"{PRE_REVIEW_ROUTE_PATH}: summary obrigatório")
     statuses = _review_ac_statuses(
         report,
         acceptance_ids,
@@ -1372,18 +1400,13 @@ def _build_review_context(root: Path) -> dict[str, object]:
         isinstance(item, dict) for item in raw_lanes
     ):
         raise FeatureValidationError(f"{IMPACT_PATH}: receipt_lanes inválidas")
-    receipts = [
-        _receipt_record_for_lane(root, lane)
-        for lane in raw_lanes
-    ]
+    receipts = [_receipt_record_for_lane(root, lane) for lane in raw_lanes]
     identity = {
         "pre_review_id": impact.get("pre_review_id"),
         "feature_sha256": _sha256(root / "docs/feature.md"),
         "plan_sha256": _sha256(root / "docs/feature-plan.md"),
         "evidence_sha256": _sha256(root / EVIDENCE_PATH),
-        "implementation_report_sha256": _sha256(
-            root / "docs/implementation-report.md"
-        ),
+        "implementation_report_sha256": _sha256(root / "docs/implementation-report.md"),
         "receipts": receipts,
     }
     product = next(
@@ -1402,9 +1425,7 @@ def _build_review_context(root: Path) -> dict[str, object]:
         else None
     )
     if not isinstance(product_fingerprint, str) or not product_fingerprint:
-        raise FeatureValidationError(
-            f"{RECEIPT_PATH}: fingerprint obrigatório"
-        )
+        raise FeatureValidationError(f"{RECEIPT_PATH}: fingerprint obrigatório")
     return {
         "schema_version": 1,
         "review_id": _canonical_digest(identity),
@@ -1447,9 +1468,7 @@ def validate_review(root: Path) -> None:
         raise FeatureValidationError(
             f"{REVIEW_ROUTE_PATH}: review_id diverge do contexto atual"
         )
-    if route.get("receipt_fingerprint") != context.get(
-        "receipt_fingerprint"
-    ):
+    if route.get("receipt_fingerprint") != context.get("receipt_fingerprint"):
         raise FeatureValidationError(
             f"{REVIEW_ROUTE_PATH}: receipt_fingerprint diverge do contexto atual"
         )
@@ -1465,7 +1484,11 @@ def validate_review(root: Path) -> None:
         "docs/feature-review.md",
     )
     if review_route == "approved":
-        failed = [acceptance_id for acceptance_id, status in statuses.items() if status == "FAIL"]
+        failed = [
+            acceptance_id
+            for acceptance_id, status in statuses.items()
+            if status == "FAIL"
+        ]
         if failed:
             raise FeatureValidationError(
                 "docs/feature-review.md: Resultado APPROVED exige todos os AC como PASS; "
@@ -1557,9 +1580,7 @@ def _finding_statuses(
     finding_ids: list[str],
 ) -> dict[str, str]:
     expected = set(finding_ids)
-    found: dict[str, set[str]] = {
-        finding_id: set() for finding_id in finding_ids
-    }
+    found: dict[str, set[str]] = {finding_id: set() for finding_id in finding_ids}
     for line in report.splitlines():
         if "|" in line:
             cells = [cell.strip() for cell in line.split("|")]
@@ -1587,8 +1608,7 @@ def _finding_statuses(
 
     missing = [finding_id for finding_id, statuses in found.items() if not statuses]
     ambiguous = [
-        finding_id for finding_id, statuses in found.items()
-        if len(statuses) > 1
+        finding_id for finding_id, statuses in found.items() if len(statuses) > 1
     ]
     if missing or ambiguous:
         details: list[str] = []
@@ -1596,21 +1616,14 @@ def _finding_statuses(
             details.append("sem status PASS/FAIL: " + ", ".join(missing))
         if ambiguous:
             details.append("status ambíguo: " + ", ".join(ambiguous))
-        raise FeatureValidationError(
-            f"{FIX_REVIEW_PATH}: " + "; ".join(details)
-        )
-    return {
-        finding_id: next(iter(statuses))
-        for finding_id, statuses in found.items()
-    }
+        raise FeatureValidationError(f"{FIX_REVIEW_PATH}: " + "; ".join(details))
+    return {finding_id: next(iter(statuses)) for finding_id, statuses in found.items()}
 
 
 def _fix_baseline(root: Path) -> dict[str, object]:
     payload = _read_yaml(root, FIX_BASELINE_PATH)
     if payload.get("schema_version") != 1:
-        raise FeatureValidationError(
-            f"{FIX_BASELINE_PATH}: schema_version deve ser 1"
-        )
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: schema_version deve ser 1")
     base_commit = payload.get("base_commit")
     if not isinstance(base_commit, str) or not re.fullmatch(
         r"[0-9a-f]{40,64}", base_commit
@@ -1621,8 +1634,7 @@ def _fix_baseline(root: Path) -> dict[str, object]:
         not isinstance(findings, list)
         or not findings
         or not all(
-            isinstance(item, str) and FINDING_RE.fullmatch(item)
-            for item in findings
+            isinstance(item, str) and FINDING_RE.fullmatch(item) for item in findings
         )
         or len(findings) != len(set(findings))
     ):
@@ -1640,33 +1652,22 @@ def _fix_baseline(root: Path) -> dict[str, object]:
         or not impact_paths
         or not all(isinstance(item, str) and item for item in impact_paths)
     ):
-        raise FeatureValidationError(
-            f"{FIX_BASELINE_PATH}: impact_paths inválidos"
-        )
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: impact_paths inválidos")
     impact_keys = payload.get("impact_keys")
-    if (
-        not isinstance(impact_keys, list)
-        or not all(
-            isinstance(item, str) and re.fullmatch(r"[a-z0-9]{3,}", item)
-            for item in impact_keys
-        )
+    if not isinstance(impact_keys, list) or not all(
+        isinstance(item, str) and re.fullmatch(r"[a-z0-9]{3,}", item)
+        for item in impact_keys
     ):
-        raise FeatureValidationError(
-            f"{FIX_BASELINE_PATH}: impact_keys inválidos"
-        )
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: impact_keys inválidos")
     source_review_id = payload.get("source_review_id")
     if not isinstance(source_review_id, str) or not re.fullmatch(
         r"sha256:[0-9a-f]{64}",
         source_review_id,
     ):
-        raise FeatureValidationError(
-            f"{FIX_BASELINE_PATH}: source_review_id inválido"
-        )
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: source_review_id inválido")
     contract_sha256 = payload.get("contract_sha256")
     if not isinstance(contract_sha256, dict):
-        raise FeatureValidationError(
-            f"{FIX_BASELINE_PATH}: contract_sha256 inválido"
-        )
+        raise FeatureValidationError(f"{FIX_BASELINE_PATH}: contract_sha256 inválido")
     receipt_fingerprint = payload.get("receipt_fingerprint")
     if not isinstance(receipt_fingerprint, str) or not re.fullmatch(
         r"sha256:[0-9a-f]{64}",
@@ -1707,15 +1708,12 @@ def prepare_fix(root: Path) -> None:
         for relative in ("docs/feature-review.md", REVIEW_ROUTE_PATH)
     }
     contract_sha256 = {
-        relative: _sha256(root / relative)
-        for relative in FIX_CONTRACT_PATHS
+        relative: _sha256(root / relative) for relative in FIX_CONTRACT_PATHS
     }
     try:
         receipt = json.loads(_read(root, RECEIPT_PATH))
     except json.JSONDecodeError as exc:
-        raise FeatureValidationError(
-            f"{RECEIPT_PATH}: JSON inválido: {exc}"
-        ) from exc
+        raise FeatureValidationError(f"{RECEIPT_PATH}: JSON inválido: {exc}") from exc
     receipt_fingerprint = (
         receipt.get("fingerprint") if isinstance(receipt, dict) else None
     )
@@ -1756,10 +1754,15 @@ def _product_paths_from_delta(
     changed = _git_changed_paths_since(root, base_commit)
     if product_root == ".":
         return [
-            path for path in changed
+            path
+            for path in changed
             if path != "CHANGELOG.md"
-            and path.split("/", 1)[0] not in {
-                ".ft", ".git", "docs", "state",
+            and path.split("/", 1)[0]
+            not in {
+                ".ft",
+                ".git",
+                "docs",
+                "state",
             }
         ]
     prefix = f"{product_root}/"
@@ -1823,8 +1826,7 @@ def validate_fix_review(root: Path) -> None:
     changed_sources = [
         relative
         for relative, expected in source_sha256.items()
-        if not isinstance(relative, str)
-        or _sha256(root / relative) != expected
+        if not isinstance(relative, str) or _sha256(root / relative) != expected
     ]
     if changed_sources:
         raise FeatureValidationError(
@@ -1839,13 +1841,9 @@ def validate_fix_review(root: Path) -> None:
         )
     review_route = route.get("review_route")
     verdict = route.get("verdict")
-    valid_routes = {
-        "approved", "implementation", "evidence", "full_review", "scope"
-    }
+    valid_routes = {"approved", "implementation", "evidence", "full_review", "scope"}
     if review_route not in valid_routes:
-        raise FeatureValidationError(
-            f"{FIX_REVIEW_ROUTE_PATH}: review_route inválida"
-        )
+        raise FeatureValidationError(f"{FIX_REVIEW_ROUTE_PATH}: review_route inválida")
     if verdict not in {"APPROVED", "REJECTED"}:
         raise FeatureValidationError(f"{FIX_REVIEW_ROUTE_PATH}: verdict inválido")
     if (review_route == "approved") != (verdict == "APPROVED"):
@@ -1853,12 +1851,8 @@ def validate_fix_review(root: Path) -> None:
             f"{FIX_REVIEW_ROUTE_PATH}: approved exige APPROVED; "
             "demais rotas exigem REJECTED"
         )
-    if not isinstance(route.get("summary"), str) or not str(
-        route["summary"]
-    ).strip():
-        raise FeatureValidationError(
-            f"{FIX_REVIEW_ROUTE_PATH}: summary obrigatório"
-        )
+    if not isinstance(route.get("summary"), str) or not str(route["summary"]).strip():
+        raise FeatureValidationError(f"{FIX_REVIEW_ROUTE_PATH}: summary obrigatório")
     if route.get("source_review") != REVIEW_ROUTE_PATH:
         raise FeatureValidationError(
             f"{FIX_REVIEW_ROUTE_PATH}: source_review deve ser {REVIEW_ROUTE_PATH}"
@@ -1885,9 +1879,7 @@ def validate_fix_review(root: Path) -> None:
         raise FeatureValidationError(
             f"{FIX_REVIEW_ROUTE_PATH}: findings deve ser lista"
         )
-    indexed = {
-        str(item.get("id") or "").upper(): item for item in findings
-    }
+    indexed = {str(item.get("id") or "").upper(): item for item in findings}
     if set(indexed) != set(finding_ids) or len(indexed) != len(findings):
         raise FeatureValidationError(
             f"{FIX_REVIEW_ROUTE_PATH}: findings deve conter exatamente "
@@ -1899,9 +1891,10 @@ def validate_fix_review(root: Path) -> None:
             raise FeatureValidationError(
                 f"{FIX_REVIEW_ROUTE_PATH}: {finding_id} sem status PASS/FAIL"
             )
-        if not isinstance(item.get("evidence"), str) or not str(
-            item["evidence"]
-        ).strip():
+        if (
+            not isinstance(item.get("evidence"), str)
+            or not str(item["evidence"]).strip()
+        ):
             raise FeatureValidationError(
                 f"{FIX_REVIEW_ROUTE_PATH}: {finding_id} sem evidence"
             )
@@ -1911,7 +1904,8 @@ def validate_fix_review(root: Path) -> None:
         finding_ids,
     )
     mismatched = [
-        finding_id for finding_id in finding_ids
+        finding_id
+        for finding_id in finding_ids
         if indexed[finding_id]["status"] != report_statuses[finding_id]
     ]
     if mismatched:
@@ -1921,7 +1915,8 @@ def validate_fix_review(root: Path) -> None:
         )
     if review_route == "approved":
         failed = [
-            finding_id for finding_id in finding_ids
+            finding_id
+            for finding_id in finding_ids
             if indexed[finding_id]["status"] == "FAIL"
         ]
         if failed:
@@ -1935,15 +1930,15 @@ def validate_fix_review(root: Path) -> None:
     changed_contracts = [
         relative
         for relative, expected in contract_sha256.items()
-        if not isinstance(relative, str)
-        or _sha256(root / relative) != expected
+        if not isinstance(relative, str) or _sha256(root / relative) != expected
     ]
     _, _, product_root = _load_baseline(root)
     changed_product = _product_paths_from_delta(root, base_commit, product_root)
     workset = [str(item) for item in baseline["impact_paths"]]
     impact_keys = {str(item) for item in baseline["impact_keys"]}
     escaped_workset = [
-        path for path in changed_product
+        path
+        for path in changed_product
         if not _path_covered_by_workset(path, workset)
         and _semantic_key(path) not in impact_keys
     ]
@@ -2070,7 +2065,9 @@ def _validated_reconciliation_proposal(root: Path) -> dict[str, str]:
     reservation = _read_yaml(root, RESERVATION_PATH)
     proposal = _read_yaml(root, RECONCILIATION_PATH)
     if proposal.get("schema_version") != 1:
-        raise FeatureValidationError(f"{RECONCILIATION_PATH}: schema_version deve ser 1")
+        raise FeatureValidationError(
+            f"{RECONCILIATION_PATH}: schema_version deve ser 1"
+        )
     backlog = metadata["backlog_item"]
     target = metadata["target_feature"]
     final_feature_id = str(reservation.get("final_feature_id") or "").upper()
@@ -2246,10 +2243,14 @@ def validate_reconcile(root: Path) -> None:
     target = metadata["target_feature"]
     reservation = _read_yaml(root, RESERVATION_PATH)
     final_feature_id = str(reservation.get("final_feature_id") or "").upper()
-    if reservation.get("schema_version") != 1 or not FEAT_RE.fullmatch(final_feature_id):
+    if reservation.get("schema_version") != 1 or not FEAT_RE.fullmatch(
+        final_feature_id
+    ):
         raise FeatureValidationError(f"{RESERVATION_PATH}: reserva inválida")
     if str(reservation.get("backlog_item") or "").upper() != backlog:
-        raise FeatureValidationError(f"{RESERVATION_PATH}: backlog diverge de {backlog}")
+        raise FeatureValidationError(
+            f"{RESERVATION_PATH}: backlog diverge de {backlog}"
+        )
     backlog_records = _markdown_records(_read(root, "docs/PROJECT_BACKLOG.md"))
     baseline_backlog, baseline_features, _ = _load_baseline(root)
     _assert_unrelated_records_unchanged(
@@ -2263,7 +2264,9 @@ def validate_reconcile(root: Path) -> None:
         raise FeatureValidationError(f"PROJECT_BACKLOG não contém {backlog}")
     status = _normalize(_row_value(backlog_row, "status", "estado"))
     if status not in {"done", "accepted"}:
-        raise FeatureValidationError(f"{backlog} deve terminar done/accepted; atual: {status or 'vazio'}")
+        raise FeatureValidationError(
+            f"{backlog} deve terminar done/accepted; atual: {status or 'vazio'}"
+        )
 
     feature_records = _markdown_records(_read(root, "docs/FEATURES.md"))
     baseline_feature_ids = set(_records_by_id(baseline_features))
@@ -2292,8 +2295,7 @@ def validate_reconcile(root: Path) -> None:
         label="FEATURES",
     )
     referencing = [
-        row for row in feature_records
-        if backlog in _row_value(row, "backlog").upper()
+        row for row in feature_records if backlog in _row_value(row, "backlog").upper()
     ]
     if metadata["type"] == "new":
         if len(referencing) != 1:
@@ -2307,7 +2309,10 @@ def validate_reconcile(root: Path) -> None:
             )
     else:
         target_row = _find_row(feature_records, target)
-        if target_row is None or backlog not in _row_value(target_row, "backlog").upper():
+        if (
+            target_row is None
+            or backlog not in _row_value(target_row, "backlog").upper()
+        ):
             raise FeatureValidationError(f"{target} não foi reconciliada com {backlog}")
 
     result = _read(root, "docs/feature-result.md")
@@ -2318,7 +2323,10 @@ def validate_reconcile(root: Path) -> None:
     changelog = _read(root, "CHANGELOG.md")
     baseline_documentation = _baseline_documentation(root)
     baseline_changelog = baseline_documentation.get("CHANGELOG.md")
-    if baseline_changelog is not None and _sha256(root / "CHANGELOG.md") == baseline_changelog:
+    if (
+        baseline_changelog is not None
+        and _sha256(root / "CHANGELOG.md") == baseline_changelog
+    ):
         raise FeatureValidationError("CHANGELOG.md não foi atualizado neste ciclo")
     if backlog not in changelog.upper():
         raise FeatureValidationError(f"CHANGELOG.md não referencia {backlog}")

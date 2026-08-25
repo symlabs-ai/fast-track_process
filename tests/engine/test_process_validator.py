@@ -1,17 +1,17 @@
 """Tests for ft.engine.process_validator."""
 
 import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 import pytest
 import yaml
 
-from ft.engine.graph import ProcessGraph, Node, load_graph
+from ft.engine.graph import Node, ProcessGraph, load_graph
 from ft.engine.process_validator import (
-    validate_process,
-    VALID_NODE_TYPES,
     VALID_EXECUTORS,
+    VALID_NODE_TYPES,
+    validate_process,
 )
 
 
@@ -19,39 +19,41 @@ def _make_graph(nodes_raw: list[dict], meta: dict | None = None) -> ProcessGraph
     """Helper: cria ProcessGraph a partir de lista de dicts."""
     nodes = []
     for n in nodes_raw:
-        nodes.append(Node(
-            id=n["id"],
-            type=n.get("type", "build"),
-            title=n.get("title", n["id"]),
-            executor=n.get("executor", "python"),
-            outputs=n.get("outputs", []),
-            validators=n.get("validators", []),
-            next=n.get("next"),
-            branches=n.get("branches"),
-            condition=n.get("condition"),
-            max_turns=n.get("max_turns"),
-            preserve_outputs_on_reentry=n.get(
-                "preserve_outputs_on_reentry", False
-            ),
-            reject_next=n.get("reject_next"),
-            fix_review=n.get("fix_review"),
-            on_fail=n.get("on_fail"),
-            hyper_mode_docs=n.get("hyper_mode_docs"),
-            hyper_mode_full_docs=n.get("hyper_mode_full_docs"),
-            hyper_mode_preview_lines=n.get("hyper_mode_preview_lines"),
-            hyper_mode_full_max_lines=n.get("hyper_mode_full_max_lines"),
-            context_profile=n.get("context_profile"),
-            llm_timeout_seconds=n.get("llm_timeout_seconds"),
-        ))
+        nodes.append(
+            Node(
+                id=n["id"],
+                type=n.get("type", "build"),
+                title=n.get("title", n["id"]),
+                executor=n.get("executor", "python"),
+                outputs=n.get("outputs", []),
+                validators=n.get("validators", []),
+                next=n.get("next"),
+                branches=n.get("branches"),
+                condition=n.get("condition"),
+                max_turns=n.get("max_turns"),
+                preserve_outputs_on_reentry=n.get("preserve_outputs_on_reentry", False),
+                reject_next=n.get("reject_next"),
+                fix_review=n.get("fix_review"),
+                on_fail=n.get("on_fail"),
+                hyper_mode_docs=n.get("hyper_mode_docs"),
+                hyper_mode_full_docs=n.get("hyper_mode_full_docs"),
+                hyper_mode_preview_lines=n.get("hyper_mode_preview_lines"),
+                hyper_mode_full_max_lines=n.get("hyper_mode_full_max_lines"),
+                context_profile=n.get("context_profile"),
+                llm_timeout_seconds=n.get("llm_timeout_seconds"),
+            )
+        )
     return ProcessGraph(nodes, meta or {"id": "test", "version": "1.0.0"})
 
 
 class TestStructure:
     def test_valid_types_pass(self):
-        graph = _make_graph([
-            {"id": "start", "type": "build", "title": "Start", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "title": "Start", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert report.passed
 
@@ -124,9 +126,7 @@ class TestStructure:
             {"mode": "referenced"},
         ],
     )
-    def test_close_policy_rejects_unsafe_backlog_configuration(
-        self, backlog_policy
-    ):
+    def test_close_policy_rejects_unsafe_backlog_configuration(self, backlog_policy):
         graph = _make_graph(
             [
                 {"id": "start", "type": "build", "title": "Start", "next": "end"},
@@ -142,19 +142,29 @@ class TestStructure:
         assert not validate_process(graph).passed
 
     def test_invalid_type_error(self):
-        graph = _make_graph([
-            {"id": "start", "type": "magic", "title": "Start", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "magic", "title": "Start", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert not report.passed
         assert any("type 'magic'" in e.message for e in report.errors)
 
     def test_invalid_executor_error(self):
-        graph = _make_graph([
-            {"id": "start", "type": "build", "title": "Start", "executor": "llm_designer", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "build",
+                    "title": "Start",
+                    "executor": "llm_designer",
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert any("executor 'llm_designer'" in e.message for e in report.errors)
 
@@ -168,26 +178,36 @@ class TestStructure:
         ],
     )
     def test_invalid_hyper_mode_schema_is_rejected(self, field, value):
-        graph = _make_graph([
-            {"id": "start", "type": "document", "title": "Start", field: value, "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "document",
+                    "title": "Start",
+                    field: value,
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
 
         report = validate_process(graph)
 
         assert any(field in error.message for error in report.errors)
 
     def test_preserve_outputs_on_reentry_must_be_boolean(self):
-        graph = _make_graph([
-            {
-                "id": "start",
-                "type": "document",
-                "title": "Start",
-                "preserve_outputs_on_reentry": "yes",
-                "next": "end",
-            },
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "document",
+                    "title": "Start",
+                    "preserve_outputs_on_reentry": "yes",
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
 
         report = validate_process(graph)
 
@@ -198,47 +218,53 @@ class TestStructure:
 
     @pytest.mark.parametrize("value", [0, -1, True, 1.5, "600"])
     def test_llm_timeout_seconds_must_be_positive_integer(self, value):
-        graph = _make_graph([
-            {
-                "id": "start",
-                "type": "build",
-                "title": "Start",
-                "llm_timeout_seconds": value,
-                "next": "end",
-            },
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "build",
+                    "title": "Start",
+                    "llm_timeout_seconds": value,
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
 
         report = validate_process(graph)
 
         assert any("llm_timeout_seconds" in error.message for error in report.errors)
 
     def test_llm_timeout_seconds_accepts_positive_integer(self):
-        graph = _make_graph([
-            {
-                "id": "start",
-                "type": "build",
-                "title": "Start",
-                "llm_timeout_seconds": 600,
-                "next": "end",
-            },
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "build",
+                    "title": "Start",
+                    "llm_timeout_seconds": 600,
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
 
         assert validate_process(graph).passed
 
     @pytest.mark.parametrize("value", ["", True, "feature_delta.unknown"])
     def test_invalid_context_profile_is_rejected(self, value):
-        graph = _make_graph([
-            {
-                "id": "start",
-                "type": "document",
-                "title": "Start",
-                "context_profile": value,
-                "next": "end",
-            },
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "document",
+                    "title": "Start",
+                    "context_profile": value,
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
 
         report = validate_process(graph)
 
@@ -254,17 +280,19 @@ class TestStructure:
         ],
     )
     def test_context_profile_cannot_mix_with_hyper_mode(self, field, value):
-        graph = _make_graph([
-            {
-                "id": "start",
-                "type": "document",
-                "title": "Start",
-                "context_profile": "feature_delta.reconcile",
-                field: value,
-                "next": "end",
-            },
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "document",
+                    "title": "Start",
+                    "context_profile": "feature_delta.reconcile",
+                    field: value,
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
 
         report = validate_process(graph)
 
@@ -273,65 +301,105 @@ class TestStructure:
 
 class TestGraphIntegrity:
     def test_orphan_node_detected(self):
-        graph = _make_graph([
-            {"id": "start", "type": "build", "title": "Start", "next": "end"},
-            {"id": "orphan", "type": "build", "title": "Orphan", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "title": "Start", "next": "end"},
+                {"id": "orphan", "type": "build", "title": "Orphan", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
-        assert any("órfão" in e.message and e.node_id == "orphan" for e in report.errors)
+        assert any(
+            "órfão" in e.message and e.node_id == "orphan" for e in report.errors
+        )
 
     def test_linear_graph_passes(self):
-        graph = _make_graph([
-            {"id": "a", "type": "build", "title": "A", "next": "b"},
-            {"id": "b", "type": "gate", "title": "B", "next": "c"},
-            {"id": "c", "type": "build", "title": "C", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {"id": "a", "type": "build", "title": "A", "next": "b"},
+                {"id": "b", "type": "gate", "title": "B", "next": "c"},
+                {"id": "c", "type": "build", "title": "C", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert report.passed
 
     def test_decision_branches_reachable(self):
-        graph = _make_graph([
-            {"id": "start", "type": "decision", "title": "Decide",
-             "condition": "mode", "branches": {"a": "path_a", "b": "path_b"}, "next": "path_a"},
-            {"id": "path_a", "type": "build", "title": "Path A", "next": "end"},
-            {"id": "path_b", "type": "build", "title": "Path B", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "decision",
+                    "title": "Decide",
+                    "condition": "mode",
+                    "branches": {"a": "path_a", "b": "path_b"},
+                    "next": "path_a",
+                },
+                {"id": "path_a", "type": "build", "title": "Path A", "next": "end"},
+                {"id": "path_b", "type": "build", "title": "Path B", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert report.passed
 
     def test_reject_next_is_reachable_edge(self):
-        graph = _make_graph([
-            {"id": "build", "type": "build", "title": "Build", "next": "gate", "outputs": ["src/app.py"]},
-            {"id": "gate", "type": "human_gate", "title": "Gate", "next": "end", "reject_next": "fix"},
-            {"id": "fix", "type": "build", "title": "Fix", "next": "gate", "outputs": ["src/app.py"]},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "build",
+                    "type": "build",
+                    "title": "Build",
+                    "next": "gate",
+                    "outputs": ["src/app.py"],
+                },
+                {
+                    "id": "gate",
+                    "type": "human_gate",
+                    "title": "Gate",
+                    "next": "end",
+                    "reject_next": "fix",
+                },
+                {
+                    "id": "fix",
+                    "type": "build",
+                    "title": "Fix",
+                    "next": "gate",
+                    "outputs": ["src/app.py"],
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
-        assert not any(e.node_id == "fix" and "órfão" in e.message for e in report.errors)
-        assert not any(e.node_id == "fix" and "inalcançável" in e.message for e in report.errors)
+        assert not any(
+            e.node_id == "fix" and "órfão" in e.message for e in report.errors
+        )
+        assert not any(
+            e.node_id == "fix" and "inalcançável" in e.message for e in report.errors
+        )
 
     def test_on_fail_goto_is_reachable_edge(self):
-        graph = _make_graph([
-            {
-                "id": "build",
-                "type": "build",
-                "title": "Build",
-                "outputs": ["src/app.py"],
-                "next": "end",
-                "on_fail": {"goto": "fix"},
-            },
-            {
-                "id": "fix",
-                "type": "build",
-                "title": "Fix",
-                "outputs": ["src/app.py"],
-                "next": "end",
-            },
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "build",
+                    "type": "build",
+                    "title": "Build",
+                    "outputs": ["src/app.py"],
+                    "next": "end",
+                    "on_fail": {"goto": "fix"},
+                },
+                {
+                    "id": "fix",
+                    "type": "build",
+                    "title": "Fix",
+                    "outputs": ["src/app.py"],
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
 
         report = validate_process(graph)
 
@@ -346,65 +414,85 @@ class TestGraphIntegrity:
 
     def test_dangling_on_fail_goto_is_rejected(self):
         with pytest.raises(ValueError, match="on_fail.goto"):
-            _make_graph([
-                {
-                    "id": "build",
-                    "type": "build",
-                    "title": "Build",
-                    "outputs": ["src/app.py"],
-                    "next": "end",
-                    "on_fail": {"goto": "missing"},
-                },
-                {"id": "end", "type": "end", "title": "End"},
-            ])
+            _make_graph(
+                [
+                    {
+                        "id": "build",
+                        "type": "build",
+                        "title": "Build",
+                        "outputs": ["src/app.py"],
+                        "next": "end",
+                        "on_fail": {"goto": "missing"},
+                    },
+                    {"id": "end", "type": "end", "title": "End"},
+                ]
+            )
 
     def test_duplicate_node_ids_are_rejected(self):
         with pytest.raises(ValueError, match="duplicados: build"):
-            _make_graph([
-                {
-                    "id": "build",
-                    "type": "build",
-                    "title": "Build one",
-                    "outputs": ["src/one.py"],
-                    "next": "end",
-                },
-                {
-                    "id": "build",
-                    "type": "build",
-                    "title": "Build two",
-                    "outputs": ["src/two.py"],
-                    "next": "end",
-                },
-                {"id": "end", "type": "end", "title": "End"},
-            ])
+            _make_graph(
+                [
+                    {
+                        "id": "build",
+                        "type": "build",
+                        "title": "Build one",
+                        "outputs": ["src/one.py"],
+                        "next": "end",
+                    },
+                    {
+                        "id": "build",
+                        "type": "build",
+                        "title": "Build two",
+                        "outputs": ["src/two.py"],
+                        "next": "end",
+                    },
+                    {"id": "end", "type": "end", "title": "End"},
+                ]
+            )
 
     def test_non_terminal_without_next_error(self):
-        graph = _make_graph([
-            {"id": "start", "type": "build", "title": "Start", "next": "dangling"},
-            {"id": "dangling", "type": "build", "title": "Dangling"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "title": "Start", "next": "dangling"},
+                {"id": "dangling", "type": "build", "title": "Dangling"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert any("sem next" in e.message for e in report.errors)
 
 
 class TestValidatorChecks:
     def test_unknown_validator_warning(self):
-        graph = _make_graph([
-            {"id": "start", "type": "gate", "title": "Gate",
-             "validators": [{"nonexistent_check": True}], "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "gate",
+                    "title": "Gate",
+                    "validators": [{"nonexistent_check": True}],
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         registry = {"tests_pass": lambda: True}
         report = validate_process(graph, registry)
         assert any("nonexistent_check" in w.message for w in report.warnings)
 
     def test_known_validator_no_warning(self):
-        graph = _make_graph([
-            {"id": "start", "type": "gate", "title": "Gate",
-             "validators": [{"tests_pass": True}], "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "gate",
+                    "title": "Gate",
+                    "validators": [{"tests_pass": True}],
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         registry = {"tests_pass": lambda: True}
         report = validate_process(graph, registry)
         assert not any("tests_pass" in w.message for w in report.warnings)
@@ -412,56 +500,61 @@ class TestValidatorChecks:
 
 class TestSemantics:
     def test_gate_without_validators_warning(self):
-        graph = _make_graph([
-            {"id": "start", "type": "gate", "title": "Gate", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "gate", "title": "Gate", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert any("gate sem validators" in w.message for w in report.warnings)
 
     def test_build_without_outputs_warning(self):
-        graph = _make_graph([
-            {"id": "start", "type": "build", "title": "Build", "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {"id": "start", "type": "build", "title": "Build", "next": "end"},
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert any("build sem outputs" in w.message for w in report.warnings)
 
     def test_llm_without_max_turns_warning(self):
-        graph = _make_graph([
-            {"id": "start", "type": "build", "title": "Build",
-             "executor": "llm_coder", "outputs": ["src/"], "next": "end"},
-            {"id": "end", "type": "end", "title": "End"},
-        ])
+        graph = _make_graph(
+            [
+                {
+                    "id": "start",
+                    "type": "build",
+                    "title": "Build",
+                    "executor": "llm_coder",
+                    "outputs": ["src/"],
+                    "next": "end",
+                },
+                {"id": "end", "type": "end", "title": "End"},
+            ]
+        )
         report = validate_process(graph)
         assert any("max_turns" in w.message for w in report.warnings)
 
 
 class TestRealProcess:
-    """Testa com o processo V2 distribuído no catálogo."""
+    """Testa com os processos distribuídos no catálogo."""
 
-    def test_fast_track_v2_passes(self):
-        process_path = (
-            Path(__file__).parent.parent.parent
-            / "templates"
-            / "fast-track-v2"
-            / "FAST_TRACK_PROCESS.yml"
-        )
-        graph = load_graph(process_path)
-        report = validate_process(graph)
-        # Pode ter warnings, mas não deve ter erros
-        assert report.passed, f"Erros: {[e.message for e in report.errors]}"
-
-    @pytest.mark.parametrize("template", [
-        "templates/base/process.yml",
-        "templates/bug/process.yml",
-        "templates/feature/process.yml",
-        "templates/tweak/process.yml",
-        "templates/mvp-builder/process.yml",
-        "templates/mvp-builder-fast/process.yml",
-        "templates/mdd/process.yml",
-        "templates/ft-ui-prototype/process.yml",
-    ])
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "templates/bug-fast/process.yml",
+            "templates/evolve_process/process.yml",
+            "templates/fastfy/process.yml",
+            "templates/feature-fast/process.yml",
+            "templates/innovation/process.yml",
+            "templates/ios-to-android/process.yml",
+            "templates/material_design_pwa/process.yml",
+            "templates/mdd/process.yml",
+            "templates/mvp-builder-fast/process.yml",
+            "templates/tweak/process.yml",
+        ],
+    )
     def test_templates_pass_process_validation(self, template):
         process_path = Path(__file__).parent.parent.parent / template
         graph = load_graph(process_path)
@@ -487,12 +580,26 @@ class TestV3RuntimeNames:
     def test_processo_v3_com_nomes_curtos_passa(self):
         """YAML V3 usa executor curto ('claude/opencode'); via load_graph deve validar."""
         raw = {
-            "id": "mini_v3", "version": "1.0.0", "title": "mini",
+            "id": "mini_v3",
+            "version": "1.0.0",
+            "title": "mini",
             "nodes": [
-                {"id": "a", "type": "build", "title": "A", "executor": "claude",
-                 "outputs": ["docs/x.md"], "next": "b"},
-                {"id": "b", "type": "build", "title": "B", "executor": "opencode",
-                 "outputs": ["docs/y.md"], "next": "c"},
+                {
+                    "id": "a",
+                    "type": "build",
+                    "title": "A",
+                    "executor": "claude",
+                    "outputs": ["docs/x.md"],
+                    "next": "b",
+                },
+                {
+                    "id": "b",
+                    "type": "build",
+                    "title": "B",
+                    "executor": "opencode",
+                    "outputs": ["docs/y.md"],
+                    "next": "c",
+                },
                 {"id": "c", "type": "exploration", "title": "C", "next": "fim"},
                 {"id": "fim", "type": "end", "title": "Fim"},
             ],
@@ -503,7 +610,11 @@ class TestV3RuntimeNames:
         try:
             graph = load_graph(Path(path))
             report = validate_process(graph)
-            executor_errors = [e for e in report.errors if "executor" in e.message or "type" in e.message]
+            executor_errors = [
+                e
+                for e in report.errors
+                if "executor" in e.message or "type" in e.message
+            ]
             assert executor_errors == []
         finally:
             os.unlink(path)

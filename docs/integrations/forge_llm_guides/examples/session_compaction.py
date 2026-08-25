@@ -4,6 +4,7 @@ Session Compaction Example - Manage long conversations with context compaction.
 This example demonstrates different strategies for managing conversation context
 when it exceeds the model's token limit.
 """
+
 import os
 
 from forge_llm import (
@@ -221,9 +222,7 @@ async def async_summarize_strategy() -> None:
         # Manually trigger compaction if needed
         if session.estimate_tokens() > 1500:
             print("Compacting session...")
-            compacted = await compactor.compact(
-                session.messages, target_tokens=1000
-            )
+            compacted = await compactor.compact(session.messages, target_tokens=1000)
             session._messages = compacted
             print(f"Session compacted to {len(session.messages)} messages")
 

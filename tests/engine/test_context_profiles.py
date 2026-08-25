@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 from ft.engine.context_profiles import (
@@ -66,8 +66,7 @@ def _runner(tmp_path: Path, *, node_type: str = "discovery") -> tuple[StepRunner
 
 def test_profile_caps_are_explicit() -> None:
     assert {
-        name: profile.max_chars
-        for name, profile in FEATURE_DELTA_PROFILES.items()
+        name: profile.max_chars for name, profile in FEATURE_DELTA_PROFILES.items()
     } == {
         "feature_delta.discovery": 64_000,
         "feature_delta.implement": 48_000,
@@ -81,9 +80,7 @@ def test_profile_caps_are_explicit() -> None:
 
 
 def test_feedback_sentinel_uses_only_explicit_last_approval(tmp_path: Path) -> None:
-    none = compose_context_profile(
-        "feature_delta.discovery", tmp_path, "TASK"
-    )
+    none = compose_context_profile("feature_delta.discovery", tmp_path, "TASK")
     present = compose_context_profile(
         "feature_delta.discovery",
         tmp_path,
@@ -108,9 +105,7 @@ def test_allowlist_never_loads_cycle_state_logs_or_archives(tmp_path: Path) -> N
     ):
         _write(tmp_path, relative, f"FORBIDDEN:{relative}")
 
-    result = compose_context_profile(
-        "feature_delta.review", tmp_path, "TASK"
-    )
+    result = compose_context_profile("feature_delta.review", tmp_path, "TASK")
 
     assert "ALLOWED" in result.context
     assert "FORBIDDEN:" not in result.context
@@ -128,9 +123,7 @@ def test_discovery_reentry_keeps_all_drafts_as_context(tmp_path: Path) -> None:
     for relative, content in drafts.items():
         _write(tmp_path, relative, content)
 
-    result = compose_context_profile(
-        "feature_delta.discovery", tmp_path, "TASK"
-    )
+    result = compose_context_profile("feature_delta.discovery", tmp_path, "TASK")
 
     for relative, content in drafts.items():
         assert relative in result.loaded_paths
@@ -154,18 +147,14 @@ def test_tech_stack_alias_is_deduplicated_and_conflict_is_manifested(
     _write(tmp_path, "docs/TECH_STACK.md", "same stack")
     _write(tmp_path, "docs/tech_stack.md", "same stack")
 
-    identical = compose_context_profile(
-        "feature_delta.discovery", tmp_path, "TASK"
-    )
+    identical = compose_context_profile("feature_delta.discovery", tmp_path, "TASK")
 
     assert "### docs/TECH_STACK.md" in identical.context
     assert "### docs/tech_stack.md" not in identical.context
     assert '"state":"identical"' in identical.context
 
     _write(tmp_path, "docs/tech_stack.md", "conflicting legacy stack")
-    conflict = compose_context_profile(
-        "feature_delta.discovery", tmp_path, "TASK"
-    )
+    conflict = compose_context_profile("feature_delta.discovery", tmp_path, "TASK")
 
     assert "### docs/TECH_STACK.md" in conflict.context
     assert "### docs/tech_stack.md" in conflict.context
@@ -194,9 +183,7 @@ def test_receipt_is_compact_and_preserves_schema_v2_file_count(tmp_path: Path) -
         json.dumps(receipt),
     )
 
-    result = compose_context_profile(
-        "feature_delta.review", tmp_path, "TASK"
-    )
+    result = compose_context_profile("feature_delta.review", tmp_path, "TASK")
 
     assert '"file_count":37' in result.context
     assert "sha256:aggregate" in result.context
@@ -205,7 +192,9 @@ def test_receipt_is_compact_and_preserves_schema_v2_file_count(tmp_path: Path) -
     assert "manifest_path" not in result.context
 
 
-def test_critical_docs_survive_huge_prd_and_context_stays_bounded(tmp_path: Path) -> None:
+def test_critical_docs_survive_huge_prd_and_context_stays_bounded(
+    tmp_path: Path,
+) -> None:
     _write(tmp_path, "docs/feature.md", "CRITICAL FEATURE")
     _write(tmp_path, "docs/feature-plan.md", "CRITICAL PLAN")
     _write(tmp_path, "docs/feature-review.md", "CRITICAL REVIEW")
@@ -218,9 +207,7 @@ def test_critical_docs_survive_huge_prd_and_context_stays_bounded(tmp_path: Path
         json.dumps({"schema_version": 2, "result": "pass", "file_count": 4}),
     )
 
-    result = compose_context_profile(
-        "feature_delta.reconcile", tmp_path, "TASK"
-    )
+    result = compose_context_profile("feature_delta.reconcile", tmp_path, "TASK")
 
     assert len(result.context) <= 72_000
     for marker in (
@@ -247,9 +234,7 @@ def test_opencode_denies_allowlisted_docs_even_when_cap_omits_them(
         else:
             _write(tmp_path, relative, relative + "\n" + ("X" * 20_000))
 
-    result = compose_context_profile(
-        "feature_delta.implement", tmp_path, "TASK"
-    )
+    result = compose_context_profile("feature_delta.implement", tmp_path, "TASK")
 
     assert len(result.context) <= 48_000
     assert "docs/api_contract.md" not in result.loaded_paths
@@ -284,9 +269,7 @@ def test_large_canonical_docs_keep_head_tail_and_targeted_pb_feat_rows(
         + "\nFEATURES TAIL\n",
     )
 
-    result = compose_context_profile(
-        "feature_delta.reconcile", tmp_path, "TASK"
-    )
+    result = compose_context_profile("feature_delta.reconcile", tmp_path, "TASK")
 
     assert len(result.context) <= 72_000
     assert "BACKLOG HEAD" in result.context
@@ -400,9 +383,12 @@ def test_fix_review_delta_uses_frozen_fix_anchor_not_cycle_base(
     assert f'"base_commit":"{fix_base}"' in result.context
     assert "current:src/fix.py" in result.context
     assert "FIXED = True" in result.context
-    assert "src/old.py" not in result.context.split(
-        "### git:feature-fix-review.changed-files", 1
-    )[1].split("\n### ", 1)[0]
+    assert (
+        "src/old.py"
+        not in result.context.split("### git:feature-fix-review.changed-files", 1)[
+            1
+        ].split("\n### ", 1)[0]
+    )
 
 
 def test_normal_runner_profile_skips_hyper_kb_and_cycle_memory(tmp_path: Path) -> None:
@@ -428,9 +414,7 @@ def test_normal_runner_profile_skips_hyper_kb_and_cycle_memory(tmp_path: Path) -
             side_effect=AssertionError("cycle memory must be skipped"),
         ),
     ):
-        prompt, compact, deny = runner._build_llm_task_context(
-            node, state, selection
-        )
+        prompt, compact, deny = runner._build_llm_task_context(node, state, selection)
 
     assert compact is None
     assert deny == []
@@ -608,6 +592,7 @@ def test_stakeholder_retry_uses_same_profile_compositor(tmp_path: Path) -> None:
     original_task = delegated.call_args.kwargs["original_task"]
     assert "CONTEXT_PROFILE=feature_delta.discovery" in original_task
     assert "RETRY SCOPE" in original_task
-    assert "REJEITADO PELO STAKEHOLDER: corrija o contrato" in (
-        delegated.call_args.kwargs["feedback"]
+    assert (
+        "REJEITADO PELO STAKEHOLDER: corrija o contrato"
+        in (delegated.call_args.kwargs["feedback"])
     )

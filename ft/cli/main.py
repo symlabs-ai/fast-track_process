@@ -5,21 +5,22 @@ ft engine CLI — comandos do motor deterministico.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import yaml
 
 from ft.cli.fix_command import execute_fix
 from ft.engine import paths
 from ft.engine.layout import (
+    LayoutMigrationRequired,
     canonical_project_root,
     latest_cycle_artifact,
     manifest_llm_defaults,
@@ -39,11 +40,11 @@ from ft.engine.process_improvements import (
     process_improvement_close_readiness,
     resolve_global_process_candidate,
 )
+from ft.engine.runner import StepRunner
 from ft.engine.validation_profiles import (
     validation_profile_catalog,
     write_validation_matrix,
 )
-from ft.engine.runner import StepRunner
 from ft.engine.validators.artifacts import (
     backlog_pending_decisions,
     backlog_referenced_decisions,
@@ -52,7 +53,6 @@ from ft.engine.validators.artifacts import (
     implemented_backlog_covered_by_features,
     project_backlog_summary,
 )
-
 
 # Sequências ANSI (para higienizar texto do estado antes de exibir).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -910,6 +910,7 @@ def _api_health_check(project_root: Path, llm_engine: str = "claude") -> None:
     import json
     import urllib.error
     import urllib.request
+
     from ft.engine import ui as _ui
 
     if llm_engine.lower().strip() != "claude":
@@ -1116,8 +1117,8 @@ def cmd_init(args):
     )
     from ft.project.bootstrap import DEFAULT_INIT_TEMPLATE, load_init_descriptor
     from ft.project.init_scripts import (
-        execute_and_record_init_template,
         InitScriptError,
+        execute_and_record_init_template,
         read_init_marker,
     )
 
@@ -2169,11 +2170,11 @@ def _print_cycle_step_details(
             if measured_duration
             else "—"
         )
-        measured_tokens = bool(rows) and all(row.token_count is not None for row in rows)
+        measured_tokens = bool(rows) and all(
+            row.token_count is not None for row in rows
+        )
         token_total = (
-            f"{sum(row.token_count or 0 for row in rows):,}"
-            if measured_tokens
-            else "—"
+            f"{sum(row.token_count or 0 for row in rows):,}" if measured_tokens else "—"
         )
         return execution_total, attempt_total, duration_total, token_total
 
@@ -2199,13 +2200,9 @@ def _print_cycle_step_details(
         w_duration = _width(
             "DURAÇÃO LLM", [*[row.duration for row in width_rows], duration_total]
         )
-        w_tokens = _width(
-            "TOKENS", [*[row.tokens for row in width_rows], token_total]
-        )
+        w_tokens = _width("TOKENS", [*[row.tokens for row in width_rows], token_total])
         w_model = _width("MODELO", [*[row.model for row in width_rows], "—"])
-        w_last = _width(
-            "ÚLT.", [*[row.last_activity for row in width_rows], "—"]
-        )
+        w_last = _width("ÚLT.", [*[row.last_activity for row in width_rows], "—"])
         w_status = _width("STATUS", [*[row.status for row in width_rows], "—"])
         w_source = _width("FONTE", [*[row.source for row in width_rows], "—"])
         print(
@@ -2392,8 +2389,9 @@ def _log_mtime(path) -> float:
 def cmd_log(args):
     """Mostra/acompanha o log LLM do ciclo selecionado, formatado para leitura humana."""
     import time as _time
-    from ft.engine.delegate import _format_stream_line
+
     from ft.engine import ui as _ui
+    from ft.engine.delegate import _format_stream_line
 
     # `ft log` puro (nenhum parâmetro) → help explicando os parâmetros.
     # Para ver as últimas linhas sem acompanhar, use `ft log -n 30`.
@@ -3135,7 +3133,11 @@ def cmd_explore(args):
                     "mode": "standalone",
                     "read_only": True,
                     "session": {
-                        "mode": "resume" if resume_session else "new" if persist_session else "ephemeral",
+                        "mode": "resume"
+                        if resume_session
+                        else "new"
+                        if persist_session
+                        else "ephemeral",
                         "id": resume_session,
                     },
                 }
@@ -3871,6 +3873,7 @@ def cmd_process_update(args):
 def _cmd_close_locked_body(args, merge_lock):
     """Encerra o ciclo ativo: merge interativo + remove worktree + limpa branch."""
     import subprocess as _sp
+
     from ft.engine import ui as _ui
 
     runner = get_runner(
@@ -4347,7 +4350,7 @@ def _validate_project_structure(root: Path) -> tuple[list[str], list[str]]:
 def cmd_validate(args):
     """Valida o YAML do processo."""
     from ft.engine.graph import load_graph
-    from ft.engine.process_validator import validate_process, format_report
+    from ft.engine.process_validator import format_report, validate_process
     from ft.engine.runner import VALIDATOR_REGISTRY
 
     root = find_project_root()
@@ -4424,6 +4427,139 @@ def cmd_validate(args):
 
     overall_pass = structure_passed and report.passed
     sys.exit(0 if overall_pass else 1)
+
+
+def cmd_analyse_template(args):
+    """Score estático de determinismo (0-100%) de um template de processo."""
+    import json as _json
+
+    from ft.engine import ui as _ui
+    from ft.engine.determinism import CATEGORY_SCORES, analyse_graph
+    from ft.engine.graph import load_graph
+    from ft.engine.runner import VALIDATOR_REGISTRY
+
+    selector = str(args.template)
+    origin = "local"
+    if "/" in selector or "\\" in selector:
+        process_path = Path(selector).expanduser()
+        origin = "path"
+        if not process_path.is_file():
+            print(f"ERRO: process.yml não encontrado: {selector}")
+            sys.exit(1)
+    else:
+        root = find_project_root()
+        try:
+            process_path = resolve_project_process(root, selector)
+        except (FileNotFoundError, ValueError, LayoutMigrationRequired):
+            process_path = None
+        if process_path is None:
+            process_path = engine_root() / "templates" / selector / "process.yml"
+            origin = "global"
+            if not process_path.is_file():
+                print(f"ERRO: template não encontrado (local nem global): {selector}")
+                sys.exit(1)
+
+    try:
+        graph = load_graph(process_path)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"ERRO: falha ao carregar YAML: {e}")
+        sys.exit(1)
+
+    report = analyse_graph(graph, frozenset(VALIDATOR_REGISTRY))
+    counts = report.category_counts()
+
+    if getattr(args, "json", False):
+        payload = {
+            "process_id": report.process_id,
+            "version": report.version,
+            "origin": origin,
+            "path": str(process_path),
+            "score": round(report.score, 4),
+            "scored_nodes": len(report.scored),
+            "categories": counts,
+            "human_nodes": report.human_nodes,
+            "skipped_nodes": report.skipped_nodes,
+            "unknown_validators": report.unknown_validators,
+            "weak_nodes": [
+                {
+                    "id": n.id,
+                    "type": n.type,
+                    "executor": n.executor,
+                    "category": n.category,
+                    "validators": n.validators,
+                    "backed_by_gate": n.backed_by_gate,
+                }
+                for n in report.weak_nodes
+            ],
+        }
+        print(_json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
+    origin_note = {
+        "local": "processo local do projeto",
+        "global": "template global do engine",
+        "path": "path explícito",
+    }[origin]
+    print()
+    print(
+        _ui.header(
+            f"Determinismo — {report.process_id} v{report.version} ({origin_note})"
+        )
+    )
+    print(_ui.dim(str(process_path)))
+    print()
+    pct = report.score * 100
+    filled = round(report.score * 24)
+    bar = "█" * filled + "░" * (24 - filled)
+    print(f"  {bar}  D = {pct:.1f}%")
+    print(_ui.dim(f"{len(report.scored)} nodes pontuados"))
+    print()
+
+    labels = {
+        "python": "python (código + gates)",
+        "llm_strong": "LLM + validator forte",
+        "llm_medium": "LLM + validator de forma",
+        "llm_weak": "LLM só existência",
+        "llm_none": "LLM sem validator",
+    }
+    for cat, label in labels.items():
+        n = counts.get(cat, 0)
+        if n == 0:
+            continue
+        d = CATEGORY_SCORES[cat]
+        print(f"  {n:3d} × {label:28s} d={d}")
+    if report.human_nodes:
+        print(
+            f"  {len(report.human_nodes):3d} × decisão humana{'':15s} (fora do score)"
+        )
+    if report.unknown_validators:
+        print()
+        print(
+            _ui.warn(
+                "validators fora do registry (contados como forma): "
+                + ", ".join(report.unknown_validators)
+            )
+        )
+
+    if report.weak_nodes:
+        print()
+        print("  Nodes fracos:")
+        for n in report.weak_nodes:
+            vals = ", ".join(sorted(set(n.validators))) or "nenhum validator"
+            if n.backed_by_gate:
+                print(_ui.dim(f"  ~ {n.id} [{vals}] — re-validado por gate downstream"))
+            else:
+                print(_ui.warn(f"{n.id} [{vals}] — SEM gate downstream"))
+        uncovered = [n for n in report.weak_nodes if not n.backed_by_gate]
+        if uncovered:
+            print()
+            print(
+                _ui.info(
+                    "Maior alavancagem: adicionar validator forte aos nodes "
+                    "marcados com '!'"
+                )
+            )
+    print()
 
 
 def cmd_lint_process(args):
@@ -4670,6 +4806,7 @@ def _abort_zombie_cycle(args, root: Path, cycle, work: Path) -> None:
     """Descarta um ciclo sem worktree Git válida (preparing/crash/corrompido)."""
     import shutil as _shutil
     import subprocess as _sp
+
     from ft.engine import ui as _ui
 
     print()
@@ -4722,6 +4859,7 @@ def _abort_zombie_cycle(args, root: Path, cycle, work: Path) -> None:
 def _cmd_abort_locked_body(args):
     """Aborta o ciclo: descarta worktree e branch sem merge nenhum."""
     import subprocess as _sp
+
     from ft.engine import ui as _ui
 
     root = find_project_root()
@@ -4866,6 +5004,7 @@ def cmd_abort(args):
 def cmd_cancel(args):
     """Cancela o run ativo com justificativa."""
     from datetime import datetime
+
     from ft.engine import ui as _ui
     from ft.engine.state import lock_owner_is_alive, mutate_state_payload
 
@@ -5013,8 +5152,8 @@ def cmd_setup_env(args):
     from ft.engine import ui as _ui
     from ft.project.bootstrap import BootstrapError, load_init_descriptor
     from ft.project.init_scripts import (
-        execute_and_record_init_template,
         InitScriptError,
+        execute_and_record_init_template,
     )
 
     print(
@@ -5098,8 +5237,8 @@ def _normalize_hipotese(
       - seção ## Problema
       - seção ## Oportunidade
     """
-    from ft.engine.validators.artifacts import file_exists, min_lines, has_sections
     from ft.engine.delegate import delegate_to_llm
+    from ft.engine.validators.artifacts import file_exists, has_sections, min_lines
 
     rel = str(hipotese_path.relative_to(project_root))
 
@@ -5245,6 +5384,7 @@ def _is_empty_cycle_dir(cycle_dir: Path) -> bool:
 def _cleanup_pristine_runs(project_root: Path) -> int:
     """Remove worktrees runtime que foram apenas inicializados e abandonados."""
     import shutil
+
     import yaml as _yaml
 
     removed = 0
@@ -6108,10 +6248,7 @@ def main():
         default=None,
         type=_positive_interval_seconds,
         metavar="SEGUNDOS",
-        help=(
-            "Atualizar o status na mesma tela a cada N segundos "
-            "(default: 60)"
-        ),
+        help=("Atualizar o status na mesma tela a cada N segundos (default: 60)"),
     )
 
     # log — acompanhar o log LLM do ciclo ativo
@@ -6373,6 +6510,23 @@ def main():
         required=True,
         metavar="TEMPLATE_OR_PATH",
         help=("Nome registrado ou path canônico .ft/process/<nome>/process.yml"),
+    )
+
+    at = sub.add_parser(
+        "analyse-template",
+        help="Score estático de determinismo (0-100%%) de um template",
+    )
+    at.add_argument(
+        "--template",
+        "-t",
+        required=True,
+        metavar="TEMPLATE_OR_PATH",
+        help="Nome de template (local ou global) ou path para um process.yml",
+    )
+    at.add_argument(
+        "--json",
+        action="store_true",
+        help="Saída em JSON para consumo por máquina",
     )
 
     # lint-process
@@ -6758,6 +6912,8 @@ def main():
             cmd_validate(args)
         elif args.command == "lint-process":
             cmd_lint_process(args)
+        elif args.command == "analyse-template":
+            cmd_analyse_template(args)
         elif args.command == "explore":
             cmd_explore(args)
         elif args.command == "evolve":
@@ -6818,7 +6974,8 @@ def main():
 def _print_crash(exc: Exception) -> None:
     """Formata exceção não-tratada de forma legível para o usuário."""
     import traceback
-    from ft.engine.ui import BOLD_RED, RED, DIM, RESET, BOLD_WHITE, YELLOW
+
+    from ft.engine.ui import BOLD_RED, BOLD_WHITE, DIM, RED, RESET, YELLOW
 
     # Extrair traceback
     tb = traceback.extract_tb(exc.__traceback__)

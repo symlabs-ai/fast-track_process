@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import stat
 import tomllib
+from pathlib import Path
 
 import pytest
 
 from ft.project.init_scripts import (
-    execute_and_record_init_template,
     InitScriptError,
+    execute_and_record_init_template,
     read_init_marker,
 )
 from ft.templates import TemplateCatalog
@@ -150,12 +150,10 @@ def test_tecnospeed_template_records_marker_only_after_remote_confirmation(
     execute_and_record_init_template(descriptor, project)
 
     assert org in read_init_marker(project)
-    assert "gateway_project: demo-project" in (
-        project / "CLAUDE.md"
-    ).read_text(encoding="utf-8")
-    settings = (project / ".claude" / "settings.local.json").read_text(
+    assert "gateway_project: demo-project" in (project / "CLAUDE.md").read_text(
         encoding="utf-8"
     )
+    settings = (project / ".claude" / "settings.local.json").read_text(encoding="utf-8")
     assert "/u/caller-secret/p/provider/s/demo-project" in settings
     curl_argv = log.read_text(encoding="utf-8")
     assert "admin-secret" not in curl_argv
@@ -186,9 +184,9 @@ def test_symlabs_template_configures_codex_and_claude_with_dedicated_key(
     )
 
     assert "symlabs" in read_init_marker(project)
-    assert "gateway_project: demo-project" in (
-        project / "CLAUDE.md"
-    ).read_text(encoding="utf-8")
+    assert "gateway_project: demo-project" in (project / "CLAUDE.md").read_text(
+        encoding="utf-8"
+    )
 
     caller_key = "sk-sym_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     private = project / ".envrc.private"
@@ -216,9 +214,10 @@ def test_symlabs_template_configures_codex_and_claude_with_dedicated_key(
             "ANTHROPIC_API_KEY": caller_key,
         }
     }
-    assert stat.S_IMODE(
-        (project / ".claude" / "settings.local.json").stat().st_mode
-    ) == 0o600
+    assert (
+        stat.S_IMODE((project / ".claude" / "settings.local.json").stat().st_mode)
+        == 0o600
+    )
 
     agents = (project / "AGENTS.md").read_text(encoding="utf-8")
     assert agents.count("<!-- symlabs-symgateway:start -->") == 1
@@ -420,8 +419,7 @@ def test_symlabs_refuses_to_duplicate_remote_key_when_local_secret_is_missing(
     assert read_init_marker(project) == {}
     assert not (project / ".envrc.private").exists()
     create_endpoint = (
-        "-X POST https://gateway.example.invalid/_api/projects/"
-        "project-id/api-keys "
+        "-X POST https://gateway.example.invalid/_api/projects/project-id/api-keys "
     )
     assert create_endpoint not in log.read_text(encoding="utf-8")
 
@@ -459,7 +457,6 @@ def test_symlabs_reuses_confirmed_dedicated_key_on_fix(
     assert agents.count("<!-- symlabs-symgateway:start -->") == 1
     assert agents.count("<!-- symlabs-symgateway:end -->") == 1
     create_endpoint = (
-        "-X POST https://gateway.example.invalid/_api/projects/"
-        "project-id/api-keys "
+        "-X POST https://gateway.example.invalid/_api/projects/project-id/api-keys "
     )
     assert log.read_text(encoding="utf-8").count(create_endpoint) == 1

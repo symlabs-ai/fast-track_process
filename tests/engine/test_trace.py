@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 
 from ft.engine.trace import (
     TraceRecorder,
@@ -59,14 +59,15 @@ def test_trace_writer_is_thread_safe_and_keeps_parent_relations(tmp_path):
     child_starts = [
         event
         for event in events
-        if event.get("event") == "span_start"
-        and event.get("category") == "validator"
+        if event.get("event") == "span_start" and event.get("category") == "validator"
     ]
     assert len(child_starts) == 12
     assert {event["parent_span_id"] for event in child_starts} == {parent.span_id}
 
 
-def test_report_uses_real_wall_range_and_null_for_unavailable_provider_metrics(tmp_path):
+def test_report_uses_real_wall_range_and_null_for_unavailable_provider_metrics(
+    tmp_path,
+):
     recorder = TraceRecorder(tmp_path / "events.jsonl", "cycle-report")
     node = recorder.begin_span(category="node", name="Build", node_id="build")
     llm = recorder.begin_span(

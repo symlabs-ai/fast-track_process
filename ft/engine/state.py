@@ -52,8 +52,11 @@ def lock_owner_is_alive(
     """Valida PID e, para locks novos, a identidade de nascimento."""
     if not isinstance(lock, dict):
         return False
+    raw_pid = lock.get("pid")
+    if not isinstance(raw_pid, (str, bytes, int)):
+        return False
     try:
-        pid = int(lock.get("pid"))
+        pid = int(raw_pid)
     except (TypeError, ValueError):
         return False
     try:
@@ -134,6 +137,7 @@ def mutate_state_payload(
 @dataclass
 class EngineState:
     """Estado do motor. Serializado em ft_state.yml."""
+
     process_id: str = ""
     process_path: str | None = None
     process_digest: str | None = None
@@ -169,8 +173,12 @@ class EngineState:
     artifacts: dict[str, str | None] = field(default_factory=dict)
     blocked_reason: str | None = None
     pending_approval: str | None = None  # node_id aguardando approve/reject
-    last_approval_message: str | None = None  # mensagem do ultimo ft approve (consumida pelo proximo LLM)
-    pending_fix: dict | None = None  # {goto, feedback, origin} quando on_fail aguarda ft fix
+    last_approval_message: str | None = (
+        None  # mensagem do ultimo ft approve (consumida pelo proximo LLM)
+    )
+    pending_fix: dict | None = (
+        None  # {goto, feedback, origin} quando on_fail aguarda ft fix
+    )
     # Rota temporária de uma correção dirigida. O fix volta diretamente ao
     # review que produziu o finding e, quando nasceu em human gate, retorna ao
     # mesmo gate depois da auditoria focal. Nodes intermediários já aprovados
@@ -178,7 +186,9 @@ class EngineState:
     active_fix_return: dict | None = None
     # {fix_node, audit_entry_node, review_node, evidence_origin, review_mode,
     #  gate_node?, review_context}
-    exploration_log: list[str] = field(default_factory=list)  # requests feitos em modo exploração
+    exploration_log: list[str] = field(
+        default_factory=list
+    )  # requests feitos em modo exploração
     # Snapshot compacto por episódio nomeado; histórico detalhado vive no trace.
     llm_episodes: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Conversas persistentes opt-in, indexadas por sprint/lane. IDs pertencem
@@ -190,21 +200,25 @@ class EngineState:
     # paralelismo: ``--route validation --parallel`` escolhe o que executar e,
     # separadamente, quantas lanes podem avançar ao mesmo tempo.
     run_route: str = "default"
-    parallel_enabled: bool = False  # ft run/continue --parallel: honrar parallel_group dos nodes
+    parallel_enabled: bool = (
+        False  # ft run/continue --parallel: honrar parallel_group dos nodes
+    )
     parallel_max_slots: int = 2  # worktrees simultâneos no fan-out de um parallel_group
     # Flags do run original, persistidos para que ft continue os herde por
     # padrão (com override explícito) — esquecer de repassá-los transformava
     # retomada autônoma em passo único ou parava num gate que era para pular.
     run_bypass_human_gates: bool = False
     run_autonomous: bool = False
-    metrics: dict[str, Any] = field(default_factory=lambda: {
-        "steps_completed": 0,
-        "steps_total": 0,
-        "tests_passing": 0,
-        "coverage": 0,
-        "llm_calls": 0,
-        "tokens_used": 0,
-    })
+    metrics: dict[str, Any] = field(
+        default_factory=lambda: {
+            "steps_completed": 0,
+            "steps_total": 0,
+            "tests_passing": 0,
+            "coverage": 0,
+            "llm_calls": 0,
+            "tokens_used": 0,
+        }
+    )
     _lock: dict[str, Any] | None = None
 
 
@@ -338,9 +352,7 @@ class StateManager:
                 "owner": "ft_engine",
                 "pid": os.getpid(),
                 "pid_start": process_start_identity(os.getpid()),
-                "timestamp": time.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                ),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
             self._write_raw_locked(self._serialize_state())
             return state
@@ -499,11 +511,15 @@ class StateManager:
         )
         self.save()
 
-    def advance(self, completed_node: str, next_node: str | None, gate_result: str = "PASS"):
+    def advance(
+        self, completed_node: str, next_node: str | None, gate_result: str = "PASS"
+    ):
         """Avanca estado apos validacao PASS."""
         s = self.state
         if s.node_status == "blocked":
-            raise RuntimeError(f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance().")
+            raise RuntimeError(
+                f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance()."
+            )
         if completed_node not in s.completed_nodes:
             s.completed_nodes.append(completed_node)
         s.gate_log[completed_node] = gate_result
@@ -515,13 +531,19 @@ class StateManager:
         s.metrics["steps_completed"] = len(s.completed_nodes)
         self.save()
 
-    def advance_guarded(self, completed_node: str, next_node: str | None, gate_result: str = "PASS"):
+    def advance_guarded(
+        self, completed_node: str, next_node: str | None, gate_result: str = "PASS"
+    ):
         """Avanca estado com verificacao de gate_result e bloqueio."""
         if gate_result != "PASS":
-            raise ValueError(f"gate_result deve ser 'PASS' para avançar, recebido: '{gate_result}'")
+            raise ValueError(
+                f"gate_result deve ser 'PASS' para avançar, recebido: '{gate_result}'"
+            )
         s = self.state
         if s.node_status == "blocked":
-            raise RuntimeError(f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance_guarded().")
+            raise RuntimeError(
+                f"Estado bloqueado: {s.blocked_reason}. Use unblock() antes de advance_guarded()."
+            )
         if completed_node not in s.completed_nodes:
             s.completed_nodes.append(completed_node)
         s.gate_log[completed_node] = gate_result

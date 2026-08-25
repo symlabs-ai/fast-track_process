@@ -8,13 +8,12 @@ maintainer records an explicit disposition.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-import re
 from typing import Any
 
 import yaml
-
 
 SCHEMA_VERSION = 1
 DEFAULT_REVIEW_PATH = "docs/process-improvements.yml"

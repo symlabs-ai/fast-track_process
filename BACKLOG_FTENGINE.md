@@ -1,7 +1,7 @@
 # ft engine — Backlog
 
-> Documento histórico. Contrato atual: `docs/ft_engine_usage.md`; processo V2
-> distribuído: `templates/fast-track-v2/FAST_TRACK_PROCESS.yml`.
+> Documento histórico. Contrato atual: `docs/ft_engine_usage.md`. O template
+> `fast-track-v2` citado abaixo foi removido do catálogo (deprecated).
 > Repo: fast-track (prototipo aqui, extrai depois)
 > Status: Fase 1 completa, Fase 2 em andamento
 

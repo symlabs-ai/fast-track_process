@@ -13,7 +13,6 @@ from typing import Any
 
 import yaml
 
-
 RESULTS = {"COHERENT", "COHERENT_WITH_RESERVATION", "INCOHERENT"}
 VERDICTS = {"APPROVED", "REJECTED"}
 
@@ -94,9 +93,14 @@ def _inventory(
     prd_text: str,
     ui_criteria_text: str,
 ) -> list[dict[str, Any]]:
-    _require(screen_map.get("schema_version") == 1, "screen-map schema_version must be 1")
+    _require(
+        screen_map.get("schema_version") == 1, "screen-map schema_version must be 1"
+    )
     screens = screen_map.get("screens")
-    _require(isinstance(screens, list) and bool(screens), "screen-map screens must be non-empty")
+    _require(
+        isinstance(screens, list) and bool(screens),
+        "screen-map screens must be non-empty",
+    )
 
     known_criteria = set(re.findall(r"\bC\d{2,}\b", ui_criteria_text))
     seen_screens: set[str] = set()
@@ -110,7 +114,8 @@ def _inventory(
         _require(isinstance(screen, dict), f"{label} must be a mapping")
         screen_id = screen.get("id")
         _require(
-            isinstance(screen_id, str) and re.fullmatch(r"S\d{2,}", screen_id) is not None,
+            isinstance(screen_id, str)
+            and re.fullmatch(r"S\d{2,}", screen_id) is not None,
             f"{label}.id must match SNN",
         )
         _require(screen_id not in seen_screens, f"duplicate screen id {screen_id}")
@@ -144,22 +149,33 @@ def _inventory(
             f"{label}.criteria must contain only CIDs",
         )
         missing_criteria = [cid for cid in criteria if cid not in known_criteria]
-        _require(not missing_criteria, f"{label}.criteria not found in ui_criteria: {missing_criteria}")
+        _require(
+            not missing_criteria,
+            f"{label}.criteria not found in ui_criteria: {missing_criteria}",
+        )
 
         states = screen.get("states")
-        _require(isinstance(states, list) and bool(states), f"{label}.states must be non-empty")
+        _require(
+            isinstance(states, list) and bool(states),
+            f"{label}.states must be non-empty",
+        )
         for state_index, state in enumerate(states):
             state_label = f"{label}.states[{state_index}]"
             _require(isinstance(state, dict), f"{state_label} must be a mapping")
             state_id = state.get("id")
             _require(
                 isinstance(state_id, str)
-                and (state_id == screen_id or re.fullmatch(re.escape(screen_id) + r"\.\d+", state_id)),
+                and (
+                    state_id == screen_id
+                    or re.fullmatch(re.escape(screen_id) + r"\.\d+", state_id)
+                ),
                 f"{state_label}.id must belong to {screen_id}",
             )
             _require(state_id not in seen_states, f"duplicate state id {state_id}")
             seen_states.add(state_id)
-            image = _safe_image_ref(state.get("image"), mockups_root, f"{state_label}.image")
+            image = _safe_image_ref(
+                state.get("image"), mockups_root, f"{state_label}.image"
+            )
             expected.append(
                 {
                     "state_id": state_id,
@@ -181,14 +197,18 @@ def _validate_markdown(
     views: list[dict[str, Any]],
     findings: list[dict[str, Any]],
 ) -> None:
-    _require(markdown.count("VERDICT:") == 1, "Markdown must contain exactly one VERDICT")
+    _require(
+        markdown.count("VERDICT:") == 1, "Markdown must contain exactly one VERDICT"
+    )
     verdict_lines = re.findall(r"(?m)^VERDICT: (APPROVED|REJECTED)$", markdown)
     _require(verdict_lines == [verdict], "Markdown and YAML verdicts differ")
 
     headings = ["## Resumo", "## Achados Transversais", "## Revisão por State"]
     positions: list[int] = []
     for heading in headings:
-        _require(markdown.count(heading) == 1, f"Markdown must contain one {heading} section")
+        _require(
+            markdown.count(heading) == 1, f"Markdown must contain one {heading} section"
+        )
         positions.append(markdown.index(heading))
     _require(positions == sorted(positions), "Markdown sections are out of order")
 
@@ -220,12 +240,21 @@ def _validate_markdown(
         for finding in findings
     ]
     observed_finding_lines = [line for line in lines if line.startswith("- FINDING: ")]
-    _require(observed_finding_lines == expected_finding_lines, "Markdown findings differ from YAML")
+    _require(
+        observed_finding_lines == expected_finding_lines,
+        "Markdown findings differ from YAML",
+    )
     empty_marker = "- Nenhum finding transversal."
     if findings:
-        _require(empty_marker not in lines, "Markdown declares no findings but YAML has findings")
+        _require(
+            empty_marker not in lines,
+            "Markdown declares no findings but YAML has findings",
+        )
     else:
-        _require(lines.count(empty_marker) == 1, "Markdown must declare the empty findings section")
+        _require(
+            lines.count(empty_marker) == 1,
+            "Markdown must declare the empty findings section",
+        )
 
 
 def validate(
@@ -271,7 +300,10 @@ def validate(
         label = f"views[{index}]"
         _require(isinstance(view, dict), f"{label} must be a mapping")
         for field in ("state_id", "screen_id", "prd_screen_id", "image"):
-            _require(view.get(field) == expected[field], f"{label}.{field} differs from screen-map")
+            _require(
+                view.get(field) == expected[field],
+                f"{label}.{field} differs from screen-map",
+            )
 
         requirements = _string_list(view.get("requirements"), f"{label}.requirements")
         missing_requirements = [ref for ref in requirements if ref not in prd_text]
@@ -280,7 +312,10 @@ def validate(
             f"{label}.requirements not found literally in PRD: {missing_requirements}",
         )
         criteria = _string_list(view.get("criteria"), f"{label}.criteria")
-        _require(criteria == expected["criteria"], f"{label}.criteria differs from parent screen")
+        _require(
+            criteria == expected["criteria"],
+            f"{label}.criteria differs from parent screen",
+        )
 
         result = view.get("result")
         _require(result in RESULTS, f"{label}.result must be one of {sorted(RESULTS)}")
@@ -316,7 +351,10 @@ def validate(
     }
     for field, expected_count in expected_summary.items():
         value = summary.get(field)
-        _require(type(value) is int and value >= 0, f"summary.{field} must be a non-negative integer")
+        _require(
+            type(value) is int and value >= 0,
+            f"summary.{field} must be a non-negative integer",
+        )
         _require(value == expected_count, f"summary.{field} has an incorrect count")
 
     findings = report.get("findings")
@@ -333,13 +371,19 @@ def validate(
         _require(isinstance(finding, dict), f"{label} must be a mapping")
         finding_id = finding.get("id")
         _require(
-            isinstance(finding_id, str) and re.fullmatch(r"F-\d{3,}", finding_id) is not None,
+            isinstance(finding_id, str)
+            and re.fullmatch(r"F-\d{3,}", finding_id) is not None,
             f"{label}.id must match F-NNN",
         )
-        _require(finding_id not in seen_finding_ids, f"duplicate finding id {finding_id}")
+        _require(
+            finding_id not in seen_finding_ids, f"duplicate finding id {finding_id}"
+        )
         seen_finding_ids.add(finding_id)
         state_id = finding.get("state_id")
-        _require(state_id in incoherent_states, f"{label}.state_id must reference an INCOHERENT view")
+        _require(
+            state_id in incoherent_states,
+            f"{label}.state_id must reference an INCOHERENT view",
+        )
         expected_text = finding.get("expected")
         observed_text = finding.get("observed")
         _require(
@@ -350,13 +394,21 @@ def validate(
             isinstance(observed_text, str) and bool(observed_text.strip()),
             f"{label}.observed must be actionable text",
         )
-        _require(expected_text.strip() != observed_text.strip(), f"{label} expected and observed must differ")
+        _require(
+            expected_text.strip() != observed_text.strip(),
+            f"{label} expected and observed must differ",
+        )
         evidence = _string_list(finding.get("evidence"), f"{label}.evidence")
         expected_image = image_by_state[state_id]
-        _require(expected_image in evidence, f"{label}.evidence must include the exact state PNG")
+        _require(
+            expected_image in evidence,
+            f"{label}.evidence must include the exact state PNG",
+        )
         for evidence_index, item in enumerate(evidence):
             if item.lower().endswith(".png"):
-                _safe_image_ref(item, screen_map_path.parent, f"{label}.evidence[{evidence_index}]")
+                _safe_image_ref(
+                    item, screen_map_path.parent, f"{label}.evidence[{evidence_index}]"
+                )
         _require(finding.get("blocking") is True, f"{label}.blocking must be true")
         covered_states.add(state_id)
         normalized_findings.append({"id": finding_id, "state_id": state_id})
@@ -365,7 +417,9 @@ def validate(
         _require(not incoherent_states, "APPROVED requires zero INCOHERENT views")
         _require(not findings, "APPROVED requires findings to be empty")
     else:
-        _require(bool(incoherent_states), "REJECTED requires at least one INCOHERENT view")
+        _require(
+            bool(incoherent_states), "REJECTED requires at least one INCOHERENT view"
+        )
         _require(
             covered_states == incoherent_states,
             "REJECTED findings must cover every and only INCOHERENT state",
@@ -384,7 +438,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prd", type=Path, default=Path("docs/PRD.md"))
     parser.add_argument("--ui-criteria", type=Path, default=Path("docs/ui_criteria.md"))
-    parser.add_argument("--screen-map", type=Path, default=Path("docs/mockups/screen-map.yml"))
+    parser.add_argument(
+        "--screen-map", type=Path, default=Path("docs/mockups/screen-map.yml")
+    )
     parser.add_argument(
         "--markdown",
         type=Path,

@@ -3,6 +3,7 @@ Async Chat Example - Non-blocking chat with AsyncChatAgent.
 
 This example demonstrates async/await patterns for concurrent LLM calls.
 """
+
 import asyncio
 import os
 
@@ -123,9 +124,7 @@ async def async_with_summarization() -> None:
         # Compact if approaching token limit
         if session.estimate_tokens() > 1500:
             print("  [Compacting context...]")
-            compacted = await compactor.compact(
-                session.messages, target_tokens=1000
-            )
+            compacted = await compactor.compact(session.messages, target_tokens=1000)
             session._messages = compacted
             print(f"  [Compacted to {len(session.messages)} messages]")
 

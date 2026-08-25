@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
+from ft.cli import main as cli_main
 from ft.engine.experts import (
     ExpertError,
     compose_expert_task,
@@ -16,9 +17,7 @@ from ft.engine.graph import load_graph
 from ft.engine.process_validator import validate_process
 from ft.engine.runner import build_task_prompt
 from ft.engine.validators.artifacts import expert_review_report_valid
-from ft.cli import main as cli_main
 from ft.project import bootstrap_project
-
 
 EXPERT = """---
 id: code_reviewer
@@ -96,9 +95,7 @@ def test_load_expert_parses_frontmatter_body_and_digest(tmp_path):
         ),
     ],
 )
-def test_load_expert_rejects_invalid_contract(
-    tmp_path, filename, content, message
-):
+def test_load_expert_rejects_invalid_contract(tmp_path, filename, content, message):
     source = tmp_path / filename
     source.write_text(content, encoding="utf-8")
 
@@ -279,15 +276,14 @@ def test_experts_cli_lists_global_template_catalog(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["ft", "experts", "--template", "base", "--json"],
+        ["ft", "experts", "--template", "mvp-builder-fast", "--json"],
     )
 
     cli_main.main()
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["template"] == "base"
+    assert payload["template"] == "mvp-builder-fast"
     assert payload["origin"] == "global"
     assert {expert["id"] for expert in payload["experts"]} == {
-        "code_reviewer",
-        "marketing_analyst",
+        "prototype_png_designer",
     }

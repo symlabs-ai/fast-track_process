@@ -210,3 +210,96 @@ def test_healthy_cycle_writes_nothing(tmp_path):
         stdin.isatty.return_value = False
         cli_main._present_cycle_improvements(tmp_path, analysis)
     assert not (tmp_path / "docs" / "process-improvements.yml").exists()
+
+
+# ------------------------------------- revisão interativa dos pendentes
+
+
+def _review_file(tmp_path, items):
+    import yaml
+
+    docs = tmp_path / "docs"
+    docs.mkdir(exist_ok=True)
+    path = docs / "process-improvements.yml"
+    path.write_text(
+        yaml.safe_dump({"schema_version": 1, "improvements": items}), encoding="utf-8"
+    )
+    return path
+
+
+def _pending(pid="PI-001"):
+    return {
+        "id": pid,
+        "title": "Node x repetiu 3x",
+        "rationale": "custa uma chamada inteira",
+        "classification": "local",
+        "evidence": [{"source": "trace:x", "detail": "3 execuções"}],
+    }
+
+
+def test_review_records_decision_with_reason(tmp_path):
+    from unittest.mock import patch
+
+    import yaml
+
+    from ft.cli import main as cli_main
+
+    path = _review_file(tmp_path, [_pending()])
+    with (
+        patch("sys.stdin") as stdin,
+        patch("builtins.input", side_effect=["g", "vale para todos os projetos"]),
+    ):
+        stdin.isatty.return_value = True
+        cli_main._review_pending_improvements(path)
+
+    item = yaml.safe_load(path.read_text())["improvements"][0]
+    assert item["decision"] == {
+        "outcome": "propose_global",
+        "reason": "vale para todos os projetos",
+    }
+    assert item["classification"] == "global_candidate"
+
+
+def test_decision_without_reason_is_not_recorded(tmp_path):
+    from unittest.mock import patch
+
+    import yaml
+
+    from ft.cli import main as cli_main
+
+    path = _review_file(tmp_path, [_pending()])
+    with (
+        patch("sys.stdin") as stdin,
+        patch("builtins.input", side_effect=["a", "   "]),
+    ):
+        stdin.isatty.return_value = True
+        cli_main._review_pending_improvements(path)
+
+    assert "decision" not in yaml.safe_load(path.read_text())["improvements"][0]
+
+
+def test_already_decided_findings_are_not_re_asked(tmp_path, capsys):
+    from unittest.mock import patch
+
+    from ft.cli import main as cli_main
+
+    decided = _pending()
+    decided["decision"] = {"outcome": "discard", "reason": "já avaliado"}
+    path = _review_file(tmp_path, [decided])
+    with patch("sys.stdin") as stdin, patch("builtins.input") as prompt:
+        stdin.isatty.return_value = True
+        cli_main._review_pending_improvements(path)
+    prompt.assert_not_called()
+    assert "já têm decisão" in capsys.readouterr().out
+
+
+def test_non_interactive_review_points_to_the_terminal(tmp_path, capsys):
+    from unittest.mock import patch
+
+    from ft.cli import main as cli_main
+
+    path = _review_file(tmp_path, [_pending()])
+    with patch("sys.stdin") as stdin:
+        stdin.isatty.return_value = False
+        cli_main._review_pending_improvements(path)
+    assert "terminal interativo" in capsys.readouterr().out

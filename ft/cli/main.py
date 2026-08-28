@@ -3428,6 +3428,114 @@ def _prompt_merge_strategy(work: Path) -> tuple[str, list[str] | None]:
         return "full", None
 
 
+def _review_pending_improvements(review_path: Path) -> None:
+    """Apresenta cada achado pendente e registra a decisão de quem invocou.
+
+    Achado derivado da telemetria vira dívida de processo: se ninguém decidir,
+    ele apodrece num YAML que ninguém abre. Este fluxo existe para trazer a
+    decisão de volta para uma pessoa — aplicar no fork local, propor ao
+    catálogo global ou descartar, sempre com motivo registrado.
+    """
+    import yaml as _yaml
+
+    from ft.engine import ui as _ui
+
+    if not review_path.is_file():
+        print(_ui.info(f"Nenhum achado registrado em {review_path.name}."))
+        return
+
+    try:
+        payload = _yaml.safe_load(review_path.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeError, _yaml.YAMLError) as exc:
+        print(_ui.fail(f"Não foi possível ler {review_path.name}: {exc}"))
+        return
+
+    improvements = payload.get("improvements")
+    if not isinstance(improvements, list) or not improvements:
+        print(_ui.success("Nenhum achado de processo aguardando decisão."))
+        return
+
+    pending = [
+        item
+        for item in improvements
+        if isinstance(item, dict) and not item.get("decision")
+    ]
+    if not pending:
+        print(_ui.success("Todos os achados já têm decisão registrada."))
+        return
+
+    if not bool(getattr(sys.stdin, "isatty", lambda: False)()):
+        print(
+            _ui.warn(
+                f"{len(pending)} achado(s) aguardando decisão em {review_path.name}; "
+                "rode `ft process-candidates --review` num terminal interativo."
+            )
+        )
+        return
+
+    print()
+    print(_ui.header(f"{len(pending)} achado(s) de processo aguardando sua decisão"))
+    decided = 0
+    for item in pending:
+        print()
+        print(f"  {item.get('id')} — {item.get('title')}")
+        for line in _wrap_plain(item.get("rationale", ""), width=68):
+            print(_ui.dim(f"  {line}"))
+        for evidence in item.get("evidence") or []:
+            if isinstance(evidence, dict):
+                print(_ui.dim(f"  evidência: {evidence.get('detail')}"))
+        try:
+            choice = (
+                input(
+                    "  [a] aplicar local  [g] propor global  [d] descartar  [s] sair: "
+                )
+                .strip()
+                .lower()
+            )
+        except (EOFError, KeyboardInterrupt, OSError):
+            print()
+            break
+        if choice == "s":
+            break
+        if choice not in {"a", "g", "d"}:
+            continue
+        try:
+            reason = input("  motivo: ").strip()
+        except (EOFError, KeyboardInterrupt, OSError):
+            print()
+            break
+        if not reason:
+            print(_ui.warn("  decisão sem motivo não é registrada"))
+            continue
+        item["decision"] = {
+            "outcome": {"a": "apply_local", "g": "propose_global", "d": "discard"}[
+                choice
+            ],
+            "reason": reason,
+        }
+        if choice == "g":
+            item["classification"] = "global_candidate"
+        elif choice == "d":
+            item["classification"] = "rejected"
+        decided += 1
+
+    if not decided:
+        print(_ui.dim("  Nenhuma decisão registrada."))
+        return
+
+    if _write_improvement_review(review_path, payload):
+        print()
+        print(
+            _ui.success(f"{decided} decisão(ões) registrada(s) em {review_path.name}")
+        )
+        print(
+            _ui.info(
+                "Aplicar local e propor global continuam sendo trabalho manual: "
+                "o registro é a decisão, não a execução dela."
+            )
+        )
+
+
 def cmd_process_candidates(args):
     """List or resolve global process candidates produced by the current cycle."""
     from ft.engine import ui as _ui
@@ -3446,6 +3554,18 @@ def cmd_process_candidates(args):
     current_review = root / "docs" / "process-improvements.yml"
     candidate_id = getattr(args, "candidate_id", None)
     status = getattr(args, "status", None)
+
+    if getattr(args, "review", False):
+        # Achados se acumulam no checkout do projeto ao longo dos ciclos; o
+        # review de um ciclo aberto vive na worktree dele. Revisar precisa
+        # alcançar os dois, na ordem em que a decisão costuma ser tomada.
+        target = current_review
+        if not target.is_file():
+            fallback = project_root / "docs" / "process-improvements.yml"
+            if fallback.is_file():
+                target = fallback
+        _review_pending_improvements(target)
+        return
 
     if bool(candidate_id) != bool(status):
         print(
@@ -3930,13 +4050,19 @@ def _present_cycle_improvements(cycle_root: Path, analysis) -> None:
         for candidate, improvement_id in zip(candidates, ids):
             payload["improvements"].append(candidate.as_record(improvement_id))
         if _write_improvement_review(review_path, payload):
+            print()
             print(
-                _ui.info(
-                    f"Sem terminal interativo: {len(candidates)} achado(s) "
-                    f"registrado(s) como pendente(s) em {DEFAULT_REVIEW_PATH}. "
-                    "Decida com `ft process-candidates`."
+                _ui.warn(
+                    f"{len(candidates)} achado(s) de processo aguardando SUA decisão"
                 )
             )
+            print(
+                _ui.dim(
+                    f"  Registrados como pendentes em {DEFAULT_REVIEW_PATH}; "
+                    "nada foi aplicado."
+                )
+            )
+            print(_ui.info("Decida quando puder:  ft process-candidates --review"))
         return
 
     print(
@@ -7078,6 +7204,11 @@ def main():
         help="Commit/path que comprova promoção (obrigatório para promoted)",
     )
     pc.add_argument("--cycle", help="Ciclo específico a consultar")
+    pc.add_argument(
+        "--review",
+        action="store_true",
+        help="Apresentar cada achado pendente e capturar sua decisão",
+    )
 
     # process (gestão dos processos locais frente aos templates globais)
     proc = sub.add_parser(

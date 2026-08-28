@@ -339,7 +339,20 @@ aplicado automaticamente**; os achados escolhidos são gravados em
 `docs/process-improvements.yml` no schema de [Governança de melhorias do
 processo](#governança-de-melhorias-do-processo), com os critérios de promoção
 global todos em `false` — quem promove ao catálogo precisa verificá-los
-deliberadamente. Sem terminal interativo os achados são apenas exibidos.
+deliberadamente.
+
+Sem terminal interativo — CI, `--auto`, agente — não há a quem perguntar, mas o
+diagnóstico não é descartado: os achados são gravados como pendentes e o close
+avisa que há decisão sua esperando. Para decidir depois, num terminal:
+
+```bash
+ft process-candidates --review
+```
+
+Ele apresenta cada achado pendente com sua evidência e captura a disposição —
+aplicar no fork local, propor ao catálogo global ou descartar — sempre com
+motivo obrigatório. Registrar a decisão não a executa: aplicar e promover
+continuam sendo trabalho manual e deliberado.
 
 ### Custo do loop de correção
 

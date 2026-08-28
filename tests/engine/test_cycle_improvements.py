@@ -303,3 +303,24 @@ def test_non_interactive_review_points_to_the_terminal(tmp_path, capsys):
         stdin.isatty.return_value = False
         cli_main._review_pending_improvements(path)
     assert "terminal interativo" in capsys.readouterr().out
+
+
+def test_review_writes_the_markdown_report_the_contract_requires(tmp_path):
+    """A governança exige o par YAML+Markdown, com cada PI citado no relatório."""
+    from unittest.mock import patch
+
+    from ft.cli import main as cli_main
+    from ft.engine.process_improvements import process_improvement_close_readiness
+
+    analysis = _analysis([_node("rev", result="FAIL"), _node("rev"), _llm("rev")])
+    with patch("sys.stdin") as stdin:
+        stdin.isatty.return_value = False
+        cli_main._present_cycle_improvements(tmp_path, analysis)
+
+    report = tmp_path / "docs" / "process-improvements.md"
+    assert report.is_file(), "YAML sem relatório produz par inválido"
+    text = report.read_text(encoding="utf-8")
+    assert "PI-001" in text and "PI-002" in text
+
+    ready, message = process_improvement_close_readiness(tmp_path)
+    assert ready, f"o par gravado deve permitir encerrar o ciclo: {message}"

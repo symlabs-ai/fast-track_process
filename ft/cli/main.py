@@ -4101,18 +4101,57 @@ def _present_cycle_improvements(cycle_root: Path, analysis) -> None:
     )
 
 
+def _improvement_report_markdown(payload: dict) -> str:
+    """Relatório legível pareado ao YAML.
+
+    A governança de melhorias exige os dois artefatos, e o validador cobra que
+    cada PI apareça no Markdown: o YAML é para máquina, o relatório é para a
+    pessoa que vai decidir. Gravar só um deles produz um par inválido.
+    """
+    lines = [
+        "# Melhorias de processo",
+        "",
+        "Achados derivados da telemetria do ciclo. Nenhum foi aplicado: cada um",
+        "aguarda decisão via `ft process-candidates --review`.",
+        "",
+    ]
+    for item in payload.get("improvements") or []:
+        if not isinstance(item, dict):
+            continue
+        lines.append(f"## {item.get('id')} — {item.get('title')}")
+        lines.append("")
+        lines.append(f"- classificação: `{item.get('classification')}`")
+        rationale = " ".join(str(item.get("rationale", "")).split())
+        if rationale:
+            lines.append(f"- racional: {rationale}")
+        for evidence in item.get("evidence") or []:
+            if isinstance(evidence, dict):
+                lines.append(
+                    f"- evidência ({evidence.get('source')}): {evidence.get('detail')}"
+                )
+        decision = item.get("decision")
+        if isinstance(decision, dict):
+            lines.append(
+                f"- decisão: `{decision.get('outcome')}` — {decision.get('reason')}"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _write_improvement_review(review_path: Path, payload: dict) -> bool:
-    """Grava o review de melhorias; falha aqui nunca impede o encerramento."""
+    """Grava o par YAML+Markdown; falha aqui nunca impede o encerramento."""
     import yaml as _yaml
 
     from ft.engine import ui as _ui
 
+    report_path = review_path.with_suffix(".md")
     try:
         review_path.parent.mkdir(parents=True, exist_ok=True)
         review_path.write_text(
             _yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
+        report_path.write_text(_improvement_report_markdown(payload), encoding="utf-8")
     except OSError as exc:
         print(_ui.warn(f"Não foi possível gravar {review_path.name}: {exc}"))
         return False

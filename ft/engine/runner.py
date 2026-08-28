@@ -4039,36 +4039,24 @@ class StepRunner:
             print(ui.info(f"Bypass human gates: on_fail automático (rodada {rounds})"))
             self.apply_fix(gate_msg)
 
-    # Falhas que descrevem um recibo malformado — o defeito está no relatório
-    # do review, não no software auditado. Encaminhá-las ao node que corrige
-    # produto é gastar um turno caro em algo que ele nem pode consertar: o
-    # relatório costuma estar fora do seu write_scope.
-    _RECEIPT_INTEGRITY_MARKERS = (
-        "deve conter exatamente um veredito",
-        "schema_version deve ser",
-        "scope_sha256",
-        "cobertura do review divergente",
-        "veredito do Markdown diverge",
-        "review outcome",
-        "severity deve ser",
-        "exige ao menos um finding P0",
-        "não admite findings P0",
-        "findings e resultados FAIL divergem",
-        "evidence não pode ser vazio",
-        "refs não pode ser vazio",
-        "resultado duplicado",
-        "finding duplicado",
-    )
-
     def _is_receipt_integrity_failure(self, feedback: str) -> bool:
-        """Distingue recibo malformado de reprovação legítima do produto."""
+        """Distingue recibo malformado de reprovação legítima do produto.
+
+        ``review_outcome_valid`` valida o RECIBO do review: schema, cobertura,
+        evidências, severidade, coerência com o Markdown. Praticamente toda
+        falha que ele emite descreve um relatório malformado — defeito do
+        parecer, não do software auditado. A única exceção é o gate que exige
+        aprovação e recebe um veredito de reprovação: aí o defeito é do
+        produto e o ciclo deve mesmo ir para a correção.
+
+        Enumerar as mensagens de integrança era frágil (a lista envelhece a
+        cada validação nova); inverter o teste mantém o comportamento correto
+        para mensagens que ainda não existem.
+        """
         text = str(feedback or "")
         if "review_outcome_valid" not in text and "review outcome" not in text:
             return False
-        # Um gate que exige aprovação e recebe REJECTED é reprovação real.
-        if "exige verdict" in text:
-            return False
-        return any(marker in text for marker in self._RECEIPT_INTEGRITY_MARKERS)
+        return "exige verdict" not in text
 
     def _schedule_focal_evidence_review_retry(
         self,

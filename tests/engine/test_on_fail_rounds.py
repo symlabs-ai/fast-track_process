@@ -240,3 +240,25 @@ def test_non_review_nodes_are_unaffected(tmp_path):
         runner._handle_on_fail(node, "review_outcome_valid FAIL: scope_sha256 ruim")
 
     apply_fix.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "feedback",
+    [
+        # mensagens que a lista enumerada anterior não cobria
+        "review_outcome_valid FAIL: results[6].evidence[0] deve ser texto não vazio",
+        "review_outcome_valid FAIL: findings[0].id inválido: 'x'",
+        "review_outcome_valid FAIL: results[2].result deve ser PASS, FAIL, PENDING ou NOT_RUN",
+        "review_outcome_valid FAIL: mensagem de validação que ainda não existe",
+    ],
+)
+def test_unknown_receipt_failures_still_rerun_the_review(tmp_path, feedback):
+    """A regra é inversa: só reprovação de veredito vai para o fix de produto."""
+    runner = _review_runner(tmp_path)
+    node = runner.graph.get_node("review")
+
+    with patch.object(runner, "apply_fix") as apply_fix:
+        runner._handle_on_fail(node, feedback)
+
+    apply_fix.assert_not_called()
+    assert runner.state_mgr.load().current_node == "review"

@@ -4,6 +4,45 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.22.0] - 2026-08-28
+
+### Custo do loop de correção no `mvp-builder-fast`
+
+- **Fix forward por severidade**: findings declaram `severity: P0|P1|P2` e o
+  novo veredito `APPROVED_WITH_FINDINGS` deixa o ciclo seguir com dívida
+  registrada; só P0 reprova. Gates optam explicitamente via `allow_findings` e
+  o validator `review_findings_tracked` exige que todo finding aceito exista
+  no backlog do produto.
+- **Circuit breaker do `on_fail`** (`max_rounds`, default 2): excedido o teto,
+  a correção automática é suspensa e o ciclo escala ao stakeholder com os
+  achados consolidados, em vez de gastar mais rodadas autônomas.
+- **Re-review focal**: da 2ª rodada em diante o review reverifica apenas os
+  findings anteriores e desce um degrau de effort (`rereview_downgrade`);
+  `batch.06b.fix_review` passa a ser gate determinístico e o recibo é emitido
+  por quem corrige.
+- **`stakeholder_fix` focal**: re-gate de build/suíte/smoke; a matriz
+  multiplataforma só é reexecutada quando há perfis ativos que o fix invalida.
+
+### Nova rota `--route direct`
+
+- Entrega focal em 8 nodes: construção em uma passagem, gates determinísticos
+  e uma única review com triagem de severidade, encerrando por retro e
+  reconciliação de backlog. Para demandas que não justificam a pipeline
+  completa.
+
+### `ft analyse-cycle`
+
+- Custo empírico de um ciclo executado: reexecuções por node, first-pass rate,
+  proporção de retrabalho, tokens e loops mais caros. Lista também as camadas
+  de validação que nunca reprovaram nada no ciclo.
+
+### Outros
+
+- `fix_review` passa a aceitar `gate` além de `review`: um gate determinístico
+  é a forma mais forte de fechar a auditoria de um fix.
+- `test_package_metadata` deriva a versão de `ft/__about__.py` em vez de fixar
+  um literal duplicado.
+
 ## [v0.21.1] - 2026-08-25
 
 - fix: perfil Codex com `model` customizado é aceito pelo provision do

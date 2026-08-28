@@ -322,6 +322,14 @@ o que outra já garantiu é candidata a virar gate determinístico. O score
 estático diz quanto do processo é preso por código; esta análise diz quanto a
 convergência custou de fato.
 
+`ft close` executa essa análise antes de mergear e remover a worktree — é o
+último momento em que o trace vivo existe. Por padrão ele pergunta; `-y`
+analisa sem perguntar e `-n` encerra sem analisar. Sem terminal interativo não
+há a quem perguntar, então a análise roda: o relatório é barato, somente
+leitura, e é justamente o que se perde ao encerrar. Falha na análise nunca
+impede o encerramento. Ciclos já encerrados continuam analisáveis — o
+`run-report.json` é arquivado em `.ft/cycles/<nome>/`.
+
 ### Custo do loop de correção
 
 Um ciclo `review → fix → review` sem teto é a maior fonte de custo em processos

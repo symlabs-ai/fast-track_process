@@ -3229,9 +3229,15 @@ nodes:
     validation_mode: fail_fast
     validators:
       - file_exists: docs/stakeholder-fix-report.md
-      - command_succeeds: "make -C src surface-build"
-      - command_succeeds: "cd src && python -m pytest tests/ -q"
-      - command_succeeds: "make -C src smoke"
+      - command_succeeds:
+          command: "make -C src surface-build"
+          timeout: 900
+      - command_succeeds:
+          command: "cd src && python -m pytest tests/ -q"
+          timeout: 600
+      - command_succeeds:
+          command: "make -C src smoke"
+          timeout: 600
     on_fail:
       human_gate: "A correção do stakeholder quebrou build, suíte ou smoke."
       goto: ft.final.03.stakeholder_fix
@@ -4012,8 +4018,16 @@ nodes:
     validators:
       - file_exists: docs/direct-plan.md
       - file_exists: Makefile
-      - command_succeeds: "make build"
-      - command_succeeds: "make verify"
+      # `make build` inclui a instalação de dependências: um ciclo que adota
+      # uma biblioteca nova paga download e compilação na primeira execução, o
+      # que estoura o teto default e reprovaria o gate por infraestrutura, não
+      # por defeito do produto.
+      - command_succeeds:
+          command: "make build"
+          timeout: 900
+      - command_succeeds:
+          command: "make verify"
+          timeout: 600
     on_fail:
       human_gate: "Build ou suíte falharam na entrega direta."
       goto: ft.direct.02.fix
@@ -4137,8 +4151,12 @@ nodes:
           require_approved: true
           # Fix forward: P1/P2 seguem como dívida; P0 volta para correção.
           allow_findings: true
-      - command_succeeds: "make verify"
-      - command_succeeds: "make smoke"
+      - command_succeeds:
+          command: "make verify"
+          timeout: 600
+      - command_succeeds:
+          command: "make smoke"
+          timeout: 600
     on_fail:
       human_gate: "A entrega direta não passou no checkpoint final."
       goto: ft.direct.02.fix

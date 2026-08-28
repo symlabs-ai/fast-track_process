@@ -4438,7 +4438,13 @@ def cmd_analyse_cycle(args):
 
     root = find_project_root().resolve()
     record = _select_cycle_for_command(root, getattr(args, "cycle", None))
-    cycle_root = Path(getattr(record, "path", None) or root).resolve()
+    # O trace vive na worktree do ciclo, não na raiz do projeto: um ciclo
+    # isolado nunca escreve telemetria no checkout dono.
+    cycle_root = Path(
+        getattr(record, "worktree_path", None)
+        or getattr(record, "worktree", None)
+        or root
+    ).resolve()
 
     report = _cycle_run_report(cycle_root) or _cycle_live_run_report(cycle_root) or {}
     if not report:

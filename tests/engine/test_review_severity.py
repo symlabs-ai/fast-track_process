@@ -283,3 +283,42 @@ def test_missing_receipt_is_skipped(tmp_path):
         review_paths=["docs/inexistente.yml"], project_root=str(tmp_path)
     )
     assert ok
+
+
+# ------------------------------------------- parser do veredito em Markdown
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        ("VERDICT: APPROVED", "APPROVED"),
+        ("Veredito: APPROVED", "APPROVED"),
+        ("**VERDICT:** REJECTED", "REJECTED"),
+        ("Resultado: **APPROVED_WITH_FINDINGS**", "APPROVED_WITH_FINDINGS"),
+        ("`Parecer`: APPROVED", "APPROVED"),
+    ],
+)
+def test_markdown_verdict_tolerates_emphasis_and_pt_label(tmp_path, line, expected):
+    """O parecer é legível: negrito e rótulo em português não são ambiguidade."""
+    from ft.engine.validators.artifacts import _review_markdown_verdict
+
+    report = tmp_path / "review.md"
+    report.write_text(f"# Parecer\n\n{line}\n", encoding="utf-8")
+    assert _review_markdown_verdict(report) == expected
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "VERDICT: APPROVED\nVeredito: REJECTED\n",  # dois vereditos
+        "# Parecer\n\nsem veredito nenhum\n",
+        "Verdito: APPROVED\n",  # grafia incorreta não vira vocabulário aceito
+    ],
+)
+def test_markdown_verdict_stays_strict(tmp_path, body):
+    from ft.engine.validators.artifacts import _review_markdown_verdict
+
+    report = tmp_path / "review.md"
+    report.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError, match="exatamente um veredito"):
+        _review_markdown_verdict(report)

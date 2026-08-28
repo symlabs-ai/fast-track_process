@@ -608,8 +608,14 @@ def _review_markdown_verdict(path: Path) -> str:
     verdicts = [
         match.group(1).upper()
         for match in re.finditer(
-            r"(?mi)^\s*(?:verdict|veredicto|resultado|result|parecer)\s*"
-            r"[:=-]\s*(APPROVED_WITH_FINDINGS|APPROVED|REJECTED)\s*$",
+            # O parecer é um documento legível: o veredito costuma vir em
+            # negrito e o rótulo em português varia. Exigir exatamente um
+            # veredito continua estrito; recusar ``**APPROVED**`` era
+            # fragilidade, não rigor.
+            r"(?mi)^\s*[*_`]*\s*"
+            r"(?:verdict|veredito|veredicto|resultado|result|parecer)"
+            r"\s*[*_`]*\s*[:=-]\s*[*_`]*\s*"
+            r"(APPROVED_WITH_FINDINGS|APPROVED|REJECTED)\s*[*_`]*\s*$",
             raw,
         )
     ]

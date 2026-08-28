@@ -4069,7 +4069,10 @@ nodes:
       confronte o comportamento real do produto (executando-o ou seus testes)
       com o que foi declarado, e registre evidência verificável repo-local.
 
-      Escreva docs/direct-review.md (parecer legível) e docs/direct-review.yml
+      Escreva docs/direct-review.md (parecer legível) contendo, em uma linha
+      isolada, exatamente `VERDICT: APPROVED`, `VERDICT: APPROVED_WITH_FINDINGS`
+      ou `VERDICT: REJECTED` — esse rótulo literal é o que o gate lê. Escreva
+      também docs/direct-review.yml
       com `schema_version: 1`, `scope_sha256` dos bytes correntes de
       docs/direct-plan.md, `verdict`, `results` e `findings`:
 
@@ -4100,7 +4103,8 @@ nodes:
         APPROVED_WITH_FINDINGS — há FAIL, mas nenhum finding P0: o ciclo segue
           e os achados viram dívida no backlog.
         REJECTED — existe ao menos um finding P0.
-      Markdown e YAML devem declarar o mesmo veredito. Não altere código.
+      Markdown e YAML devem declarar o mesmo veredito, e o Markdown deve
+      conter esse veredito uma única vez. Não altere código.
     validators:
       - file_exists: docs/direct-review.md
       - file_exists: docs/direct-review.yml

@@ -140,3 +140,73 @@ def test_derivation_never_applies_anything():
 )
 def test_ids_never_collide_with_existing(existing, count, expected):
     assert next_improvement_ids(existing, count) == expected
+
+
+# --------------------------------- persistência sem terminal interativo
+
+
+def test_findings_are_persisted_when_non_interactive(tmp_path, monkeypatch, capsys):
+    """Sem TTY não há quem decida agora — mas o diagnóstico não pode evaporar."""
+    from unittest.mock import patch
+
+    import yaml
+
+    from ft.cli import main as cli_main
+
+    analysis = _analysis([_node("rev", result="FAIL"), _node("rev"), _llm("rev")])
+
+    with patch("sys.stdin") as stdin:
+        stdin.isatty.return_value = False
+        cli_main._present_cycle_improvements(tmp_path, analysis)
+
+    review = tmp_path / "docs" / "process-improvements.yml"
+    assert review.is_file(), "achado perdido em close automatizado"
+    payload = yaml.safe_load(review.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    # Esta telemetria produz dois achados: o loop e o first-pass derrubado por ele.
+    assert [item["id"] for item in payload["improvements"]] == ["PI-001", "PI-002"]
+    item = payload["improvements"][0]
+    # Registrado, porém não aplicado e não promovido: a decisão segue sendo humana.
+    assert item["classification"] == "local"
+    assert item["change"]["applied_locally"] is False
+    assert "pendente" in capsys.readouterr().out
+
+
+def test_non_interactive_run_does_not_renumber_existing_findings(tmp_path):
+    from unittest.mock import patch
+
+    import yaml
+
+    from ft.cli import main as cli_main
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "process-improvements.yml").write_text(
+        yaml.safe_dump(
+            {"schema_version": 1, "improvements": [{"id": "PI-001", "title": "antigo"}]}
+        ),
+        encoding="utf-8",
+    )
+    analysis = _analysis([_node("rev", result="FAIL"), _node("rev"), _llm("rev")])
+
+    with patch("sys.stdin") as stdin:
+        stdin.isatty.return_value = False
+        cli_main._present_cycle_improvements(tmp_path, analysis)
+
+    payload = yaml.safe_load((docs / "process-improvements.yml").read_text())
+    ids = [item["id"] for item in payload["improvements"]]
+    assert ids == ["PI-001", "PI-002", "PI-003"], (
+        "IDs existentes não podem ser renumerados"
+    )
+
+
+def test_healthy_cycle_writes_nothing(tmp_path):
+    from unittest.mock import patch
+
+    from ft.cli import main as cli_main
+
+    analysis = _analysis([_node("a"), _node("b"), _node("c"), _node("d")])
+    with patch("sys.stdin") as stdin:
+        stdin.isatty.return_value = False
+        cli_main._present_cycle_improvements(tmp_path, analysis)
+    assert not (tmp_path / "docs" / "process-improvements.yml").exists()

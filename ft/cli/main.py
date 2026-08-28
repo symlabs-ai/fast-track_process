@@ -3901,18 +3901,8 @@ def _present_cycle_improvements(cycle_root: Path, analysis) -> None:
             print(_ui.dim(f"  evidência: {evidence['detail']}"))
         print()
 
-    interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
-    if not interactive:
-        print(
-            _ui.info(
-                "Sem terminal interativo: achados apenas exibidos. Rode "
-                "`ft analyse-cycle` e registre a disposição com "
-                "`ft process-candidates` quando decidir."
-            )
-        )
-        return
-
     review_path = cycle_root / DEFAULT_REVIEW_PATH
+    interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
     existing_ids: list[str] = []
     payload: dict = {"schema_version": 1, "improvements": []}
     if review_path.is_file():
@@ -3930,11 +3920,29 @@ def _present_cycle_improvements(cycle_root: Path, analysis) -> None:
         except (OSError, UnicodeError, _yaml.YAMLError):
             pass
 
+    ids = next_improvement_ids(existing_ids, len(candidates))
+
+    if not interactive:
+        # Sem TTY não há a quem perguntar — mas "não há quem decida agora" não
+        # é "não há o que guardar". Os achados ficam registrados como local
+        # não aplicado, para decisão posterior via ft process-candidates; caso
+        # contrário todo close automatizado perderia o diagnóstico em silêncio.
+        for candidate, improvement_id in zip(candidates, ids):
+            payload["improvements"].append(candidate.as_record(improvement_id))
+        if _write_improvement_review(review_path, payload):
+            print(
+                _ui.info(
+                    f"Sem terminal interativo: {len(candidates)} achado(s) "
+                    f"registrado(s) como pendente(s) em {DEFAULT_REVIEW_PATH}. "
+                    "Decida com `ft process-candidates`."
+                )
+            )
+        return
+
     print(
         "  Para cada achado: [l] registrar como melhoria local, "
         "[g] propor ao catálogo global, [d] descartar, [s] sair"
     )
-    ids = next_improvement_ids(existing_ids, len(candidates))
     recorded = 0
     for candidate, improvement_id in zip(candidates, ids):
         try:
@@ -3955,14 +3963,7 @@ def _present_cycle_improvements(cycle_root: Path, analysis) -> None:
         print(_ui.dim("  Nenhum achado registrado."))
         return
 
-    try:
-        review_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path.write_text(
-            _yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        print(_ui.warn(f"Não foi possível gravar {DEFAULT_REVIEW_PATH}: {exc}"))
+    if not _write_improvement_review(review_path, payload):
         return
 
     print(_ui.success(f"{recorded} achado(s) registrado(s) em {DEFAULT_REVIEW_PATH}"))
@@ -3972,6 +3973,24 @@ def _present_cycle_improvements(cycle_root: Path, analysis) -> None:
             "template; registre a disposição com `ft process-candidates`."
         )
     )
+
+
+def _write_improvement_review(review_path: Path, payload: dict) -> bool:
+    """Grava o review de melhorias; falha aqui nunca impede o encerramento."""
+    import yaml as _yaml
+
+    from ft.engine import ui as _ui
+
+    try:
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        review_path.write_text(
+            _yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(_ui.warn(f"Não foi possível gravar {review_path.name}: {exc}"))
+        return False
+    return True
 
 
 def _wrap_plain(text: str, width: int = 68) -> list[str]:

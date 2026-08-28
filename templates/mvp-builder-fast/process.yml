@@ -3952,10 +3952,13 @@ nodes:
     max_turns: 120
     outputs:
       - src/
+      - Makefile
       - docs/direct-plan.md
       - docs/PROJECT_BACKLOG.md
     write_scope:
       - src
+      - tests
+      - Makefile
       - docs/direct-plan.md
       - docs/PROJECT_BACKLOG.md
     prompt: |
@@ -3970,9 +3973,18 @@ nodes:
       2. Implemente as obrigações em src/, com testes que as cubram. Os testes
          são a prova: cada D-* deve ter ao menos um teste que falharia sem a
          implementação.
-      3. Garanta que `make -C src surface-build` (ou o build declarado do
-         projeto) e a suíte completa passem antes de encerrar.
-      4. Registre em docs/PROJECT_BACKLOG.md os PB-* correspondentes à demanda,
+      3. Crie ou atualize um Makefile não interativo na raiz do projeto com os
+         targets `build`, `verify` e `smoke`. `verify` roda os checks
+         herméticos completos (suíte, lint, typecheck) sem rede paga nem
+         credencial real; `smoke` exercita o artefato construído pelo caminho
+         público do produto. Os gates deste ciclo chamam exatamente esses
+         targets — eles são o contrato entre a sua entrega e a verificação, e
+         funcionam qualquer que seja o layout do projeto. Preserve o
+         gerenciador de dependências já adotado (Poetry, uv, npm) e a versão
+         de pacote do baseline.
+      4. Execute `make build`, `make verify` e `make smoke` até ficarem verdes
+         antes de encerrar.
+      5. Registre em docs/PROJECT_BACKLOG.md os PB-* correspondentes à demanda,
          preservando IDs existentes e marcando como done apenas o que tem
          evidência real neste ciclo.
 
@@ -3999,8 +4011,9 @@ nodes:
     validation_mode: fail_fast
     validators:
       - file_exists: docs/direct-plan.md
-      - command_succeeds: "make -C src surface-build"
-      - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - file_exists: Makefile
+      - command_succeeds: "make build"
+      - command_succeeds: "make verify"
     on_fail:
       human_gate: "Build ou suíte falharam na entrega direta."
       goto: ft.direct.02.fix
@@ -4020,6 +4033,8 @@ nodes:
       - docs/direct-fix-report.md
     write_scope:
       - src
+      - tests
+      - Makefile
       - docs/direct-fix-report.md
     prompt: |
       Corrija SOMENTE os achados correntes — falha de build/suíte ou findings
@@ -4027,7 +4042,9 @@ nodes:
       demanda.
 
       Registre docs/direct-fix-report.md com achado→causa→path→teste→resultado
-      e rode os testes focais dos arquivos alterados. Encerre DONE.
+      e rode os testes focais dos arquivos alterados. Se a correção mudar o
+      contrato de build, atualize o Makefile da raiz junto — `make build`,
+      `make verify` e `make smoke` precisam continuar verdes. Encerre DONE.
     validators:
       - file_exists: docs/direct-fix-report.md
       - command_succeeds: "git diff --check"
@@ -4116,8 +4133,8 @@ nodes:
           require_approved: true
           # Fix forward: P1/P2 seguem como dívida; P0 volta para correção.
           allow_findings: true
-      - command_succeeds: "cd src && python -m pytest tests/ -q"
-      - command_succeeds: "make -C src smoke"
+      - command_succeeds: "make verify"
+      - command_succeeds: "make smoke"
     on_fail:
       human_gate: "A entrega direta não passou no checkpoint final."
       goto: ft.direct.02.fix

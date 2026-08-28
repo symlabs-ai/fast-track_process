@@ -4429,6 +4429,128 @@ def cmd_validate(args):
     sys.exit(0 if overall_pass else 1)
 
 
+def cmd_analyse_cycle(args):
+    """Custo empírico de um ciclo executado: loops, retrabalho e tokens."""
+    import json as _json
+
+    from ft.engine import ui as _ui
+    from ft.engine.cycle_analysis import analyse_run_report
+
+    root = find_project_root().resolve()
+    record = _select_cycle_for_command(root, getattr(args, "cycle", None))
+    cycle_root = Path(getattr(record, "path", None) or root).resolve()
+
+    report = _cycle_run_report(cycle_root) or _cycle_live_run_report(cycle_root) or {}
+    if not report:
+        print(
+            f"ERRO: nenhum trace ou run-report encontrado em {cycle_root}. "
+            "O ciclo precisa ter executado ao menos um node."
+        )
+        sys.exit(1)
+
+    state_metrics: dict = {}
+    state_path = cycle_root / "state" / "engine_state.yml"
+    if state_path.is_file():
+        try:
+            payload = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+            if isinstance(payload, dict) and isinstance(payload.get("metrics"), dict):
+                state_metrics = payload["metrics"]
+        except (OSError, UnicodeError, yaml.YAMLError):
+            state_metrics = {}
+
+    analysis = analyse_run_report(report, state_metrics)
+
+    if getattr(args, "json", False):
+        payload = {
+            "cycle": getattr(record, "name", None) or cycle_root.name,
+            "run_id": analysis.run_id,
+            "wall_ms": analysis.wall_ms,
+            "llm_calls": analysis.llm_calls,
+            "output_tokens": analysis.output_tokens,
+            "input_tokens": analysis.input_tokens,
+            "first_pass_rate": round(analysis.first_pass_rate, 4),
+            "rework_ratio": round(analysis.rework_ratio, 4),
+            "total_executions": analysis.total_executions,
+            "total_reexecutions": analysis.total_reexecutions,
+            "on_fail_rounds": analysis.on_fail_rounds,
+            "nodes": {
+                node.id: {
+                    "executions": node.executions,
+                    "reexecutions": node.reexecutions,
+                    "failures": node.failures,
+                    "duration_ms": node.duration_ms,
+                    "llm_calls": node.llm_calls,
+                    "output_tokens": node.output_tokens,
+                    "input_tokens": node.input_tokens,
+                }
+                for node in sorted(
+                    analysis.nodes.values(),
+                    key=lambda item: item.output_tokens,
+                    reverse=True,
+                )
+            },
+            "loops": [node.id for node in analysis.loops()],
+            "silent_validation_layers": [node.id for node in analysis.silent_layers()],
+        }
+        print(_json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
+    cycle_name = getattr(record, "name", None) or cycle_root.name
+    print()
+    print(_ui.header(f"Custo do ciclo — {cycle_name}"))
+    print(_ui.dim(str(cycle_root)))
+    print()
+
+    if analysis.wall_ms:
+        print(f"  Duração:        {analysis.wall_ms / 60000:.1f} min")
+    print(f"  Chamadas LLM:   {analysis.llm_calls}")
+    if analysis.output_tokens:
+        print(
+            f"  Tokens:         {analysis.input_tokens:,} in / "
+            f"{analysis.output_tokens:,} out"
+        )
+    print(
+        f"  Execuções:      {analysis.total_executions} "
+        f"({analysis.total_reexecutions} reexecuções)"
+    )
+    print(f"  First-pass:     {analysis.first_pass_rate:.0%}")
+    print(f"  Retrabalho:     {analysis.rework_ratio:.0%} das execuções")
+
+    loops = analysis.loops()
+    if loops:
+        print()
+        print("  Loops mais caros:")
+        for node in loops[:8]:
+            rounds = analysis.on_fail_rounds.get(node.id)
+            rounds_note = f", {rounds} rodada(s) on_fail" if rounds else ""
+            cost = (
+                f"{node.output_tokens:,} tokens out"
+                if node.output_tokens
+                else f"{node.duration_ms / 1000:.0f}s"
+            )
+            print(f"    {node.executions}× {node.id} ({cost}{rounds_note})")
+
+    silent = analysis.silent_layers()
+    if silent:
+        print()
+        print("  Camadas de validação que nunca reprovaram:")
+        for node in silent[:8]:
+            cost = (
+                f"{node.output_tokens:,} tokens out"
+                if node.output_tokens
+                else f"{node.duration_ms / 1000:.0f}s"
+            )
+            print(_ui.dim(f"  {node.id} ({cost})"))
+        print()
+        print(
+            _ui.info(
+                "Camada sem reprovação em vários ciclos é candidata a virar "
+                "gate determinístico — custo que não compra risco."
+            )
+        )
+    print()
+
+
 def cmd_analyse_template(args):
     """Score estático de determinismo (0-100%) de um template de processo."""
     import json as _json
@@ -6512,6 +6634,17 @@ def main():
         help=("Nome registrado ou path canônico .ft/process/<nome>/process.yml"),
     )
 
+    ac = sub.add_parser(
+        "analyse-cycle",
+        help="Custo empírico de um ciclo: loops, retrabalho e tokens por node",
+    )
+    ac.add_argument("--cycle", "-c", metavar="CYCLE", help="Ciclo a analisar")
+    ac.add_argument(
+        "--json",
+        action="store_true",
+        help="Saída em JSON para consumo por máquina",
+    )
+
     at = sub.add_parser(
         "analyse-template",
         help="Score estático de determinismo (0-100%%) de um template",
@@ -6914,6 +7047,8 @@ def main():
             cmd_lint_process(args)
         elif args.command == "analyse-template":
             cmd_analyse_template(args)
+        elif args.command == "analyse-cycle":
+            cmd_analyse_cycle(args)
         elif args.command == "explore":
             cmd_explore(args)
         elif args.command == "evolve":

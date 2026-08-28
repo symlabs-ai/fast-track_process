@@ -41,6 +41,10 @@ class Node:
     parallel_group: str | None = None
     # Override do limite de turns do LLM para nodes complexos
     max_turns: int | None = None
+    # Reviews reexecutados após on_fail viram reverificação focal do delta e
+    # descem um degrau de effort. ``false`` mantém o orçamento cheio em toda
+    # rodada — reservado a reviews cuja auditoria é sempre integral.
+    rereview_downgrade: bool = True
     # Comandos shell executados antes da delegação ao LLM (setup determinístico)
     env_setup: list[str] = field(default_factory=list)
     env_teardown: list[str] = field(default_factory=list)
@@ -227,10 +231,13 @@ class ProcessGraph:
                         f"'{node.fix_review}' que nao existe"
                     )
                 fix_review = self.nodes[node.fix_review]
-                if fix_review.type != "review":
+                # A auditoria que fecha um fix pode ser uma review LLM ou um
+                # gate determinístico — o gate é a forma mais forte, não a mais
+                # fraca: valida o recibo e reexecuta as provas sem novo turno.
+                if fix_review.type not in {"review", "gate"}:
                     raise ValueError(
                         f"Node '{node.id}' fix_review aponta para "
-                        f"'{node.fix_review}', que nao e review"
+                        f"'{node.fix_review}', que nao e review nem gate"
                     )
                 cursor = node.next
                 visited: set[str] = set()
@@ -432,6 +439,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
                 bypass_prompt=node_raw.get("bypass_prompt"),
                 bypass_reject_when=node_raw.get("bypass_reject_when"),
                 on_fail=node_raw.get("on_fail"),
+                rereview_downgrade=bool(node_raw.get("rereview_downgrade", True)),
                 optional=node_raw.get("optional", False),
                 hyper_mode_docs=node_raw.get("hyper_mode_docs"),
                 hyper_mode_full_docs=node_raw.get("hyper_mode_full_docs"),

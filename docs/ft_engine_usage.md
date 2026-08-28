@@ -300,6 +300,7 @@ ft cancel "motivo" --cycle <id>
 ft validate -t <template>
 ft lint-process -t <template>
 ft analyse-template -t <template|path> [--json]
+ft analyse-cycle [--cycle <id>] [--json]
 ```
 
 `ft analyse-template` computa o score estático de determinismo (0–100%) de um
@@ -312,6 +313,31 @@ indicação de haver (ou não) gate determinístico downstream que re-valide seu
 outputs — os marcados com `!` são o ponto de maior alavancagem para elevar o
 determinismo do template. Aceita nome de template (local materializado ou
 global do engine) ou path direto para um `process.yml`.
+
+`ft analyse-cycle` é a contraparte empírica: lê o trace do ciclo executado e
+mostra o custo real — execuções e reexecuções por node, first-pass rate,
+proporção de retrabalho, tokens e os loops mais caros. Também lista as camadas
+de validação que **nunca reprovaram nada** no ciclo: uma camada que só confirma
+o que outra já garantiu é candidata a virar gate determinístico. O score
+estático diz quanto do processo é preso por código; esta análise diz quanto a
+convergência custou de fato.
+
+### Custo do loop de correção
+
+Um ciclo `review → fix → review` sem teto é a maior fonte de custo em processos
+com review perfeccionista. O engine aplica três controles:
+
+- **Teto de rodadas** (`on_fail.max_rounds`, default 2): excedido o teto, a
+  correção automática é suspensa e o ciclo escala ao stakeholder com os achados
+  consolidados, em vez de gastar mais rodadas autônomas.
+- **Re-review focal**: a partir da 2ª rodada, o review reverifica apenas os
+  findings da rodada anterior e desce um degrau de effort
+  (`rereview_downgrade: false` desliga por node).
+- **Fix forward**: reviews classificam findings por severidade
+  (`severity: P0|P1|P2`). Só P0 reprova; P1/P2 produzem
+  `verdict: APPROVED_WITH_FINDINGS`, o ciclo segue e os achados viram dívida no
+  backlog — garantida pelo validator `review_findings_tracked`. Gates aceitam
+  esse veredito apenas com `allow_findings: true` explícito.
 
 `ft status --watch [SEGUNDOS]` abre uma tela fixa em terminal interativo e
 redesenha o status no mesmo lugar, sem produzir uma sequência de snapshots no
@@ -946,7 +972,15 @@ correção fria silenciosa e não reabre o workflow completo.
 
 `--parallel` controla somente concorrência. Para continuar um builder já em
 acabamento sem reabrir o processo integral, use `--route validation`; combine
-as duas opções quando houver deltas independentes. Nessa rota, o usuário
+as duas opções quando houver deltas independentes.
+
+Para uma demanda focal que não justifica a pipeline completa, use
+`--route direct`: construção em uma passagem, gates determinísticos (build,
+suíte, smoke) e **uma** review com triagem de severidade, encerrando por retro
+e reconciliação de backlog. São 8 nodes contra ~50 da rota completa, com os
+mesmos validators binários — é o custo de um coding agent direto, com os gates
+que dão o determinismo. Reserve a rota completa para release candidate e para
+superfícies de risco. Nessa rota, o usuário
 continua fornecendo somente `--request` ou `--input` em linguagem natural. Uma
 única chamada de planejamento produz
 `docs/mvp-batch-plan.yml`; o YAML é um artefato interno, não uma entrada exigida

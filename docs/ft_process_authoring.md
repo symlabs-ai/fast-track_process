@@ -363,12 +363,14 @@ antes da validação semântica.
 | `llm_engine` | string ou ausente | LLM | override por node | substitui o provider do run para esse node. |
 | `llm_model` | string ou ausente | LLM | use modelo disponível no provider escolhido | substitui o modelo do run. |
 | `llm_effort` | string ou ausente | LLM | provider-specific | substitui reasoning effort do run. |
+| `rereview_downgrade` | booleano; default `true` | `review` | mantenha `true` salvo auditoria sempre integral | a partir da 2ª rodada de um mesmo review, a reverificação é focal no delta e desce um degrau de effort. `false` preserva o orçamento cheio em toda rodada. |
 | `codex_auth` | `chatgpt` ou ausente | Codex | qualquer outro valor falha; exige executor/engine Codex | usa rota built-in OpenAI/ChatGPT para o node inteiro. |
 | `env_setup` | lista; `[]` | delegações que precisam de preflight | comandos determinísticos e seguros | executa antes da delegação. |
 | `env_teardown` | lista; `[]` | delegações com recursos temporários | pareie com `env_setup` | executa após a delegação para encerrar recursos. |
 | `validators` | lista; `[]` | todos | nome e argumentos precisam existir no registry | prova determinística antes de avançar. |
 | `validation_mode` | `aggregate` | não `end` | `aggregate` ou `fail_fast` | agrega todos os diagnósticos ou para no primeiro. |
 | `on_fail` | mapping ou ausente | nodes com falha roteável | `goto` deve existir; pode informar `human_gate` | rota de recuperação depois de validator/review falhar. |
+| `on_fail.max_rounds` | inteiro; default 2 | nodes com `on_fail.goto` | `0` desliga o teto | teto de rodadas do loop correção→reauditoria. Excedido, o engine suspende a correção automática e escala ao stakeholder com os achados consolidados. |
 | `requires_approval` | booleano; `false` | todos | use quando um node aprovado precisa parar para humano | pausa depois de passar. |
 | `no_pre_seed` | booleano; `false` | todos | use em trabalho/review que deve sempre ser refeito | impede reaproveitar outputs já válidos. |
 | `allow_pre_seed` | booleano; `false` | principalmente build/review/test | declare deliberadamente | permite reaproveitar checkpoint em tipos fail-closed. |

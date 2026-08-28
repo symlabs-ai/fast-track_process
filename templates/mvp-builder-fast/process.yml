@@ -120,6 +120,11 @@ artifact_policy:
     - docs/operational-readiness.md
     - docs/operational-readiness.yml
   cycle:
+    - docs/direct-plan.md
+    - docs/direct-review.md
+    - docs/direct-review.yml
+    - docs/direct-fix-report.md
+    - docs/stakeholder-fix-report.md
     - .build_ok
     - docs/task_list.md
     - docs/screenshots/
@@ -175,12 +180,13 @@ nodes:
   - id: ft.start.route_mode
     type: decision
     title: "Selecionar Rota do Builder"
-    description: "A rota validation continua um produto em construção na etapa terminal; --parallel controla somente o fan-out das lanes."
+    description: "A rota validation continua um produto em construção na etapa terminal; direct entrega uma demanda focal com gates determinísticos e uma única review; --parallel controla somente o fan-out das lanes."
     sprint: sprint-00-batch
     executor: python
     condition: run_route
     branches:
       "validation": ft.batch.01.plan
+      "direct": ft.direct.01.build
       "_default": ft.start.route
 
   - id: ft.batch.01.plan
@@ -502,20 +508,29 @@ nodes:
   - id: ft.batch.06.fix
     type: build
     title: "Corrigir Apenas Achados do Batch"
-    description: "Loop focal: corrigir somente os achados acionáveis do review e seus testes diretamente relacionados."
+    description: "Loop focal: corrigir somente os achados acionáveis do review e seus testes diretamente relacionados, emitindo o recibo que o gate determinístico verifica."
     fix_review: ft.batch.06b.fix_review
     sprint: sprint-00-batch
     executor: codex
     no_pre_seed: true
+    preserve_outputs_on_reentry: true
     max_turns: 80
     outputs:
       - src/
       - docs/api_contract.md
       - docs/mvp-batch-fix-report.md
+      - docs/mvp-batch-fix-review.md
+      - docs/mvp-batch-fix-review.yml
+      - docs/mvp-batch-fix-evidence/
     write_scope:
       - src
       - docs/api_contract.md
       - docs/mvp-batch-fix-report.md
+      - docs/mvp-batch-fix-review.md
+      - docs/mvp-batch-fix-review.yml
+      - docs/mvp-batch-fix-evidence
+      - docs/mvp-batch-navigation-reachability.yml
+      - docs/batches/mvp-builder-fast/navigation
     prompt: |
       Leia docs/mvp-batch-review.md, docs/mvp-batch-review.yml,
       docs/platform-validation-report.yml quando existir e, quando esta etapa
@@ -533,7 +548,26 @@ nodes:
       finding→causa→path→fix→teste→resultado. Normalize cada finding corrente
       como FX-001, FX-002 etc., uma única vez; preserve na mesma linha o ID F-*
       de origem quando ele vier do review combinado e preserve o ID PV-F-* de
-      origem quando vier da validação de plataforma. Encerre DONE.
+      origem quando vier da validação de plataforma.
+
+      Emita também o recibo estruturado docs/mvp-batch-fix-review.yml e o
+      parecer docs/mvp-batch-fix-review.md que o atestam, com
+      `schema_version: 1`, `scope_sha256` dos bytes correntes de
+      docs/mvp-batch-fix-report.md, `verdict`, `results` e `findings`. Cada
+      `results[].ref` é exatamente um FX-* do fix report e exige evidência
+      verificável repo-local do teste que comprova a correção. Para dado
+      exibido em UI, confronte cada campo citado com a fonte real pela
+      interface pública e a tela executável; prova mock-only é insuficiente.
+      Nesses casos, preserve a captura ou dump físico sanitizado como arquivo
+      separado em docs/mvp-batch-fix-evidence/ e referencie esse path na claim
+      correspondente. Auto-referenciar o Markdown ou incorporar a imagem inline
+      não satisfaz o contrato. Nunca grave certificado, chave privada, senha ou
+      dado pessoal bruto nesse diretório. Markdown e YAML declaram o mesmo veredito. Se algum
+      FX-* continuar reprovado, registre-o como FAIL com finding FFX-* e
+      severity P0 em vez de declarar aprovação. Se o finding envolver
+      descoberta/navegação, reexecute somente as jornadas afetadas na UI de
+      produção e atualize docs/mvp-batch-navigation-reachability.yml.
+      Encerre DONE.
     validators:
       - file_exists: docs/mvp-batch-fix-report.md
       - api_contract_complete:
@@ -543,63 +577,15 @@ nodes:
     next: ft.batch.06b.fix_review
 
   - id: ft.batch.06b.fix_review
-    type: review
-    title: "Auditar Somente o Fix do Batch"
-    description: "Comprovar apenas que os findings rejeitados foram corrigidos, sem reabrir requirements já aprovados."
+    type: gate
+    title: "Verificar o Fix do Batch (determinístico)"
+    description: "Checkpoint Python do recibo de correção: schema, cobertura FX-*, evidências, navegação e árvore limpa. Substitui uma segunda review LLM cujo resultado já era reavaliado por validators."
     sprint: sprint-00-batch
-    executor: codex
+    executor: python
     no_pre_seed: true
-    preserve_outputs_on_reentry: true
-    max_turns: 30
-    outputs:
-      - docs/mvp-batch-fix-review.md
-      - docs/mvp-batch-fix-review.yml
-      - docs/mvp-batch-fix-evidence/
-    write_scope:
-      - docs/mvp-batch-fix-review.md
-      - docs/mvp-batch-fix-review.yml
-      - docs/mvp-batch-fix-evidence/
-      - docs/mvp-batch-navigation-reachability.yml
-      - docs/batches/mvp-builder-fast/navigation
-    prompt: |
-      Audite SOMENTE o delta registrado em docs/mvp-batch-fix-report.md contra
-      os findings REJECTED do último docs/mvp-batch-review.md ou
-      docs/platform-validation-report.yml. Inspecione apenas os paths e testes
-      citados nesses findings. Não reabra requirements,
-      critérios ou arquivos anteriormente aprovados e não rode a regressão
-      completa.
-
-      Escreva docs/mvp-batch-fix-review.md com finding→path→teste→evidência e
-      uma linha explícita VERDICT: APPROVED ou VERDICT: REJECTED. Rejeite apenas
-      defeito reproduzível ainda presente. Para dados exibidos em UI, confronte
-      cada campo citado no finding com a fonte real pela interface pública e a
-      tela executável; prova mock-only é insuficiente. Nesses casos, preserve a
-      captura ou dump físico sanitizado como arquivo separado em
-      docs/mvp-batch-fix-evidence/ e referencie esse path em `visual_evidence` e
-      nas claims correspondentes. Auto-referenciar o Markdown ou incorporar a
-      imagem inline não satisfaz o contrato. Nunca grave certificado, chave
-      privada, senha ou dado pessoal bruto nesse diretório. Siga o contrato
-      global `focal_evidence` injetado pela engine. Se houver APK/hash no finding,
-      comprove que candidato local e artefato observado no dispositivo têm o
-      mesmo SHA-256. Jornada autenticada deve usar o usuário exclusivo do agente
-      e citar o recibo sanitizado de seu seed; não dependa da conta ou de uma
-      ação manual do stakeholder. Se o finding envolver descoberta/navegação,
-      reexecute somente as jornadas afetadas pela UI de produção, renove suas
-      evidências e atualize docs/mvp-batch-navigation-reachability.yml. Não
-      altere código.
-
-      Para finding `mockup_watermark`, abra cada tela afetada no target real e
-      confirme visualmente que a marca d'água vem do produto, contém o ID exato
-      do mockup e permanece legível sem bloquear conteúdo ou interação.
-
-      Gere docs/mvp-batch-fix-review.yml com `schema_version: 1`,
-      `scope_sha256` dos bytes correntes de docs/mvp-batch-fix-report.md,
-      `verdict`, `results` e `findings`, no mesmo schema do review combinado.
-      Aqui cada `results[].ref` deve ser exatamente um FX-* do fix report.
-      Cubra todos os findings correntes. APPROVED exige todos PASS e findings
-      vazio; uma nova falha usa ID FFX-* e referencia o FX-* ainda reprovado. O
-      Markdown e o YAML devem declarar o mesmo veredito.
+    validation_mode: fail_fast
     validators:
+      - file_exists: docs/mvp-batch-fix-report.md
       - file_exists: docs/mvp-batch-fix-review.md
       - file_exists: docs/mvp-batch-fix-review.yml
       - review_outcome_valid:
@@ -618,7 +604,7 @@ nodes:
           require_approved: true
       - command_succeeds: "git diff --check"
     on_fail:
-      human_gate: "A auditoria focal ainda encontrou defeito no fix."
+      human_gate: "O recibo de correção do batch não comprova o fix."
       goto: ft.batch.06.fix
       automatic: true
     next: ft.batch.07.verify
@@ -2320,11 +2306,25 @@ nodes:
            findings:
              - id: FV-001
                refs: [<states reprovados>]
+               severity: P0 | P1 | P2
                summary: <divergência visual ou operacional>
                evidence: [<paths repo-local verificáveis>]
-         Markdown e YAML devem ter o mesmo veredito. APPROVED exige todos os
-         states PASS e findings vazio; REJECTED exige findings que cubram
+         Markdown e YAML devem ter o mesmo veredito. Findings devem cobrir
          exatamente os states FAIL.
+         SEVERIDADE (obrigatória em cada finding): `severity: P0|P1|P2`.
+           P0 — bloqueante: quebra funcional, rota/ação P0 inacessível, dado
+                corrompido ou perdido, falha de segurança/autorização.
+           P1 — defeito real sem bloqueio: degrada a experiência mas o produto
+                cumpre a obrigação.
+           P2 — cosmético ou melhoria pontual.
+         Escolha o veredito pela severidade, não pela existência de achados:
+           APPROVED — nenhum FAIL e findings vazio.
+           APPROVED_WITH_FINDINGS — há FAIL, mas nenhum finding P0. O ciclo
+             SEGUE em frente e os findings viram dívida no backlog.
+           REJECTED — existe ao menos um finding P0. Só então o ciclo volta
+             para correção.
+         Não use REJECTED para achado P1/P2: cada volta desnecessária custa
+         uma rodada inteira de correção e re-review.
       8. Não exija backend, API ou persistência reais neste checkpoint. Dados
          locais determinísticos podem viabilizar a inspeção visual, mas nunca
          contam como prova de integração ou fidelidade de dados.
@@ -2363,6 +2363,9 @@ nodes:
           scope_path: docs/mockups/screen-map.yml
           scope_pattern: "(?<=\\{id: )S\\d+\\.\\d+\\b"
           require_approved: true
+          # Fix forward: findings P1/P2 aprovam e viram dívida no backlog;
+          # P0 continua reprovando e devolvendo o ciclo à correção.
+          allow_findings: true
     next: ft.tdd.01.red
 
   # ================================================================
@@ -2517,17 +2520,33 @@ nodes:
            findings:
              - id: FI-001
                refs: [<critérios reprovados>]
+               severity: P0 | P1 | P2
                summary: <defeito reproduzível>
                evidence: [<paths repo-local verificáveis>]
-         Markdown e YAML devem ter o mesmo veredito. APPROVED exige todos os
-         critérios PASS e findings vazio; REJECTED exige findings que cubram
+         Markdown e YAML devem ter o mesmo veredito. Findings devem cobrir
          exatamente os critérios FAIL observados. Após early-stop, critérios
-         ainda não executados ficam PENDING/NOT_RUN e não originam finding.
+         ainda não executados ficam PENDING/NOT_RUN e não originam finding
+         (e impedem APPROVED_WITH_FINDINGS: conclua a auditoria antes).
+         SEVERIDADE (obrigatória em cada finding): `severity: P0|P1|P2`.
+           P0 — bloqueante: quebra funcional, rota/ação P0 inacessível, dado
+                corrompido ou perdido, falha de segurança/autorização.
+           P1 — defeito real sem bloqueio: degrada a experiência mas o produto
+                cumpre a obrigação.
+           P2 — cosmético ou melhoria pontual.
+         Escolha o veredito pela severidade, não pela existência de achados:
+           APPROVED — nenhum FAIL e findings vazio.
+           APPROVED_WITH_FINDINGS — há FAIL, mas nenhum finding P0. O ciclo
+             SEGUE em frente e os findings viram dívida no backlog.
+           REJECTED — existe ao menos um finding P0. Só então o ciclo volta
+             para correção.
+         Não use REJECTED para achado P1/P2: cada volta desnecessária custa
+         uma rodada inteira de correção e re-review.
       9. Audite primeiro o finding corrente e depois os critérios PENDING, um
-         por vez. Ao observar o primeiro FAIL, interrompa a auditoria e escreva
-         imediatamente os outputs canônicos; marque como PENDING/NOT_RUN tudo
-         que ainda não foi executado e gere finding somente para o FAIL
-         observado. Somente com 0 FAIL prossiga até esgotar os pendentes.
+         por vez. Interrompa a auditoria apenas ao observar um FAIL de
+         severidade P0: escreva imediatamente os outputs canônicos, marque
+         PENDING/NOT_RUN o que não executou e gere finding somente para o FAIL
+         observado. FAIL P1/P2 não interrompe — registre e siga auditando até
+         esgotar os critérios, para que o ciclo possa aprovar com findings.
       10. Depois de escrever o receipt, valide somente sua integridade YAML com
           `python -c "import pathlib,yaml; yaml.safe_load(pathlib.Path('docs/surface-integrated-review.yml').read_text())"`.
           Esse parse é obrigatório mesmo com FAIL; build e testes do produto
@@ -2597,6 +2616,9 @@ nodes:
           scope_pattern: "\\bC\\d+\\b"
           scope_exclude_pattern: "matriz (?:aplicável|de validação)|target físico|simulador|emulador|receipt de plataforma|validação multiplataforma"
           require_approved: true
+          # Fix forward: findings P1/P2 aprovam e viram dívida no backlog;
+          # P0 continua reprovando e devolvendo o ciclo à correção.
+          allow_findings: true
       - ui_criteria_coverage:
           criteria_path: docs/ui_criteria.md
           report_path: docs/screenshot-review.md
@@ -3175,8 +3197,57 @@ nodes:
     max_turns: 60
     outputs:
       - src/
-    fix_review: ft.platform.01.validate
-    next: ft.platform.01.validate
+      - docs/stakeholder-fix-report.md
+    write_scope:
+      - src
+      - docs/stakeholder-fix-report.md
+    prompt: |
+      Aplique somente as correções pedidas em docs/stakeholder-feedback.md.
+      Não expanda escopo, não refatore o que não foi apontado e não reabra
+      requisitos já aceitos.
+
+      Registre docs/stakeholder-fix-report.md com uma linha por pedido:
+      pedido→causa→paths alterados→teste que comprova→resultado. Liste
+      explicitamente todos os paths que você tocou; a rota de revalidação do
+      ciclo depende dessa lista ser fiel.
+
+      Rode os testes focais dos arquivos alterados antes de encerrar. Encerre
+      DONE.
+    validators:
+      - file_exists: docs/stakeholder-fix-report.md
+      - command_succeeds: "git diff --check"
+    fix_review: gate.stakeholder_fix
+    next: gate.stakeholder_fix
+
+  - id: gate.stakeholder_fix
+    no_pre_seed: true
+    type: gate
+    title: "Reprovar o Fix do Stakeholder (focal)"
+    description: "Reexecuta as provas determinísticas afetadas por uma correção de aceite — build, suíte e smoke — em vez de rebobinar a cadeia inteira de validação."
+    sprint: sprint-09-final
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - file_exists: docs/stakeholder-fix-report.md
+      - command_succeeds: "make -C src surface-build"
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - command_succeeds: "make -C src smoke"
+    on_fail:
+      human_gate: "A correção do stakeholder quebrou build, suíte ou smoke."
+      goto: ft.final.03.stakeholder_fix
+      automatic: true
+    next: ft.final.03b.revalidation_route
+
+  - id: ft.final.03b.revalidation_route
+    type: decision
+    title: "Escolher o Alcance da Revalidação"
+    description: "Uma correção de aceite invalida o receipt multiplataforma somente quando há perfis de plataforma ativos; sem eles, a revalidação focal basta e a matriz cara não é reexecutada."
+    sprint: sprint-09-final
+    executor: python
+    condition: validation_profiles_active
+    branches:
+      "true": ft.platform.01.validate
+      "false": ft.final.01.visual_check
 
   # ================================================================
   # Sprint 10 — Handoff
@@ -3206,7 +3277,14 @@ nodes:
       4. Reconcilie docs/FEATURES.md: somente PB-* done/accepted criam ou
          evoluem FEAT-*; preserve IDs e histórico deprecatado/removido.
       5. Bypass de human gate não conta como aprovação ou evidência.
-      Verifique a consistência entre os quatro documentos antes de encerrar.
+      6. Dívida do fix forward: para cada review com
+         `verdict: APPROVED_WITH_FINDINGS` (docs/surface-visual-review.yml e
+         docs/surface-integrated-review.yml), abra um PB-* novo por finding
+         aceito, citando o id do finding (ex.: FI-003) no título ou nas notas,
+         com prioridade derivada da severidade (P1 → P1, P2 → P2) e status
+         deferred. Foi assim que o ciclo pôde seguir sem corrigir: o débito é
+         registrado, não esquecido.
+      Verifique a consistência entre os documentos antes de encerrar.
     validators:
       - file_exists: docs/retro.md
       - file_exists: docs/PROJECT_BACKLOG.md
@@ -3268,6 +3346,13 @@ nodes:
           min_items: 1
       - backlog_pending_decisions:
           path: docs/PROJECT_BACKLOG.md
+      # Contrapartida do fix forward: todo finding aceito como dívida
+      # (APPROVED_WITH_FINDINGS) precisa existir no backlog do produto.
+      - review_findings_tracked:
+          review_paths:
+            - docs/surface-visual-review.yml
+            - docs/surface-integrated-review.yml
+          backlog_path: docs/PROJECT_BACKLOG.md
       - file_exists: docs/backlog-progress.md
       - has_sections:
           path: docs/backlog-progress.md
@@ -3847,6 +3932,249 @@ nodes:
   # ================================================================
   # Fim
   # ================================================================
+
+  # ================================================================
+  # Rota direct — entrega focal com gates determinísticos
+  #
+  # Para demandas que não justificam a pipeline completa: uma construção,
+  # gates determinísticos e UMA review com triagem de severidade. Mantém o
+  # que dá garantia (build, suíte, smoke, recibo de review, dívida
+  # registrada) e remove as camadas de auditoria sobrepostas.
+  # ================================================================
+
+  - id: ft.direct.01.build
+    no_pre_seed: true
+    type: build
+    title: "Construir a Demanda com Testes"
+    description: "Uma única passagem de construção: declarar as obrigações da demanda, implementá-las e cobri-las com testes."
+    sprint: sprint-direct-01-build
+    executor: claude
+    max_turns: 120
+    outputs:
+      - src/
+      - docs/direct-plan.md
+      - docs/PROJECT_BACKLOG.md
+    write_scope:
+      - src
+      - docs/direct-plan.md
+      - docs/PROJECT_BACKLOG.md
+    prompt: |
+      Entregue a demanda registrada em docs/demanda.md (ou, se ausente, em
+      docs/feature-request.md) em uma única passagem de construção.
+
+      1. Escreva docs/direct-plan.md declarando as obrigações verificáveis da
+         demanda, uma por linha, numeradas D-001, D-002, ... Cada obrigação
+         precisa ser observável de fora: comportamento, contrato ou saída.
+         Este arquivo é o escopo do review final — obrigação não declarada
+         não será auditada, e obrigação declarada e não entregue reprova.
+      2. Implemente as obrigações em src/, com testes que as cubram. Os testes
+         são a prova: cada D-* deve ter ao menos um teste que falharia sem a
+         implementação.
+      3. Garanta que `make -C src surface-build` (ou o build declarado do
+         projeto) e a suíte completa passem antes de encerrar.
+      4. Registre em docs/PROJECT_BACKLOG.md os PB-* correspondentes à demanda,
+         preservando IDs existentes e marcando como done apenas o que tem
+         evidência real neste ciclo.
+
+      Não abra escopo além da demanda. Encerre DONE.
+    validators:
+      - file_exists: docs/direct-plan.md
+      - min_lines:
+          path: docs/direct-plan.md
+          n: 5
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - command_succeeds: "git diff --check"
+    next: gate.direct.build
+
+  - id: gate.direct.build
+    no_pre_seed: true
+    type: gate
+    title: "Verificar Build e Suíte (determinístico)"
+    description: "Checkpoint Python da construção: build do produto e suíte completa verde antes de gastar qualquer turno de review."
+    sprint: sprint-direct-01-build
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - file_exists: docs/direct-plan.md
+      - command_succeeds: "make -C src surface-build"
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
+    on_fail:
+      human_gate: "Build ou suíte falharam na entrega direta."
+      goto: ft.direct.02.fix
+      automatic: true
+    next: ft.direct.03.review
+
+  - id: ft.direct.02.fix
+    no_pre_seed: true
+    type: build
+    title: "Corrigir Apenas o Apontado"
+    description: "Loop focal da rota direct: corrigir somente os achados correntes, sem reabrir a demanda."
+    sprint: sprint-direct-01-build
+    executor: claude
+    max_turns: 60
+    outputs:
+      - src/
+      - docs/direct-fix-report.md
+    write_scope:
+      - src
+      - docs/direct-fix-report.md
+    prompt: |
+      Corrija SOMENTE os achados correntes — falha de build/suíte ou findings
+      P0 do review. Não reabra obrigações já aprovadas nem amplie o escopo da
+      demanda.
+
+      Registre docs/direct-fix-report.md com achado→causa→path→teste→resultado
+      e rode os testes focais dos arquivos alterados. Encerre DONE.
+    validators:
+      - file_exists: docs/direct-fix-report.md
+      - command_succeeds: "git diff --check"
+    next: gate.direct.build
+
+  - id: ft.direct.03.review
+    no_pre_seed: true
+    type: review
+    title: "Review Único da Entrega"
+    description: "A única auditoria LLM da rota: confronta cada obrigação declarada com o produto executável e classifica os achados por severidade."
+    sprint: sprint-direct-02-review
+    executor: codex
+    max_turns: 60
+    outputs:
+      - docs/direct-review.md
+      - docs/direct-review.yml
+    write_scope:
+      - docs/direct-review.md
+      - docs/direct-review.yml
+    prompt: |
+      Audite a entrega contra docs/direct-plan.md. Para cada obrigação D-*,
+      confronte o comportamento real do produto (executando-o ou seus testes)
+      com o que foi declarado, e registre evidência verificável repo-local.
+
+      Escreva docs/direct-review.md (parecer legível) e docs/direct-review.yml
+      com `schema_version: 1`, `scope_sha256` dos bytes correntes de
+      docs/direct-plan.md, `verdict`, `results` e `findings`:
+
+          schema_version: 1
+          scope_sha256: <sha256 de docs/direct-plan.md>
+          verdict: APPROVED | APPROVED_WITH_FINDINGS | REJECTED
+          results:
+            - ref: D-001
+              result: PASS | FAIL
+              evidence: [<prova repo-local>]
+          findings:
+            - id: DR-001
+              refs: [<obrigações reprovadas>]
+              severity: P0 | P1 | P2
+              summary: <defeito reproduzível>
+              evidence: [<paths repo-local verificáveis>]
+
+      Cubra exatamente os D-* do plano — nem a mais, nem a menos. Findings
+      devem cobrir exatamente os results FAIL.
+
+      SEVERIDADE (obrigatória em cada finding): `severity: P0|P1|P2`.
+        P0 — bloqueante: obrigação não entregue, quebra funcional, dado
+             corrompido ou falha de segurança/autorização.
+        P1 — defeito real sem bloqueio.
+        P2 — cosmético ou melhoria pontual.
+      Escolha o veredito pela severidade, não pela existência de achados:
+        APPROVED — nenhum FAIL e findings vazio.
+        APPROVED_WITH_FINDINGS — há FAIL, mas nenhum finding P0: o ciclo segue
+          e os achados viram dívida no backlog.
+        REJECTED — existe ao menos um finding P0.
+      Markdown e YAML devem declarar o mesmo veredito. Não altere código.
+    validators:
+      - file_exists: docs/direct-review.md
+      - file_exists: docs/direct-review.yml
+      - review_outcome_valid:
+          path: docs/direct-review.yml
+          markdown_path: docs/direct-review.md
+          scope_path: docs/direct-plan.md
+          scope_pattern: "\\bD-\\d+\\b"
+    on_fail:
+      human_gate: "O review da entrega direta encontrou defeito bloqueante."
+      goto: ft.direct.02.fix
+      automatic: true
+    next: gate.direct.review
+
+  - id: gate.direct.review
+    no_pre_seed: true
+    type: gate
+    title: "Verificar a Entrega (determinístico)"
+    description: "Checkpoint Python final da rota: recibo do review aprovado (com ou sem dívida), suíte verde e smoke real."
+    sprint: sprint-direct-02-review
+    executor: python
+    validation_mode: fail_fast
+    validators:
+      - file_exists: docs/direct-review.yml
+      - review_outcome_valid:
+          path: docs/direct-review.yml
+          markdown_path: docs/direct-review.md
+          scope_path: docs/direct-plan.md
+          scope_pattern: "\\bD-\\d+\\b"
+          require_approved: true
+          # Fix forward: P1/P2 seguem como dívida; P0 volta para correção.
+          allow_findings: true
+      - command_succeeds: "cd src && python -m pytest tests/ -q"
+      - command_succeeds: "make -C src smoke"
+    on_fail:
+      human_gate: "A entrega direta não passou no checkpoint final."
+      goto: ft.direct.02.fix
+      automatic: true
+    next: ft.direct.04.stakeholder
+
+  - id: ft.direct.04.stakeholder
+    no_pre_seed: true
+    type: human_gate
+    title: "Validação do Stakeholder"
+    description: "Apresentar a entrega executável ao stakeholder e capturar o aceite ou os ajustes pedidos."
+    sprint: sprint-direct-03-handoff
+    executor: python
+    outputs:
+      - docs/stakeholder-feedback.md
+    approval_message_required: true
+    reject_next: ft.direct.02.fix
+    next: ft.direct.05.handoff
+
+  - id: ft.direct.05.handoff
+    no_pre_seed: true
+    type: retro
+    title: "Consolidar Retro e Backlog"
+    description: "Handoff compacto da rota direct: retro do ciclo e reconciliação do backlog, incluindo a dívida aceita pelo review."
+    sprint: sprint-direct-03-handoff
+    executor: claude
+    max_turns: 40
+    outputs:
+      - docs/retro.md
+      - docs/PROJECT_BACKLOG.md
+    write_scope:
+      - docs/retro.md
+      - docs/PROJECT_BACKLOG.md
+    prompt: |
+      Consolide o encerramento da rota direct em um único turn:
+      1. Gere docs/retro.md a partir do log do ciclo, distinguindo PASS,
+         BLOCKED, REJECTED e BYPASSED.
+      2. Atualize docs/PROJECT_BACKLOG.md sem renumerar PB-*: entregas com
+         evidência recebem done; o que não entrou recebe deferred/blocked com
+         decisão explícita.
+      3. Dívida do fix forward: se docs/direct-review.yml tiver
+         `verdict: APPROVED_WITH_FINDINGS`, abra um PB-* por finding aceito
+         citando o id do finding (ex.: DR-002) no título ou nas notas, com
+         prioridade derivada da severidade (P1 → P1, P2 → P2) e status
+         deferred. Foi assim que o ciclo pôde seguir sem corrigir.
+      Encerre DONE.
+    validators:
+      - file_exists: docs/retro.md
+      - file_exists: docs/PROJECT_BACKLOG.md
+      - project_backlog_valid:
+          path: docs/PROJECT_BACKLOG.md
+          min_items: 1
+      - review_findings_tracked:
+          review_paths:
+            - docs/direct-review.yml
+          backlog_path: docs/PROJECT_BACKLOG.md
+    next: ft.end
 
   - id: ft.end
     type: end

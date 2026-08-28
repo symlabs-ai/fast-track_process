@@ -722,6 +722,7 @@ VALIDATOR_REGISTRY: dict[str, Any] = {
     "navigation_contract_valid": val.navigation_contract_valid,
     "navigation_reachability": val.navigation_reachability,
     "review_outcome_valid": val.review_outcome_valid,
+    "review_findings_tracked": val.review_findings_tracked,
     "review_chain_approved": val.review_chain_approved,
     "validation_matrix_valid": platform_val.validation_matrix_valid,
     "validation_profile_hooks": platform_val.validation_profile_hooks,
@@ -1380,6 +1381,11 @@ def build_task_prompt(node: Node, state_dict: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 MAX_RETRIES = 3
+# Teto de rodadas do ciclo review→fix→review de um mesmo node. Excedido o
+# teto, o engine deixa de aplicar correções automáticas e escala para decisão
+# humana com os achados consolidados: um loop autônomo sem teto é a principal
+# fonte de custo em processos com review perfeccionista.
+MAX_ON_FAIL_ROUNDS = 2
 
 
 def _lexical_absolute(path: str | Path) -> Path:
@@ -1683,6 +1689,9 @@ class StepRunner:
         self._max_node_retries = self._environment.get("max_node_retries", MAX_RETRIES)
         self._max_gate_retries = self._environment.get("max_gate_retries", MAX_RETRIES)
         self._max_auto_fix = self._environment.get("max_auto_fix", 2)
+        self._max_on_fail_rounds = self._environment.get(
+            "max_on_fail_rounds", MAX_ON_FAIL_ROUNDS
+        )
         self._bypass_human_gates = False  # setado por cmd_run via --bypass-human-gates
         # Run mode: isolated → LLM trabalha na worktree externa; continuous → na raiz.
         self._run_mode = self._environment.get("run_mode", "isolated")
@@ -2251,6 +2260,39 @@ class StepRunner:
         }
         self.state_mgr.save()
 
+    def _rereview_directive(self, node: "Node") -> str | None:
+        """Diretiva de re-review focal a partir da 2ª rodada de um mesmo node.
+
+        Refazer a auditoria inteira a cada rodada é o que torna o loop caro: a
+        rodada N só precisa provar que os findings da rodada N-1 sumiram, sem
+        reexecutar os critérios que já passaram.
+        """
+        if node.type != "review":
+            return None
+        rounds = self._on_fail_rounds(node.id)
+        if rounds < 1:
+            return None
+        state = self.state_mgr.state
+        pending = state.pending_fix if isinstance(state.pending_fix, dict) else {}
+        feedback = str(pending.get("feedback") or "").strip()
+        finding_ids = sorted(set(re.findall(r"\b[A-Z]{2,6}-[A-Z]?\d{1,4}\b", feedback)))
+        alvo = (
+            "Findings a reverificar: " + ", ".join(finding_ids[:12])
+            if finding_ids
+            else "Findings a reverificar: os registrados no receipt da rodada anterior."
+        )
+        return (
+            f"RE-REVIEW FOCAL (rodada {rounds + 1}). Esta NÃO é uma auditoria "
+            "completa: reexecute somente os critérios que falharam na rodada "
+            "anterior e os diretamente afetados pela correção. Critérios já "
+            "PASS mantêm o resultado e a evidência anteriores — copie-os para "
+            "o novo receipt sem reexecutar.\n"
+            f"{alvo}\n"
+            "Se os findings anteriores foram resolvidos e nenhum novo defeito P0 "
+            "apareceu no delta corrigido, aprove. Não abra frente de auditoria "
+            "nova nesta rodada."
+        )
+
     def _inject_execution_plan(self, prompt: str) -> str:
         metadata = self.state_mgr.state.llm_execution_plan
         if not isinstance(metadata, dict) or not isinstance(metadata.get("path"), str):
@@ -2495,6 +2537,19 @@ class StepRunner:
     def _has_command_llm_override(self) -> bool:
         return self._llm_settings.has_command_override
 
+    # Efforts em ordem crescente de custo; a re-review focal desce um degrau.
+    _EFFORT_LADDER = ("low", "medium", "high", "xhigh", "max")
+
+    def _downgrade_effort(self, effort: str | None) -> str | None:
+        """Um degrau abaixo na escada de esforço, quando houver."""
+        if not effort:
+            return effort
+        try:
+            index = self._EFFORT_LADDER.index(str(effort).strip().lower())
+        except ValueError:
+            return effort
+        return self._EFFORT_LADDER[max(0, index - 1)]
+
     def _resolve_llm_selection(
         self,
         state: Any | None = None,
@@ -2503,12 +2558,25 @@ class StepRunner:
         manifest_defaults: dict[str, Any] | None = None,
         manifest_is_active: bool | None = None,
     ) -> LLMSelection:
-        return self._llm_settings.resolve(
+        selection = self._llm_settings.resolve(
             state,
             node,
             manifest_defaults=manifest_defaults,
             manifest_is_active=manifest_is_active,
         )
+        # A rodada 2+ de um review é uma reverificação focal do delta: escopo
+        # menor não justifica o mesmo orçamento de raciocínio da auditoria
+        # inicial. Nodes podem recusar o desconto com rereview_downgrade: false.
+        if (
+            node is not None
+            and getattr(node, "type", None) == "review"
+            and getattr(node, "rereview_downgrade", True)
+            and self._on_fail_rounds(getattr(node, "id", "")) >= 1
+        ):
+            downgraded = self._downgrade_effort(selection.effort)
+            if downgraded != selection.effort:
+                selection = replace(selection, effort=downgraded)
+        return selection
 
     def _resolve_llm_engine(
         self, state: Any | None = None, node: Any | None = None
@@ -3857,6 +3925,44 @@ class StepRunner:
             self.merge_on_close("selective", [f"{spec}/"])
         # Se não tem merge_on_end, nada a fazer (ft close vai perguntar)
 
+    def _on_fail_round_limit(self, node: "Node") -> int:
+        """Teto de rodadas on_fail do node: override local ou default do run."""
+        raw = (node.on_fail or {}).get("max_rounds", self._max_on_fail_rounds)
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError):
+            limit = int(MAX_ON_FAIL_ROUNDS)
+        # 0 (ou negativo) desliga o teto e preserva o loop ilimitado histórico.
+        return max(0, limit)
+
+    def _on_fail_rounds(self, node_id: str) -> int:
+        raw = self.state_mgr.state.metrics.get("on_fail_rounds")
+        rounds = raw if isinstance(raw, dict) else {}
+        try:
+            return int(rounds.get(node_id, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _record_on_fail_round(self, node_id: str) -> int:
+        """Incrementa e persiste a rodada corrente do loop on_fail do node."""
+        state = self.state_mgr.state
+        raw = state.metrics.get("on_fail_rounds")
+        rounds = dict(raw) if isinstance(raw, dict) else {}
+        current = self._on_fail_rounds(node_id) + 1
+        rounds[node_id] = current
+        state.metrics["on_fail_rounds"] = rounds
+        return current
+
+    def _reset_on_fail_rounds(self, node_id: str) -> None:
+        """Zera o contador quando o node finalmente passa."""
+        state = self.state_mgr.state
+        raw = state.metrics.get("on_fail_rounds")
+        if not isinstance(raw, dict) or node_id not in raw:
+            return
+        rounds = dict(raw)
+        rounds.pop(node_id, None)
+        state.metrics["on_fail_rounds"] = rounds
+
     def _handle_on_fail(self, node: "Node", feedback: str) -> None:
         """Processa o evento on_fail de um node. Pausa para ft fix ou bloqueia."""
         on_fail = node.on_fail or {}
@@ -3892,13 +3998,30 @@ class StepRunner:
         state.blocked_reason = None
         self.state_mgr.save()
 
+        rounds = self._record_on_fail_round(node.id)
+        limit = self._on_fail_round_limit(node)
+        self.state_mgr.save()
+
         print(ui.fix_gate(gate_msg, feedback, goto))
         automatic = bool(on_fail.get("automatic", False))
+        if limit and rounds > limit:
+            # Circuit breaker: o loop autônomo já gastou o orçamento de rodadas
+            # sem convergir. Escalar decide em segundos o que o loop não resolve.
+            print(ui.on_fail_escalation(node.id, rounds, limit, goto))
+            self._log_event(
+                "on_fail_escalated",
+                f"Escalonamento do loop de correção ({node.id})",
+                "ESCALATED",
+                f"rodada {rounds} excede o teto {limit}; decisão devolvida ao stakeholder",
+            )
+            return
         if self._auto_approve and automatic:
-            print(ui.info("Correção focal automática autorizada pelo processo"))
+            print(
+                ui.info(f"Correção focal automática (rodada {rounds}/{limit or '∞'})")
+            )
             self.apply_fix("Corrigir somente os findings reproduzíveis do review")
         elif self._auto_approve and self._bypass_human_gates:
-            print(ui.info("Bypass human gates: aplicando on_fail automaticamente"))
+            print(ui.info(f"Bypass human gates: on_fail automático (rodada {rounds})"))
             self.apply_fix(gate_msg)
 
     def _schedule_focal_evidence_review_retry(
@@ -4058,6 +4181,7 @@ class StepRunner:
         # Mantê-la até o avanço permite que um retry após interrupção/orfandade
         # reconstrua exatamente o mesmo prompt, sem vazá-la para o próximo node.
         self.state_mgr.state.last_approval_message = None
+        self._reset_on_fail_rounds(completed_node)
         self.state_mgr.advance(completed_node, next_node, gate_result)
         if focal_review_context is not None:
             state.last_approval_message = focal_review_context
@@ -5217,6 +5341,9 @@ class StepRunner:
         """
         state_dict = {**state.__dict__, "_project_root": self.project_root}
         task_prompt = self._inject_execution_plan(build_task_prompt(node, state_dict))
+        rereview = self._rereview_directive(node)
+        if rereview:
+            task_prompt = f"{rereview}\n\n{task_prompt}"
         # Modo autônomo: com --bypass-human-gates não há humano para responder
         # perguntas. A LLM decide no lugar do humano — responde as perguntas com
         # o default mais razoável, documenta a decisão, e nunca deixa o fluxo

@@ -245,7 +245,23 @@ class TestGraphValidation:
 
         assert graph.get_node("fix").fix_review == "audit"
 
-        with pytest.raises(ValueError, match="fix_review.*nao e review"):
+        # Um gate determinístico também pode fechar a auditoria de um fix: ele
+        # valida o recibo e reexecuta as provas sem gastar um turno de LLM.
+        gate_audit = make_graph(
+            [
+                {
+                    "id": "fix",
+                    "type": "build",
+                    "next": "check",
+                    "fix_review": "check",
+                },
+                {"id": "check", "type": "gate", "next": "done"},
+                {"id": "done", "type": "end"},
+            ]
+        )
+        assert gate_audit.get_node("fix").fix_review == "check"
+
+        with pytest.raises(ValueError, match="fix_review.*nao e review nem gate"):
             make_graph(
                 [
                     {
@@ -254,7 +270,7 @@ class TestGraphValidation:
                         "next": "check",
                         "fix_review": "check",
                     },
-                    {"id": "check", "type": "gate", "next": "done"},
+                    {"id": "check", "type": "document", "next": "done"},
                     {"id": "done", "type": "end"},
                 ]
             )

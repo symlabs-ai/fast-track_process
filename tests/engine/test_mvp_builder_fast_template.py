@@ -83,7 +83,8 @@ def test_fast_path_bounds_llm_turns_and_preserves_human_gates() -> None:
     # para impedir falso aceite baseado em demo seed/mocks.
     assert fast_turns <= 26
     # O gate de plano é determinístico; mockups têm aceite humano próprio.
-    assert sum(node.type == "human_gate" for node in fast.nodes.values()) == 8
+    # O nono é o aceite da rota direct, fora do caminho de produto novo.
+    assert sum(node.type == "human_gate" for node in fast.nodes.values()) == 9
 
 
 def test_visual_brief_and_mockups_are_mandatory_and_model_pinned() -> None:
@@ -274,6 +275,7 @@ def test_parallel_flag_routes_to_one_internal_builder_batch() -> None:
     assert route.condition == "run_route"
     assert route.branches == {
         "validation": "ft.batch.01.plan",
+        "direct": "ft.direct.01.build",
         "_default": "ft.start.route",
     }
     assert graph.get_node("ft.batch.03.foundation").type == "build"
@@ -350,7 +352,11 @@ def test_macro_nodes_keep_deterministic_checkpoints() -> None:
     assert integrated_review.no_pre_seed is True
     assert integrated_review.preserve_outputs_on_reentry is True
     assert integrated_review.on_fail["goto"] == "ft.frontend.05.integrated_fix"
-    assert "primeiro FAIL" in integrated_review.prompt
+    # O early-stop passou a valer só para FAIL P0: achado P1/P2 não interrompe
+    # a auditoria, para que o ciclo possa aprovar com findings (fix forward).
+    integrated_prompt = " ".join(integrated_review.prompt.split())
+    assert "apenas ao observar um FAIL de severidade P0" in integrated_prompt
+    assert "APPROVED_WITH_FINDINGS" in integrated_prompt
     assert "PENDING/NOT_RUN" in integrated_review.prompt
     assert "yaml.safe_load" in integrated_review.prompt
     assert "exclusivamente no gate alcançado com 0 FAIL" in integrated_review.prompt
@@ -594,8 +600,19 @@ def test_stakeholder_gate_presents_the_selected_platform_not_always_web() -> Non
     assert any("URL somente para web" in item for item in checklist)
     assert any("AppImage/aplicativo nativo" in item for item in checklist)
     assert all("pela URL apresentada" not in item for item in checklist)
-    assert stakeholder_fix.next == "ft.platform.01.validate"
-    assert stakeholder_fix.fix_review == "ft.platform.01.validate"
+    # A correção de aceite passa por um re-gate focal (build/suíte/smoke) e só
+    # rebobina a matriz multiplataforma quando há perfis ativos que o fix
+    # invalida — revalidação cara deixou de ser o default.
+    assert stakeholder_fix.next == "gate.stakeholder_fix"
+    focal_gate = graph.get_node("gate.stakeholder_fix")
+    assert focal_gate.type == "gate"
+    assert focal_gate.executor == "python"
+    assert focal_gate.next == "ft.final.03b.revalidation_route"
+    assert graph.get_node("ft.final.03b.revalidation_route").branches == {
+        "true": "ft.platform.01.validate",
+        "false": "ft.final.01.visual_check",
+    }
+    assert stakeholder_fix.fix_review == "gate.stakeholder_fix"
 
 
 def test_composable_platform_validation_is_gated_in_both_routes() -> None:
@@ -668,8 +685,14 @@ def test_batch_review_uses_scope_bound_structured_receipts() -> None:
     assert "docs/test-identity.json" in review.write_scope
     assert "review_outcome_valid" in str(review.validators)
 
+    # O recibo do fix é emitido por quem corrige e verificado por um gate
+    # determinístico: uma segunda review LLM da correção era reavaliada pelos
+    # mesmos validators, custando um turno inteiro sem acrescentar garantia.
+    fix = graph.get_node("ft.batch.06.fix")
+    assert "docs/mvp-batch-fix-review.yml" in fix.outputs
     fix_review = graph.get_node("ft.batch.06b.fix_review")
-    assert "docs/mvp-batch-fix-review.yml" in fix_review.outputs
+    assert fix_review.type == "gate"
+    assert fix_review.executor == "python"
     assert "review_outcome_valid" in str(fix_review.validators)
     assert "'require_approved': True" in str(fix_review.validators)
 
@@ -681,15 +704,16 @@ def test_focal_review_persists_separate_physical_evidence_across_retries() -> No
     graph = load_graph(FAST_PROCESS)
     evidence_dir = "docs/mvp-batch-fix-evidence/"
 
-    review = graph.get_node("ft.batch.06b.fix_review")
+    fix = graph.get_node("ft.batch.06.fix")
     assert evidence_dir in graph.meta["artifact_policy"]["cycle"]
-    assert evidence_dir in review.outputs
-    assert evidence_dir in review.write_scope
-    assert review.preserve_outputs_on_reentry is True
-    assert "arquivo separado" in review.prompt
-    assert "Auto-referenciar o Markdown" in review.prompt
-    assert "Nunca grave certificado" in review.prompt
-    assert "senha" in review.prompt
+    assert evidence_dir in fix.outputs
+    assert evidence_dir.rstrip("/") in fix.write_scope
+    assert fix.preserve_outputs_on_reentry is True
+    fix_prompt = " ".join(fix.prompt.split())
+    assert "arquivo separado" in fix_prompt
+    assert "Auto-referenciar o Markdown" in fix_prompt
+    assert "Nunca grave certificado" in fix_prompt
+    assert "senha" in fix_prompt
 
 
 def test_device_reviews_keep_the_standard_device_profile() -> None:

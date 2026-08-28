@@ -595,7 +595,12 @@ def navigation_reachability(
     )
 
 
-_REVIEW_OUTCOME_VERDICTS = {"APPROVED", "REJECTED"}
+# APPROVED_WITH_FINDINGS é a válvula de "fix forward": o review encontrou
+# defeitos reais, mas nenhum bloqueante. O ciclo segue e os achados viram
+# dívida registrada no backlog, em vez de mais uma rodada review→fix→review.
+_REVIEW_OUTCOME_VERDICTS = {"APPROVED", "APPROVED_WITH_FINDINGS", "REJECTED"}
+_REVIEW_BLOCKING_SEVERITY = "P0"
+_REVIEW_FINDING_SEVERITIES = {"P0", "P1", "P2"}
 
 
 def _review_markdown_verdict(path: Path) -> str:
@@ -604,14 +609,14 @@ def _review_markdown_verdict(path: Path) -> str:
         match.group(1).upper()
         for match in re.finditer(
             r"(?mi)^\s*(?:verdict|veredicto|resultado|result|parecer)\s*"
-            r"[:=-]\s*(APPROVED|REJECTED)\s*$",
+            r"[:=-]\s*(APPROVED_WITH_FINDINGS|APPROVED|REJECTED)\s*$",
             raw,
         )
     ]
     if len(verdicts) != 1:
         raise ValueError(
             "o relatório Markdown deve conter exatamente um veredito explícito "
-            "APPROVED ou REJECTED"
+            "APPROVED, APPROVED_WITH_FINDINGS ou REJECTED"
         )
     return verdicts[0]
 
@@ -623,6 +628,7 @@ def _validate_review_outcome_payload(
     expected_scope_hash: str,
     markdown_file: Path | None,
     require_approved: bool,
+    allow_findings: bool = False,
 ) -> tuple[str, set[str]]:
     if payload.get("schema_version") != 1:
         raise ValueError("schema_version deve ser 1")
@@ -633,9 +639,14 @@ def _validate_review_outcome_payload(
 
     verdict = _navigation_text(payload.get("verdict"), "verdict").upper()
     if verdict not in _REVIEW_OUTCOME_VERDICTS:
-        raise ValueError("verdict deve ser APPROVED ou REJECTED")
-    if require_approved and verdict != "APPROVED":
-        raise ValueError("este gate exige verdict APPROVED")
+        raise ValueError(
+            "verdict deve ser APPROVED, APPROVED_WITH_FINDINGS ou REJECTED"
+        )
+    accepted = {"APPROVED"}
+    if allow_findings:
+        accepted.add("APPROVED_WITH_FINDINGS")
+    if require_approved and verdict not in accepted:
+        raise ValueError("este gate exige verdict " + " ou ".join(sorted(accepted)))
 
     results: dict[str, dict] = {}
     failed_refs: set[str] = set()
@@ -680,6 +691,7 @@ def _validate_review_outcome_payload(
 
     finding_ids: set[str] = set()
     finding_refs: set[str] = set()
+    blocking_ids: set[str] = set()
     findings = _navigation_list(payload.get("findings"), "findings")
     for index, raw_finding in enumerate(findings):
         finding = _navigation_mapping(raw_finding, f"findings[{index}]")
@@ -705,6 +717,22 @@ def _validate_review_outcome_payload(
                 f"finding {finding_id} aponta referências inexistentes: {unknown_refs}"
             )
         _navigation_text(finding.get("summary"), f"findings[{index}].summary")
+        # A severidade é opcional por compatibilidade: sem ela o finding é
+        # tratado como bloqueante, preservando a semântica histórica de
+        # REJECTED. Fix forward exige classificação explícita.
+        raw_severity = finding.get("severity")
+        severity = (
+            _navigation_text(raw_severity, f"findings[{index}].severity").upper()
+            if raw_severity is not None
+            else _REVIEW_BLOCKING_SEVERITY
+        )
+        if severity not in _REVIEW_FINDING_SEVERITIES:
+            raise ValueError(
+                f"findings[{index}].severity deve ser "
+                + ", ".join(sorted(_REVIEW_FINDING_SEVERITIES))
+            )
+        if severity == _REVIEW_BLOCKING_SEVERITY:
+            blocking_ids.add(finding_id)
         evidence = _navigation_list(
             finding.get("evidence"), f"findings[{index}].evidence"
         )
@@ -729,10 +757,17 @@ def _validate_review_outcome_payload(
         if findings:
             raise ValueError("verdict APPROVED exige findings vazio")
     else:
+        # APPROVED_WITH_FINDINGS e REJECTED compartilham a coerência entre
+        # falhas e findings; divergem apenas na severidade admitida.
+        if pending_refs and verdict == "APPROVED_WITH_FINDINGS":
+            raise ValueError(
+                "verdict APPROVED_WITH_FINDINGS contém resultados pendentes: "
+                f"{sorted(pending_refs)}"
+            )
         if not failed_refs:
-            raise ValueError("verdict REJECTED exige ao menos um resultado FAIL")
+            raise ValueError(f"verdict {verdict} exige ao menos um resultado FAIL")
         if not findings:
-            raise ValueError("verdict REJECTED exige findings acionáveis")
+            raise ValueError(f"verdict {verdict} exige findings acionáveis")
         uncovered_failures = sorted(failed_refs - finding_refs)
         findings_without_failure = sorted(finding_refs - failed_refs)
         if uncovered_failures or findings_without_failure:
@@ -740,6 +775,16 @@ def _validate_review_outcome_payload(
                 "findings e resultados FAIL divergem; "
                 f"falhas_sem_finding={uncovered_failures}, "
                 f"findings_sem_falha={findings_without_failure}"
+            )
+        if verdict == "APPROVED_WITH_FINDINGS" and blocking_ids:
+            raise ValueError(
+                "verdict APPROVED_WITH_FINDINGS não admite findings P0: "
+                f"{sorted(blocking_ids)}"
+            )
+        if verdict == "REJECTED" and not blocking_ids:
+            raise ValueError(
+                "verdict REJECTED exige ao menos um finding P0; classifique o "
+                "achado como P1/P2 e use APPROVED_WITH_FINDINGS para seguir"
             )
 
     if markdown_file is not None:
@@ -760,6 +805,7 @@ def _load_review_outcome(
     scope_file: Path,
     markdown_path: str | None,
     require_approved: bool,
+    allow_findings: bool = False,
 ) -> tuple[str, set[str]]:
     receipt_file = _navigation_repo_file(root, path, "review outcome")
     markdown_file = (
@@ -777,6 +823,7 @@ def _load_review_outcome(
         expected_scope_hash=hashlib.sha256(scope_file.read_bytes()).hexdigest(),
         markdown_file=markdown_file,
         require_approved=require_approved,
+        allow_findings=allow_findings,
     )
 
 
@@ -787,9 +834,15 @@ def review_outcome_valid(
     scope_exclude_pattern: str | None = None,
     markdown_path: str | None = None,
     require_approved: bool = False,
+    allow_findings: bool = False,
     project_root: str = ".",
 ) -> tuple[bool, str]:
-    """Validate a scope-bound, deterministic review verdict and finding set."""
+    """Validate a scope-bound, deterministic review verdict and finding set.
+
+    ``allow_findings`` habilita fix forward: um gate que exige aprovação passa
+    a aceitar APPROVED_WITH_FINDINGS (defeitos reais, nenhum bloqueante), em
+    vez de devolver o ciclo a mais uma rodada review→fix→review.
+    """
 
     root = Path(project_root).resolve()
     try:
@@ -806,12 +859,82 @@ def review_outcome_valid(
             scope_file=scope_file,
             markdown_path=markdown_path,
             require_approved=require_approved,
+            allow_findings=allow_findings,
         )
     except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
         return False, f"review_outcome_valid FAIL: {exc}"
     return True, (
         "review_outcome_valid: "
         f"{len(expected_refs)} refs, {len(finding_ids)} findings, verdict={verdict}"
+    )
+
+
+def review_findings_tracked(
+    review_paths: list | str,
+    backlog_path: str = "docs/PROJECT_BACKLOG.md",
+    project_root: str = ".",
+) -> tuple[bool, str]:
+    """Exige que findings não bloqueantes aceitos virem dívida registrada.
+
+    Contrapartida determinística do fix forward: um review pode aprovar com
+    findings P1/P2 e o ciclo segue, mas cada finding aceito precisa aparecer
+    no backlog do produto. Sem isto, "seguir em frente" viraria "esquecer".
+    """
+
+    root = Path(project_root).resolve()
+    if isinstance(review_paths, str):
+        candidates = [review_paths]
+    else:
+        candidates = [str(item) for item in review_paths]
+
+    accepted: dict[str, str] = {}
+    try:
+        for candidate in candidates:
+            receipt = root / candidate
+            if not receipt.is_file():
+                # Rotas condicionais podem não produzir todos os receipts.
+                continue
+            payload = yaml.safe_load(
+                receipt.read_text(encoding="utf-8", errors="strict")
+            )
+            if not isinstance(payload, dict):
+                raise ValueError(f"{candidate}: receipt de review inválido")
+            verdict = str(payload.get("verdict") or "").strip().upper()
+            if verdict != "APPROVED_WITH_FINDINGS":
+                continue
+            for index, raw in enumerate(payload.get("findings") or []):
+                if not isinstance(raw, dict):
+                    raise ValueError(f"{candidate}: findings[{index}] inválido")
+                finding_id = str(raw.get("id") or "").strip().upper()
+                if not finding_id:
+                    raise ValueError(f"{candidate}: findings[{index}].id vazio")
+                accepted[finding_id] = candidate
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+        return False, f"review_findings_tracked FAIL: {exc}"
+
+    if not accepted:
+        return True, "review_findings_tracked: nenhum finding aceito a rastrear"
+
+    backlog_file = root / backlog_path
+    if not backlog_file.exists():
+        return False, (
+            f"review_findings_tracked FAIL: {backlog_path} ausente, mas "
+            f"{len(accepted)} finding(s) foram aceitos como dívida"
+        )
+    backlog_text = backlog_file.read_text(encoding="utf-8", errors="ignore").upper()
+    missing = sorted(
+        f"{finding_id} ({origin})"
+        for finding_id, origin in accepted.items()
+        if finding_id not in backlog_text
+    )
+    if missing:
+        return False, (
+            "review_findings_tracked FAIL: findings aceitos ausentes do backlog: "
+            + ", ".join(missing[:8])
+        )
+    return True, (
+        f"review_findings_tracked: {len(accepted)} finding(s) aceito(s) "
+        "rastreado(s) no backlog"
     )
 
 
@@ -849,8 +972,8 @@ def review_chain_approved(
                 "fix scope e fix review devem existir juntos para comprovar o delta"
             )
         if not has_fix_scope:
-            if verdict == "APPROVED":
-                return True, "review_chain_approved: review original aprovado"
+            if verdict in {"APPROVED", "APPROVED_WITH_FINDINGS"}:
+                return True, f"review_chain_approved: review original {verdict}"
             raise ValueError("review rejeitado ainda não possui fix review aprovado")
 
         fix_scope_file = _navigation_repo_file(root, fix_scope_path, "fix review scope")

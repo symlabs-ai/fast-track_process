@@ -386,6 +386,26 @@ def fix_gate(message: str, feedback: str, goto: str) -> str:
     return "\n".join(lines)
 
 
+def on_fail_escalation(node_id: str, rounds: int, limit: int, goto: str) -> str:
+    """Card do circuit breaker: o loop de correção esgotou o orçamento."""
+    w = 54
+    sep = f"  {DIM}{'─' * (w - 2)}{RESET}"
+    return "\n".join(
+        [
+            f"\n{BOLD_YELLOW}  ⚠ Loop de correção escalado ao stakeholder{RESET}",
+            sep,
+            f"  {YELLOW}{node_id} reprovou {rounds}x (teto: {limit} rodadas){RESET}",
+            f"  {DIM}Correção automática suspensa — o loop não convergiu.{RESET}",
+            sep,
+            f"  {DIM}Destino após decisão: {goto}{RESET}",
+            sep,
+            f'  Corrigir com direção:  {BOLD}ft fix "sua instrução"{RESET}',
+            f"  Aceitar e seguir:      {BOLD}ft approve{RESET}",
+            f"  Cancelar o ciclo:      {BOLD}ft reject{RESET}",
+        ]
+    )
+
+
 def process_complete(steps_done: int | str, steps_total: int | str) -> str:
     w = 54
     line = "━" * w

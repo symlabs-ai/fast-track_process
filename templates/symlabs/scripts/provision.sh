@@ -157,9 +157,11 @@ except (OSError, tomllib.TOMLDecodeError) as exc:
     raise SystemExit(1)
 
 provider = (data.get("model_providers") or {}).get("symgateway_openai_dev") or {}
+# O contrato validado é a fiação do gateway (provider, base_url, chaves e
+# protocolo). Defaults de modelo/effort são preferência do usuário: um perfil
+# com `model` customizado continua válido e não deve bloquear o ft init.
 expected = {
     "model_provider": "symgateway_openai_dev",
-    "model": "gpt-5.6-sol",
     "provider.name": "SymGateway OpenAI OAuth — Symlabs DEV",
     "provider.base_url": base_url,
     "provider.env_key": "SYMGATEWAY_API_KEY",
@@ -169,7 +171,6 @@ expected = {
 }
 actual = {
     "model_provider": data.get("model_provider"),
-    "model": data.get("model"),
     "provider.name": provider.get("name"),
     "provider.base_url": provider.get("base_url"),
     "provider.env_key": provider.get("env_key"),
@@ -178,6 +179,9 @@ actual = {
     "provider.supports_websockets": provider.get("supports_websockets"),
 }
 mismatches = [key for key, value in expected.items() if actual.get(key) != value]
+model = data.get("model")
+if not mismatches and model and model != "gpt-5.6-sol":
+    print(f"  → perfil Codex mantém model default local: {model}")
 if mismatches:
     print(
         f"  ✗ Perfil Codex existente incompatível em {path}: " + ", ".join(mismatches),

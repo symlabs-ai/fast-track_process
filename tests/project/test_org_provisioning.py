@@ -250,6 +250,105 @@ def test_symlabs_template_configures_codex_and_claude_with_dedicated_key(
     assert "--header @" in curl_argv
 
 
+def test_symlabs_accepts_existing_profile_with_custom_model_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Perfil Codex com `model` customizado é preferência, não quebra de contrato.
+
+    O validador só exige a fiação do gateway (provider, base_url, chaves e
+    protocolo); defaults de modelo/effort evoluem na máquina do usuário e não
+    podem bloquear o ft init nem ser sobrescritos.
+    """
+    project = tmp_path / "demo-project"
+    project.mkdir()
+    (project / ".gitignore").write_text(".env\n", encoding="utf-8")
+    config = tmp_path / "config"
+    _org_config(config, "symlabs")
+    binary, log = _fake_tools(tmp_path)
+    _configure(
+        monkeypatch,
+        binary=binary,
+        log=log,
+        config_root=config,
+        project_name=project.name,
+    )
+
+    codex_home = binary.parent / "codex-home"
+    codex_home.mkdir()
+    profile_path = codex_home / "symgateway-dev.config.toml"
+    existing_profile = (
+        'model_provider = "symgateway_openai_dev"\n'
+        'model = "gpt-5.6-terra"\n'
+        'model_reasoning_effort = "high"\n'
+        "\n"
+        "[model_providers.symgateway_openai_dev]\n"
+        'name = "SymGateway OpenAI OAuth — Symlabs DEV"\n'
+        'base_url = "https://gateway.example.invalid/p/openai/v1"\n'
+        'env_key = "SYMGATEWAY_API_KEY"\n'
+        'http_headers = { "X-Provider-Account" = "openai-6148cb60" }\n'
+        'env_http_headers = { "X-Project-Slug" = "SYMGATEWAY_PROJECT_SLUG" }\n'
+        'wire_api = "responses"\n'
+        "supports_websockets = false\n"
+    )
+    profile_path.write_text(existing_profile, encoding="utf-8")
+
+    execute_and_record_init_template(
+        TemplateCatalog().get_init("symlabs"),
+        project,
+    )
+
+    assert "symlabs" in read_init_marker(project)
+    # O perfil customizado permanece intacto — nem sobrescrito, nem "corrigido".
+    assert profile_path.read_text(encoding="utf-8") == existing_profile
+
+
+def test_symlabs_rejects_existing_profile_with_broken_gateway_wiring(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = tmp_path / "demo-project"
+    project.mkdir()
+    (project / ".gitignore").write_text(".env\n", encoding="utf-8")
+    config = tmp_path / "config"
+    _org_config(config, "symlabs")
+    binary, log = _fake_tools(tmp_path)
+    _configure(
+        monkeypatch,
+        binary=binary,
+        log=log,
+        config_root=config,
+        project_name=project.name,
+    )
+
+    codex_home = binary.parent / "codex-home"
+    codex_home.mkdir()
+    profile_path = codex_home / "symgateway-dev.config.toml"
+    profile_path.write_text(
+        'model_provider = "symgateway_openai_dev"\n'
+        "\n"
+        "[model_providers.symgateway_openai_dev]\n"
+        'name = "SymGateway OpenAI OAuth — Symlabs DEV"\n'
+        'base_url = "https://outro-gateway.example.invalid/v1"\n'
+        'env_key = "OUTRA_CHAVE"\n'
+        'wire_api = "responses"\n'
+        "supports_websockets = false\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InitScriptError) as excinfo:
+        execute_and_record_init_template(
+            TemplateCatalog().get_init("symlabs"),
+            project,
+        )
+    message = str(excinfo.value)
+    assert "incompatível" in message
+    assert "provider.base_url" in message
+    assert "provider.env_key" in message
+    # Preferências de modelo não aparecem como quebra de contrato.
+    assert "model," not in message and not message.rstrip().endswith("model")
+
+
 @pytest.mark.parametrize("status", ["401", "403", "500", "000"])
 def test_gateway_registration_failure_blocks_marker_and_local_routing(
     tmp_path: Path,

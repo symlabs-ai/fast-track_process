@@ -4,6 +4,12 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [v0.21.1] - 2026-08-25
+
+- fix: perfil Codex com `model` customizado é aceito pelo provision do
+  template `symlabs` — o validador exige apenas a fiação do gateway; o
+  perfil existente é mantido intacto e fiação quebrada continua bloqueando
+
 ## [v0.21.0] - 2026-08-25
 
 ### `ft analyse-template` mede o determinismo estático de um processo

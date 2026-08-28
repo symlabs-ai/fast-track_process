@@ -3870,6 +3870,36 @@ def cmd_process_update(args):
         sys.exit(1)
 
 
+def _maybe_analyse_cycle_before_close(args, runner) -> None:
+    """Analisa o custo do ciclo antes do close, conforme -y / -n / pergunta.
+
+    Default: pergunta. ``-y`` analisa sem perguntar, ``-n`` pula sem perguntar.
+    Sem terminal interativo não há a quem perguntar: analisa, porque o relatório
+    é barato, somente-leitura e é justamente o que se perde ao encerrar.
+    """
+    from ft.engine import ui as _ui
+
+    if getattr(args, "analyse_no", False):
+        return
+
+    cycle_root = Path(runner.project_root).resolve()
+    cycle_name = cycle_root.name
+
+    if not getattr(args, "analyse_yes", False):
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
+        if interactive and not _confirm(
+            "Analisar o custo deste ciclo antes de encerrar?"
+        ):
+            return
+
+    try:
+        if not render_cycle_analysis(cycle_root, cycle_name):
+            print(_ui.warn("Sem telemetria para analisar neste ciclo"))
+    except (OSError, UnicodeError, ValueError, KeyError) as exc:
+        # A análise é informativa: nunca pode impedir o encerramento.
+        print(_ui.warn(f"Análise do ciclo indisponível: {exc}"))
+
+
 def _cmd_close_locked_body(args, merge_lock):
     """Encerra o ciclo ativo: merge interativo + remove worktree + limpa branch."""
     import subprocess as _sp
@@ -3893,6 +3923,11 @@ def _cmd_close_locked_body(args, merge_lock):
     close_policy = graph_meta.get("close_policy", {})
     if not isinstance(close_policy, dict):
         close_policy = {}
+
+    # A análise roda ANTES do merge/remoção: a worktree ainda existe e o trace
+    # vivo é mais rico que o run-report arquivado. Encerrar um ciclo sem olhar
+    # o que ele custou é como fechar a obra sem ler a fatura.
+    _maybe_analyse_cycle_before_close(args, runner)
 
     # Verificar se o ciclo terminou
     terminal = {"done", "completed"}
@@ -4429,84 +4464,37 @@ def cmd_validate(args):
     sys.exit(0 if overall_pass else 1)
 
 
-def cmd_analyse_cycle(args):
-    """Custo empírico de um ciclo executado: loops, retrabalho e tokens."""
-    import json as _json
+def render_cycle_analysis(
+    cycle_root: Path,
+    cycle_name: str,
+    *,
+    state_source: Path | None = None,
+) -> bool:
+    """Imprime o custo empírico de um ciclo. False quando não há telemetria."""
+    import yaml as _yaml
 
     from ft.engine import ui as _ui
     from ft.engine.cycle_analysis import analyse_run_report
 
-    root = find_project_root().resolve()
-    record = _select_cycle_for_command(root, getattr(args, "cycle", None))
-    # O trace vive na worktree do ciclo, não na raiz do projeto: um ciclo
-    # isolado nunca escreve telemetria no checkout dono.
-    cycle_root = Path(
-        getattr(record, "worktree_path", None)
-        or getattr(record, "worktree", None)
-        or root
-    ).resolve()
-
     report = _cycle_run_report(cycle_root) or _cycle_live_run_report(cycle_root) or {}
     if not report:
-        print(
-            f"ERRO: nenhum trace ou run-report encontrado em {cycle_root}. "
-            "O ciclo precisa ter executado ao menos um node."
-        )
-        sys.exit(1)
+        return False
 
     state_metrics: dict = {}
-    state_path = cycle_root / "state" / "engine_state.yml"
+    state_path = (state_source or cycle_root) / "state" / "engine_state.yml"
     if state_path.is_file():
         try:
-            payload = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+            payload = _yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
             if isinstance(payload, dict) and isinstance(payload.get("metrics"), dict):
                 state_metrics = payload["metrics"]
-        except (OSError, UnicodeError, yaml.YAMLError):
+        except (OSError, UnicodeError, _yaml.YAMLError):
             state_metrics = {}
 
     analysis = analyse_run_report(report, state_metrics)
-
-    if getattr(args, "json", False):
-        payload = {
-            "cycle": getattr(record, "name", None) or cycle_root.name,
-            "run_id": analysis.run_id,
-            "wall_ms": analysis.wall_ms,
-            "llm_calls": analysis.llm_calls,
-            "output_tokens": analysis.output_tokens,
-            "input_tokens": analysis.input_tokens,
-            "first_pass_rate": round(analysis.first_pass_rate, 4),
-            "rework_ratio": round(analysis.rework_ratio, 4),
-            "total_executions": analysis.total_executions,
-            "total_reexecutions": analysis.total_reexecutions,
-            "on_fail_rounds": analysis.on_fail_rounds,
-            "nodes": {
-                node.id: {
-                    "executions": node.executions,
-                    "reexecutions": node.reexecutions,
-                    "failures": node.failures,
-                    "duration_ms": node.duration_ms,
-                    "llm_calls": node.llm_calls,
-                    "output_tokens": node.output_tokens,
-                    "input_tokens": node.input_tokens,
-                }
-                for node in sorted(
-                    analysis.nodes.values(),
-                    key=lambda item: item.output_tokens,
-                    reverse=True,
-                )
-            },
-            "loops": [node.id for node in analysis.loops()],
-            "silent_validation_layers": [node.id for node in analysis.silent_layers()],
-        }
-        print(_json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-        return
-
-    cycle_name = getattr(record, "name", None) or cycle_root.name
     print()
     print(_ui.header(f"Custo do ciclo — {cycle_name}"))
     print(_ui.dim(str(cycle_root)))
     print()
-
     if analysis.wall_ms:
         print(f"  Duração:        {analysis.wall_ms / 60000:.1f} min")
     print(f"  Chamadas LLM:   {analysis.llm_calls}")
@@ -4555,6 +4543,100 @@ def cmd_analyse_cycle(args):
             )
         )
     print()
+    return True
+
+
+def cmd_analyse_cycle(args):
+    """Custo empírico de um ciclo executado: loops, retrabalho e tokens."""
+    import json as _json
+
+    from ft.engine.cycle_analysis import analyse_run_report
+
+    root = find_project_root().resolve()
+    requested = getattr(args, "cycle", None)
+
+    # Um ciclo encerrado perde a worktree, mas o run-report é arquivado em
+    # .ft/cycles/<nome>/ — analisar custo depois do close é justamente o caso
+    # de uso principal, então o arquivo é procurado antes de exigir um ciclo
+    # aberto.
+    archived: Path | None = None
+    if requested:
+        candidate = paths.project_cycles_dir(root) / str(requested)
+        if (candidate / "run-report.json").is_file():
+            archived = candidate
+
+    if archived is not None:
+        cycle_root = archived
+        cycle_name = str(requested)
+        state_source = archived
+    else:
+        record = _select_cycle_for_command(root, requested)
+        cycle_root = Path(
+            getattr(record, "worktree_path", None)
+            or getattr(record, "worktree", None)
+            or root
+        ).resolve()
+        cycle_name = getattr(record, "name", None) or cycle_root.name
+        state_source = cycle_root
+
+    report = _cycle_run_report(cycle_root) or _cycle_live_run_report(cycle_root) or {}
+    if not report:
+        print(
+            f"ERRO: nenhum trace ou run-report encontrado em {cycle_root}. "
+            "O ciclo precisa ter executado ao menos um node."
+        )
+        sys.exit(1)
+
+    state_metrics: dict = {}
+    state_path = state_source / "state" / "engine_state.yml"
+    if state_path.is_file():
+        try:
+            payload = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+            if isinstance(payload, dict) and isinstance(payload.get("metrics"), dict):
+                state_metrics = payload["metrics"]
+        except (OSError, UnicodeError, yaml.YAMLError):
+            state_metrics = {}
+
+    analysis = analyse_run_report(report, state_metrics)
+
+    if getattr(args, "json", False):
+        payload = {
+            "cycle": cycle_name,
+            "run_id": analysis.run_id,
+            "wall_ms": analysis.wall_ms,
+            "llm_calls": analysis.llm_calls,
+            "output_tokens": analysis.output_tokens,
+            "input_tokens": analysis.input_tokens,
+            "first_pass_rate": round(analysis.first_pass_rate, 4),
+            "rework_ratio": round(analysis.rework_ratio, 4),
+            "total_executions": analysis.total_executions,
+            "total_reexecutions": analysis.total_reexecutions,
+            "on_fail_rounds": analysis.on_fail_rounds,
+            "nodes": {
+                node.id: {
+                    "executions": node.executions,
+                    "reexecutions": node.reexecutions,
+                    "failures": node.failures,
+                    "duration_ms": node.duration_ms,
+                    "llm_calls": node.llm_calls,
+                    "output_tokens": node.output_tokens,
+                    "input_tokens": node.input_tokens,
+                }
+                for node in sorted(
+                    analysis.nodes.values(),
+                    key=lambda item: item.output_tokens,
+                    reverse=True,
+                )
+            },
+            "loops": [node.id for node in analysis.loops()],
+            "silent_validation_layers": [node.id for node in analysis.silent_layers()],
+        }
+        print(_json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
+    if not render_cycle_analysis(cycle_root, cycle_name, state_source=state_source):
+        print(f"ERRO: telemetria ausente em {cycle_root}")
+        sys.exit(1)
 
 
 def cmd_analyse_template(args):
@@ -6830,6 +6912,21 @@ def main():
     )
     cl.add_argument(
         "--cycle", help="Ciclo específico a encerrar (ex: cycle-12-f01-busca)"
+    )
+    cl_analysis = cl.add_mutually_exclusive_group()
+    cl_analysis.add_argument(
+        "-y",
+        "--analyse",
+        action="store_true",
+        dest="analyse_yes",
+        help="Analisar o custo do ciclo antes de encerrar, sem perguntar",
+    )
+    cl_analysis.add_argument(
+        "-n",
+        "--no-analyse",
+        action="store_true",
+        dest="analyse_no",
+        help="Encerrar sem analisar o custo do ciclo e sem perguntar",
     )
 
     # process-candidates

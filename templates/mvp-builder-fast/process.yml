@@ -4169,9 +4169,11 @@ nodes:
     outputs:
       - docs/retro.md
       - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
     write_scope:
       - docs/retro.md
       - docs/PROJECT_BACKLOG.md
+      - docs/FEATURES.md
     prompt: |
       Consolide o encerramento da rota direct em um único turn:
       1. Gere docs/retro.md a partir do log do ciclo, distinguindo PASS,
@@ -4184,6 +4186,9 @@ nodes:
          citando o id do finding (ex.: DR-002) no título ou nas notas, com
          prioridade derivada da severidade (P1 → P1, P2 → P2) e status
          deferred. Foi assim que o ciclo pôde seguir sem corrigir.
+      4. Reconcilie docs/FEATURES.md: somente PB-* done/accepted criam ou
+         evoluem FEAT-*; preserve IDs e histórico. A close policy do processo
+         exige esse catálogo — sem ele o ciclo não encerra.
       Encerre DONE.
     validators:
       - file_exists: docs/retro.md
@@ -4194,6 +4199,13 @@ nodes:
       - review_findings_tracked:
           review_paths:
             - docs/direct-review.yml
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - file_exists: docs/FEATURES.md
+      - features_catalog_valid:
+          path: docs/FEATURES.md
+          backlog_path: docs/PROJECT_BACKLOG.md
+      - implemented_backlog_covered_by_features:
+          features_path: docs/FEATURES.md
           backlog_path: docs/PROJECT_BACKLOG.md
     next: ft.end
 

@@ -3870,6 +3870,116 @@ def cmd_process_update(args):
         sys.exit(1)
 
 
+def _present_cycle_improvements(cycle_root: Path, analysis) -> None:
+    """Apresenta achados derivados da telemetria e registra a decisão do operador.
+
+    Nada é aplicado aqui. A derivação é mecânica (vem dos números do trace) e a
+    disposição de cada achado — aplicar no fork local, promover ao catálogo
+    global ou descartar — é sempre escolha de quem conduz o ciclo. Candidato
+    global jamais é aplicado automaticamente: mexer no catálogo afeta todos os
+    projetos, e essa decisão não é de um comando de encerramento.
+    """
+    import yaml as _yaml
+
+    from ft.engine import ui as _ui
+    from ft.engine.cycle_improvements import derive_candidates, next_improvement_ids
+    from ft.engine.process_improvements import DEFAULT_REVIEW_PATH
+
+    candidates = derive_candidates(analysis)
+    if not candidates:
+        print(_ui.success("Telemetria sem achados de processo neste ciclo"))
+        return
+
+    print()
+    print(f"  {len(candidates)} achado(s) de processo derivado(s) da telemetria:")
+    print()
+    for index, candidate in enumerate(candidates, start=1):
+        print(f"  {index}. {candidate.title}")
+        for line in _wrap_plain(candidate.rationale, width=68):
+            print(_ui.dim(f"  {line}"))
+        for evidence in candidate.evidence:
+            print(_ui.dim(f"  evidência: {evidence['detail']}"))
+        print()
+
+    interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
+    if not interactive:
+        print(
+            _ui.info(
+                "Sem terminal interativo: achados apenas exibidos. Rode "
+                "`ft analyse-cycle` e registre a disposição com "
+                "`ft process-candidates` quando decidir."
+            )
+        )
+        return
+
+    review_path = cycle_root / DEFAULT_REVIEW_PATH
+    existing_ids: list[str] = []
+    payload: dict = {"schema_version": 1, "improvements": []}
+    if review_path.is_file():
+        try:
+            loaded = _yaml.safe_load(review_path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict) and isinstance(
+                loaded.get("improvements"), list
+            ):
+                payload = loaded
+                existing_ids = [
+                    str(item.get("id"))
+                    for item in loaded["improvements"]
+                    if isinstance(item, dict)
+                ]
+        except (OSError, UnicodeError, _yaml.YAMLError):
+            pass
+
+    print(
+        "  Para cada achado: [l] registrar como melhoria local, "
+        "[g] propor ao catálogo global, [d] descartar, [s] sair"
+    )
+    ids = next_improvement_ids(existing_ids, len(candidates))
+    recorded = 0
+    for candidate, improvement_id in zip(candidates, ids):
+        try:
+            choice = input(f"  {candidate.title[:60]} [l/g/d/s]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt, OSError):
+            print()
+            break
+        if choice == "s":
+            break
+        if choice not in {"l", "g"}:
+            continue
+        record = candidate.as_record(improvement_id)
+        record["classification"] = "local" if choice == "l" else "global_candidate"
+        payload["improvements"].append(record)
+        recorded += 1
+
+    if not recorded:
+        print(_ui.dim("  Nenhum achado registrado."))
+        return
+
+    try:
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        review_path.write_text(
+            _yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(_ui.warn(f"Não foi possível gravar {DEFAULT_REVIEW_PATH}: {exc}"))
+        return
+
+    print(_ui.success(f"{recorded} achado(s) registrado(s) em {DEFAULT_REVIEW_PATH}"))
+    print(
+        _ui.info(
+            "Candidato global exige revisão manual no engine antes de virar "
+            "template; registre a disposição com `ft process-candidates`."
+        )
+    )
+
+
+def _wrap_plain(text: str, width: int = 68) -> list[str]:
+    import textwrap
+
+    return textwrap.wrap(" ".join(str(text).split()), width=width) or [""]
+
+
 def _maybe_analyse_cycle_before_close(args, runner) -> None:
     """Analisa o custo do ciclo antes do close, conforme -y / -n / pergunta.
 
@@ -3893,8 +4003,11 @@ def _maybe_analyse_cycle_before_close(args, runner) -> None:
             return
 
     try:
-        if not render_cycle_analysis(cycle_root, cycle_name):
+        analysis = render_cycle_analysis(cycle_root, cycle_name)
+        if analysis is None:
             print(_ui.warn("Sem telemetria para analisar neste ciclo"))
+            return
+        _present_cycle_improvements(cycle_root, analysis)
     except (OSError, UnicodeError, ValueError, KeyError) as exc:
         # A análise é informativa: nunca pode impedir o encerramento.
         print(_ui.warn(f"Análise do ciclo indisponível: {exc}"))
@@ -4469,8 +4582,8 @@ def render_cycle_analysis(
     cycle_name: str,
     *,
     state_source: Path | None = None,
-) -> bool:
-    """Imprime o custo empírico de um ciclo. False quando não há telemetria."""
+):
+    """Imprime o custo empírico de um ciclo. None quando não há telemetria."""
     import yaml as _yaml
 
     from ft.engine import ui as _ui
@@ -4478,7 +4591,7 @@ def render_cycle_analysis(
 
     report = _cycle_run_report(cycle_root) or _cycle_live_run_report(cycle_root) or {}
     if not report:
-        return False
+        return None
 
     state_metrics: dict = {}
     state_path = (state_source or cycle_root) / "state" / "engine_state.yml"
@@ -4543,7 +4656,7 @@ def render_cycle_analysis(
             )
         )
     print()
-    return True
+    return analysis
 
 
 def cmd_analyse_cycle(args):
@@ -4634,7 +4747,7 @@ def cmd_analyse_cycle(args):
         print(_json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return
 
-    if not render_cycle_analysis(cycle_root, cycle_name, state_source=state_source):
+    if render_cycle_analysis(cycle_root, cycle_name, state_source=state_source) is None:
         print(f"ERRO: telemetria ausente em {cycle_root}")
         sys.exit(1)
 

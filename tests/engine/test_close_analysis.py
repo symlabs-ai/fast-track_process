@@ -22,6 +22,13 @@ def _args(**kw) -> Namespace:
     return Namespace(**base)
 
 
+@pytest.fixture(autouse=True)
+def _quiet_improvements():
+    """Os achados têm testes próprios; aqui só interessa o fluxo do close."""
+    with patch.object(cli_main, "_present_cycle_improvements"):
+        yield
+
+
 @pytest.fixture
 def runner(tmp_path):
     return _Runner(tmp_path / "cycle-07-demo")
@@ -39,7 +46,9 @@ def test_dash_n_skips_without_asking(runner):
 
 def test_dash_y_analyses_without_asking(runner):
     with (
-        patch.object(cli_main, "render_cycle_analysis", return_value=True) as render,
+        patch.object(
+            cli_main, "render_cycle_analysis", return_value=object()
+        ) as render,
         patch.object(cli_main, "_confirm") as confirm,
     ):
         cli_main._maybe_analyse_cycle_before_close(_args(analyse_yes=True), runner)
@@ -49,7 +58,9 @@ def test_dash_y_analyses_without_asking(runner):
 
 def test_default_asks_and_honours_yes(runner):
     with (
-        patch.object(cli_main, "render_cycle_analysis", return_value=True) as render,
+        patch.object(
+            cli_main, "render_cycle_analysis", return_value=object()
+        ) as render,
         patch.object(cli_main, "_confirm", return_value=True) as confirm,
         patch("sys.stdin") as stdin,
     ):
@@ -73,7 +84,9 @@ def test_default_asks_and_honours_no(runner):
 def test_non_interactive_analyses_without_hanging(runner):
     """Sem TTY não há a quem perguntar: analisa em vez de travar num input()."""
     with (
-        patch.object(cli_main, "render_cycle_analysis", return_value=True) as render,
+        patch.object(
+            cli_main, "render_cycle_analysis", return_value=object()
+        ) as render,
         patch.object(cli_main, "_confirm") as confirm,
         patch("sys.stdin") as stdin,
     ):
@@ -92,6 +105,6 @@ def test_analysis_failure_never_blocks_the_close(runner, capsys):
 
 
 def test_missing_telemetry_warns_but_proceeds(runner, capsys):
-    with patch.object(cli_main, "render_cycle_analysis", return_value=False):
+    with patch.object(cli_main, "render_cycle_analysis", return_value=None):
         cli_main._maybe_analyse_cycle_before_close(_args(analyse_yes=True), runner)
     assert "Sem telemetria" in capsys.readouterr().out

@@ -330,6 +330,17 @@ leitura, e é justamente o que se perde ao encerrar. Falha na análise nunca
 impede o encerramento. Ciclos já encerrados continuam analisáveis — o
 `run-report.json` é arquivado em `.ft/cycles/<nome>/`.
 
+Depois da análise, o close deriva **achados de processo** dos próprios números
+— node que repetiu e quanto custou, camada de validação que não reprovou nada,
+first-pass abaixo do piso — e apresenta cada um para decisão: registrar como
+melhoria `local`, propor como `global_candidate` ou descartar. A derivação é
+mecânica e reproduzível: parte do trace, não de julgamento do modelo. **Nada é
+aplicado automaticamente**; os achados escolhidos são gravados em
+`docs/process-improvements.yml` no schema de [Governança de melhorias do
+processo](#governança-de-melhorias-do-processo), com os critérios de promoção
+global todos em `false` — quem promove ao catálogo precisa verificá-los
+deliberadamente. Sem terminal interativo os achados são apenas exibidos.
+
 ### Custo do loop de correção
 
 Um ciclo `review → fix → review` sem teto é a maior fonte de custo em processos

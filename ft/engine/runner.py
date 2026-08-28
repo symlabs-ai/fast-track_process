@@ -3998,6 +3998,21 @@ class StepRunner:
         state.blocked_reason = None
         self.state_mgr.save()
 
+        if node.type == "review" and self._is_receipt_integrity_failure(feedback):
+            if self._schedule_focal_evidence_review_retry(node, feedback):
+                self._log_event(
+                    "review_receipt_retry",
+                    f"Recibo de review malformado ({node.id})",
+                    "RETRY",
+                    "defeito no relatório, não no produto; refazendo o review",
+                )
+                return
+            self.state_mgr.block(
+                "recibo de review malformado além do limite de retries; "
+                f"o produto não foi encaminhado ao fix: {feedback[:300]}"
+            )
+            return
+
         rounds = self._record_on_fail_round(node.id)
         limit = self._on_fail_round_limit(node)
         self.state_mgr.save()
@@ -4023,6 +4038,37 @@ class StepRunner:
         elif self._auto_approve and self._bypass_human_gates:
             print(ui.info(f"Bypass human gates: on_fail automático (rodada {rounds})"))
             self.apply_fix(gate_msg)
+
+    # Falhas que descrevem um recibo malformado — o defeito está no relatório
+    # do review, não no software auditado. Encaminhá-las ao node que corrige
+    # produto é gastar um turno caro em algo que ele nem pode consertar: o
+    # relatório costuma estar fora do seu write_scope.
+    _RECEIPT_INTEGRITY_MARKERS = (
+        "deve conter exatamente um veredito",
+        "schema_version deve ser",
+        "scope_sha256",
+        "cobertura do review divergente",
+        "veredito do Markdown diverge",
+        "review outcome",
+        "severity deve ser",
+        "exige ao menos um finding P0",
+        "não admite findings P0",
+        "findings e resultados FAIL divergem",
+        "evidence não pode ser vazio",
+        "refs não pode ser vazio",
+        "resultado duplicado",
+        "finding duplicado",
+    )
+
+    def _is_receipt_integrity_failure(self, feedback: str) -> bool:
+        """Distingue recibo malformado de reprovação legítima do produto."""
+        text = str(feedback or "")
+        if "review_outcome_valid" not in text and "review outcome" not in text:
+            return False
+        # Um gate que exige aprovação e recebe REJECTED é reprovação real.
+        if "exige verdict" in text:
+            return False
+        return any(marker in text for marker in self._RECEIPT_INTEGRITY_MARKERS)
 
     def _schedule_focal_evidence_review_retry(
         self,

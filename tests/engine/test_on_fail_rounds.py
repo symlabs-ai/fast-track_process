@@ -145,3 +145,98 @@ def test_invalid_limit_falls_back_to_default(tmp_path, bad):
     node.on_fail = dict(node.on_fail or {})
     node.on_fail["max_rounds"] = bad
     assert runner._on_fail_round_limit(node) == MAX_ON_FAIL_ROUNDS
+
+
+# ------------------------------ recibo malformado ≠ defeito de produto
+
+
+_REVIEW_PROCESS = """
+id: test_receipt
+version: "0.1.0"
+title: "Test"
+nodes:
+  - id: review
+    type: review
+    title: Review
+    executor: claude
+    outputs:
+      - docs/review.md
+    on_fail:
+      human_gate: "Review reprovou."
+      goto: fix
+      automatic: true
+    next: end
+  - id: fix
+    type: build
+    title: Fix
+    executor: claude
+    next: review
+  - id: end
+    type: end
+    title: End
+"""
+
+
+def _review_runner(tmp_path: Path) -> StepRunner:
+    project = tmp_path / "project"
+    (project / "docs").mkdir(parents=True)
+    (project / "state").mkdir()
+    process = tmp_path / "process.yml"
+    process.write_text(_REVIEW_PROCESS, encoding="utf-8")
+    runner = StepRunner(
+        process_path=process,
+        state_path=project / "state" / "engine_state.yml",
+        project_root=project,
+    )
+    runner.init_state()
+    runner._auto_approve = True
+    return runner
+
+
+@pytest.mark.parametrize(
+    "feedback",
+    [
+        "review_outcome_valid FAIL: o relatório Markdown deve conter exatamente "
+        "um veredito explícito APPROVED, APPROVED_WITH_FINDINGS ou REJECTED",
+        "review_outcome_valid FAIL: scope_sha256 não corresponde aos bytes do escopo",
+        "review_outcome_valid FAIL: cobertura do review divergente; ausentes=['C2']",
+        "review_outcome_valid FAIL: verdict REJECTED exige ao menos um finding P0",
+    ],
+)
+def test_malformed_receipt_reruns_the_review(tmp_path, feedback):
+    runner = _review_runner(tmp_path)
+    node = runner.graph.get_node("review")
+
+    with patch.object(runner, "apply_fix") as apply_fix:
+        runner._handle_on_fail(node, feedback)
+
+    apply_fix.assert_not_called()
+    state = runner.state_mgr.load()
+    assert state.current_node == "review"
+    assert state.node_status == "ready"
+    # não consome orçamento do loop de correção do produto
+    assert not (state.metrics.get("on_fail_rounds") or {}).get("review")
+
+
+def test_real_rejection_still_routes_to_the_product_fix(tmp_path):
+    runner = _review_runner(tmp_path)
+    node = runner.graph.get_node("review")
+
+    with patch.object(runner, "apply_fix") as apply_fix:
+        runner._handle_on_fail(
+            node, "review_outcome_valid FAIL: este gate exige verdict APPROVED"
+        )
+
+    apply_fix.assert_called_once()
+    assert runner._on_fail_rounds("review") == 1
+
+
+def test_non_review_nodes_are_unaffected(tmp_path):
+    runner = _review_runner(tmp_path)
+    node = runner.graph.get_node("review")
+    node.type = "build"
+
+    with patch.object(runner, "apply_fix") as apply_fix:
+        runner._handle_on_fail(node, "review_outcome_valid FAIL: scope_sha256 ruim")
+
+    apply_fix.assert_called_once()

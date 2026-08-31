@@ -1012,7 +1012,17 @@ suíte, smoke) e **uma** review com triagem de severidade, encerrando por retro
 e reconciliação de backlog. São 8 nodes contra ~50 da rota completa, com os
 mesmos validators binários — é o custo de um coding agent direto, com os gates
 que dão o determinismo. Reserve a rota completa para release candidate e para
-superfícies de risco. Nessa rota, o usuário
+superfícies de risco.
+
+A rota não tem review LLM. Sete ciclos medidos com `ft analyse-cycle` mostraram
+que essa camada consumia cerca de um quarto do orçamento de cada ciclo e não
+reprovou nada em nenhum deles, enquanto os defeitos reais — inclusive um
+requisito de segurança certificado por um teste que não podia falhar — foram
+encontrados por teste de mutação no gate humano. Quem entrega atesta a entrega
+num recibo preso ao plano por hash; um gate determinístico confere cobertura,
+coerência e evidência; e a auditoria de mérito é responsabilidade declarada do
+stakeholder, com mutação como método. Uma suíte verde prova que os testes
+passam, não que eles verificam algo. Nessa rota, o usuário
 continua fornecendo somente `--request` ou `--input` em linguagem natural. Uma
 única chamada de planejamento produz
 `docs/mvp-batch-plan.yml`; o YAML é um artefato interno, não uma entrada exigida

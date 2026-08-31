@@ -773,3 +773,47 @@ def test_batch_freezes_public_contract_and_acceptance_reports_non_p0_skip() -> N
     assert "d.get('skip')>=0" in acceptance_commands
     assert "d.get('skip')>=0" in gate_commands
     assert "SKIP é permitido somente fora do P0" in gate.description
+
+
+def test_direct_route_audits_by_deterministic_gate_not_llm_review() -> None:
+    """Sete ciclos medidos: o review LLM da rota custou ~25% do orçamento de
+    cada ciclo e não reprovou nada em nenhum. Os defeitos reais — inclusive um
+    requisito de segurança certificado por teste tautológico — vieram de teste
+    de mutação no gate humano. A auditoria passou a ser determinística, e a de
+    mérito virou responsabilidade declarada do stakeholder.
+    """
+    graph = load_graph(FAST_PROCESS)
+
+    audit = graph.get_node("ft.direct.03.review")
+    assert audit.type == "gate"
+    assert audit.executor == "python"
+    assert "review_outcome_valid" in str(audit.validators)
+    assert audit.on_fail["goto"] == "ft.direct.02.fix"
+
+    # Quem entrega atesta; o gate confere. O escopo fica preso por hash.
+    build = graph.get_node("ft.direct.01.build")
+    assert "docs/direct-review.yml" in build.outputs
+    assert "docs/direct-review.md" in build.outputs
+    build_prompt = " ".join(build.prompt.split())
+    assert "scope_sha256" in build_prompt
+    assert "VERDICT: APPROVED" in build_prompt
+    assert "evidência verificável repo-local" in build_prompt
+
+    # A rota não pode voltar a ter review LLM sem uma decisão consciente.
+    llm_nodes = [
+        node.id
+        for node in graph.nodes.values()
+        if node.id.startswith("ft.direct.") and node.executor.startswith("llm")
+    ]
+    assert llm_nodes == [
+        "ft.direct.01.build",
+        "ft.direct.02.fix",
+        "ft.direct.05.handoff",
+    ]
+
+    # A responsabilidade que substituiu a camada precisa estar escrita.
+    stakeholder = " ".join(
+        graph.get_node("ft.direct.04.stakeholder").description.split()
+    )
+    assert "mutação" in stakeholder
+    assert "não podia falhar" in stakeholder

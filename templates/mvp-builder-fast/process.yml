@@ -3960,12 +3960,16 @@ nodes:
       - src/
       - Makefile
       - docs/direct-plan.md
+      - docs/direct-review.md
+      - docs/direct-review.yml
       - docs/PROJECT_BACKLOG.md
     write_scope:
       - src
       - tests
       - Makefile
       - docs/direct-plan.md
+      - docs/direct-review.md
+      - docs/direct-review.yml
       - docs/PROJECT_BACKLOG.md
     prompt: |
       Entregue a demanda registrada em docs/demanda.md (ou, se ausente, em
@@ -3990,7 +3994,21 @@ nodes:
          de pacote do baseline.
       4. Execute `make build`, `make verify` e `make smoke` até ficarem verdes
          antes de encerrar.
-      5. Registre em docs/PROJECT_BACKLOG.md os PB-* correspondentes à demanda,
+      5. Emita a atestação da entrega em docs/direct-review.md (legível) e
+         docs/direct-review.yml (estruturado), com `schema_version: 1`,
+         `scope_sha256` dos bytes finais de docs/direct-plan.md, `verdict`,
+         `results` e `findings`. Cada `results[].ref` é exatamente um D-* do
+         plano e exige evidência verificável repo-local — o teste que prova
+         aquela obrigação, com o comando que o executa. Declarar PASS sem
+         evidência executável é falha de contrato, não economia de esforço.
+         O Markdown deve conter, em linha isolada, exatamente
+         `VERDICT: APPROVED`, `VERDICT: APPROVED_WITH_FINDINGS` ou
+         `VERDICT: REJECTED`, e o YAML declarar o mesmo. Obrigação que você
+         não conseguiu entregar recebe FAIL com finding e severidade honesta;
+         P0 para quebra funcional ou obrigação ausente.
+         Escreva o plano ANTES e não o altere depois de gerar a atestação:
+         o hash prende os dois.
+      6. Registre em docs/PROJECT_BACKLOG.md os PB-* correspondentes à demanda,
          preservando IDs existentes e marcando como done apenas o que tem
          evidência real neste ciclo.
 
@@ -4066,60 +4084,20 @@ nodes:
 
   - id: ft.direct.03.review
     no_pre_seed: true
-    type: review
-    title: "Review Único da Entrega"
-    description: "A única auditoria LLM da rota: confronta cada obrigação declarada com o produto executável e classifica os achados por severidade."
+    type: gate
+    title: "Verificar a Atestação da Entrega (determinístico)"
+    description: >-
+      Checkpoint Python da atestação: escopo preso por hash, cobertura exata
+      das obrigações e evidência presente. Substitui uma review LLM que, em
+      sete ciclos medidos, consumiu cerca de um quarto do orçamento de cada
+      ciclo sem reprovar nada — os defeitos reais foram encontrados por teste
+      de mutação no gate humano, não por leitura. A auditoria de mérito passa
+      a ser responsabilidade declarada do stakeholder.
     sprint: sprint-direct-02-review
-    executor: codex
-    max_turns: 60
-    outputs:
-      - docs/direct-review.md
-      - docs/direct-review.yml
-    write_scope:
-      - docs/direct-review.md
-      - docs/direct-review.yml
-    prompt: |
-      Audite a entrega contra docs/direct-plan.md. Para cada obrigação D-*,
-      confronte o comportamento real do produto (executando-o ou seus testes)
-      com o que foi declarado, e registre evidência verificável repo-local.
-
-      Escreva docs/direct-review.md (parecer legível) contendo, em uma linha
-      isolada, exatamente `VERDICT: APPROVED`, `VERDICT: APPROVED_WITH_FINDINGS`
-      ou `VERDICT: REJECTED` — esse rótulo literal é o que o gate lê. Escreva
-      também docs/direct-review.yml
-      com `schema_version: 1`, `scope_sha256` dos bytes correntes de
-      docs/direct-plan.md, `verdict`, `results` e `findings`:
-
-          schema_version: 1
-          scope_sha256: <sha256 de docs/direct-plan.md>
-          verdict: APPROVED | APPROVED_WITH_FINDINGS | REJECTED
-          results:
-            - ref: D-001
-              result: PASS | FAIL
-              evidence: [<prova repo-local>]
-          findings:
-            - id: DR-001
-              refs: [<obrigações reprovadas>]
-              severity: P0 | P1 | P2
-              summary: <defeito reproduzível>
-              evidence: [<paths repo-local verificáveis>]
-
-      Cubra exatamente os D-* do plano — nem a mais, nem a menos. Findings
-      devem cobrir exatamente os results FAIL.
-
-      SEVERIDADE (obrigatória em cada finding): `severity: P0|P1|P2`.
-        P0 — bloqueante: obrigação não entregue, quebra funcional, dado
-             corrompido ou falha de segurança/autorização.
-        P1 — defeito real sem bloqueio.
-        P2 — cosmético ou melhoria pontual.
-      Escolha o veredito pela severidade, não pela existência de achados:
-        APPROVED — nenhum FAIL e findings vazio.
-        APPROVED_WITH_FINDINGS — há FAIL, mas nenhum finding P0: o ciclo segue
-          e os achados viram dívida no backlog.
-        REJECTED — existe ao menos um finding P0.
-      Markdown e YAML devem declarar o mesmo veredito, e o Markdown deve
-      conter esse veredito uma única vez. Não altere código.
+    executor: python
+    validation_mode: fail_fast
     validators:
+      - file_exists: docs/direct-plan.md
       - file_exists: docs/direct-review.md
       - file_exists: docs/direct-review.yml
       - review_outcome_valid:
@@ -4128,7 +4106,7 @@ nodes:
           scope_path: docs/direct-plan.md
           scope_pattern: "\\bD-\\d+\\b"
     on_fail:
-      human_gate: "O review da entrega direta encontrou defeito bloqueante."
+      human_gate: "A atestação da entrega direta não fecha com o plano."
       goto: ft.direct.02.fix
       automatic: true
     next: gate.direct.review
@@ -4167,7 +4145,16 @@ nodes:
     no_pre_seed: true
     type: human_gate
     title: "Validação do Stakeholder"
-    description: "Apresentar a entrega executável ao stakeholder e capturar o aceite ou os ajustes pedidos."
+    description: >-
+      Apresentar a entrega executável ao stakeholder e capturar o aceite ou os
+      ajustes pedidos. Esta rota não tem review LLM: a auditoria de mérito é
+      exercida aqui, e a evidência que a sustenta é teste de mutação — quebrar
+      deliberadamente a garantia e confirmar que a suíte acusa. Uma suíte verde
+      só prova que os testes passam; que eles verificam algo é outra afirmação,
+      e foi assim que um requisito de segurança já passou certificado por um
+      teste que não podia falhar. Antes de aprovar, mute ao menos a garantia
+      mais crítica da demanda e confirme que ela reprova — e verifique que a
+      mutação de fato entrou no código antes de acreditar no resultado.
     sprint: sprint-direct-03-handoff
     executor: python
     outputs:

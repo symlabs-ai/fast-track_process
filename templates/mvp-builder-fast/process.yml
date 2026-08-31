@@ -120,6 +120,7 @@ artifact_policy:
     - docs/operational-readiness.md
     - docs/operational-readiness.yml
   cycle:
+    - checks/
     - docs/direct-plan.md
     - docs/direct-review.md
     - docs/direct-review.yml
@@ -3959,6 +3960,7 @@ nodes:
     outputs:
       - src/
       - Makefile
+      - checks/
       - docs/direct-plan.md
       - docs/direct-review.md
       - docs/direct-review.yml
@@ -3967,6 +3969,7 @@ nodes:
       - src
       - tests
       - Makefile
+      - checks
       - docs/direct-plan.md
       - docs/direct-review.md
       - docs/direct-review.yml
@@ -3978,8 +3981,19 @@ nodes:
       1. Escreva docs/direct-plan.md declarando as obrigações verificáveis da
          demanda, uma por linha, numeradas D-001, D-002, ... Cada obrigação
          precisa ser observável de fora: comportamento, contrato ou saída.
-         Este arquivo é o escopo do review final — obrigação não declarada
-         não será auditada, e obrigação declarada e não entregue reprova.
+         Este arquivo é o escopo da verificação final — obrigação não
+         declarada não será auditada, e obrigação declarada e não entregue
+         reprova.
+
+         Para CADA obrigação, escreva no mesmo momento o check determinístico
+         que a verifica: `checks/D-NNN.py`, um arquivo por obrigação, sem
+         dependência além da stdlib, que sai com 0 quando a obrigação está
+         cumprida e 1 quando não está, imprimindo o motivo. Escreva o check
+         ANTES de implementar: nesse momento ninguém tem interesse no
+         resultado, e é isso que o torna honesto. Um check precisa poder
+         reprovar — se ele passaria mesmo com a obrigação não entregue, ele
+         não verifica nada. Obrigação documental se verifica lendo o arquivo
+         e procurando o conteúdo exigido, não a existência do arquivo.
       2. Implemente as obrigações em src/, com testes que as cubram. Os testes
          são a prova: cada D-* deve ter ao menos um teste que falharia sem a
          implementação.
@@ -4105,8 +4119,28 @@ nodes:
           markdown_path: docs/direct-review.md
           scope_path: docs/direct-plan.md
           scope_pattern: "\\bD-\\d+\\b"
+      # Cobertura: toda obrigação declarada tem o seu check, e todo check
+      # corresponde a uma obrigação. Sem isto, bastaria não escrever o check
+      # da obrigação inconveniente.
+      - command_succeeds:
+          command: >-
+            python3 -c "import pathlib,re,sys;
+            plan=pathlib.Path('docs/direct-plan.md').read_text(encoding='utf-8');
+            refs=sorted(set(re.findall(r'\bD-\d+\b', plan)));
+            have={p.stem for p in pathlib.Path('checks').glob('D-*.py')};
+            falta=[r for r in refs if r not in have];
+            extra=sorted(have-set(refs));
+            sys.exit(f'obrigacoes sem check={falta} checks orfaos={extra}') if (falta or extra)
+            else print(f'cobertura: {len(refs)} obrigacao(oes) com check')"
+      # Execução: cada check roda de verdade. É o gate que impede aprovar por
+      # afirmação um artefato que ninguém conferiu.
+      - command_succeeds:
+          command: >-
+            sh -c 'set -e; n=0; for f in checks/D-*.py; do python3 "$f"; n=$((n+1)); done;
+            echo "$n check(s) determinístico(s) OK"'
+          timeout: 600
     on_fail:
-      human_gate: "A atestação da entrega direta não fecha com o plano."
+      human_gate: "A atestação da entrega direta não fecha com o plano ou um check determinístico reprovou."
       goto: ft.direct.02.fix
       automatic: true
     next: gate.direct.review

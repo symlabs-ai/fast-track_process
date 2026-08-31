@@ -1022,7 +1022,21 @@ encontrados por teste de mutação no gate humano. Quem entrega atesta a entrega
 num recibo preso ao plano por hash; um gate determinístico confere cobertura,
 coerência e evidência; e a auditoria de mérito é responsabilidade declarada do
 stakeholder, com mutação como método. Uma suíte verde prova que os testes
-passam, não que eles verificam algo. Nessa rota, o usuário
+passam, não que eles verificam algo.
+
+Cada obrigação `D-*` do plano nasce acompanhada do seu **check determinístico**,
+`checks/D-NNN.py`: um script de stdlib que sai 0 quando a obrigação está
+cumprida e 1 quando não está. Ele é escrito **antes** da implementação, no
+momento em que ninguém ainda tem interesse no resultado — é isso que o torna
+honesto. O gate verifica as duas coisas que importam: **cobertura**, toda
+obrigação declarada tem check e todo check corresponde a uma obrigação, para
+que não baste omitir o check da obrigação inconveniente; e **execução**, cada
+check roda de verdade e um `exit 1` reprova o ciclo.
+
+Isso fecha a falha mais comum de aceite: obrigação de artefato — atualizar um
+documento, registrar uma decisão — aceita por afirmação porque conferi-la exige
+abrir o arquivo. Um check que procura o conteúdo exigido dentro do documento,
+e não apenas a existência dele, não deixa essa escolha. Nessa rota, o usuário
 continua fornecendo somente `--request` ou `--input` em linguagem natural. Uma
 única chamada de planejamento produz
 `docs/mvp-batch-plan.yml`; o YAML é um artefato interno, não uma entrada exigida

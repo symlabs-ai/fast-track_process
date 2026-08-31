@@ -817,3 +817,36 @@ def test_direct_route_audits_by_deterministic_gate_not_llm_review() -> None:
     )
     assert "mutação" in stakeholder
     assert "não podia falhar" in stakeholder
+
+
+def test_direct_route_requires_a_deterministic_check_per_obligation() -> None:
+    """Cada obrigação nasce com o check que a verifica, escrito antes da
+    implementação. Sem isso, uma obrigação documental é aceita por afirmação:
+    foi exatamente assim que dois itens de PRD exigidos na demanda viraram
+    dívida enquanto a aprovação afirmava que estavam feitos.
+    """
+    graph = load_graph(FAST_PROCESS)
+
+    build = graph.get_node("ft.direct.01.build")
+    assert "checks/" in build.outputs
+    assert "checks" in build.write_scope
+    prompt = " ".join(build.prompt.split())
+    assert "checks/D-NNN.py" in prompt
+    # O momento importa: o check é escrito antes de existir interesse no
+    # resultado, e precisa poder reprovar.
+    assert "Escreva o check ANTES de implementar" in prompt
+    assert "precisa poder reprovar" in prompt
+    assert "não a existência do arquivo" in prompt
+
+    gate = graph.get_node("ft.direct.03.review")
+    commands = [
+        spec["command_succeeds"]["command"]
+        for spec in gate.validators
+        if "command_succeeds" in spec
+    ]
+    assert len(commands) == 2, "cobertura e execução são checagens distintas"
+    # Cobertura: não basta rodar os checks que existem; todo D-* precisa ter um.
+    assert "obrigacoes sem check" in commands[0]
+    assert "checks orfaos" in commands[0]
+    # Execução: os checks rodam de verdade e um exit 1 reprova o gate.
+    assert "checks/D-*.py" in commands[1]

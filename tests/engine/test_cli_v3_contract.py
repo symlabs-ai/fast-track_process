@@ -446,7 +446,7 @@ def test_two_template_runs_are_isolated_and_cycle_selection_is_strict(
     multi_status = capsys.readouterr().out
     assert "Ciclo: cycle-01-feature-fast" in multi_status
     assert "Ciclo: cycle-02-tweak" in multi_status
-    assert "feature_fast v2.0.3" in multi_status
+    assert "feature_fast v2.0.4" in multi_status
     assert "tweak v1.1.0" in multi_status
 
     selected = cli_main._select_cycle_for_command(project, "cycle-02-tweak")

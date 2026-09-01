@@ -374,3 +374,49 @@ def test_log_do_engine_nao_invalida_o_receipt(feature_root: Path) -> None:
     )
     mudado = receipt._snapshot(feature_root, ".", "implementation")
     assert mudado["fingerprint"] != antes["fingerprint"]
+
+
+def test_checks_rodam_no_interpretador_do_produto(feature_root: Path) -> None:
+    """Um check prova um AC exercitando o produto — precisa do ambiente dele.
+
+    `sys.executable` dentro do gate é o interpretador herdado do shell, não o
+    do projeto. No SymProbe era o do miniconda: o check importava o pacote
+    (porque ele mesmo põe `src/` no `sys.path`), mas o subprocesso
+    `python -m sym_probe` morria sem o pacote instalado, e o AC reprovava um
+    produto correto. Pior que o falso negativo: `feature.verify` auditava uma
+    instalação diferente da que `product_validate` validou via `make`.
+    """
+    venv_bin = feature_root / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python = venv_bin / "python"
+    # Um "interpretador" que se identifica, para provarmos qual foi chamado.
+    python.write_text(
+        '#!/bin/sh\nprintf "venv-do-projeto\\n"\nexit 0\n', encoding="utf-8"
+    )
+    python.chmod(0o755)
+
+    escolhido, origem = attest._check_interpreter(feature_root)
+    assert escolhido == str(python)
+    assert ".venv" in origem
+
+    # E é ele que a atestação de verdade usa — não basta saber escolher.
+    _attest(feature_root, "pre")
+    _validate(feature_root, "pre-review")
+    _attest(feature_root, "evidence")
+    _validate(feature_root, "evidence")
+    _validate(feature_root, "prepare-review")
+    saida = _attest(feature_root, "attest")
+    assert str(python) in saida
+    revisao = (feature_root / "docs/feature-review.md").read_text(encoding="utf-8")
+    assert str(python) in revisao
+    # O interpretador falso responde 0 sempre: se o check tivesse rodado no do
+    # gate, o AC-02 (que reprova de propósito) apareceria como FAIL.
+    assert "venv-do-projeto" in saida
+
+    # Sem venv no projeto, cai no interpretador atual — sem inventar ambiente.
+    python.unlink()
+    venv_bin.rmdir()
+    (feature_root / ".venv").rmdir()
+    escolhido, origem = attest._check_interpreter(feature_root)
+    assert escolhido == sys.executable
+    assert "nenhum .venv" in origem

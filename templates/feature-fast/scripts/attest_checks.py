@@ -32,6 +32,39 @@ def _fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def _check_interpreter(root: Path) -> tuple[str, str]:
+    """O interpretador em que os checks rodam, e como ele foi escolhido.
+
+    Um check prova um AC exercitando o produto — importando o pacote, ou
+    subindo o entrypoint dele num subprocesso. Isso só é verdade se ele rodar
+    onde o produto está instalado. `sys.executable` aqui é o interpretador que
+    o gate herdou do shell, que não é necessariamente o do projeto: no
+    SymProbe era o do miniconda, sem o pacote instalado, e o subprocesso
+    `python -m sym_probe` morria antes de abrir o socket. O check reprovava um
+    produto correto, e `feature.verify` acabava auditando uma instalação
+    diferente da que `product_validate` tinha validado via `make`.
+
+    A convenção do venv no próprio projeto (`.venv/`, o padrão de poetry
+    `in-project`, uv e `python -m venv`) é o que resolve isso sem adivinhar
+    gerenciador. Sem ele, cai no interpretador atual — que é o comportamento
+    correto para projetos que não isolam ambiente.
+    """
+    try:
+        _, _, product_root = vf._load_baseline(root)
+    except vf.FeatureValidationError:
+        product_root = "."
+    # O venv acompanha o pyproject/Makefile: pode estar no product_root ou na
+    # raiz do repositório, conforme o produto seja um subdiretório ou não.
+    bases = [root] if product_root == "." else [root / product_root, root]
+    for base in bases:
+        for relative in ("bin/python", "Scripts/python.exe"):
+            candidate = base / ".venv" / relative
+            if candidate.is_file():
+                onde = base.relative_to(root).as_posix() or "."
+                return str(candidate), f"venv do projeto ({onde}/.venv)"
+    return sys.executable, "interpretador atual (nenhum .venv no projeto)"
+
+
 def _contract(root: Path) -> list[str]:
     try:
         _, _, acceptance_ids = vf._feature_contract(root)
@@ -55,10 +88,12 @@ def _coverage(root: Path, acceptance_ids: list[str]) -> dict[str, Path]:
     return {ac: have[ac] for ac in acceptance_ids}
 
 
-def _run_check(root: Path, path: Path) -> tuple[bool, str]:
+def _run_check(
+    root: Path, path: Path, interpreter: str | None = None
+) -> tuple[bool, str]:
     try:
         done = subprocess.run(
-            [sys.executable, str(path.relative_to(root))],
+            [interpreter or sys.executable, str(path.relative_to(root))],
             cwd=root,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -195,9 +230,12 @@ def stage_attest(root: Path) -> int:
     if not isinstance(review_id, str) or not isinstance(fingerprint, str):
         _fail(f"{vf.REVIEW_CONTEXT_PATH}: review_id/receipt_fingerprint ausentes")
 
+    interpreter, origem = _check_interpreter(root)
+    print(f"interpretador dos checks: {interpreter} — {origem}")
+
     resultados = []
     for ac in acceptance_ids:
-        passou, evidencia = _run_check(root, checks[ac])
+        passou, evidencia = _run_check(root, checks[ac], interpreter)
         resultados.append((ac, passou, evidencia))
         print(f"{ac}: {'PASS' if passou else 'FAIL'} — {evidencia}")
 
@@ -209,6 +247,8 @@ def stage_attest(root: Path) -> int:
         "",
         f"Veredicto derivado da execução de {len(resultados)} check(s) em `checks/`. "
         "Cada AC-* é provado pelo seu check; nenhum julgamento semântico foi aplicado.",
+        "",
+        f"Interpretador: `{interpreter}` — {origem}.",
         "",
         f"REVIEW_ID: {review_id}",
         "",

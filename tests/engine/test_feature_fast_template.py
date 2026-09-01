@@ -295,7 +295,7 @@ def test_feature_fast_graph_and_session_policy_are_valid() -> None:
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature_fast"
-    assert graph.meta["version"] == "2.0.4"
+    assert graph.meta["version"] == "2.0.5"
     assert graph.meta["execution_policy"]["max_acceptance_criteria_per_cycle"] == 6
     assert graph.meta["session_policy"] == {
         "mode": "sprint",

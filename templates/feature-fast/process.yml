@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "2.0.4"
+version: "2.0.5"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -682,16 +682,29 @@ nodes:
     type: gate
     title: "Validar Fix Aprovado por Completo"
     description: >-
-      Após a auditoria focal aprovar o delta, renova uma única vez o receipt de
-      build+test e as lanes impactadas antes do aceite.
+      Após a auditoria focal aprovar o delta, renova uma única vez o impacto, a
+      pré-revisão determinística, o receipt de build+test e as lanes impactadas
+      antes do aceite. Um fix que acrescenta arquivo de produto muda o conjunto
+      auditado: sem refazer o impacto e a cobertura de checks aqui, o ciclo
+      chega em review_prepare com um impacto obsoleto e sem nó que o regenere.
     sprint: feature-02-build
     executor: python
     validation_mode: fail_fast
     outputs:
+      - docs/feature-impact.yml
       - docs/feature-validation.json
     validators:
       - command_succeeds:
           command: "python .ft/process/feature-fast/scripts/validate_feature.py fix-implementation"
+          stop_on_failure: true
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py prepare-impact"
+          stop_on_failure: true
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/attest_checks.py pre"
+          stop_on_failure: true
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/validate_feature.py pre-review"
           stop_on_failure: true
       - command_succeeds:
           command: >-

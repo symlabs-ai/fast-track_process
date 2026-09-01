@@ -420,3 +420,109 @@ def test_checks_rodam_no_interpretador_do_produto(feature_root: Path) -> None:
     escolhido, origem = attest._check_interpreter(feature_root)
     assert escolhido == sys.executable
     assert "nenhum .venv" in origem
+
+
+def _fix_full_validate_commands() -> list[str]:
+    """Os comandos que `feature.fix_full_validate` roda, na ordem do grafo."""
+    import yaml
+
+    graph = yaml.safe_load(
+        (ROOT / "templates/feature-fast/process.yml").read_text(encoding="utf-8")
+    )
+    node = next(n for n in graph["nodes"] if n["id"] == "feature.fix_full_validate")
+    comandos = []
+    for validator in node["validators"]:
+        spec = validator.get("command_succeeds")
+        if isinstance(spec, str):
+            comandos.append(" ".join(spec.split()))
+        elif isinstance(spec, dict):
+            comandos.append(" ".join(str(spec["command"]).split()))
+    return comandos
+
+
+def test_fix_que_acrescenta_arquivo_reancora_impacto_e_pre_revisao(
+    feature_root: Path,
+) -> None:
+    """Um fix focal pode alargar o conjunto auditado; o ramo precisa reancorar.
+
+    Foi o que travou o ciclo do instalador do SymProbe: o nó de correção
+    acrescentou um teste de produto, o impacto armazenado virou obsoleto, e
+    `feature.review_prepare` reprovou sem que existisse nó no ramo do fix capaz
+    de regenerá-lo — `prepare-impact` só era invocado no caminho de
+    implementação. O `on_fail` do review_prepare aponta para product_validate,
+    que também não regenera, então o ciclo ficava em laço.
+    """
+    _attest(feature_root, "pre")
+    _validate(feature_root, "pre-review")
+    _attest(feature_root, "evidence")
+    _validate(feature_root, "evidence")
+    _validate(feature_root, "prepare-review")
+
+    impacto_antes = vf._read_yaml(feature_root, vf.IMPACT_PATH)
+
+    # O fix focal acrescenta um arquivo de produto — exatamente o delta que o
+    # instalador produziu ao cobrir o processo do relay com um teste novo.
+    (feature_root / "src/test_relay_process.py").write_text(
+        "from relay import serve\n\n\ndef test_processo():\n    assert serve('h', 1)\n",
+        encoding="utf-8",
+    )
+
+    _validate(feature_root, "prepare-review", expected=1)
+
+    # A sequência do ramo do fix, na ordem em que fix_full_validate a roda.
+    comandos = _fix_full_validate_commands()
+    assert comandos[:4] == [
+        "python .ft/process/feature-fast/scripts/validate_feature.py fix-implementation",
+        "python .ft/process/feature-fast/scripts/validate_feature.py prepare-impact",
+        "python .ft/process/feature-fast/scripts/attest_checks.py pre",
+        "python .ft/process/feature-fast/scripts/validate_feature.py pre-review",
+    ], "o ramo do fix precisa reancorar impacto e pré-revisão antes do receipt"
+
+    _validate(feature_root, "prepare-impact")
+    _attest(feature_root, "pre")
+    _validate(feature_root, "pre-review")
+
+    # `product.sh ensure --record` roda em seguida no mesmo nó: é ele que
+    # renova a lane product, cujas dependências o arquivo novo tornou mais
+    # recentes que o receipt.
+    (feature_root / "docs/feature-validation.json").touch()
+
+    impacto_depois = vf._read_yaml(feature_root, vf.IMPACT_PATH)
+    assert impacto_depois != impacto_antes
+    assert impacto_depois["pre_review_id"] != impacto_antes["pre_review_id"], (
+        "o arquivo novo precisa produzir uma pré-revisão nova, não reaproveitar a antiga"
+    )
+    assert "src/test_relay_process.py" in impacto_depois["impact_paths"]
+
+    # Reancorado, o gate que travava o ciclo volta a passar.
+    _validate(feature_root, "prepare-review")
+
+
+def test_reancoragem_do_fix_nao_dispensa_cobertura_de_checks(
+    feature_root: Path,
+) -> None:
+    """Reancorar não pode virar carimbo: um AC sem check ainda reprova.
+
+    `attest_checks.py pre` no ramo do fix serve para reemitir o pre_review_id,
+    mas ele carrega junto a verificação de cobertura. Se o fix introduzir um
+    AC-* novo sem check, a reancoragem tem que falhar em vez de aprovar.
+    """
+    _attest(feature_root, "pre")
+    _validate(feature_root, "pre-review")
+
+    # O fix apaga o check de um AC ainda vigente no contrato.
+    (feature_root / "checks/AC-02.py").unlink()
+
+    _validate(feature_root, "prepare-impact")
+    saida = _attest(feature_root, "pre", expected=1)
+    assert "AC-02" in saida and "cobertura incompleta" in saida
+
+    # E um check órfão — sem AC correspondente — também barra a reancoragem.
+    (feature_root / "checks/AC-02.py").write_text(
+        "import sys; sys.exit(0)\n", encoding="utf-8"
+    )
+    (feature_root / "checks/AC-09.py").write_text(
+        "import sys; sys.exit(0)\n", encoding="utf-8"
+    )
+    saida = _attest(feature_root, "pre", expected=1)
+    assert "AC-09" in saida and "órfãos" in saida

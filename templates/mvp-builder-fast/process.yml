@@ -12,7 +12,7 @@
 #        (por exemplo src/, tests/ e examples/ na raiz), sem inventar frontend.
 
 id: mvp_builder_fast
-version: "1.20.0"
+version: "1.21.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -4010,12 +4010,33 @@ nodes:
       4. Execute `make build`, `make verify` e `make smoke` até ficarem verdes
          antes de encerrar.
       5. Emita a atestação da entrega em docs/direct-review.md (legível) e
-         docs/direct-review.yml (estruturado), com `schema_version: 1`,
-         `scope_sha256` dos bytes finais de docs/direct-plan.md, `verdict`,
-         `results` e `findings`. Cada `results[].ref` é exatamente um D-* do
-         plano e exige evidência verificável repo-local — o teste que prova
-         aquela obrigação, com o comando que o executa. Declarar PASS sem
-         evidência executável é falha de contrato, não economia de esforço.
+         docs/direct-review.yml (estruturado). O YAML tem schema fixo — o
+         gate é determinístico e rejeita qualquer desvio de nome ou tipo:
+
+             schema_version: 1
+             scope_sha256: "<sha256 dos bytes finais de docs/direct-plan.md>"
+             verdict: APPROVED            # ou APPROVED_WITH_FINDINGS | REJECTED
+             results:
+               - ref: D-001               # um por D-* do plano, sem faltar nem sobrar
+                 result: PASS             # PASS | FAIL | PENDING | NOT_RUN
+                 evidence:                # LISTA não vazia de strings, nunca uma string solta
+                   - "tests/test_x.py::test_y — poetry run pytest -q tests/test_x.py"
+             findings: []                 # lista; vazia obrigatoriamente quando verdict é APPROVED
+               # quando houver:
+               # - id: F-001              # ^[A-Z][A-Z0-9_.:-]{2,63}$, único
+               #   refs: [D-001]          # só D-* que existem no plano e estão FAIL
+               #   summary: "o que ficou devendo"
+               #   severity: P1           # P0 bloqueia; P1/P2 seguem como dívida
+               #   evidence: ["..."]      # lista não vazia
+
+         A chave de status de cada item é `result` (não `status`), e
+         `evidence` é sempre lista em `results[]` e em `findings[]`. Todo
+         FAIL precisa de exatamente um finding que o referencie, e todo
+         finding precisa apontar para um FAIL — o gate compara os dois
+         conjuntos. Cada `results[].ref` exige evidência verificável
+         repo-local: o teste que prova aquela obrigação, com o comando que o
+         executa. Declarar PASS sem evidência executável é falha de
+         contrato, não economia de esforço.
          O Markdown deve conter, em linha isolada, exatamente
          `VERDICT: APPROVED`, `VERDICT: APPROVED_WITH_FINDINGS` ou
          `VERDICT: REJECTED`, e o YAML declarar o mesmo. Obrigação que você

@@ -850,3 +850,25 @@ def test_direct_route_requires_a_deterministic_check_per_obligation() -> None:
     assert "checks orfaos" in commands[0]
     # Execução: os checks rodam de verdade e um exit 1 reprova o gate.
     assert "checks/D-*.py" in commands[1]
+
+
+def test_direct_fix_can_correct_documentation_obligations() -> None:
+    """Rejeição documental precisa alcançar o artefato que a carrega.
+
+    O write_scope original do fix só cobria código, então uma rejeição por
+    obrigação de PRD não cumprida deixava o node com duas saídas ruins:
+    recusar a instrução ou inventar mudança em src/. Três rejeições seguidas
+    numa sessão real bateram nisso.
+    """
+    graph = load_graph(FAST_PROCESS)
+    fix = graph.get_node("ft.direct.02.fix")
+
+    assert "docs/PRD.md" in fix.write_scope
+    assert "checks" in fix.write_scope
+    assert "docs/direct-plan.md" in fix.write_scope
+    assert "docs/direct-review.yml" in fix.write_scope
+
+    prompt = " ".join(fix.prompt.split())
+    assert "Nem todo achado é de código" in prompt
+    # Inventar mudança de produto para defeito de documentação é pior que nada.
+    assert "inventar mudança em `src/`" in prompt

@@ -4081,11 +4081,26 @@ nodes:
       - src
       - tests
       - Makefile
+      - checks
       - docs/direct-fix-report.md
+      # Nem todo achado é de código: obrigação documental rejeitada precisa
+      # ser corrigida no artefato que a carrega, e um write_scope só de src
+      # obriga o node a recusar a instrução ou a inventar mudança de produto.
+      - docs/PRD.md
+      - docs/direct-plan.md
+      - docs/direct-review.md
+      - docs/direct-review.yml
     prompt: |
       Corrija SOMENTE os achados correntes — falha de build/suíte ou findings
       P0 do review. Não reabra obrigações já aprovadas nem amplie o escopo da
       demanda.
+
+      Nem todo achado é de código. Se o achado for uma obrigação documental —
+      registrar um requisito, uma decisão ou uma política num artefato
+      canônico — corrija o artefato, e não o produto: inventar mudança em
+      `src/` para um defeito de documentação é pior que não corrigir. Se a
+      obrigação já estiver cumprida e o achado for de evidência, diga isso no
+      relatório em vez de alterar código.
 
       Registre docs/direct-fix-report.md com achado→causa→path→teste→resultado
       e rode os testes focais dos arquivos alterados. Se a correção mudar o

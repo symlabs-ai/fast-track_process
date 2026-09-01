@@ -1,7 +1,7 @@
 # Feature Fast — Diagrama de Fluxo
 
 Fluxo do processo definido em [`process.yml`](./process.yml)
-(`id: feature_fast`, versão `1.3.0`). O template executa um ciclo independente
+(`id: feature_fast`, versão `2.0.0`). O template executa um ciclo independente
 por demanda, precedido por um plano interno consultivo. O grafo e seus gates
 continuam autoritativos.
 
@@ -34,24 +34,20 @@ flowchart TD
     end
 
     subgraph build["feature-02-build"]
-        implement["implement<br/>somente código e testes"]
+        implement["implement<br/>checks/AC-* + código e testes"]
         impact_prepare{{"impact_prepare<br/>workset dinâmico + lanes"}}
-        pre_review["pre_review<br/>semântica antes da suíte completa"]
+        checks{{"checks<br/>cobertura AC ↔ checks/"}}
         pre_review_route{{"pre_review_route<br/>extrair rota"}}
         pre_review_decision{"pre_review_decision"}
         product_validate{{"product_validate<br/>ensure local: build + test"}}
-        evidence["evidence<br/>somente referências e relatório"]
-        evidence_gate{{"evidence_gate<br/>integridade referencial"}}
+        evidence_gate{{"evidence_gate<br/>derivar e auditar evidência"}}
         review_prepare{{"review_prepare<br/>review_id + receipts atuais"}}
-        review["review<br/>avaliação semântica independente"]
+        verify{{"verify<br/>executa um check por AC-*"}}
         review_route{{"review_route<br/>extrair rota estruturada"}}
         review_decision{"review_decision"}
         fix_prepare{{"fix_prepare<br/>congelar review + F-* + commit"}}
         fix["fix<br/>somente achados rejeitados"]
         fix_validate{{"fix_validate<br/>delta focal válido"}}
-        fix_review["fix_review<br/>auditoria somente do delta"]
-        fix_review_route{{"fix_review_route<br/>extrair rota focal"}}
-        fix_review_decision{"fix_review_decision"}
         fix_full_validate{{"fix_full_validate<br/>build + test uma vez"}}
     end
 
@@ -67,29 +63,25 @@ flowchart TD
     questions -. respostas .-> discovery
     clarity -->|clear| reserve_ids --> scope_gate
     scope_gate -. rejeição .-> discovery
-    scope_gate --> receipt_baseline --> implement --> impact_prepare --> pre_review
-    pre_review --> pre_review_route --> pre_review_decision
+    scope_gate --> receipt_baseline --> implement --> impact_prepare --> checks
+    checks --> pre_review_route --> pre_review_decision
+    checks -. cobertura incompleta .-> implement
     pre_review_decision -->|approved| product_validate
     pre_review_decision -. implementation .-> implement
     pre_review_decision -. scope .-> discovery
-    pre_review_decision -. inválida .-> pre_review
-    product_validate --> evidence --> evidence_gate --> review_prepare --> review
+    pre_review_decision -. inválida .-> checks
+    product_validate --> evidence_gate --> review_prepare --> verify
     product_validate -. falha focal .-> implement
-    evidence_gate -. referência inválida .-> evidence
-    review --> review_route --> review_decision
+    evidence_gate -. evidência incompleta .-> implement
+    verify --> review_route --> review_decision
     review_decision -->|approved| accept
-    review_decision -->|implementation| fix_prepare --> fix --> fix_validate --> fix_review
-    fix_review --> fix_review_route --> fix_review_decision
+    review_decision -->|implementation| fix_prepare --> fix --> fix_validate
+    fix_validate --> fix_full_validate --> review_prepare
     fix_validate -. falha focal .-> fix
-    fix_review_decision -->|approved| fix_full_validate --> accept
-    fix_review_decision -. implementation .-> fix
-    fix_review_decision -. evidence .-> impact_prepare
-    fix_review_decision -. full_review .-> impact_prepare
-    fix_review_decision -. scope .-> discovery
-    fix_review_decision -. inválida .-> fix_review
-    review_decision -. evidence .-> evidence
+    fix_full_validate -. regressão .-> fix
+    review_decision -. evidence .-> evidence_gate
     review_decision -. scope .-> discovery
-    review_decision -. inválida .-> review
+    review_decision -. inválida .-> verify
     accept -. rejeição semântica .-> implement
     accept --> reconcile --> final_gate --> endnode --> close([ft close --merge full])
 
@@ -97,7 +89,7 @@ flowchart TD
     classDef gate fill:#bfdbfe,stroke:#1e40af,color:#000;
     classDef terminal fill:#bbf7d0,stroke:#166534,color:#000;
     class questions,scope_gate,accept human;
-    class preflight,discovery_gate,reserve_ids,receipt_baseline,impact_prepare,pre_review_route,product_validate,evidence_gate,review_prepare,review_route,fix_prepare,fix_validate,fix_review_route,fix_full_validate,final_gate gate;
+    class preflight,discovery_gate,reserve_ids,receipt_baseline,impact_prepare,checks,pre_review_route,product_validate,evidence_gate,review_prepare,verify,review_route,fix_prepare,fix_validate,fix_full_validate,final_gate gate;
     class start,endnode,close terminal;
 ```
 
@@ -112,14 +104,19 @@ flowchart TD
 - `implement` não produz evidência narrativa. `product_validate` roda a suíte
   completa uma vez por snapshot e `ensure` reutiliza somente o receipt local
   válido.
-- `evidence` não altera código e o gate seguinte comprova apenas referências;
-  a suficiência semântica permanece na review.
+- `evidence_gate` deriva relatório e evidência do receipt executado e audita
+  as referências; o veredicto por AC-* fica em `verify`, o único gate que
+  executa os checks.
+- `checks` e `verify` substituem as três revisões por LLM. Cada AC-* tem um
+  `checks/AC-NNN.py` escrito antes da implementação e ancorado no código de
+  produção; a qualidade deles é medida por mutação no aceite do stakeholder.
 - Uma rejeição de implementação não reinicia `implement → evidence → review`.
-  Ela congela os F-* e executa `fix → fix_validate → fix_review`; apenas
+  Ela congela os F-* e executa `fix → fix_validate → fix_full_validate`;
+  a atestação é refeita do zero em `verify`. Apenas
   expansão do workset/contrato retorna ao caminho completo.
-- Tentativas intermediárias do fix executam somente validação e auditoria
-  focais. `fix_full_validate` paga build+test e renova receipts uma única vez,
-  depois da aprovação focal e antes do aceite.
+- Tentativas intermediárias do fix executam somente a validação focal.
+  `fix_full_validate` paga build+test e renova receipts uma única vez, antes
+  de a atestação ser refeita.
 - Toda review recebe um ID ligado ao snapshot atual. Receipts adicionais
   declaram seus paths: uma lane física só é refeita quando essas dependências
   mudam, inclusive durante um fix focal; caso contrário, sua prova anterior é

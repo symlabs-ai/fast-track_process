@@ -295,7 +295,7 @@ def test_feature_fast_graph_and_session_policy_are_valid() -> None:
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature_fast"
-    assert graph.meta["version"] == "1.4.0"
+    assert graph.meta["version"] == "2.0.0"
     assert graph.meta["execution_policy"]["max_acceptance_criteria_per_cycle"] == 6
     assert graph.meta["session_policy"] == {
         "mode": "sprint",
@@ -311,17 +311,24 @@ def test_feature_fast_preserves_feature_safety_contract() -> None:
     # de segurança que a comparação garantia viram asserções absolutas.
     fast = _payload(FAST_PROCESS)
 
-    assert {
-        "docs/feature-fix-baseline.yml",
-        "docs/feature-fix-review.md",
-        "docs/feature-fix-review.yml",
-    }.issubset(fast["artifact_policy"]["cycle"])
+    assert "docs/feature-fix-baseline.yml" in fast["artifact_policy"]["cycle"]
+    # Os checks determinísticos provam os AC-* e sobrevivem ao `ft close`.
+    assert "checks/" in fast["artifact_policy"]["canonical"]
+    assert not [
+        entry
+        for entry in fast["artifact_policy"]["cycle"]
+        if entry.startswith("checks")
+    ]
 
     policy = fast["correction_policy"]
     assert policy["follow_graph_after_retry"] is True
     assert policy["scope_rejection_restarts_at"] == "feature.discovery"
     assert policy["acceptance_rejection_restarts_at"] == "feature.implement"
-    assert "feature.fix_review" in policy["mandatory_after_implementation"]
+    assert policy["mandatory_after_implementation"] == [
+        "feature.checks",
+        "feature.verify",
+        "feature.acceptance",
+    ]
     assert sum(node["type"] == "human_gate" for node in fast["nodes"]) == 3
 
 
@@ -330,17 +337,30 @@ def test_feature_fast_session_boundaries_match_process_roles() -> None:
 
     assert graph.get_node("feature.discovery").sprint == "feature-01-scope"
     assert graph.get_node("feature.implement").sprint == "feature-02-build"
-    assert graph.get_node("feature.evidence").sprint == "feature-02-build"
-    review = graph.get_node("feature.review")
-    assert review.sprint == "feature-02-build"
-    assert review.type == "review"
-    assert review.llm_timeout_seconds == 1800
+    assert graph.get_node("feature.evidence_gate").sprint == "feature-02-build"
+    # A cadeia de revisão é determinística: nenhum node LLM entre implement e
+    # o aceite, exceto a correção focal.
+    for node_id in ("feature.checks", "feature.verify"):
+        node = graph.get_node(node_id)
+        assert node.sprint == "feature-02-build"
+        assert node.type == "gate"
+        assert node.executor == "python"
+
     fix = graph.get_node("feature.fix")
     assert fix.sprint == "feature-02-build"
     assert fix.llm_episode == "feature_implementation"
-    assert graph.get_node("feature.fix_review").type == "review"
-    assert graph.get_node("feature.fix_review").llm_timeout_seconds == 600
     assert graph.get_node("feature.reconcile").sprint == "feature-03-acceptance"
+    llm_nodes = sorted(
+        node.id
+        for node in graph.nodes.values()
+        if str(node.executor).startswith("llm_")
+    )
+    assert llm_nodes == [
+        "feature.discovery",
+        "feature.fix",
+        "feature.implement",
+        "feature.reconcile",
+    ]
 
 
 def test_feature_fast_uses_focal_fix_and_delta_review_topology() -> None:
@@ -349,33 +369,31 @@ def test_feature_fast_uses_focal_fix_and_delta_review_topology() -> None:
     assert graph.get_node("feature.review_decision").branches == {
         "approved": "feature.acceptance",
         "implementation": "feature.fix_prepare",
-        "evidence": "feature.evidence",
+        "evidence": "feature.evidence_gate",
         "scope": "feature.discovery",
-        "_default": "feature.review",
+        "_default": "feature.verify",
     }
     assert graph.get_node("feature.fix_prepare").next == "feature.fix"
     assert graph.get_node("feature.fix").next == "feature.fix_validate"
-    assert graph.get_node("feature.fix_validate").next == "feature.fix_review"
-    assert graph.get_node("feature.fix_review").next == "feature.fix_review_route"
-    assert graph.get_node("feature.fix_review_decision").branches == {
-        "approved": "feature.fix_full_validate",
-        "implementation": "feature.fix",
-        "evidence": "feature.impact_prepare",
-        "full_review": "feature.impact_prepare",
-        "scope": "feature.discovery",
-        "_default": "feature.fix_review",
-    }
-    assert graph.get_node("feature.fix_full_validate").next == ("feature.acceptance")
+    assert graph.get_node("feature.fix_validate").next == "feature.fix_full_validate"
+    # Depois do fix focal a atestação é refeita do zero, nunca reaproveitada.
+    assert graph.get_node("feature.fix_full_validate").next == "feature.review_prepare"
+    assert graph.get_node("feature.review_prepare").next == "feature.verify"
     assert graph.get_node("feature.scope_gate").next == "feature.receipt_baseline"
     assert graph.get_node("feature.implement").next == "feature.impact_prepare"
-    assert graph.get_node("feature.pre_review").next == "feature.pre_review_route"
+    assert graph.get_node("feature.impact_prepare").next == "feature.checks"
+    assert graph.get_node("feature.checks").next == "feature.pre_review_route"
     assert graph.get_node("feature.pre_review_decision").branches == {
         "approved": "feature.product_validate",
         "implementation": "feature.implement",
         "scope": "feature.discovery",
-        "_default": "feature.pre_review",
+        "_default": "feature.checks",
     }
+    assert graph.get_node("feature.product_validate").next == "feature.evidence_gate"
     assert graph.get_node("feature.evidence_gate").next == "feature.review_prepare"
+    # O fix focal corrige código; ele não pode reescrever a prova.
+    assert "checks" not in (graph.get_node("feature.fix").write_scope or [])
+    assert "checks" in (graph.get_node("feature.implement").write_scope or [])
 
 
 def test_feature_fast_runtime_references_are_self_contained() -> None:

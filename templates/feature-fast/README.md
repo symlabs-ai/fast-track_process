@@ -76,26 +76,25 @@ comandos e contagem de arquivos; ele não serializa a lista de arquivos/hashes.
 O fingerprint continua ligado às versões das ferramentas e aos hashes dos inputs
 executáveis versionados/não ignorados do projeto e dos scripts do processo.
 Documentos e CHANGELOG reconciliados depois do aceite não entram nesse snapshot.
-O node `evidence` não altera código: ele referencia ACs, testes, comandos e
-artefatos existentes. O gate de evidência prova integridade referencial; a
-review continua responsável por julgar a suficiência semântica. Seu primeiro
-veredicto de implementação rejeitado segue para `fix_prepare`, que congela a
-review, seus F-* e o commit revisado. `fix` corrige somente esses achados,
-`fix_validate` confirma o delta focal e `fix_review` audita apenas esse delta.
-Somente depois da aprovação, `fix_full_validate` renova o receipt completo e as
-lanes impactadas uma vez, antes do aceite. Tentativas intermediárias não
-repetem build+test.
-Lacunas de prova voltam a `evidence`, contradições de escopo voltam a
-`discovery` e aprovações seguem para o aceite. Se contrato, AC ou workset forem
-ampliados, a auditoria focal exige `full_review` e retorna ao caminho completo.
+O gate `evidence_gate` não altera código: ele deriva relatório e evidência do
+receipt executado e prova a integridade referencial. O veredicto por AC-* fica
+em `feature.verify`, que executa um `checks/AC-NNN.py` por obrigação — não há
+julgamento semântico por LLM na cadeia de revisão. Um veredicto REJECTED segue
+para `fix_prepare`, que congela a atestação, seus F-* e o commit revisado.
+`fix` corrige somente esses achados e não pode escrever em `checks/`;
+`fix_validate` confirma o delta focal e `fix_full_validate` renova o receipt
+completo e as lanes impactadas uma vez. A atestação é então refeita do zero em
+`verify`. Tentativas intermediárias não repetem build+test.
+Lacunas de prova voltam a `evidence_gate`, contradições de escopo voltam a
+`discovery` e aprovações seguem para o aceite.
 
-Antes da suíte completa, uma pré-revisão semântica focal verifica todos os ACs,
-testes, compatibilidade e escopo. Demandas claras com mais de 6 ACs são
-recusadas até serem divididas em fatias verticais de 4–6 ACs. O workset inicial
-é expandido pelo delta real e por testes/pares semanticamente relacionados.
+Antes da suíte completa, o gate `checks` confirma que cada AC-* tem o seu check
+e que nenhum check sobra — uma falha estrutural aqui volta ao código barato.
+Demandas claras com mais de 6 ACs são recusadas até serem divididas em fatias
+verticais de 4–6 ACs. O workset inicial é expandido pelo delta real e por
+testes/pares semanticamente relacionados.
 
-Review usa `verify` para reaproveitar a evidência antes do aceite. Cada
-pré-review e review completa recebe um ID determinístico ligado ao impacto,
+Cada atestação recebe um ID determinístico ligado ao impacto,
 evidência e receipts atuais; artefatos de uma iteração anterior não são aceitos.
 `feature-workset.yml` pode declarar `receipt_dependencies` para lanes caras.
 O processo compara seus paths antes/depois: uma lane física impactada exige
@@ -149,12 +148,14 @@ ativo.
 - no máximo 6 ACs por ciclo claro; demandas maiores viram fatias verticais;
 - perguntas iterativas antes de congelar o escopo;
 - nenhum código antes do human gate de escopo;
-- implementação, pré-review, validação do produto, evidência e review são
-  etapas separadas;
+- cada AC-* tem o seu `checks/AC-NNN.py`, escrito antes da implementação e
+  ancorado no código de produção, e é o check que prova o AC;
+- implementação, cobertura de checks, validação do produto, evidência e
+  atestação são etapas separadas;
 - uma validação completa `make build` + `make test`, com receipt determinístico,
   obrigatória após cada episódio de implementação/correção;
-- correções rejeitadas pela review usam fix focal + receipt completo + auditoria
-  somente do delta; expansão de contrato, AC ou workset volta à review completa;
+- correções rejeitadas pela atestação usam fix focal + receipt completo +
+  reexecução dos checks; o fix não pode escrever em `checks/`;
 - aceite humano antes de atualizar backlog e catálogo;
 - reconciliação final obrigatória de `docs/PROJECT_BACKLOG.md`,
   `docs/FEATURES.md`, documentação canônica afetada e `CHANGELOG.md`;
@@ -169,9 +170,10 @@ vez, fixa path e digest no estado, segue novamente o grafo após rejeições e a
 `close_policy` restrito ao PB selecionado. O processo global é apenas fonte de
 materialização e nunca é executado.
 
-Os oito nodes LLM usam perfis `feature_delta.*` próprios do processo incremental
+Os quatro nodes LLM (`discovery`, `implement`, `fix`, `reconcile`) usam perfis
+`feature_delta.*` próprios do processo incremental
 em vez de herdar HyperMode do `mvp-builder`. O engine compõe apenas demanda,
 contratos, feedback, diff e recortes focais aplicáveis a discovery, implementação,
-fix, review ou reconcile.
+fix ou reconcile.
 
 Consulte `examples/feature.md` para o formato produzido ao final do discovery.

@@ -4,6 +4,29 @@ Todas as mudanças notáveis do Fast Track são documentadas neste arquivo.
 
 ---
 
+## [Não lançado]
+
+### `feature-fast` v2.0.0 — atestação determinística no lugar das revisões por LLM
+
+- **De 8 para 4 nodes LLM** (`discovery`, `implement`, `fix`, `reconcile`).
+  Saíram `pre_review`, `evidence`, `review`, `fix_review` e a rota focal do
+  fix_review; entraram os gates python `feature.checks` (cobertura AC ↔
+  `checks/`) e `feature.verify` (executa um check por AC-*). O grafo caiu de
+  31 para 27 nodes e o score de determinismo subiu de 83.9% para 89.1%.
+- **Cada AC-\* ganha o seu `checks/AC-NNN.py`**, escrito antes da
+  implementação e ancorado no código de produção — não em `tests/`, onde um
+  check sobreviveria à remoção da garantia. O veredicto da feature passa a ser
+  a execução desses checks, não uma opinião; a qualidade deles é medida por
+  mutação no aceite do stakeholder.
+- **`attest_checks.py`** deriva pré-revisão, evidência e atestação nos mesmos
+  schemas que `validate_feature.py` já cobrava do LLM. O validador de 2421
+  linhas não mudou: os gates seguintes auditam a atestação determinística com
+  o mesmo rigor que aplicavam à revisão semântica.
+- **`checks/` virou artefato canônico** em `feature-fast` e em
+  `mvp-builder-fast`. Antes estava listado como artefato de ciclo no
+  `mvp-builder-fast` e o `ft close` o arquivava junto com o descarte — as
+  provas dos ciclos 10 e 11 do SymProbe morreram assim.
+
 ## [v0.22.0] - 2026-08-28
 
 ### Custo do loop de correção no `mvp-builder-fast`

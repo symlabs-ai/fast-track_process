@@ -98,6 +98,7 @@ input_policy:
 
 artifact_policy:
   canonical:
+    - checks/
     - .ft/project.yml
     - docs/PRD.md
     - docs/TECH_STACK.md
@@ -120,7 +121,6 @@ artifact_policy:
     - docs/operational-readiness.md
     - docs/operational-readiness.yml
   cycle:
-    - checks/
     - docs/direct-plan.md
     - docs/direct-review.md
     - docs/direct-review.yml

@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "1.4.0"
+version: "2.0.0"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -41,9 +41,8 @@ correction_policy:
   scope_rejection_restarts_at: feature.discovery
   acceptance_rejection_restarts_at: feature.implement
   mandatory_after_implementation:
-    - feature.pre_review
-    - feature.review
-    - feature.fix_review
+    - feature.checks
+    - feature.verify
     - feature.acceptance
 
 # O mvp-builder decide todos os P0/P1 no encerramento do MVP. Um ciclo de
@@ -62,6 +61,7 @@ close_policy:
 
 artifact_policy:
   canonical:
+    - checks/
     - CHANGELOG.md
     - docs/PRD.md
     - docs/TECH_STACK.md
@@ -91,8 +91,6 @@ artifact_policy:
     - docs/feature-review.md
     - docs/feature-review.yml
     - docs/feature-fix-baseline.yml
-    - docs/feature-fix-review.md
-    - docs/feature-fix-review.yml
     - docs/feature-reconciliation.yml
     - docs/stakeholder-feedback.md
     - docs/feature-result.md
@@ -341,21 +339,24 @@ nodes:
     context_profile: feature_delta.implement
     title: "Implementar Feature e Testes"
     description: >-
-      Implementa apenas código, testes e contratos executáveis do escopo
-      aprovado. Evidências e relatórios são produzidos por um node separado.
+      Implementa código, testes e o check determinístico de cada AC-*. O check
+      é escrito antes da implementação; relatórios e evidência são derivados
+      mecanicamente do receipt pelos gates seguintes.
     sprint: feature-02-build
     executor: claude
-    max_turns: 60
-    llm_timeout_seconds: 900
+    max_turns: 80
+    llm_timeout_seconds: 1200
     llm_episode: feature_implementation
     llm_episode_budget_seconds: 1800
     llm_episode_max_calls: 2
     outputs:
       - project/
       - src/
+      - checks/
     write_scope:
       - project
       - src
+      - checks
       - docs/api_contract.md
       - docs/ui_criteria.md
       - docs/screenshots/feature
@@ -366,19 +367,35 @@ nodes:
       para confirmar a mudança focal e preserve comportamentos fora do escopo.
 
       Regras:
-      1. Crie ou atualize testes para cada AC-* antes de concluir.
-      2. Atualize api_contract/ui_criteria apenas quando o plano exigir.
-      3. Não recrie scaffold, stack, Makefile ou infraestrutura do produto.
-      4. Não atualize FEATURES nem conclua o PB antes do aceite humano.
-      5. Durante a implementação, rode somente os testes focais necessários com
+      1. Para CADA AC-* do contrato, escreva `checks/AC-NNN.py` ANTES de
+         implementar — um arquivo por AC, sem dependência além da stdlib, que
+         sai com 0 quando o critério está cumprido e 1 quando não está,
+         imprimindo o motivo. Escrever o check antes é o que o torna honesto:
+         nesse momento ninguém tem interesse no resultado. Um check precisa
+         poder reprovar; se ele passaria mesmo com o critério não entregue, ele
+         não verifica nada.
+
+         O check ancora no artefato que carrega a garantia — o código em `src/`
+         ou `project/` para critérios de comportamento, o documento para
+         critérios documentais (lendo o conteúdo exigido, nunca só a existência
+         do arquivo). Um check que apenas procura um nome de função dentro de
+         `tests/` continua verde com a garantia arrancada de `src/` e por isso
+         não vale. O gate `feature.verify` executa todos eles e o veredicto do
+         ciclo é o resultado dessa execução.
+      2. Crie ou atualize testes para cada AC-* antes de concluir.
+      3. Atualize api_contract/ui_criteria apenas quando o plano exigir.
+      4. Não recrie scaffold, stack, Makefile ou infraestrutura do produto.
+      5. Não atualize FEATURES nem conclua o PB antes do aceite humano.
+      6. Durante a implementação, rode somente os testes focais necessários com
          `.ft/process/feature-fast/scripts/product.sh focal -- <comando> [args...]`.
          Não repita a suíte completa: após sua entrega, o gate determinístico
          executará `full --record docs/feature-validation.json`, cobrindo build
          e test nessa ordem e vinculando o resultado ao snapshot executável do
          produto.
-      6. Não produza relatórios ou evidências narrativas neste node; concentre a
-         chamada em código e testes. O node evidence fará essa coleta.
-      7. Em uma correção solicitada, considere o feedback mais recente e mantenha
+      7. Não produza relatórios nem evidências narrativas: eles são derivados
+         mecanicamente do receipt e dos checks pelos gates. Concentre a chamada
+         em código, testes e checks.
+      8. Em uma correção solicitada, considere o feedback mais recente e mantenha
          todo o restante aprovado funcionando.
     next: feature.impact_prepare
 
@@ -402,57 +419,32 @@ nodes:
     on_fail:
       human_gate: "O delta não forma uma implementação testável; corrija o produto antes de validar."
       goto: feature.implement
-    next: feature.pre_review
+    next: feature.checks
 
-  - id: feature.pre_review
-    no_pre_seed: true
-    type: review
-    review_route_path: docs/feature-pre-review.yml
-    context_profile: feature_delta.pre_review
-    title: "Pré-revisão Semântica Focal"
+  - id: feature.checks
+    type: gate
+    title: "Cobertura de Checks por AC"
     description: >-
-      Audita contrato, testes e escopo antes do build/test completo. Uma falha
-      semântica volta ao código sem desperdiçar a suíte cara.
+      Confirma que cada AC-* tem o seu checks/AC-NNN.py e que nenhum check
+      sobra, antes de gastar a suíte completa. Substitui a pré-revisão
+      semântica: a falha aqui é estrutural e volta ao código barato.
     sprint: feature-02-build
-    executor: claude
-    max_turns: 24
-    llm_timeout_seconds: 600
+    executor: python
     outputs:
       - docs/feature-pre-review.md
       - docs/feature-pre-review.yml
-    write_scope:
-      - docs/feature-pre-review.md
-      - docs/feature-pre-review.yml
-    prompt: |
-      Faça uma pré-revisão semântica focal antes da validação completa. Use o
-      contrato, plano, diff e `docs/feature-impact.yml`; não altere produto,
-      testes, contratos ou artefatos anteriores e não rode build/suíte completa.
-      Sondas focais somente quando indispensáveis.
-
-      Faça uma única passagem adversarial abrangente. Para cada AC, verifique:
-      entregável concreto (não apenas modelo/teste), existência e execução real
-      dos comandos citados, linhas/owners/bloqueios canônicos, coerência entre
-      resultado e receipts, cobertura semântica entre plataformas, modelo de
-      snapshot sem autorreferência e ao menos uma falsificação que prove
-      fail-closed. Receipt histórico só pode ser reutilizado se ele próprio
-      carregar a âncora de dependências/revisão da execução original; baseline
-      capturada no início do ciclo não prova o predecessor. Âncora ausente
-      significa NOT_VERIFIED, nunca PASS.
-
-      Verifique todos os AC-*, teste correspondente, compatibilidade, escopo e
-      coerência do delta e reporte todos os achados conhecidos na mesma revisão,
-      em vez de revelar um por reentrada. Gere docs/feature-pre-review.md com uma tabela
-      AC/PASS|FAIL/evidência. Achados de implementação devem ser numerados
-      P-01, P-02... Gere docs/feature-pre-review.yml com `schema_version: 1`,
-      o `review_id` exato de `feature-impact.yml`, `verdict`, `review_route` e
-      `summary`. Rotas: approved, implementation ou scope.
     validation_mode: fail_fast
     validators:
-      - file_exists: docs/feature-pre-review.md
-      - file_exists: docs/feature-pre-review.yml
-      - command_succeeds: "python .ft/process/feature-fast/scripts/validate_feature.py pre-review"
+      - command_succeeds:
+          command: python .ft/process/feature-fast/scripts/attest_checks.py pre
+          stop_on_failure: true
+      - command_succeeds: python .ft/process/feature-fast/scripts/validate_feature.py pre-review
+    on_fail:
+      human_gate: >-
+        Há AC-* sem checks/AC-NNN.py ou check órfão sem AC. Escreva o check que
+        falta na implementação — o fix focal não tem permissão de escrever checks.
+      goto: feature.implement
     next: feature.pre_review_route
-
   - id: feature.pre_review_route
     type: gate
     title: "Registrar Rota da Pré-revisão"
@@ -475,7 +467,7 @@ nodes:
       approved: feature.product_validate
       implementation: feature.implement
       scope: feature.discovery
-      _default: feature.pre_review
+      _default: feature.checks
     episode_restart:
       implementation: feature_implementation
       scope: feature_implementation
@@ -507,60 +499,31 @@ nodes:
     on_fail:
       human_gate: "A validação do produto falhou; corrija a implementação preservada."
       goto: feature.implement
-    next: feature.evidence
-
-  - id: feature.evidence
-    no_pre_seed: true
-    preserve_outputs_on_reentry: true
-    type: document
-    context_profile: feature_delta.evidence
-    title: "Coletar Evidências da Feature"
-    description: >-
-      Converte diff, testes e receipt já executado em evidência referencial por
-      AC, sem alterar o produto nem repetir build/test.
-    sprint: feature-02-build
-    executor: claude
-    max_turns: 24
-    llm_timeout_seconds: 480
-    outputs:
-      - docs/implementation-report.md
-      - docs/feature-evidence.yml
-    write_scope:
-      - docs/implementation-report.md
-      - docs/feature-evidence.yml
-      - docs/screenshots/feature
-    prompt: |
-      Produza apenas evidência da implementação já validada. Não altere código,
-      testes, contratos ou o receipt e não repita build/test.
-
-      Gere docs/implementation-report.md com uma linha PASS/FAIL por AC-*, os
-      arquivos alterados, compatibilidade e os comandos presentes no receipt.
-      Gere docs/feature-evidence.yml (schema_version: 1) com `receipt`,
-      `commands` e uma lista `acceptance`; cada item deve conter `id`, `status`,
-      `tests` e `artifacts`. Paths devem existir. Screenshots só são exigidos
-      quando o contrato aprovado os prevê. A suficiência semântica continuará
-      sendo responsabilidade da revisão independente.
     next: feature.evidence_gate
 
   - id: feature.evidence_gate
     type: gate
     title: "Validar Integridade das Evidências"
     description: >-
-      Confirma referências, ACs, paths e receipt. Não tenta decidir se um teste
-      demonstra semanticamente o comportamento; isso pertence à review.
+      Deriva o relatório e a evidência por AC do receipt já executado e então
+      confirma referências, ACs, paths e receipt. A prova semântica não é
+      opinião: é o check determinístico executado no gate seguinte.
     sprint: feature-02-build
     executor: python
     validation_mode: fail_fast
     validators:
-      - file_exists: docs/implementation-report.md
-      - file_exists: docs/feature-evidence.yml
       - command_succeeds:
           command: "bash .ft/process/feature-fast/scripts/product.sh verify docs/feature-validation.json"
           stop_on_failure: true
+      - command_succeeds:
+          command: "python .ft/process/feature-fast/scripts/attest_checks.py evidence"
+          stop_on_failure: true
+      - file_exists: docs/implementation-report.md
+      - file_exists: docs/feature-evidence.yml
       - command_succeeds: "python .ft/process/feature-fast/scripts/validate_feature.py evidence"
     on_fail:
-      human_gate: "As referências de evidência estão incompletas; regenere somente a evidência."
-      goto: feature.evidence
+      human_gate: "A evidência derivada do receipt está incompleta; corrija a implementação e seus testes."
+      goto: feature.implement
     next: feature.review_prepare
 
   - id: feature.review_prepare
@@ -582,59 +545,31 @@ nodes:
     on_fail:
       human_gate: "Um receipt impactado está ausente ou obsoleto; execute somente a lane indicada."
       goto: feature.product_validate
-    next: feature.review
+    next: feature.verify
 
-  - id: feature.review
-    no_pre_seed: true
-    type: review
-    review_route_path: docs/feature-review.yml
-    context_profile: feature_delta.review
-    title: "Revisão Independente da Feature"
+  - id: feature.verify
+    type: gate
+    title: "Verificar AC pelos Checks Determinísticos"
     description: >-
-      Audita diff, testes e evidências contra cada AC-*, procurando regressões,
-      quebra de contrato e expansão de escopo antes do stakeholder.
+      Executa um check por AC-* e deriva a atestação do resultado. Substitui a
+      revisão semântica por LLM: o veredicto é a execução dos checks, e a
+      qualidade deles é medida por mutação no aceite do stakeholder.
     sprint: feature-02-build
-    executor: claude
-    max_turns: 50
-    llm_timeout_seconds: 1800
+    executor: python
     outputs:
       - docs/feature-review.md
       - docs/feature-review.yml
-    write_scope:
-      - docs/feature-review.md
-      - docs/feature-review.yml
-    prompt: |
-      Faça uma revisão independente usando o contexto focal fornecido por
-      `feature_delta.review`: contrato, plano, relatório, diff, código/testes
-      alterados e resumo do receipt. O validator determinístico deste node
-      confirma o receipt; não o reexecute por conta própria.
-
-      Não repita a suíte completa nem o build já atestados pelo receipt. Quando
-      precisar desafiar uma hipótese ou um AC-*, execute somente sondas/testes
-      focais com `product.sh focal -- <comando> [args...]`. Qualquer alteração no
-      produto invalida deterministicamente o receipt e exige nova implementação.
-
-      Gere docs/feature-review.md com uma tabela de todos os AC-*, regressões,
-      compatibilidade, scope creep e evidências. Em um veredicto REJECTED,
-      numere cada achado acionável como F-01, F-02 etc.; não agrupe defeitos
-      independentes sob o mesmo ID. Gere também
-      docs/feature-review.yml com schema_version: 1, verdict, review_route e
-      summary, além do `review_id` e `receipt_fingerprint` exatos de
-      docs/feature-review-context.yml. `review_route` deve ser exatamente
-      approved, implementation, evidence ou scope: use implementation para
-      defeito no produto, evidence para prova ausente/inadequada e scope para
-      contradição do contrato. Nunca reutilize IDs ou artefatos de uma revisão
-      anterior.
     validation_mode: fail_fast
     validators:
-      - file_exists: docs/feature-review.md
-      - file_exists: docs/feature-review.yml
       - command_succeeds:
-          command: "bash .ft/process/feature-fast/scripts/product.sh verify docs/feature-validation.json"
+          command: bash .ft/process/feature-fast/scripts/product.sh verify docs/feature-validation.json
           stop_on_failure: true
-      - command_succeeds: "python .ft/process/feature-fast/scripts/validate_feature.py review"
+      - command_succeeds:
+          command: python .ft/process/feature-fast/scripts/attest_checks.py attest
+          stop_on_failure: true
+          timeout: 900
+      - command_succeeds: python .ft/process/feature-fast/scripts/validate_feature.py review
     next: feature.review_route
-
   - id: feature.review_route
     type: gate
     title: "Registrar Rota da Revisão"
@@ -656,9 +591,9 @@ nodes:
     branches:
       approved: feature.acceptance
       implementation: feature.fix_prepare
-      evidence: feature.evidence
+      evidence: feature.evidence_gate
       scope: feature.discovery
-      _default: feature.review
+      _default: feature.verify
     episode_restart:
       implementation: feature_implementation
       scope: feature_implementation
@@ -704,8 +639,9 @@ nodes:
       - src
     prompt: |
       Faça uma correção focal, não uma nova implementação. Use a âncora em
-      docs/feature-fix-baseline.yml, a revisão rejeitada e, em uma reentrada, a
-      última feature-fix-review como autoridade.
+      docs/feature-fix-baseline.yml e os F-* de docs/feature-review.md — a
+      atestação determinística — como autoridade. Cada F-* nomeia o
+      `checks/AC-NNN.py` que reprovou e a saída dele.
 
       Regras:
       1. Altere somente o necessário para resolver os F-* ainda reprovados.
@@ -714,7 +650,9 @@ nodes:
       4. Rode apenas testes/sondas focais durante a chamada com
          `.ft/process/feature-fast/scripts/product.sh focal -- <comando> [args...]`.
       5. Não reescreva as revisões, a âncora, o receipt ou documentação
-         narrativa. O gate seguinte executará a validação completa uma vez.
+         narrativa, e não altere `checks/` — corrigir o código é o único
+         caminho para virar um check. O gate seguinte executará a validação
+         completa uma vez e a atestação será refeita do zero.
       6. Se um achado só puder ser resolvido ampliando contrato, AC ou workset,
          preserve o diagnóstico e pare: a auditoria encaminhará para revisão
          completa.
@@ -738,86 +676,7 @@ nodes:
       human_gate: >-
         A correção focal não satisfaz sua âncora; ajuste somente o achado.
       goto: feature.fix
-    next: feature.fix_review
-
-  - id: feature.fix_review
-    type: review
-    review_route_path: docs/feature-fix-review.yml
-    context_profile: feature_delta.fix_review
-    title: "Auditar Somente a Correção"
-    description: >-
-      Audita o delta acumulado desde a revisão rejeitada e cada F-* original,
-      preservando o julgamento dos ACs não afetados.
-    sprint: feature-02-build
-    executor: claude
-    max_turns: 28
-    llm_timeout_seconds: 600
-    outputs:
-      - docs/feature-fix-review.md
-      - docs/feature-fix-review.yml
-    write_scope:
-      - docs/feature-fix-review.md
-      - docs/feature-fix-review.yml
-    prompt: |
-      Execute uma auditoria independente somente da correção. A âncora,
-      a revisão rejeitada, o receipt completo anterior ao fix e o diff desde `base_commit` já
-      estão no contexto `feature_delta.fix_review`.
-
-      Para cada F-* original, registre exatamente PASS ou FAIL e uma evidência
-      verificável. Não reabra ACs, código ou decisões não tocados pelo delta.
-      Não repita build/test; o validator confirma o receipt ancorado. Uma nova
-      suíte completa só roda depois que esta auditoria aprovar. Se necessário,
-      rode apenas uma sonda focal sem alterar o produto.
-
-      Gere docs/feature-fix-review.md com a tabela dos F-* e a análise de
-      regressão do delta. Gere docs/feature-fix-review.yml com:
-      `schema_version: 1`, `verdict`, `review_route`, `summary`,
-      `source_review: docs/feature-review.yml`, o `source_review_id` exato da
-      âncora, `base_commit`,
-      `receipt_fingerprint` do receipt ancorado e `findings` (lista de `id`,
-      `status`, `evidence`).
-
-      Rotas válidas:
-      - approved: todos os F-* corrigidos sem expansão;
-      - implementation: defeito focal ainda presente;
-      - evidence: a prova focal continua insuficiente;
-      - full_review: o delta escapou do workset ou pede reavaliação ampla;
-      - scope: contrato/AC aprovado precisa mudar.
-    validation_mode: fail_fast
-    validators:
-      - file_exists: docs/feature-fix-review.md
-      - file_exists: docs/feature-fix-review.yml
-      - command_succeeds: "python .ft/process/feature-fast/scripts/validate_feature.py fix-review"
-    next: feature.fix_review_route
-
-  - id: feature.fix_review_route
-    type: gate
-    title: "Registrar Rota da Auditoria da Correção"
-    sprint: feature-02-build
-    executor: python
-    validators:
-      - read_artifact:
-          path: docs/feature-fix-review.yml
-          key: review_route
-          pattern: "review_route:\\s*(approved|implementation|evidence|full_review|scope)"
-    next: feature.fix_review_decision
-
-  - id: feature.fix_review_decision
-    type: decision
-    title: "Encaminhar Auditoria da Correção"
-    sprint: feature-02-build
-    executor: python
-    condition: review_route
-    branches:
-      approved: feature.fix_full_validate
-      implementation: feature.fix
-      evidence: feature.impact_prepare
-      full_review: feature.impact_prepare
-      scope: feature.discovery
-      _default: feature.fix_review
-    episode_restart:
-      implementation: feature_implementation
-      scope: feature_implementation
+    next: feature.fix_full_validate
 
   - id: feature.fix_full_validate
     type: gate
@@ -850,7 +709,7 @@ nodes:
         A suíte completa ou um receipt impactado do fix aprovado falhou;
         corrija somente a regressão observada.
       goto: feature.fix
-    next: feature.acceptance
+    next: feature.review_prepare
 
   - id: feature.acceptance
     type: human_gate
@@ -858,8 +717,8 @@ nodes:
     description: >-
       Valide a capacidade implementada e seus AC-*. UI/API sobe pelo serve.sh;
       mudanças internas são avaliadas pelos relatórios e testes. Rejeite com um
-      desvio reproduzível. Defeitos encontrados pela review usam correção focal,
-      receipt completo e auditoria somente do delta; uma rejeição do stakeholder
+      desvio reproduzível. Defeitos encontrados pela atestação usam correção
+      focal, receipt completo e reexecução dos checks; uma rejeição do stakeholder
       reinicia a implementação por poder introduzir um requisito semântico novo.
     sprint: feature-03-acceptance
     executor: python

@@ -217,3 +217,45 @@ e manter o retry normal; a operação nunca pode transformar um `REJECTED` do
 reviewer em `APPROVED`.
 
 **Status:** proposto. **Prioridade:** alta.
+
+---
+
+## [SymProbe cycle-10] `checks/` é arquivado como scrap e morre no arquivo
+
+Origem: verificação pós-close do cycle-10 em `~/dev/tools/sym_probe`.
+
+**Problema:** `templates/mvp-builder-fast/process.yml` lista `checks/` em
+`artifact_policy.cycle` (introduzido em `42a91ec`, o mesmo commit que criou o
+mecanismo). `archive_cycle_artifacts` **move** artefatos de ciclo para
+`.ft/cycles/<id>/`, então o `ft close` apagou os 19 `checks/D-NNN.py` da raiz
+do projeto (commit `35091fd`, 20 deleções). Pior: as cópias arquivadas são
+inexecutáveis — `checks/_common.py` ancora `REPO_ROOT =
+Path(__file__).resolve().parent.parent`, que no arquivo aponta para
+`.ft/cycles/cycle-10-mvp-builder-fast/`. Rodar as 19 do arquivo dá 19 FAIL
+("src/sym_probe/relay/server.py does not exist").
+
+O efeito é que a garantia central do mecanismo — "toda obrigação tem um check
+determinístico que reprova se a garantia for removida" — vale só durante o
+ciclo que a escreveu. Nada na raiz impede o ciclo seguinte de reverter em
+silêncio a validação de certificado ou o rate limiting.
+
+**Tensão de design:** basta mover `checks/` para `canonical` para os arquivos
+persistirem, mas o validator de cobertura de `ft.direct.03.review` exige
+igualdade exata entre os refs `D-*` do plano e os arquivos em `checks/` — com
+acúmulo, o ciclo 11 acusaria `checks orfaos={D-001..D-019}`. E a numeração
+reiniciada por ciclo faria o build sobrescrever guardas antigos.
+
+**Solução proposta (só template, sem mudar o engine):**
+1. `checks/` passa de `cycle` para `canonical`.
+2. A cláusula de órfãos sai do validator de cobertura: órfão passa a ser
+   legítimo (é guarda de ciclo anterior). Fica só "toda obrigação do plano tem
+   check". O validator de execução já roda `checks/D-*.py` inteiro — com
+   acúmulo, ele vira a suíte de regressão que hoje não existe.
+3. Colisão de numeração vira validator determinístico: `git diff --name-status
+   HEAD -- checks/` no review não pode ter entrada `M`, só `A`. Reusar
+   `D-005` de um ciclo anterior sobrescreve um guarda e reprova.
+4. O prompt do build declara que a numeração das obrigações é contínua no
+   projeto, nunca reiniciada.
+
+Os 19 checks do cycle-10 são recuperáveis de `a093bde`/`87d7aa8` quando a
+correção for aplicada.

@@ -292,3 +292,48 @@ def test_makefile_do_mvp_builder_entra_no_feature_fast(tmp_path, monkeypatch):
     makefile.write_text("build:\n\t@true\n", encoding="utf-8")
     with pytest.raises(receipt.ReceiptError):
         receipt.resolve_suite_target(tmp_path, ".")
+
+
+def test_log_do_engine_nao_invalida_o_impacto(feature_root: Path) -> None:
+    """O engine escreve `<projeto>_log.md` entre um gate e o seguinte.
+
+    Com `product_root: "."` — o layout que o mvp-builder-fast entrega — esse
+    log caía dentro da lane do produto. O impacto passava a se autoinvalidar:
+    `impact_prepare` gravava o fingerprint e o próprio ato de registrar a
+    passagem do gate mudava o conteúdo hasheado, deixando `feature.checks`
+    inalcançável para sempre. O resto do engine já trata `*_log.md` como
+    artefato seu; o que este teste protege é que o validador concorde.
+    """
+    # O produto na raiz, como o mvp-builder-fast entrega.
+    vf._atomic_write_yaml(
+        feature_root / "docs/feature-baseline.yml",
+        {
+            "version": 2,
+            "product_root": ".",
+            "project_backlog": [
+                {"ID": "PB-050", "Item": "entrypoint", "Status": "doing"}
+            ],
+            "features": [{"ID": "FEAT-001", "Nome": "relay", "Status": "ativo"}],
+        },
+    )
+    # O log do engine é não-rastreado e vive na raiz, como no worktree real.
+    log = feature_root / "produto_log.md"
+    log.write_text("| no | resultado |\n| --- | --- |\n", encoding="utf-8")
+
+    vf.prepare_receipt_baseline(feature_root)
+    vf._atomic_write_yaml(feature_root / vf.IMPACT_PATH, vf._build_impact(feature_root))
+
+    # O engine registra a transicao de no: o log cresce entre um gate e o outro.
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write("| feature.impact_prepare | PASS |\n")
+
+    # O impacto continua valido: o log e do engine, nao do produto.
+    vf._current_impact(feature_root)
+    _attest(feature_root, "pre")
+
+    # E a garantia inversa: mexer no produto de verdade AINDA invalida.
+    (feature_root / "src/relay.py").write_text(
+        "def serve(host, port):\n    return None\n", encoding="utf-8"
+    )
+    with pytest.raises(vf.FeatureValidationError):
+        vf._current_impact(feature_root)

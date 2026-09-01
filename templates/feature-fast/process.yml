@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "2.0.1"
+version: "2.0.2"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:

@@ -854,6 +854,31 @@ def validate_reserve(root: Path) -> None:
     )
 
 
+#: Diretórios de topo que pertencem ao ciclo, não ao produto, quando o produto
+#: mora na raiz do repositório (`product_root: "."`, o layout que o
+#: mvp-builder-fast entrega).
+CYCLE_ONLY_ROOTS = frozenset({".ft", ".git", "docs", "state"})
+
+
+def _is_product_path(path: str) -> bool:
+    """Um caminho da raiz conta como produto, e não como artefato do ciclo?
+
+    A regra vivia duplicada em `_changed_product_paths` e
+    `_product_visible_files`, e as duas cópias esqueceram o mesmo caso: o
+    engine grava `<projeto>_log.md` na raiz do worktree a cada transição de
+    nó. Com o produto na raiz, esse log entrava na lane e no conjunto de
+    arquivos alterados, e o impacto passava a se autoinvalidar — registrar a
+    passagem de um gate já mudava o conteúdo hasheado pelo gate seguinte,
+    deixando `feature.checks` inalcançável. O resto do engine já trata
+    `*_log.md` como artefato seu (ft/engine/git_ops.py,
+    validators/check_paths.py, delegate.py). Uma função só para que as duas
+    chamadas não voltem a divergir.
+    """
+    if path == "CHANGELOG.md" or path.endswith("_log.md"):
+        return False
+    return path.split("/", 1)[0] not in CYCLE_ONLY_ROOTS
+
+
 def _changed_product_paths(root: Path, product_root: str) -> list[str]:
     try:
         result = subprocess.run(
@@ -920,9 +945,7 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
             continue
         seen.add(raw)
         if product_root == ".":
-            # Produto na raiz: docs/.ft/CHANGELOG são evidência do ciclo, não produto.
-            first = raw.split("/", 1)[0]
-            if first in {"docs", ".ft", ".git", "state"} or raw == "CHANGELOG.md":
+            if not _is_product_path(raw):
                 continue
             paths.append(raw)
         elif raw.startswith(f"{product_root}/"):
@@ -1021,12 +1044,7 @@ def _product_visible_files(
     if product_root != ".":
         prefix = f"{product_root}/"
         return [path for path in visible_files if path.startswith(prefix)]
-    return [
-        path
-        for path in visible_files
-        if path != "CHANGELOG.md"
-        and path.split("/", 1)[0] not in {".ft", ".git", "docs", "state"}
-    ]
+    return [path for path in visible_files if _is_product_path(path)]
 
 
 def prepare_receipt_baseline(root: Path) -> None:

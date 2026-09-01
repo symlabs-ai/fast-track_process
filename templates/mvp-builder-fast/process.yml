@@ -12,7 +12,7 @@
 #        (por exemplo src/, tests/ e examples/ na raiz), sem inventar frontend.
 
 id: mvp_builder_fast
-version: "1.19.0"
+version: "1.20.0"
 title: "MVP Builder Fast — MVP com Sessões Persistentes"
 
 execution_policy:
@@ -3970,6 +3970,7 @@ nodes:
       - tests
       - Makefile
       - checks
+      - docs/PRD.md
       - docs/direct-plan.md
       - docs/direct-review.md
       - docs/direct-review.yml

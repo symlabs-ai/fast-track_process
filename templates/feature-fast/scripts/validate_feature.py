@@ -23,6 +23,10 @@ from typing import Iterable
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from product_receipt import SUITE_TARGETS  # noqa: E402
+
 AC_RE = re.compile(r"\bAC-\d{2,3}\b", re.IGNORECASE)
 FINDING_RE = re.compile(r"\bF-\d{2,3}\b", re.IGNORECASE)
 PRE_FINDING_RE = re.compile(r"\bP-\d{2,3}\b", re.IGNORECASE)
@@ -643,9 +647,14 @@ def validate_baseline(root: Path) -> None:
     makefile = _read(root, makefile_path)
     missing_targets = [
         target
-        for target in ("test", "build")
+        for target in ("build",)
         if not re.search(rf"(?m)^{re.escape(target)}\s*:", makefile)
     ]
+    if not any(
+        re.search(rf"(?m)^{re.escape(target)}\s*:", makefile)
+        for target in SUITE_TARGETS
+    ):
+        missing_targets.append("|".join(SUITE_TARGETS))
     if missing_targets:
         raise FeatureValidationError(
             f"{makefile_path} sem targets obrigatórios: " + ", ".join(missing_targets)

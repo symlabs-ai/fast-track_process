@@ -108,11 +108,16 @@ run_full_validation() {
     printf 'ERRO: validação completa falhou em build; receipt não foi gravado\n' >&2
     return "$status"
   fi
-  if (cd "$ROOT" && env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_REL" test); then
+  local suite
+  suite="$(receipt_tool "$validation_kind" suite-target)" || {
+    printf 'ERRO: alvo de suíte indeterminado no Makefile do produto\n' >&2
+    return 1
+  }
+  if (cd "$ROOT" && env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_REL" "$suite"); then
     :
   else
     local status="$?"
-    printf 'ERRO: validação completa falhou em test; receipt não foi gravado\n' >&2
+    printf 'ERRO: validação completa falhou em %s; receipt não foi gravado\n' "$suite" >&2
     return "$status"
   fi
   receipt_tool "$validation_kind" record --receipt "$receipt" --expected "$before"
@@ -219,7 +224,13 @@ case "${1:-path}" in
   path)
     printf '%s\n' "$PRODUCT_REL"
     ;;
-  test|build)
+  test)
+    # O nome do alvo é resolvido do Makefile, não assumido: ver SUITE_TARGETS
+    # em product_receipt.py.
+    suite_target="$(receipt_tool implementation suite-target)" || exit 1
+    exec env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_ROOT" "$suite_target"
+    ;;
+  build)
     exec env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS make -C "$PRODUCT_ROOT" "$1"
     ;;
   run)

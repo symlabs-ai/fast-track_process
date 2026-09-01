@@ -273,11 +273,35 @@ def _normalize_product_root(root: Path, raw_product_root: str) -> str:
     return normalized
 
 
-def _commands(product_root: str) -> list[list[str]]:
+#: Nomes aceitos para o alvo que roda a suíte do produto, em ordem de
+#: precedência. `test` é o nome canônico do feature-fast; `verify` é o nome
+#: que o mvp-builder-fast grava no Makefile que entrega, e sem ele um produto
+#: entregue por aquele template não conseguiria entrar num ciclo de feature.
+#: O primeiro alvo definido no Makefile vence e o receipt grava o comando
+#: exato que rodou — nunca o nome que se esperava encontrar.
+SUITE_TARGETS = ("test", "verify")
+
+
+def resolve_suite_target(root: Path, product_root: str) -> str:
+    makefile = root / product_root / "Makefile"
+    try:
+        text = makefile.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        raise ReceiptError(f"Makefile ilegível em {product_root}: {exc}") from exc
+    for target in SUITE_TARGETS:
+        if re.search(rf"(?m)^{re.escape(target)}\s*:", text):
+            return target
+    raise ReceiptError(
+        f"{product_root}/Makefile não define nenhum alvo de suíte: "
+        + ", ".join(SUITE_TARGETS)
+    )
+
+
+def _commands(product_root: str, suite_target: str) -> list[list[str]]:
     make = ["env", "-u", "MAKEFLAGS", "-u", "MFLAGS", "-u", "GNUMAKEFLAGS", "make"]
     return [
         [*make, "-C", product_root, "build"],
-        [*make, "-C", product_root, "test"],
+        [*make, "-C", product_root, suite_target],
     ]
 
 
@@ -294,7 +318,7 @@ def _snapshot(
         "schema_version": SCHEMA_VERSION,
         "kind": RECEIPT_KINDS[validation_kind],
         "product_root": product_root,
-        "commands": _commands(product_root),
+        "commands": _commands(product_root, resolve_suite_target(root, product_root)),
         "tools": _tool_versions(),
         "project_identity": _project_identity(root),
         "validation_contract": {
@@ -475,6 +499,13 @@ def _common_parser(subparser: argparse.ArgumentParser) -> None:
     )
 
 
+def command_suite_target(args: argparse.Namespace) -> None:
+    """Imprime o alvo de suíte para que o product.sh rode exatamente o mesmo
+    comando que o receipt grava."""
+    product_root = _normalize_product_root(args.root, args.product_root)
+    print(resolve_suite_target(args.root, product_root))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -498,6 +529,10 @@ def _parser() -> argparse.ArgumentParser:
     _common_parser(verify)
     verify.add_argument("--receipt", required=True)
     verify.set_defaults(handler=command_verify)
+
+    suite = commands.add_parser("suite-target")
+    _common_parser(suite)
+    suite.set_defaults(handler=command_suite_target)
     return parser
 
 

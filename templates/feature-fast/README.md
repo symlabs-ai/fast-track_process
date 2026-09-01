@@ -152,8 +152,10 @@ ativo.
   ancorado no código de produção, e é o check que prova o AC;
 - implementação, cobertura de checks, validação do produto, evidência e
   atestação são etapas separadas;
-- uma validação completa `make build` + `make test`, com receipt determinístico,
-  obrigatória após cada episódio de implementação/correção;
+- uma validação completa `make build` + a suíte do produto (`make test`, ou
+  `make verify` quando o Makefile usa esse nome — o receipt grava o comando
+  exato que rodou), com receipt determinístico, obrigatória após cada
+  episódio de implementação/correção;
 - correções rejeitadas pela atestação usam fix focal + receipt completo +
   reexecução dos checks; o fix não pode escrever em `checks/`;
 - aceite humano antes de atualizar backlog e catálogo;

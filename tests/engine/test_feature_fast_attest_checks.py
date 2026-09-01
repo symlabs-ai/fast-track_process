@@ -266,3 +266,29 @@ def test_check_pendurado_e_falha_e_nao_trava_o_gate(
     )
     assert passou is False
     assert "timeout" in evidencia
+
+
+def test_makefile_do_mvp_builder_entra_no_feature_fast(tmp_path, monkeypatch):
+    """Um produto entregue pelo mvp-builder-fast chama a suíte de `verify`.
+
+    Antes desta correção o feature-fast exigia literalmente um alvo `test` e
+    recusava, no preflight, todo projeto vindo do outro template — os dois
+    processos discordavam do nome do mesmo alvo.
+    """
+    receipt = _load("product_receipt")
+    makefile = tmp_path / "Makefile"
+
+    makefile.write_text("build:\n\t@true\nverify: build\n\t@true\n", encoding="utf-8")
+    assert receipt.resolve_suite_target(tmp_path, ".") == "verify"
+    assert receipt._commands(".", "verify")[1][-1] == "verify"
+
+    # `test` continua vencendo quando os dois existem.
+    makefile.write_text(
+        "build:\n\t@true\ntest:\n\t@true\nverify:\n\t@true\n", encoding="utf-8"
+    )
+    assert receipt.resolve_suite_target(tmp_path, ".") == "test"
+
+    # Sem nenhum dos dois, falha fechado em vez de gravar um receipt vazio.
+    makefile.write_text("build:\n\t@true\n", encoding="utf-8")
+    with pytest.raises(receipt.ReceiptError):
+        receipt.resolve_suite_target(tmp_path, ".")

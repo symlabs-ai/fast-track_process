@@ -337,3 +337,40 @@ def test_log_do_engine_nao_invalida_o_impacto(feature_root: Path) -> None:
     )
     with pytest.raises(vf.FeatureValidationError):
         vf._current_impact(feature_root)
+
+
+def test_log_do_engine_nao_invalida_o_receipt(feature_root: Path) -> None:
+    """A mesma regra, na terceira cópia dela: o receipt do produto.
+
+    `product_receipt.py` decide sozinho o que é entrada executável de
+    validação, e a sua tentativa de excluir o log do ciclo (`*.log`,
+    `cycle-*`) era um palpite sobre o nome que o engine nunca escreveu. O
+    efeito era o mesmo do impacto: `product_validate` gravava o fingerprint,
+    o engine registrava aquele PASS no log, e `evidence_gate` — o nó
+    seguinte — reconferia contra um produto que só mudara por causa do
+    próprio registro. O receipt se auto-invalidava um nó depois de nascer.
+    """
+    receipt = _load("product_receipt")
+    # O produto na raiz, com a suíte no Makefile, como o mvp-builder-fast entrega.
+    (feature_root / "Makefile").write_text(
+        "build:\n\t@true\ntest: build\n\t@true\n", encoding="utf-8"
+    )
+    log = feature_root / "produto_log.md"
+    log.write_text("| no | resultado |\n| --- | --- |\n", encoding="utf-8")
+
+    antes = receipt._snapshot(feature_root, ".", "implementation")
+
+    # O engine registra a transição de nó entre product_validate e evidence_gate.
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write("| feature.product_validate | PASS |\n")
+    depois = receipt._snapshot(feature_root, ".", "implementation")
+
+    assert "produto_log.md" not in [f["path"] for f in antes["files"]]
+    assert depois["fingerprint"] == antes["fingerprint"]
+
+    # E a garantia inversa: mexer numa entrada executável AINDA invalida.
+    (feature_root / "src/relay.py").write_text(
+        "def serve(host, port):\n    return None\n", encoding="utf-8"
+    )
+    mudado = receipt._snapshot(feature_root, ".", "implementation")
+    assert mudado["fingerprint"] != antes["fingerprint"]

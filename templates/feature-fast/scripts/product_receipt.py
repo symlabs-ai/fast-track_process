@@ -110,8 +110,17 @@ def _git_paths(root: Path, product_root: str) -> list[str]:
         # são evidência/saída do ciclo, não entrada executável de test/build.
         if path.parts[0] in {"docs", "state"} or relative == "CHANGELOG.md":
             return False
+        # O log do ciclo é escrito pelo próprio engine a cada transição de nó
+        # (`<projeto>_log.md`, ft/engine/runner.py). Contá-lo como entrada de
+        # validação torna o receipt auto-invalidante: `product_validate` grava o
+        # fingerprint e o simples registro daquele PASS muda o conteúdo que
+        # `evidence_gate` reconfere um nó depois. As duas formas antigas
+        # (`*.log`, `cycle-*`) eram palpites sobre o nome e nunca casaram com o
+        # que o engine escreve; ficam por compatibilidade com ciclos anteriores.
         if len(path.parts) == 1 and (
-            path.suffix == ".log" or path.name.startswith("cycle-")
+            path.suffix == ".log"
+            or path.name.startswith("cycle-")
+            or path.name.endswith("_log.md")
         ):
             return False
         if path.parts[0] == ".ft":

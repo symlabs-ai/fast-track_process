@@ -2,7 +2,8 @@
 """Deriva pré-revisão, evidência e atestação dos checks determinísticos.
 
 Substitui as três revisões por LLM do feature-fast. Cada AC-* do contrato
-tem um `checks/AC-NNN.py` escrito antes da implementação; o veredicto é o
+tem um `checks/<FEAT-NNN>/AC-NNN.py` escrito antes da implementação; o
+veredicto é o
 resultado de executá-los, não uma opinião. Os artefatos emitidos seguem
 exatamente o schema que `validate_feature.py` já cobrava do LLM, então os
 gates seguintes auditam esta atestação com o mesmo rigor.
@@ -65,6 +66,35 @@ def _check_interpreter(root: Path) -> tuple[str, str]:
     return sys.executable, "interpretador atual (nenhum .venv no projeto)"
 
 
+def _checks_dir(root: Path) -> Path:
+    """O diretório de checks desta feature, isolado pelo id reservado.
+
+    Os AC são numerados por feature — toda feature tem um AC-01 —, então um
+    diretório plano `checks/` faz features distintas disputarem os mesmos
+    caminhos. Isso quebrava de duas maneiras. Ciclos paralelos colidiam por
+    construção: dois worktrees fechando escreviam `checks/AC-01.py`..`AC-06.py`
+    com conteúdos diferentes e o merge do segundo parava em conflito add/add.
+    E ciclos sequenciais herdavam o que sobrou: uma feature com menos AC que a
+    anterior encontrava os checks excedentes na árvore e `_coverage` a reprovava
+    por órfãos, logo no primeiro gate, sem que nada estivesse errado com ela.
+
+    `checks/<FEAT-NNN>/` dá a cada conjunto o seu espaço e mantém a prova
+    durável de todas as features na árvore, que é a razão de `checks/` ser
+    canônico.
+    """
+    try:
+        reservation = vf._read_yaml(root, vf.RESERVATION_PATH)
+    except vf.FeatureValidationError as exc:
+        _fail(str(exc))
+    feature_id = str(reservation.get("final_feature_id") or "").upper()
+    if not vf.FEAT_RE.fullmatch(feature_id):
+        _fail(
+            f"{vf.RESERVATION_PATH}: final_feature_id ausente ou inválido "
+            f"({feature_id or 'vazio'})"
+        )
+    return root / "checks" / feature_id
+
+
 def _contract(root: Path) -> list[str]:
     try:
         _, _, acceptance_ids = vf._feature_contract(root)
@@ -76,16 +106,22 @@ def _contract(root: Path) -> list[str]:
 
 
 def _coverage(root: Path, acceptance_ids: list[str]) -> dict[str, Path]:
-    have = {p.stem.upper(): p for p in sorted((root / "checks").glob("AC-*.py"))}
+    checks_dir = _checks_dir(root)
+    onde = checks_dir.relative_to(root).as_posix()
+    have = {p.stem.upper(): p for p in sorted(checks_dir.glob("AC-*.py"))}
     missing = [ac for ac in acceptance_ids if ac not in have]
     orphans = sorted(set(have) - set(acceptance_ids))
     if missing or orphans:
         _fail(
             "cobertura incompleta — AC sem check: "
             f"{missing or 'nenhum'}; checks órfãos: {orphans or 'nenhum'}. "
-            "Todo AC-* precisa de checks/AC-NNN.py e nenhum check pode sobrar."
+            f"Todo AC-* precisa de {onde}/AC-NNN.py e nenhum check pode sobrar."
         )
     return {ac: have[ac] for ac in acceptance_ids}
+
+
+def _rel(root: Path, path: Path) -> str:
+    return path.relative_to(root).as_posix()
 
 
 def _run_check(
@@ -129,7 +165,8 @@ def stage_pre(root: Path) -> int:
     corpo = [
         "# Pré-revisão Determinística — Cobertura de Checks",
         "",
-        f"Cada AC-* do contrato tem o seu check executável em `checks/`. "
+        f"Cada AC-* do contrato tem o seu check executável em "
+        f"`{_checks_dir(root).relative_to(root).as_posix()}/`. "
         f"Cobertura verificada: {len(checks)} obrigação(ões), nenhum check órfão.",
         "A execução dos checks acontece no gate `feature.verify`, depois da suíte completa.",
         "",
@@ -138,7 +175,7 @@ def stage_pre(root: Path) -> int:
     ]
     corpo += _ac_table(
         [
-            (ac, "PASS", f"`checks/{ac}.py` presente e executável")
+            (ac, "PASS", f"`{_rel(root, checks[ac])}` presente e executável")
             for ac in acceptance_ids
         ]
     )
@@ -185,7 +222,7 @@ def stage_evidence(root: Path) -> int:
             (
                 ac,
                 "PASS",
-                f"suíte do receipt verde; `checks/{ac}.py` declarado "
+                f"suíte do receipt verde; `{_rel(root, checks[ac])}` declarado "
                 "(veredicto em feature.verify)",
             )
             for ac in acceptance_ids
@@ -245,7 +282,8 @@ def stage_attest(root: Path) -> int:
     corpo = [
         "# Atestação Determinística da Feature",
         "",
-        f"Veredicto derivado da execução de {len(resultados)} check(s) em `checks/`. "
+        f"Veredicto derivado da execução de {len(resultados)} check(s) em "
+        f"`{_checks_dir(root).relative_to(root).as_posix()}/`. "
         "Cada AC-* é provado pelo seu check; nenhum julgamento semântico foi aplicado.",
         "",
         f"Interpretador: `{interpreter}` — {origem}.",
@@ -255,7 +293,7 @@ def stage_attest(root: Path) -> int:
     ]
     corpo += _ac_table(
         [
-            (ac, "PASS" if ok else "FAIL", f"`checks/{ac}.py` — {ev}")
+            (ac, "PASS" if ok else "FAIL", f"`{_rel(root, checks[ac])}` — {ev}")
             for ac, ok, ev in resultados
         ]
     )
@@ -268,7 +306,7 @@ def stage_attest(root: Path) -> int:
             "| --- | --- | --- | --- |",
         ]
         corpo += [
-            f"| F-{i:02d} | FAIL | {ac} | `checks/{ac}.py` — {ev} |"
+            f"| F-{i:02d} | FAIL | {ac} | `{_rel(root, checks[ac])}` — {ev} |"
             for i, (ac, ev) in enumerate(falhas, start=1)
         ]
     corpo += ["", f"Resultado: {'APPROVED' if aprovado else 'REJECTED'}", ""]

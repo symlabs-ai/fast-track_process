@@ -63,6 +63,11 @@ FEATURE_MD = textwrap.dedent(
 )
 
 
+#: Os checks vivem sob o id reservado da feature — ver `_checks_dir`.
+FEATURE_ID = "FEAT-001"
+CHECKS = f"checks/{FEATURE_ID}"
+
+
 def _git(root: Path, *args: str) -> None:
     subprocess.run(
         ["git", *args],
@@ -78,7 +83,7 @@ def feature_root(tmp_path: Path) -> Path:
     """Um projeto no estado exato em que `feature.impact_prepare` termina."""
     root = tmp_path / "produto"
     (root / "docs").mkdir(parents=True)
-    (root / "checks").mkdir()
+    (root / CHECKS).mkdir(parents=True)
     (root / "src").mkdir()
 
     (root / "docs/feature.md").write_text(FEATURE_MD, encoding="utf-8")
@@ -116,6 +121,16 @@ def feature_root(tmp_path: Path) -> Path:
         },
     )
     vf._atomic_write_yaml(
+        root / vf.RESERVATION_PATH,
+        {
+            "schema_version": 1,
+            "backlog_item": "PB-050",
+            "target_feature": FEATURE_ID,
+            "final_feature_id": FEATURE_ID,
+            "request_type": "evolution",
+        },
+    )
+    vf._atomic_write_yaml(
         root / "docs/feature-workset.yml",
         {"schema_version": 1, "paths": ["src/relay.py", "src/test_relay.py"]},
     )
@@ -147,7 +162,7 @@ def feature_root(tmp_path: Path) -> Path:
     )
     vf._atomic_write_yaml(root / vf.IMPACT_PATH, vf._build_impact(root))
     for acceptance_id in ("AC-01", "AC-02"):
-        (root / f"checks/{acceptance_id}.py").write_text(
+        (root / f"{CHECKS}/{acceptance_id}.py").write_text(
             f"import sys; print('{acceptance_id} provado'); sys.exit(0)\n",
             encoding="utf-8",
         )
@@ -195,7 +210,7 @@ def test_check_que_reprova_rejeita_e_abre_o_fix_focal(feature_root: Path) -> Non
     _attest(feature_root, "pre")
     _attest(feature_root, "evidence")
     _validate(feature_root, "prepare-review")
-    (feature_root / "checks/AC-02.py").write_text(
+    (feature_root / f"{CHECKS}/AC-02.py").write_text(
         "import sys; print('URL ainda aponta para relay.symprobe.io'); sys.exit(1)\n",
         encoding="utf-8",
     )
@@ -221,14 +236,14 @@ def test_reentrada_do_fix_reatesta_do_zero(feature_root: Path) -> None:
     _attest(feature_root, "pre")
     _attest(feature_root, "evidence")
     _validate(feature_root, "prepare-review")
-    (feature_root / "checks/AC-02.py").write_text(
+    (feature_root / f"{CHECKS}/AC-02.py").write_text(
         "import sys; sys.exit(1)\n", encoding="utf-8"
     )
     _attest(feature_root, "attest")
     assert vf._read_yaml(feature_root, vf.REVIEW_ROUTE_PATH)["verdict"] == "REJECTED"
 
     # fix -> fix_validate -> fix_full_validate -> review_prepare -> verify
-    (feature_root / "checks/AC-02.py").write_text(
+    (feature_root / f"{CHECKS}/AC-02.py").write_text(
         "import sys; print('URL corrigida'); sys.exit(0)\n", encoding="utf-8"
     )
     _validate(feature_root, "prepare-review")
@@ -240,14 +255,14 @@ def test_reentrada_do_fix_reatesta_do_zero(feature_root: Path) -> None:
 
 
 def test_ac_sem_check_reprova_antes_da_suite(feature_root: Path) -> None:
-    (feature_root / "checks/AC-02.py").unlink()
+    (feature_root / f"{CHECKS}/AC-02.py").unlink()
     saida = _attest(feature_root, "pre", expected=1)
     assert "cobertura incompleta" in saida and "AC-02" in saida
     assert _attest(feature_root, "attest", expected=1)
 
 
 def test_check_orfao_reprova(feature_root: Path) -> None:
-    (feature_root / "checks/AC-09.py").write_text(
+    (feature_root / f"{CHECKS}/AC-09.py").write_text(
         "import sys; sys.exit(0)\n", encoding="utf-8"
     )
     saida = _attest(feature_root, "pre", expected=1)
@@ -257,12 +272,12 @@ def test_check_orfao_reprova(feature_root: Path) -> None:
 def test_check_pendurado_e_falha_e_nao_trava_o_gate(
     feature_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (feature_root / "checks/AC-02.py").write_text(
+    (feature_root / f"{CHECKS}/AC-02.py").write_text(
         "import time; time.sleep(9999)\n", encoding="utf-8"
     )
     monkeypatch.setattr(attest, "CHECK_TIMEOUT", 2)
     passou, evidencia = attest._run_check(
-        feature_root, feature_root / "checks/AC-02.py"
+        feature_root, feature_root / f"{CHECKS}/AC-02.py"
     )
     assert passou is False
     assert "timeout" in evidencia
@@ -511,18 +526,57 @@ def test_reancoragem_do_fix_nao_dispensa_cobertura_de_checks(
     _validate(feature_root, "pre-review")
 
     # O fix apaga o check de um AC ainda vigente no contrato.
-    (feature_root / "checks/AC-02.py").unlink()
+    (feature_root / f"{CHECKS}/AC-02.py").unlink()
 
     _validate(feature_root, "prepare-impact")
     saida = _attest(feature_root, "pre", expected=1)
     assert "AC-02" in saida and "cobertura incompleta" in saida
 
     # E um check órfão — sem AC correspondente — também barra a reancoragem.
-    (feature_root / "checks/AC-02.py").write_text(
+    (feature_root / f"{CHECKS}/AC-02.py").write_text(
         "import sys; sys.exit(0)\n", encoding="utf-8"
     )
-    (feature_root / "checks/AC-09.py").write_text(
+    (feature_root / f"{CHECKS}/AC-09.py").write_text(
         "import sys; sys.exit(0)\n", encoding="utf-8"
     )
     saida = _attest(feature_root, "pre", expected=1)
     assert "AC-09" in saida and "órfãos" in saida
+
+
+def test_checks_de_outra_feature_nao_sao_orfaos(feature_root: Path) -> None:
+    """O namespace por feature é o que permite ciclos consecutivos e paralelos.
+
+    Os AC são numerados por feature: toda feature tem um AC-01. Com um `checks/`
+    plano, os checks de uma feature anterior ficavam na árvore — `checks/` é
+    canônico, então nada os arquiva — e a feature seguinte, se tivesse menos AC,
+    era reprovada por órfãos que não eram dela. O mesmo namespace plano fazia
+    dois worktrees fechando em paralelo colidirem em `checks/AC-01.py`.
+
+    Aqui a feature vizinha tem seis AC contra os dois desta, incluindo um AC-09
+    que o contrato vigente não conhece. Nada disso pode alcançar esta feature.
+    """
+    vizinha = feature_root / "checks/FEAT-002"
+    vizinha.mkdir(parents=True)
+    for acceptance_id in ("AC-01", "AC-02", "AC-03", "AC-04", "AC-05", "AC-09"):
+        (vizinha / f"{acceptance_id}.py").write_text(
+            "import sys; sys.exit(1)\n", encoding="utf-8"
+        )
+
+    _attest(feature_root, "pre")
+    _validate(feature_root, "pre-review")
+    _attest(feature_root, "evidence")
+    _validate(feature_root, "evidence")
+    _validate(feature_root, "prepare-review")
+    saida = _attest(feature_root, "attest")
+
+    # Só os dois checks desta feature rodaram, e nenhum check da vizinha —
+    # que reprovaria — influenciou o veredicto.
+    assert "AC-01: PASS" in saida and "AC-02: PASS" in saida
+    assert "AC-09" not in saida
+    rota = vf._read_yaml(feature_root, vf.REVIEW_ROUTE_PATH)
+    assert rota["verdict"] == "APPROVED"
+    assert "2 AC" in str(rota["summary"])
+
+    revisao = (feature_root / "docs/feature-review.md").read_text(encoding="utf-8")
+    assert f"{CHECKS}/AC-01.py" in revisao
+    assert "FEAT-002" not in revisao

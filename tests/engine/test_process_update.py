@@ -351,13 +351,13 @@ def test_merge_conflict_keeps_diff3_markers(project, fake_engine):
     global_process = fake_engine / "templates" / "feature-fast" / "process.yml"
     local_process.write_text(
         local_process.read_text(encoding="utf-8").replace(
-            'version: "2.0.5"', 'version: "2.1.0-fork"'
+            'version: "2.1.0"', 'version: "2.1.1-fork"'
         ),
         encoding="utf-8",
     )
     global_process.write_text(
         global_process.read_text(encoding="utf-8").replace(
-            'version: "2.0.5"', 'version: "3.0.0"'
+            'version: "2.1.0"', 'version: "3.0.0"'
         ),
         encoding="utf-8",
     )
@@ -373,7 +373,7 @@ def test_merge_conflict_keeps_diff3_markers(project, fake_engine):
     assert "||||||| base" in staged
     assert ">>>>>>> global" in staged
     # O fork local permaneceu intocado.
-    assert 'version: "2.1.0-fork"' in local_process.read_text(encoding="utf-8")
+    assert 'version: "2.1.1-fork"' in local_process.read_text(encoding="utf-8")
 
 
 def test_apply_update_rolls_back_on_failure(project, fake_engine):

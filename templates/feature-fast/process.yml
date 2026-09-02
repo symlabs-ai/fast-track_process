@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "2.0.5"
+version: "2.1.0"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -367,13 +367,23 @@ nodes:
       para confirmar a mudança focal e preserve comportamentos fora do escopo.
 
       Regras:
-      1. Para CADA AC-* do contrato, escreva `checks/AC-NNN.py` ANTES de
-         implementar — um arquivo por AC, sem dependência além da stdlib, que
-         sai com 0 quando o critério está cumprido e 1 quando não está,
-         imprimindo o motivo. Escrever o check antes é o que o torna honesto:
-         nesse momento ninguém tem interesse no resultado. Um check precisa
-         poder reprovar; se ele passaria mesmo com o critério não entregue, ele
-         não verifica nada.
+      1. Para CADA AC-* do contrato, escreva `checks/<FEAT-NNN>/AC-NNN.py`
+         ANTES de implementar — onde `<FEAT-NNN>` é o `final_feature_id` de
+         `docs/feature-id-reservation.yml`. Um arquivo por AC, sem dependência
+         além da stdlib, que sai com 0 quando o critério está cumprido e 1
+         quando não está, imprimindo o motivo. Escrever o check antes é o que o
+         torna honesto: nesse momento ninguém tem interesse no resultado. Um
+         check precisa poder reprovar; se ele passaria mesmo com o critério não
+         entregue, ele não verifica nada.
+
+         O diretório por feature não é cosmético: os AC são numerados por
+         feature, então um `checks/` plano faz features distintas disputarem
+         `AC-01.py` — ciclos paralelos conflitam no merge e um ciclo com menos
+         AC que o anterior é reprovado por checks órfãos que não são dele.
+
+         Ancore o repositório subindo até o diretório que contém `.git`, nunca
+         contando níveis de `parent`:
+         `REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / ".git").exists())`
 
          O check ancora no artefato que carrega a garantia — o código em `src/`
          ou `project/` para critérios de comportamento, o documento para
@@ -425,7 +435,7 @@ nodes:
     type: gate
     title: "Cobertura de Checks por AC"
     description: >-
-      Confirma que cada AC-* tem o seu checks/AC-NNN.py e que nenhum check
+      Confirma que cada AC-* tem o seu checks/<FEAT-NNN>/AC-NNN.py e que nenhum check
       sobra, antes de gastar a suíte completa. Substitui a pré-revisão
       semântica: a falha aqui é estrutural e volta ao código barato.
     sprint: feature-02-build
@@ -441,7 +451,7 @@ nodes:
       - command_succeeds: python .ft/process/feature-fast/scripts/validate_feature.py pre-review
     on_fail:
       human_gate: >-
-        Há AC-* sem checks/AC-NNN.py ou check órfão sem AC. Escreva o check que
+        Há AC-* sem checks/<FEAT-NNN>/AC-NNN.py ou check órfão sem AC. Escreva o check que
         falta na implementação — o fix focal não tem permissão de escrever checks.
       goto: feature.implement
     next: feature.pre_review_route
@@ -641,7 +651,7 @@ nodes:
       Faça uma correção focal, não uma nova implementação. Use a âncora em
       docs/feature-fix-baseline.yml e os F-* de docs/feature-review.md — a
       atestação determinística — como autoridade. Cada F-* nomeia o
-      `checks/AC-NNN.py` que reprovou e a saída dele.
+      `checks/<FEAT-NNN>/AC-NNN.py` que reprovou e a saída dele.
 
       Regras:
       1. Altere somente o necessário para resolver os F-* ainda reprovados.

@@ -17,8 +17,12 @@ Etapas:
 from __future__ import annotations
 
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,6 +30,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import validate_feature as vf  # noqa: E402
 
 CHECK_TIMEOUT = 120
+
+# Marcação no contrato que dispensa um AC do controle negativo: a garantia já
+# valia na baseline, então exigir que o check reprove lá seria exigir que ele
+# minta. Fica em `docs/feature.md` de propósito — é o artefato que o
+# stakeholder lê no gate humano. Uma isenção escondida no próprio check seria
+# o buraco que o controle existe para fechar.
+NON_REGRESSION_RE = re.compile(
+    r"\((?:n[ãa]o[- ]regress[ãa]o|non[- ]regression)\)", re.I
+)
 
 
 def _fail(message: str) -> None:
@@ -125,7 +138,10 @@ def _rel(root: Path, path: Path) -> str:
 
 
 def _run_check(
-    root: Path, path: Path, interpreter: str | None = None
+    root: Path,
+    path: Path,
+    interpreter: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> tuple[bool, str]:
     try:
         done = subprocess.run(
@@ -136,6 +152,7 @@ def _run_check(
             text=True,
             timeout=CHECK_TIMEOUT,
             check=False,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return False, f"timeout após {CHECK_TIMEOUT}s"
@@ -143,6 +160,166 @@ def _run_check(
         return False, f"falha ao executar: {exc}"
     saida = " ".join(done.stdout.split())[:200] or "(sem saída)"
     return done.returncode == 0, f"exit {done.returncode}: {saida}"
+
+
+def _non_regression_acs(root: Path) -> set[str]:
+    """Os AC que o contrato declara como garantia preexistente."""
+    text = vf._read(root, "docs/feature.md")
+    content = vf._section(
+        text,
+        ("Critérios de Aceite", "Criterios de Aceite", "Acceptance Criteria"),
+    )
+    marcados: set[str] = set()
+    for line in content.splitlines():
+        if NON_REGRESSION_RE.search(line):
+            marcados.update(m.group(0).upper() for m in vf.AC_RE.finditer(line))
+    return marcados
+
+
+def _baseline_commit(root: Path) -> str:
+    try:
+        payload = vf._read_yaml(root, vf.RECEIPT_BASELINE_PATH)
+    except vf.FeatureValidationError as exc:
+        _fail(str(exc))
+    commit = str(payload.get("baseline_commit") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{7,64}", commit):
+        _fail(
+            f"{vf.RECEIPT_BASELINE_PATH}: baseline_commit ausente ou inválido. "
+            "Rode novamente `validate_feature.py prepare-receipt-baseline` a "
+            "partir do estado pré-implementação."
+        )
+    return commit
+
+
+def _negative_control(
+    root: Path, checks: dict[str, Path], interpreter: str
+) -> tuple[list[str], list[str]]:
+    """Prova que cada check fala da entrega, e não de algo que já era verdade.
+
+    A cobertura diz que existe um arquivo por AC; ela não diz que o arquivo
+    prova alguma coisa. Um `sys.exit(0)` satisfaz a cobertura e atesta o nada.
+    O teste determinístico disso é o controle negativo: o check de um AC novo
+    tem que **reprovar** no commit congelado por `feature.receipt_baseline` —
+    o estado em que a garantia ainda não valia — e passar depois. Se ele passa
+    lá, ele não distingue o produto entregue do produto anterior.
+
+    Limite que não escondo: o controle é permissivo. Um check pode reprovar na
+    baseline pelo motivo errado — um ImportError porque o produto não está
+    instalado naquela árvore, por exemplo — e ainda assim contar como
+    reprovado. Isso enfraquece a evidência, mas nunca deixa passar um check
+    oco: o oco passa em qualquer estado, inclusive na baseline.
+
+    O outro limite é ambiental. A árvore da baseline é uma worktree do commit,
+    mas o interpretador é o do projeto: com instalação editável estrita, o
+    finder do setuptools pode resolver o import para o código NOVO mesmo com o
+    `PYTHONPATH` apontando para a baseline. Quando isso acontece o check passa
+    na baseline e é reportado aqui — a mensagem nomeia as duas causas
+    possíveis e o comando para reproduzir, porque distinguir uma da outra
+    exige olhar o produto, não adivinhar.
+    """
+    isentos = _non_regression_acs(root)
+    alvos = [ac for ac in checks if ac not in isentos]
+    if not alvos:
+        return (
+            [],
+            [
+                "Controle negativo: nenhum AC sujeito — o contrato declara "
+                f"todos como não-regressão ({', '.join(sorted(isentos))})."
+            ],
+        )
+
+    commit = _baseline_commit(root)
+    try:
+        _, _, product_root = vf._load_baseline(root)
+    except vf.FeatureValidationError:
+        product_root = "."
+
+    temp_parent = tempfile.mkdtemp(prefix="ft-baseline-")
+    work = Path(temp_parent) / "baseline"
+    try:
+        try:
+            subprocess.run(
+                ["git", "worktree", "add", "--detach", str(work), commit],
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=120,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            saida = getattr(exc, "output", "") or ""
+            _fail(
+                f"controle negativo: não consegui materializar a baseline "
+                f"{commit[:12]}: {exc} {' '.join(saida.split())[:200]}"
+            )
+
+        # Os checks vêm da árvore atual: é justamente o código deles que está
+        # sob teste. Só o produto volta ao estado anterior.
+        destino = work / _checks_dir(root).relative_to(root)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(destino, ignore_errors=True)
+        shutil.copytree(_checks_dir(root), destino)
+
+        env = dict(os.environ)
+        raiz_produto = work if product_root == "." else work / product_root
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(raiz_produto)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+        )
+
+        passaram: list[str] = []
+        linhas: list[str] = []
+        for ac in alvos:
+            relativo = checks[ac].relative_to(root)
+            passou, evidencia = _run_check(work, work / relativo, interpreter, env=env)
+            linhas.append(
+                f"| {ac} | {'FALHOU (esperado)' if not passou else 'PASSOU'} | "
+                f"`{relativo.as_posix()}` — {evidencia} |"
+            )
+            print(
+                f"{ac}: baseline {'reprova (ok)' if not passou else 'APROVA (oco?)'}"
+                f" — {evidencia}"
+            )
+            if passou:
+                passaram.append(ac)
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(work)],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        shutil.rmtree(temp_parent, ignore_errors=True)
+
+    relatorio = [
+        "",
+        "## Controle Negativo",
+        "",
+        f"Cada check reexecutado na baseline `{commit[:12]}`. Um check que "
+        "passa lá não distingue a entrega do estado anterior.",
+        "",
+        "| AC | Baseline | Evidência |",
+        "| --- | --- | --- |",
+        *linhas,
+    ]
+    if isentos:
+        relatorio += [
+            "",
+            "Isentos por declaração de não-regressão no contrato: "
+            + ", ".join(sorted(isentos))
+            + ".",
+        ]
+    return passaram, relatorio
 
 
 def _ac_table(rows: list[tuple[str, str, str]]) -> list[str]:
@@ -162,6 +339,20 @@ def stage_pre(root: Path) -> int:
     if not isinstance(pre_review_id, str):
         _fail(f"{vf.IMPACT_PATH}: pre_review_id ausente")
 
+    interpretador, origem = _check_interpreter(root)
+    print(f"interpretador dos checks: {interpretador} — {origem}")
+    hollow, controle = _negative_control(root, checks, interpretador)
+    if hollow:
+        _fail(
+            "controle negativo reprovou — estes checks passam na baseline, "
+            "logo não provam a entrega: "
+            + ", ".join(f"{ac} (`{_rel(root, checks[ac])}`)" for ac in hollow)
+            + ". Ou o check não exercita a garantia do AC, ou o produto novo "
+            "vazou para a árvore da baseline (instalação editável estrita). "
+            "Reproduza com `git worktree add --detach /tmp/baseline "
+            f"{_baseline_commit(root)[:12]}`, copie os checks para lá e rode-os."
+        )
+
     corpo = [
         "# Pré-revisão Determinística — Cobertura de Checks",
         "",
@@ -179,6 +370,7 @@ def stage_pre(root: Path) -> int:
             for ac in acceptance_ids
         ]
     )
+    corpo += controle
     corpo += ["", "Resultado: APPROVED", ""]
     (root / vf.PRE_REVIEW_PATH).write_text("\n".join(corpo), encoding="utf-8")
 
@@ -191,7 +383,7 @@ def stage_pre(root: Path) -> int:
             "review_route": "approved",
             "summary": (
                 f"cobertura determinística completa: {len(checks)} AC com check "
-                "dedicado, nenhum órfão"
+                "dedicado, nenhum órfão; controle negativo verde na baseline"
             ),
         },
     )

@@ -4197,6 +4197,54 @@ def _maybe_analyse_cycle_before_close(args, runner) -> None:
         print(_ui.warn(f"Análise do ciclo indisponível: {exc}"))
 
 
+def _close_cycle_id(runner, state) -> str | None:
+    """O id sob o qual `ft close` arquiva — o mesmo que o merge usa."""
+    from ft.engine import paths as _engine_paths
+
+    work_root = Path(runner.project_root)
+    if _engine_paths.is_worktree_path(work_root):
+        return work_root.name
+    current = getattr(state, "current_cycle", None)
+    return str(current) if current else None
+
+
+_SAFE_CYCLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _resolve_close_reference_path(
+    work: Path, references_path: str, cycle_id: str | None
+) -> str:
+    """O artefato de referência do fechamento, vivo ou já arquivado.
+
+    `ft close` move `docs/<nome>` para `.ft/cycles/<ciclo>/<nome>` e só então
+    tenta o merge. Quando o merge falha, a retomada reencontra este gate sem o
+    arquivo no lugar declarado — não porque o ciclo perdeu a referência, mas
+    porque ele já a guardou. Sem este fallback o `ft close` deixa de ser
+    idempotente e a única saída vira `--force`, que desliga o gate inteiro em
+    vez de reencontrá-lo.
+
+    Devolve o path declarado quando ele existe ou quando nada foi arquivado,
+    para que a mensagem de falha continue apontando o lugar que o processo
+    declara — o arquivamento é a exceção, não o endereço canônico.
+    """
+    relative = Path(references_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        return references_path
+    if (work / relative).is_file():
+        return references_path
+    if not cycle_id or not _SAFE_CYCLE_ID_RE.fullmatch(cycle_id):
+        return references_path
+    # Mesmo desmonte do plano de arquivamento: o prefixo `docs/` é descartado.
+    parts = relative.parts
+    archived_rel = (
+        Path(*parts[1:]) if parts[0] == "docs" and len(parts) > 1 else relative
+    )
+    archived = Path(".ft") / "cycles" / cycle_id / archived_rel
+    if (work / archived).is_file():
+        return archived.as_posix()
+    return references_path
+
+
 def _cmd_close_locked_body(args, merge_lock):
     """Encerra o ciclo ativo: merge interativo + remove worktree + limpa branch."""
     import subprocess as _sp
@@ -4306,7 +4354,11 @@ def _cmd_close_locked_body(args, merge_lock):
                     )
                 else:
                     backlog_ok, backlog_detail = backlog_referenced_decisions(
-                        references_path=str(references_path),
+                        references_path=_resolve_close_reference_path(
+                            work,
+                            str(references_path),
+                            _close_cycle_id(runner, state),
+                        ),
                         backlog_path=str(
                             backlog_policy.get(
                                 "backlog_path", "docs/PROJECT_BACKLOG.md"

@@ -295,7 +295,7 @@ def test_feature_fast_graph_and_session_policy_are_valid() -> None:
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature_fast"
-    assert graph.meta["version"] == "2.1.0"
+    assert graph.meta["version"] == "2.2.0"
     assert graph.meta["execution_policy"]["max_acceptance_criteria_per_cycle"] == 6
     assert graph.meta["session_policy"] == {
         "mode": "sprint",
@@ -739,3 +739,31 @@ def test_feature_fast_semantic_impact_allows_a_new_related_test(
     result = _run_fast_validator(root, "fix-review")
 
     assert result.returncode == 0, result.stderr
+
+
+def test_receipt_obsoleto_volta_para_quem_reancora_o_impacto() -> None:
+    """`review_prepare` só sai do lugar por um nó que refaça o impacto.
+
+    A falha ali é "um receipt impactado está ausente ou obsoleto". Mandar o
+    ciclo para `product_validate` regrava o receipt, mas sobre o impacto
+    velho — as lanes cobradas continuam sendo as de antes, e o ciclo volta a
+    parar no mesmo gate. O caminho que resolve é reancorar o impacto e deixar
+    o grafo seguir dali: `impact_prepare` recalcula as lanes e o percurso até
+    `review_prepare` regrava o receipt já com o conjunto certo.
+    """
+    graph = load_graph(FAST_PROCESS)
+    destino = graph.get_node("feature.review_prepare").on_fail["goto"]
+    assert destino == "feature.impact_prepare"
+
+    # E o destino precisa mesmo recalcular o impacto — não basta o nome.
+    reancora = graph.get_node(destino)
+    comandos = " ".join(str(validator) for validator in (reancora.validators or []))
+    assert "prepare-impact" in comandos
+
+    # O ramo de fix não serve aqui: ele exige a âncora que só existe depois de
+    # `prepare-fix`, e saltar para lá deixaria o ciclo preso num erro alheio.
+    fix_full = " ".join(
+        str(validator)
+        for validator in (graph.get_node("feature.fix_full_validate").validators or [])
+    )
+    assert "fix-implementation" in fix_full

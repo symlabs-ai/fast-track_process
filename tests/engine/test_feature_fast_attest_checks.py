@@ -78,6 +78,29 @@ def _git(root: Path, *args: str) -> None:
     )
 
 
+def _write_check(root: Path, acceptance_id: str, agulha: str) -> None:
+    """Um check que lê a garantia no produto, ancorado pelo diretório `.git`."""
+    (root / f"{CHECKS}/{acceptance_id}.py").write_text(
+        textwrap.dedent(
+            f"""\
+            import sys
+            from pathlib import Path
+
+            REPO_ROOT = next(
+                p for p in Path(__file__).resolve().parents if (p / ".git").exists()
+            )
+            fonte = (REPO_ROOT / "src" / "relay.py").read_text(encoding="utf-8")
+            if {agulha!r} not in fonte:
+                print("{acceptance_id} FAIL: {agulha} ausente em src/relay.py")
+                sys.exit(1)
+            print("{acceptance_id} provado")
+            sys.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def feature_root(tmp_path: Path) -> Path:
     """Um projeto no estado exato em que `feature.impact_prepare` termina."""
@@ -144,11 +167,12 @@ def feature_root(tmp_path: Path) -> Path:
     # Delta de implementação: produto e teste mudam depois da baseline.
     (root / "src/relay.py").write_text(
         'DEFAULT_RELAY_URL = "wss://relay.symlabs.ai/sp"\n\n'
-        "def serve(host, port):\n    return (host, port)\n",
+        "def serve(host, port):\n    return (host, port)\n\n"
+        "def main(argv=None):\n    return serve('0.0.0.0', 8765)\n",
         encoding="utf-8",
     )
     (root / "src/test_relay.py").write_text(
-        "from relay import serve, DEFAULT_RELAY_URL\n", encoding="utf-8"
+        "from relay import serve, main, DEFAULT_RELAY_URL\n", encoding="utf-8"
     )
 
     (root / "docs/feature-validation.json").write_text(
@@ -161,11 +185,12 @@ def feature_root(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     vf._atomic_write_yaml(root / vf.IMPACT_PATH, vf._build_impact(root))
-    for acceptance_id in ("AC-01", "AC-02"):
-        (root / f"{CHECKS}/{acceptance_id}.py").write_text(
-            f"import sys; print('{acceptance_id} provado'); sys.exit(0)\n",
-            encoding="utf-8",
-        )
+    # Checks honestos: cada um ancora no artefato que carrega a garantia, e por
+    # isso reprova no commit da baseline — que é o que o controle negativo de
+    # `stage_pre` exige. Um `sys.exit(0)` aqui faria o gate reprovar, e é
+    # exatamente esse o ponto.
+    _write_check(root, "AC-01", "def main(")
+    _write_check(root, "AC-02", "relay.symlabs.ai")
     return root
 
 
@@ -252,6 +277,100 @@ def test_reentrada_do_fix_reatesta_do_zero(feature_root: Path) -> None:
     assert vf._read_yaml(feature_root, vf.REVIEW_ROUTE_PATH)["verdict"] == "APPROVED"
     # A evidência derivada antes do fix continua ancorada no mesmo receipt.
     _validate(feature_root, "evidence")
+
+
+def test_check_oco_e_reprovado_pelo_controle_negativo(feature_root: Path) -> None:
+    """A cobertura aceita qualquer arquivo; o controle negativo, não.
+
+    `sys.exit(0)` satisfaz "existe um check por AC" e atesta o nada. O único
+    jeito determinístico de separá-lo de um check honesto é reexecutá-lo no
+    commit anterior à implementação: lá a garantia ainda não valia, então um
+    check que fala dela tem que reprovar. O oco passa nos dois estados.
+    """
+    (feature_root / f"{CHECKS}/AC-02.py").write_text(
+        "import sys; print('AC-02 provado'); sys.exit(0)\n", encoding="utf-8"
+    )
+    saida = _attest(feature_root, "pre", expected=1)
+    assert "controle negativo" in saida
+    assert "AC-02" in saida
+    assert "AC-01" not in saida.split("controle negativo")[-1], (
+        "o check honesto não pode ser acusado junto"
+    )
+    assert not (feature_root / vf.PRE_REVIEW_ROUTE_PATH).exists(), (
+        "nenhuma rota pode ser emitida quando o controle reprova"
+    )
+
+
+def test_check_ancorado_em_teste_e_reprovado(feature_root: Path) -> None:
+    """Um check que lê `tests/` continua verde com a garantia arrancada.
+
+    Este é o modo de falha real que motivou o controle: o check parecia
+    verificar comportamento, mas só confirmava que o teste mencionava o nome.
+    Aqui ele é ancorado no arquivo de teste — que já existia na baseline com o
+    símbolo — e por isso passa lá e é recusado.
+    """
+    (feature_root / f"{CHECKS}/AC-01.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "REPO_ROOT = next(p for p in Path(__file__).resolve().parents "
+        'if (p / ".git").exists())\n'
+        'fonte = (REPO_ROOT / "src" / "test_relay.py").read_text()\n'
+        'sys.exit(0 if "serve" in fonte else 1)\n',
+        encoding="utf-8",
+    )
+    saida = _attest(feature_root, "pre", expected=1)
+    assert "controle negativo" in saida and "AC-01" in saida
+
+
+def test_nao_regressao_declarada_no_contrato_isenta_o_ac(feature_root: Path) -> None:
+    """Um AC cuja garantia já valia não pode ser obrigado a reprovar.
+
+    A isenção mora em `docs/feature.md` de propósito: é o artefato que o
+    stakeholder lê no gate humano. Escondida no check, ela seria o buraco que
+    o controle existe para fechar.
+    """
+    contrato = (feature_root / "docs/feature.md").read_text(encoding="utf-8")
+    contrato = contrato.replace(
+        "- AC-02 — a URL padrão aponta para o relay de produção.",
+        "- AC-02 (não-regressão) — a URL padrão continua resolvível.",
+    )
+    (feature_root / "docs/feature.md").write_text(contrato, encoding="utf-8")
+    # Refaz baseline e impacto: o contrato mudou.
+    vf.prepare_receipt_baseline(feature_root)
+    vf._atomic_write_yaml(feature_root / vf.IMPACT_PATH, vf._build_impact(feature_root))
+    (feature_root / f"{CHECKS}/AC-02.py").write_text(
+        "import sys; print('AC-02 ja valia'); sys.exit(0)\n", encoding="utf-8"
+    )
+
+    saida = _attest(feature_root, "pre")
+    assert "AC-02" not in saida.replace("AC-02 ja valia", "")
+    pre_review = (feature_root / vf.PRE_REVIEW_PATH).read_text(encoding="utf-8")
+    assert "Isentos por declaração de não-regressão" in pre_review
+    assert "AC-02" in pre_review
+
+
+def test_baseline_sem_commit_registrado_falha_com_instrucao(
+    feature_root: Path,
+) -> None:
+    """Uma baseline de antes desta versão não pode passar em silêncio."""
+    payload = vf._read_yaml(feature_root, vf.RECEIPT_BASELINE_PATH)
+    payload.pop("baseline_commit")
+    vf._atomic_write_yaml(feature_root / vf.RECEIPT_BASELINE_PATH, payload)
+    saida = _attest(feature_root, "pre", expected=1)
+    assert "baseline_commit" in saida and "prepare-receipt-baseline" in saida
+
+
+def test_controle_negativo_nao_deixa_worktree_para_tras(feature_root: Path) -> None:
+    """A árvore da baseline é descartável — e o repositório não guarda restos."""
+    _attest(feature_root, "pre")
+    listagem = subprocess.run(
+        ["git", "worktree", "list"],
+        cwd=feature_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "ft-baseline-" not in listagem
+    assert listagem.strip().count("\n") == 0, listagem
 
 
 def test_ac_sem_check_reprova_antes_da_suite(feature_root: Path) -> None:
@@ -405,8 +524,13 @@ def test_checks_rodam_no_interpretador_do_produto(feature_root: Path) -> None:
     venv_bin.mkdir(parents=True)
     python = venv_bin / "python"
     # Um "interpretador" que se identifica, para provarmos qual foi chamado.
+    # Ele ainda decide o veredicto olhando o produto sob `cwd`: o controle
+    # negativo reexecuta os checks na árvore da baseline, e um interpretador
+    # que respondesse 0 sempre seria — corretamente — acusado de oco.
     python.write_text(
-        '#!/bin/sh\nprintf "venv-do-projeto\\n"\nexit 0\n', encoding="utf-8"
+        '#!/bin/sh\nprintf "venv-do-projeto\\n"\n'
+        'grep -q "def main(" src/relay.py || exit 1\nexit 0\n',
+        encoding="utf-8",
     )
     python.chmod(0o755)
 
@@ -424,8 +548,8 @@ def test_checks_rodam_no_interpretador_do_produto(feature_root: Path) -> None:
     assert str(python) in saida
     revisao = (feature_root / "docs/feature-review.md").read_text(encoding="utf-8")
     assert str(python) in revisao
-    # O interpretador falso responde 0 sempre: se o check tivesse rodado no do
-    # gate, o AC-02 (que reprova de propósito) apareceria como FAIL.
+    # A assinatura do interpretador falso na saída prova qual binário rodou:
+    # o do projeto, não o que o gate herdou do shell.
     assert "venv-do-projeto" in saida
 
     # Sem venv no projeto, cai no interpretador atual — sem inventar ambiente.

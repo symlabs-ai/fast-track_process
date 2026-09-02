@@ -1048,6 +1048,13 @@ def _product_visible_files(
 
 
 def prepare_receipt_baseline(root: Path) -> None:
+    """Congela as dependências dos receipts e o commit pré-implementação.
+
+    O commit importa tanto quanto as lanes: é o único endereço estável do
+    estado em que a garantia de cada AC ainda **não** valia. O controle
+    negativo de `attest_checks.py` reexecuta os checks ali para provar que eles
+    falam da entrega, e não de algo que já era verdade.
+    """
     _feature_contract(root)
     visible = _git_visible_files(root)
     _, _, product_root = _load_baseline(root)
@@ -1070,6 +1077,7 @@ def prepare_receipt_baseline(root: Path) -> None:
             "schema_version": 1,
             "feature_sha256": _sha256(root / "docs/feature.md"),
             "workset_sha256": _sha256(root / "docs/feature-workset.yml"),
+            "baseline_commit": str(_git_stdout(root, ["rev-parse", "HEAD"])).strip(),
             "lanes": lanes,
         },
     )

@@ -21,6 +21,14 @@ from pathlib import Path
 
 import yaml
 
+# Importar um módulo irmão gravaria `__pycache__` dentro do bundle, em
+# `.ft/process/<template>/scripts/`. Esse bytecode aparece como arquivo
+# novo na árvore e é contado como mudança de quem trabalha no produto.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from engine_artifacts import is_engine_artifact  # noqa: E402
+
 REQUEST_PATH = Path("docs/feature-request.md")
 BASELINE_PATH = Path("docs/tweak-baseline.yml")
 REPORT_PATH = Path("docs/tweak-report.md")
@@ -894,16 +902,11 @@ def _is_cycle_path(root: Path, relative: str) -> bool:
         return False
     if path in CYCLE_PATHS:
         return True
-    # `state/` é bookkeeping de runtime da própria engine (engine_state.yml,
-    # llm_logs/, trace/events.jsonl) escrito DURANTE o run — não é mudança de
-    # produto do LLM. Ignorar o diretório inteiro; senão a escrita da engine
-    # conta contra o orçamento de arquivos do tweak e bloqueia mudanças legítimas.
-    if path.parts and path.parts[0] == "state":
-        return True
-    # StepRunner's activity log is a runtime artifact consumed by `ft runs`,
-    # close/archive and duration reports. Ignore only its exact root-level
-    # filename; arbitrary `*_log.md` paths remain guarded product changes.
-    return len(path.parts) == 1 and path.name == f"{root.name}_log.md"
+    # O que a engine escreve durante o run não é mudança de produto do LLM e
+    # não pode consumir o orçamento de arquivos do tweak. A regra local só
+    # conhecia `state/` e o log de raiz: `runs/`, `.ft/runtime/` e os arquivos
+    # de serviço (`.serve.pid`, `.serve_url`, ...) contavam contra o tweak.
+    return is_engine_artifact(relative, project_name=root.name)
 
 
 def _forbidden_product_path(relative: str) -> str | None:

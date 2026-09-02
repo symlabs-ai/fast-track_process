@@ -8,34 +8,13 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
-_RUNTIME_STATE_PATHS = [
-    "state/",
-    "runs/",
-    ".ft/runtime/",
-    ".ft/cache/",
-    ".ft/tmp/",
-    ".ft/logs/",
-    ".serve_url",
-    ".serve_backend.pid",
-    ".serve_frontend.pid",
-    ".serve.pid",
-    ".presented_artifact",
-    ".presentation.pid",
-    ".presentation.log",
-    "src/.serve.log",
-    "src/.serve.pid",
-    ":(glob)**/.serve_url",
-    ":(glob)**/.serve*.pid",
-    ":(glob)**/.serve*.log",
-    ":(glob)**/.presented_artifact",
-    ":(glob)**/.presentation.pid",
-    ":(glob)**/.presentation.log",
-    ":(glob)**/.node-runs-tmp/**",
-    ":(glob)**/.process-yaml-tmp/**",
-    ":(glob)**/test-results/**/.tmp/**",
-    ":(glob)*_log.md",
-    ":(glob)**/*_log.md",
-]
+from ft.engine.engine_artifacts import GIT_RUNTIME_PATHSPECS
+
+#: O que a engine escreveu durante o run sai do commit automático. A lista é
+#: declarada uma vez em `engine_artifacts`; manter uma cópia aqui foi o que
+#: deixou este módulo e os validadores de template discordarem sobre
+#: `<projeto>_log.md`.
+_RUNTIME_STATE_PATHS = list(GIT_RUNTIME_PATHSPECS)
 
 
 def verify_hooks_from_process_meta(meta: Mapping[str, Any] | None) -> bool:

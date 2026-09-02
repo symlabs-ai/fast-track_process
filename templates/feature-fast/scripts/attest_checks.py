@@ -25,6 +25,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Importar um módulo irmão gravaria `__pycache__` dentro do bundle, em
+# `.ft/process/<template>/scripts/`. Esse bytecode aparece como arquivo
+# novo na árvore e é contado como mudança de quem trabalha no produto.
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import validate_feature as vf  # noqa: E402

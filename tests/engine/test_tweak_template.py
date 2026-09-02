@@ -27,6 +27,7 @@ PROCESS = TEMPLATE / "process.yml"
 VALIDATOR = TEMPLATE / "scripts" / "validate_tweak.py"
 PRODUCT_HELPER = TEMPLATE / "scripts" / "product.sh"
 SERVE_HELPER = TEMPLATE / "scripts" / "serve.sh"
+ENGINE_ARTIFACTS = TEMPLATE / "scripts" / "engine_artifacts.py"
 
 
 def _write(root: Path, relative: str, content: str) -> None:
@@ -47,6 +48,7 @@ def _project(
     scripts.mkdir(parents=True)
     shutil.copy2(VALIDATOR, scripts / "validate_tweak.py")
     shutil.copy2(PRODUCT_HELPER, scripts / "product.sh")
+    shutil.copy2(ENGINE_ARTIFACTS, scripts / "engine_artifacts.py")
     _write(
         root,
         ".ft/manifest.yml",
@@ -347,6 +349,23 @@ def test_tweak_ignores_only_the_exact_engine_activity_log(tmp_path):
     result = _run_validator(root, "implementation")
 
     assert result.returncode == 0, result.stderr
+
+
+def test_tweak_validator_nao_deixa_bytecode_na_arvore(tmp_path):
+    """O bundle vive dentro do projeto: um `__pycache__` ali vira mudança.
+
+    O validador importa um módulo irmão (`engine_artifacts`). Sem desligar a
+    escrita de bytecode, o próprio ato de validar cria um arquivo novo em
+    `.ft/process/tweak/scripts/` e o gate seguinte acusa path fora do produto.
+    """
+    root = _project(tmp_path)
+    _preflight(root)
+
+    residuo = sorted(
+        path.relative_to(root).as_posix() for path in root.rglob("__pycache__")
+    )
+
+    assert residuo == []
 
 
 def test_tweak_rejects_arbitrary_engine_lookalike_log(tmp_path):

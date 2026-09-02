@@ -23,8 +23,13 @@ from typing import Iterable
 
 import yaml
 
+# Importar um módulo irmão gravaria `__pycache__` dentro do bundle, em
+# `.ft/process/<template>/scripts/`. Esse bytecode aparece como arquivo
+# novo na árvore e é contado como mudança de quem trabalha no produto.
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from engine_artifacts import is_engine_artifact  # noqa: E402
 from product_receipt import SUITE_TARGETS  # noqa: E402
 
 AC_RE = re.compile(r"\bAC-\d{2,3}\b", re.IGNORECASE)
@@ -860,21 +865,25 @@ def validate_reserve(root: Path) -> None:
 CYCLE_ONLY_ROOTS = frozenset({".ft", ".git", "docs", "state"})
 
 
-def _is_product_path(path: str) -> bool:
+def _is_product_path(path: str, project_name: str) -> bool:
     """Um caminho da raiz conta como produto, e não como artefato do ciclo?
 
-    A regra vivia duplicada em `_changed_product_paths` e
-    `_product_visible_files`, e as duas cópias esqueceram o mesmo caso: o
-    engine grava `<projeto>_log.md` na raiz do worktree a cada transição de
-    nó. Com o produto na raiz, esse log entrava na lane e no conjunto de
-    arquivos alterados, e o impacto passava a se autoinvalidar — registrar a
-    passagem de um gate já mudava o conteúdo hasheado pelo gate seguinte,
-    deixando `feature.checks` inalcançável. O resto do engine já trata
-    `*_log.md` como artefato seu (ft/engine/git_ops.py,
-    validators/check_paths.py, delegate.py). Uma função só para que as duas
-    chamadas não voltem a divergir.
+    Duas origens, deliberadamente separadas. O que a engine escreve durante o
+    run é declarado uma vez em `engine_artifacts` e vale para todo template —
+    a cópia local desta regra conhecia só `*_log.md` e deixava `state/`,
+    `runs/` e os arquivos de serviço entrarem na lane do produto. O que é
+    artefato deste processo (`docs/`, `CHANGELOG.md`) é decisão do
+    feature-fast e fica aqui.
+
+    O caso que motivou a separação: com o produto na raiz, o log que a engine
+    grava a cada transição de nó entrava no conjunto hasheado, e o impacto
+    passava a se autoinvalidar — registrar a passagem de um gate mudava o
+    conteúdo que o gate seguinte reconferia, deixando `feature.checks`
+    inalcançável para sempre.
     """
-    if path == "CHANGELOG.md" or path.endswith("_log.md"):
+    if is_engine_artifact(path, project_name=project_name):
+        return False
+    if path == "CHANGELOG.md":
         return False
     return path.split("/", 1)[0] not in CYCLE_ONLY_ROOTS
 
@@ -945,7 +954,7 @@ def _changed_product_paths(root: Path, product_root: str) -> list[str]:
             continue
         seen.add(raw)
         if product_root == ".":
-            if not _is_product_path(raw):
+            if not _is_product_path(raw, root.name):
                 continue
             paths.append(raw)
         elif raw.startswith(f"{product_root}/"):
@@ -1040,11 +1049,12 @@ def _receipt_lanes(root: Path) -> list[dict[str, object]]:
 def _product_visible_files(
     visible_files: list[str],
     product_root: str,
+    project_name: str,
 ) -> list[str]:
     if product_root != ".":
         prefix = f"{product_root}/"
         return [path for path in visible_files if path.startswith(prefix)]
-    return [path for path in visible_files if _is_product_path(path)]
+    return [path for path in visible_files if _is_product_path(path, project_name)]
 
 
 def prepare_receipt_baseline(root: Path) -> None:
@@ -1065,7 +1075,7 @@ def prepare_receipt_baseline(root: Path) -> None:
             root,
             patterns,
             visible_files=(
-                _product_visible_files(visible, product_root)
+                _product_visible_files(visible, product_root, root.name)
                 if lane["id"] == "product"
                 else visible
             ),
@@ -1178,7 +1188,7 @@ def _build_impact(root: Path) -> dict[str, object]:
             root,
             patterns,
             visible_files=(
-                _product_visible_files(visible, product_root)
+                _product_visible_files(visible, product_root, root.name)
                 if lane["id"] == "product"
                 else visible
             ),
@@ -1400,7 +1410,7 @@ def _receipt_record_for_lane(
     dependency_files = [
         path
         for path in (
-            _product_visible_files(visible, product_root)
+            _product_visible_files(visible, product_root, root.name)
             if lane.get("id") == "product"
             else visible
         )

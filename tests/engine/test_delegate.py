@@ -612,11 +612,30 @@ class TestBuildExecutorCommand:
         log_dir.mkdir(parents=True)
         (log_dir / "review.jsonl").write_text("stream\n", encoding="utf-8")
         (log_dir / "review.jsonl.activity").write_text("heartbeat\n", encoding="utf-8")
-        (tmp_path / "cycle-01_log.md").write_text("engine\n", encoding="utf-8")
+        # O nome real é `<projeto>_log.md`, derivado da pasta do projeto
+        # (runner.py). `cycle-01_log.md` era o palpite antigo e nunca existiu.
+        (tmp_path / f"{tmp_path.name}_log.md").write_text("engine\n", encoding="utf-8")
 
         after = _workspace_progress_snapshot(paths, str(tmp_path))
 
         assert after == before
+
+    def test_workspace_snapshot_conta_log_sosia_como_trabalho_do_llm(self, tmp_path):
+        """Só o log que a engine escreve é ignorado; o resto é produção.
+
+        Perdoar qualquer `*_log.md` deixaria o supervisor cego para um arquivo
+        que o LLM criou — e cego na direção errada: ele concluiria que nada
+        aconteceu enquanto havia trabalho acontecendo.
+        """
+        paths = _workspace_progress_paths(str(tmp_path), ["docs"])
+        before = _workspace_progress_snapshot(paths, str(tmp_path))
+
+        (tmp_path / "anotacoes_log.md").write_text("do LLM\n", encoding="utf-8")
+
+        after = _workspace_progress_snapshot(paths, str(tmp_path))
+
+        assert after.digest != before.digest
+        assert after.file_count == before.file_count + 1
 
     def test_opt_in_max_wall_stops_even_a_productive_stream(
         self, tmp_path, monkeypatch

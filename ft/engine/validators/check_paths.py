@@ -10,6 +10,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from ft.engine.engine_artifacts import is_engine_artifact
+
 
 def paths_clean(allowed: list[str], project_root: str = ".") -> tuple[bool, str]:
     """
@@ -34,16 +36,16 @@ def paths_clean(allowed: list[str], project_root: str = ".") -> tuple[bool, str]
         text=True,
     )
 
-    # Padrões gerados pelo engine — sempre excluídos da checagem
-    ENGINE_PATTERNS = ("_log.md",)
-
     modified = set(result.stdout.strip().splitlines())
     untracked = set(result_untracked.stdout.strip().splitlines())
     all_changed = modified | untracked
 
-    # Remover arquivos gerados pelo engine
+    # O que a engine escreveu durante o run não conta como mudança de quem
+    # trabalha no produto. A regra é declarada uma vez em `engine_artifacts`:
+    # a versão local aqui conhecia só `_log.md` e deixava passar `state/`,
+    # `runs/` e os arquivos de serviço.
     all_changed = {
-        f for f in all_changed if not any(f.endswith(p) for p in ENGINE_PATTERNS)
+        f for f in all_changed if not is_engine_artifact(f, project_name=root.name)
     }
 
     if not all_changed:

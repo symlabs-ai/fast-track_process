@@ -18,6 +18,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Importar um módulo irmão gravaria `__pycache__` dentro do bundle, em
+# `.ft/process/<template>/scripts/`. Esse bytecode aparece como arquivo
+# novo na árvore e é contado como mudança de quem trabalha no produto.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from engine_artifacts import is_engine_artifact  # noqa: E402
+
 SCHEMA_VERSION = 3
 RECEIPT_KINDS = {
     "baseline": "ft.feature.baseline-attestation",
@@ -108,20 +116,15 @@ def _git_paths(root: Path, product_root: str) -> list[str]:
             return False
         # Reconcile atualiza docs e CHANGELOG após a validação completa. Eles
         # são evidência/saída do ciclo, não entrada executável de test/build.
-        if path.parts[0] in {"docs", "state"} or relative == "CHANGELOG.md":
+        if path.parts[0] == "docs" or relative == "CHANGELOG.md":
             return False
-        # O log do ciclo é escrito pelo próprio engine a cada transição de nó
-        # (`<projeto>_log.md`, ft/engine/runner.py). Contá-lo como entrada de
-        # validação torna o receipt auto-invalidante: `product_validate` grava o
-        # fingerprint e o simples registro daquele PASS muda o conteúdo que
-        # `evidence_gate` reconfere um nó depois. As duas formas antigas
-        # (`*.log`, `cycle-*`) eram palpites sobre o nome e nunca casaram com o
-        # que o engine escreve; ficam por compatibilidade com ciclos anteriores.
-        if len(path.parts) == 1 and (
-            path.suffix == ".log"
-            or path.name.startswith("cycle-")
-            or path.name.endswith("_log.md")
-        ):
+        # O que a engine escreve durante o run também não é entrada de
+        # validação. Contá-lo torna o receipt auto-invalidante:
+        # `product_validate` grava o fingerprint e o simples registro daquele
+        # PASS muda o conteúdo que `evidence_gate` reconfere um nó depois. As
+        # formas antigas desta regra (`*.log`, `cycle-*`) eram palpites sobre o
+        # nome do log e nunca casaram com o que a engine grava.
+        if is_engine_artifact(relative, project_name=root.name):
             return False
         if path.parts[0] == ".ft":
             return relative == PROCESS_PATHS[0] or relative.startswith(

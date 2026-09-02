@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from ft.engine.engine_artifacts import is_engine_artifact
 from ft.engine.llm_activity import (
     activity_log_path,
     append_activity,
@@ -473,16 +474,15 @@ def _workspace_progress_paths(
     return [root]
 
 
-def _is_engine_runtime_progress_path(relative: Path) -> bool:
-    """Ignore files whose growth is caused by the supervisor itself."""
-    parts = relative.parts
-    if parts and parts[0] == "state":
-        return True
-    return (
-        len(parts) == 1
-        and relative.name.startswith("cycle-")
-        and relative.name.endswith("_log.md")
-    )
+def _is_engine_runtime_progress_path(relative: Path, project_name: str) -> bool:
+    """Ignore files whose growth is caused by the supervisor itself.
+
+    A regra local exigia o prefixo `cycle-` no log, um palpite sobre o nome que
+    nunca casou: a engine escreve `<projeto>_log.md`. O supervisor via o
+    próprio registro de passagem como progresso do LLM. `engine_artifacts` é a
+    declaração única de tudo que a engine escreve.
+    """
+    return is_engine_artifact(relative.as_posix(), project_name=project_name)
 
 
 def _workspace_progress_snapshot(
@@ -511,7 +511,7 @@ def _workspace_progress_snapshot(
             return
         if relative == ".git" or relative.startswith(".git/"):
             return
-        if _is_engine_runtime_progress_path(relative_path):
+        if _is_engine_runtime_progress_path(relative_path, root.name):
             return
         if missing:
             digest.update(f"M\0{relative}\0".encode("utf-8", errors="surrogateescape"))
@@ -599,7 +599,7 @@ def _workspace_progress_snapshot(
                     continue
                 if ".git" in relative.parts:
                     continue
-                if _is_engine_runtime_progress_path(relative):
+                if _is_engine_runtime_progress_path(relative, root.name):
                     continue
                 try:
                     if entry.is_dir(follow_symlinks=False):

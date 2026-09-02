@@ -19,6 +19,14 @@ from typing import Any
 
 import yaml
 
+# Importar um módulo irmão gravaria `__pycache__` dentro do bundle, em
+# `.ft/process/<template>/scripts/`. Esse bytecode aparece como arquivo
+# novo na árvore e é contado como mudança de quem trabalha no produto.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from engine_artifacts import is_engine_artifact  # noqa: E402
+
 SCHEMA_VERSION = 1
 BASELINE_PATH = Path("docs/bug-baseline.yml")
 REPORT_PATH = Path("docs/bug-report.md")
@@ -823,7 +831,11 @@ def _allowed_implementation_path(root: Path, relative: str, product_root: str) -
         return True
     if path.parts[0] in PRODUCT_CHANGE_ROOTS:
         return True
-    if path.parts[0] == "state":
+    # O que a engine escreve durante o run nunca é mudança do LLM. A regra
+    # local conhecia `state/`, três `.serve*` de raiz e o log — e ignorava
+    # `runs/`, `.ft/runtime/` e os arquivos de serviço fora da raiz, que assim
+    # eram acusados como paths fora do produto selecionado.
+    if is_engine_artifact(relative, project_name=root.name):
         return True
     if relative in {
         "docs/feature-request.md",
@@ -837,11 +849,6 @@ def _allowed_implementation_path(root: Path, relative: str, product_root: str) -
         FIX_REVIEW_PATH.as_posix(),
         "docs/stakeholder-feedback.md",
     }:
-        return True
-    if len(path.parts) == 1 and (
-        path.name in {".serve.pid", ".serve_url", ".serve.log"}
-        or path.name == f"{root.name}_log.md"
-    ):
         return True
     return False
 

@@ -1,11 +1,27 @@
-"""O commit de um node de build alcança o produto na raiz do repositório.
+"""O commit de um node é o delta desse node, não a permissão do LLM.
 
-`write_scope` enumera palpites de onde o produto mora (`project`, `src`,
-`test`, `tests`). Quando o produto é a própria raiz — como em qualquer
-projeto cujo `Makefile`, `pyproject.toml` e `packaging/` ficam no topo — nenhum
-palpite casa, e o `git add` restrito ao escopo deixava a implementação inteira
-de fora do commit sem emitir sinal nenhum. O sintoma aparecia só depois, num
-gate a jusante reclamando de outra coisa.
+`write_scope` diz onde o LLM pode escrever, e é orientação de prompt, não
+barreira: um node cujo escopo era `['project', 'src', 'checks']` alterou o
+`Makefile` da raiz. Usá-lo como pathspec de `git add` fazia o commit descrever
+a permissão em vez do delta, e o que caía fora ficava de fora — em silêncio,
+porque `git add` num pathspec que não casa só falha para quem lê o código de
+saída.
+
+O custo é destrutivo: `cmd_close` mergeia *commits* e depois roda
+`git worktree remove --force`. Um único ciclo real perdeu duas coisas por
+isso, ambas resgatadas à mão: o produto, que morava em `Makefile` e
+`packaging/`, e a reconciliação que marca o item do backlog como entregue —
+escrita por um node `document`, que sequer estava na lista de tipos que
+commitam.
+
+A primeira tentativa de correção errou duas vezes. Assumiu que "produto na
+raiz" equivalia a "nenhum de `project`/`src`/`test`/`tests` existe", e um
+projeto real tem `src/`, `tests/` **e** produto na raiz. Depois tentou varrer
+a árvore inteira, o que atropela dois invariantes que a suíte já protegia: um
+node que não mudou nada não pode gerar commit, e um arquivo que a engine
+copiou para a worktree como entrada tem de permanecer untracked.
+
+Comparar com a foto tirada antes resolve os dois casos sem varrer nada.
 """
 
 from __future__ import annotations
@@ -57,6 +73,12 @@ nodes:
     outputs: [project/, src/, checks/]
     write_scope: [project, src, checks]
     next: end
+  - id: reconcile
+    type: document
+    title: Reconcile
+    outputs: [docs/reconciliation.yml]
+    write_scope: [docs/reconciliation.yml]
+    next: end
   - id: end
     type: end
     title: End
@@ -77,8 +99,16 @@ def _tracked(root: Path) -> list[str]:
     return _git(root, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
 
 
-def _commit_build(root: Path) -> None:
+def _commit_build(root: Path, escrever) -> None:
+    """Foto, depois a escrita do node, depois o commit — nessa ordem.
+
+    A ordem é o teste: tirar a foto depois da escrita põe o produto na
+    baseline e o delta sai vazio, que é o modo mais fácil de escrever um teste
+    que passa sem provar nada.
+    """
     runner = _runner(root)
+    runner._refresh_commit_baseline()
+    escrever()
     runner._maybe_auto_commit(runner.graph.get_node("build"))
 
 
@@ -86,15 +116,19 @@ def test_commit_alcanca_o_produto_na_raiz_quando_o_escopo_erra_o_lugar(tmp_path)
     """O caso do PB-053: Makefile e packaging/ sumiam do commit."""
     root = tmp_path / "repo"
     _init_repo(root)
-    # O escopo declarado aponta para project/ e src/, que este projeto não tem.
-    (root / "checks").mkdir()
-    (root / "checks" / "AC-01.py").write_text("# check\n", encoding="utf-8")
-    (root / "Makefile").write_text("build:\n\techo base\npackage:\n\techo deb\n")
-    (root / "packaging" / "deb").mkdir(parents=True)
-    (root / "packaging" / "build_deb.py").write_text("# assembla\n", encoding="utf-8")
-    (root / "packaging" / "deb" / "control.in").write_text("Package: x\n")
 
-    _commit_build(root)
+    def escrever() -> None:
+        # O escopo declarado aponta para project/ e src/, que este projeto não tem.
+        (root / "checks").mkdir()
+        (root / "checks" / "AC-01.py").write_text("# check\n", encoding="utf-8")
+        (root / "Makefile").write_text("build:\n\techo base\npackage:\n\techo deb\n")
+        (root / "packaging" / "deb").mkdir(parents=True)
+        (root / "packaging" / "build_deb.py").write_text(
+            "# assembla\n", encoding="utf-8"
+        )
+        (root / "packaging" / "deb" / "control.in").write_text("Package: x\n")
+
+    _commit_build(root, escrever)
 
     tracked = _tracked(root)
     assert "Makefile" in tracked
@@ -109,17 +143,21 @@ def test_commit_na_raiz_nao_arrasta_artefato_de_ciclo(tmp_path):
     """Alcançar a raiz não pode significar varrer os descartáveis do ciclo."""
     root = tmp_path / "repo"
     _init_repo(root)
-    (root / "checks").mkdir()
-    (root / "checks" / "AC-01.py").write_text("# check\n", encoding="utf-8")
-    (root / "packaging").mkdir()
-    (root / "packaging" / "build_deb.py").write_text("# assembla\n", encoding="utf-8")
-    (root / "docs").mkdir()
-    (root / CYCLE_ARTIFACT).write_text("# contrato do ciclo\n", encoding="utf-8")
-    (root / "state").mkdir()
-    (root / "state" / "engine_state.yml").write_text("runtime\n", encoding="utf-8")
-    (root / f"{root.name}_log.md").write_text("log da engine\n", encoding="utf-8")
 
-    _commit_build(root)
+    def escrever() -> None:
+        (root / "checks").mkdir()
+        (root / "checks" / "AC-01.py").write_text("# check\n", encoding="utf-8")
+        (root / "packaging").mkdir()
+        (root / "packaging" / "build_deb.py").write_text(
+            "# assembla\n", encoding="utf-8"
+        )
+        (root / "docs").mkdir()
+        (root / CYCLE_ARTIFACT).write_text("# contrato do ciclo\n", encoding="utf-8")
+        (root / "state").mkdir()
+        (root / "state" / "engine_state.yml").write_text("runtime\n", encoding="utf-8")
+        (root / f"{root.name}_log.md").write_text("log da engine\n", encoding="utf-8")
+
+    _commit_build(root, escrever)
 
     tracked = _tracked(root)
     assert "packaging/build_deb.py" in tracked
@@ -128,19 +166,36 @@ def test_commit_na_raiz_nao_arrasta_artefato_de_ciclo(tmp_path):
     assert f"{root.name}_log.md" not in tracked
 
 
-def test_escopo_que_acerta_o_diretorio_do_produto_segue_restrito(tmp_path):
-    """Se src/ existe, o escopo declarado está certo e nada mais entra."""
+def test_produto_na_raiz_conta_mesmo_com_src_e_tests(tmp_path):
+    """A forma real do projeto, que a primeira correção não pegava.
+
+    `src/` e `tests/` existem **e** a raiz é produto. A heurística de palpites
+    concluía, por `src/` existir, que o escopo declarado estava certo, e o
+    produto da raiz seguia fora do commit.
+    """
     root = tmp_path / "repo"
     _init_repo(root)
-    (root / "src").mkdir()
-    (root / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
-    (root / "avulso.txt").write_text("fora do escopo\n", encoding="utf-8")
 
-    _commit_build(root)
+    def escrever() -> None:
+        (root / "src").mkdir()
+        (root / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+        (root / "tests").mkdir()
+        (root / "tests" / "test_app.py").write_text(
+            "def test_x(): pass\n", encoding="utf-8"
+        )
+        (root / "Makefile").write_text("build:\n\techo base\npackage:\n\techo deb\n")
+        (root / "packaging").mkdir()
+        (root / "packaging" / "build_deb.py").write_text(
+            "# assembla\n", encoding="utf-8"
+        )
+
+    _commit_build(root, escrever)
 
     tracked = _tracked(root)
     assert "src/app.py" in tracked
-    assert "avulso.txt" not in tracked
+    assert "tests/test_app.py" in tracked
+    assert "packaging/build_deb.py" in tracked
+    assert "package" in _git(root, "show", "HEAD:Makefile").stdout
 
 
 def test_auto_commit_denuncia_pathspec_que_nao_casou_com_nada(tmp_path):
@@ -154,3 +209,86 @@ def test_auto_commit_denuncia_pathspec_que_nao_casou_com_nada(tmp_path):
     assert ok, detail
     assert "project" in detail
     assert "novo.txt" in _tracked(root)
+
+
+def test_node_document_commita_a_reconciliacao_que_escreveu(tmp_path):
+    """O segundo resgate manual: `document` não commitava nada.
+
+    O node que marca o item do backlog como entregue declara apenas os seus
+    dois artefatos descartáveis, e escreve os canônicos. Sem commit, o
+    `ft close` mergeia e apaga: o projeto passa a registrar como não entregue
+    uma feature aceita, sem conflito e sem aviso.
+    """
+    root = tmp_path / "repo"
+    _init_repo(root)
+    (root / "docs").mkdir()
+    (root / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
+    (root / "docs" / "BACKLOG.md").write_text("| PB-01 | ready |\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "canonicos")
+
+    runner = _runner(root)
+    runner._refresh_commit_baseline()
+    (root / "docs" / "BACKLOG.md").write_text(
+        "| PB-01 | accepted |\n", encoding="utf-8"
+    )
+    (root / "CHANGELOG.md").write_text("# Changelog\n\n- entrega\n", encoding="utf-8")
+    (root / CYCLE_ARTIFACT).write_text("# descartavel\n", encoding="utf-8")
+    runner._maybe_auto_commit(runner.graph.get_node("reconcile"))
+
+    commitado = _git(root, "show", "HEAD:docs/BACKLOG.md").stdout
+    assert "accepted" in commitado
+    assert "entrega" in _git(root, "show", "HEAD:CHANGELOG.md").stdout
+    assert CYCLE_ARTIFACT not in _tracked(root)
+
+
+def test_entrada_copiada_pela_engine_nao_entra_no_commit(tmp_path):
+    """O invariante que a varredura quebrava.
+
+    `ft run` copia a demanda para dentro da worktree depois que ela nasce. O
+    arquivo está sujo desde antes do node rodar, e não é delta de node nenhum.
+    """
+    root = tmp_path / "repo"
+    _init_repo(root)
+    (root / "request.md").write_text("demanda\n", encoding="utf-8")
+
+    runner = _runner(root)
+    runner._refresh_commit_baseline()
+    (root / "src").mkdir()
+    (root / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    runner._maybe_auto_commit(runner.graph.get_node("build"))
+
+    tracked = _tracked(root)
+    assert "src/app.py" in tracked
+    assert "request.md" not in tracked
+
+
+def test_node_que_nao_mudou_nada_nao_gera_commit(tmp_path):
+    """Um node pulado por pre-seed não pode inventar um commit."""
+    root = tmp_path / "repo"
+    _init_repo(root)
+    (root / "request.md").write_text("demanda\n", encoding="utf-8")
+
+    runner = _runner(root)
+    runner._refresh_commit_baseline()
+    runner._maybe_auto_commit(runner.graph.get_node("build"))
+
+    assert _git(root, "log", "-1", "--pretty=%s").stdout.strip() == "base"
+    assert "request.md" not in _tracked(root)
+
+
+def test_delta_pega_conteudo_novo_com_o_mesmo_status(tmp_path):
+    """Arquivo já sujo antes do node, cujo conteúdo o node mudou.
+
+    O status porcelain continua ` M` nos dois momentos; só o conteúdo denuncia.
+    """
+    root = tmp_path / "repo"
+    _init_repo(root)
+    (root / "Makefile").write_text("build:\n\techo sujo\n", encoding="utf-8")
+
+    runner = _runner(root)
+    runner._refresh_commit_baseline()
+    (root / "Makefile").write_text("build:\n\techo sujo\npackage:\n\techo deb\n")
+    runner._maybe_auto_commit(runner.graph.get_node("build"))
+
+    assert "package" in _git(root, "show", "HEAD:Makefile").stdout

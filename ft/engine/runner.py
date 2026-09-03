@@ -3062,29 +3062,96 @@ class StepRunner:
 
     # Nomes que um write_scope usa para dizer "o produto", sem saber onde ele
     # mora neste projeto.
-    _PRODUCT_LOCATION_CANDIDATES = ("project", "src", "test", "tests")
+    def _worktree_snapshot(self) -> dict[str, tuple[str, str | None]]:
+        """Foto do que está sujo na árvore, por caminho.
+
+        Guarda o status porcelain e, para arquivo existente, um hash do
+        conteúdo: dois estados com o mesmo status podem ter conteúdos
+        diferentes, e é a diferença de conteúdo que define o delta de um node.
+        Só arquivo sujo é hasheado, que é um punhado — a árvore limpa não
+        custa nada.
+        """
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return {}
+        root = Path(self.project_root)
+        snapshot: dict[str, tuple[str, str | None]] = {}
+        campos = [campo for campo in result.stdout.split("\0") if campo]
+        indice = 0
+        while indice < len(campos):
+            entrada = campos[indice]
+            indice += 1
+            if len(entrada) < 4:
+                continue
+            status, relativo = entrada[:2], entrada[3:]
+            # Rename/copy gastam um campo extra com a origem, que não é o alvo.
+            if "R" in status or "C" in status:
+                indice += 1
+            alvo = root / relativo
+            digest: str | None = None
+            try:
+                if alvo.is_file() and not alvo.is_symlink():
+                    digest = hashlib.sha256(alvo.read_bytes()).hexdigest()
+            except OSError:
+                digest = None
+            snapshot[relativo] = (status, digest)
+        return snapshot
+
+    def _refresh_commit_baseline(self) -> None:
+        """Ancora o delta na foto atual da árvore.
+
+        Chamado uma vez, no início do run. Re-ancorar depois de cada commit
+        seria intuitivo e é desnecessário: o que foi commitado fica limpo e
+        some do `git status`, então não reaparece no delta de node nenhum. A
+        chamada extra não altera nenhum resultado observável, e código que
+        nenhuma mutação consegue matar não se justifica.
+        """
+        self._commit_baseline = self._worktree_snapshot()
 
     def _commit_pathspecs(self, node: Node) -> list[str]:
-        """Escopo do commit — não é a permissão de escrita do LLM.
+        """Escopo do commit: o delta **deste node**, e não a permissão do LLM.
 
-        `write_scope` enumera palpites de onde o produto mora. Quando o produto
-        é a própria raiz do repositório, nenhum palpite casa: `git add project`
-        e `git add src` falham, sobra o que por acaso existe, e a implementação
-        inteira fica fora do commit sem sinal nenhum. Se o escopo tentou nomear
-        o produto e errou o lugar, o produto é a raiz.
+        `write_scope` responde "onde o LLM pode escrever". É orientação de
+        prompt, não barreira — um node cujo escopo era ``['project', 'src']``
+        alterou o `Makefile` da raiz, e nada o impediu. Usá-lo como pathspec de
+        `git add` faz o commit descrever a permissão em vez do delta, e o que
+        cai fora não é commitado; em silêncio, porque um `git add` que não casa
+        com nada só falha para quem lê o código de saída.
+
+        O custo é destrutivo, não incômodo: `cmd_close` mergeia *commits* e
+        depois roda `git worktree remove --force`. Num único ciclo isso
+        descartaria duas vezes — o produto que morava em `Makefile` e
+        `packaging/`, e a reconciliação que marca o item do backlog como
+        entregue, ambos escritos fora do `write_scope` de quem os escreveu.
+
+        Comparar com a foto tirada antes resolve os dois sem varrer a árvore.
+        Um arquivo que a engine copiou para a worktree como entrada já está na
+        foto e não entra no commit de ninguém; um node que não mudou nada tem
+        delta vazio e não gera commit. O que sobra é exatamente o que este node
+        escreveu, e as exclusões de `auto_commit` tiram dali os descartáveis.
+
+        Os paths declarados continuam sendo passados junto, e por dois
+        motivos: preservam o comportamento antigo dentro do escopo declarado —
+        o delta só alarga, nunca estreita — e são o que faz `auto_commit`
+        denunciar pathspec sem correspondência, aviso que sinaliza um
+        `write_scope` de template nomeando diretório que o projeto não tem.
         """
-        allowed = self._resolve_allowed_paths(node)
-        tentativas = [
-            path
-            for path in allowed
-            if path.strip("/") in self._PRODUCT_LOCATION_CANDIDATES
-        ]
-        if not tentativas:
-            return allowed
-        root = Path(self.project_root)
-        if any((root / path.strip("/")).exists() for path in tentativas):
-            return allowed
-        return [*allowed, "."]
+        antes = getattr(self, "_commit_baseline", None)
+        declarados = self._resolve_allowed_paths(node)
+        if antes is None:
+            return declarados
+        agora = self._worktree_snapshot()
+        delta = sorted(
+            relativo
+            for relativo, estado in agora.items()
+            if antes.get(relativo) != estado
+        )
+        return [*declarados, *delta] if delta else declarados
 
     def _cycle_artifact_pathspecs(self) -> list[str]:
         """Descartáveis do ciclo, que um commit amplo não pode arrastar."""
@@ -4834,6 +4901,11 @@ class StepRunner:
         return True
 
     def run(self, mode: str = "step"):
+        # A foto inicial ancora o delta de cada node. Tirada aqui, ela já
+        # contém o que a engine copiou para a worktree como entrada (a
+        # demanda, o handoff, o plano de voo) — e por isso nada disso entra
+        # no commit de um node que apenas passou por perto.
+        self._refresh_commit_baseline()
         try:
             return self._run_loop(mode)
         except LLMEpisodeBudgetExceeded as exc:
@@ -6592,7 +6664,19 @@ class StepRunner:
 
     def _maybe_auto_commit(self, node: Node):
         """Auto-commit apos PASS em nodes de build/test_green/refactor."""
-        commit_types = ("build", "batch", "test_green", "refactor", "test_red")
+        # `document` entra porque um node de documento escreve artefato
+        # canônico — a reconciliação que marca o item do backlog como entregue
+        # é um deles, e ficava fora de qualquer commit. Incluí-lo é seguro
+        # porque o escopo é o delta e as exclusões tiram os descartáveis: um
+        # node que só escreveu artefato de ciclo continua sem commitar.
+        commit_types = (
+            "build",
+            "batch",
+            "test_green",
+            "refactor",
+            "test_red",
+            "document",
+        )
         if node.type not in commit_types:
             return
 

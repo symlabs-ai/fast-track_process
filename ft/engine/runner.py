@@ -48,6 +48,7 @@ from ft.engine.graph import Node, load_graph
 from ft.engine.hooks import hooks_all_passed, load_environment, run_hooks
 from ft.engine.layout import (
     archive_cycle_artifacts,
+    cycle_artifact_pathspecs,
     is_cycle_artifact,
     process_digest,
     validate_local_process_path,
@@ -3058,6 +3059,36 @@ class StepRunner:
             return allowed
 
         return ["project/", "docs/"]
+
+    # Nomes que um write_scope usa para dizer "o produto", sem saber onde ele
+    # mora neste projeto.
+    _PRODUCT_LOCATION_CANDIDATES = ("project", "src", "test", "tests")
+
+    def _commit_pathspecs(self, node: Node) -> list[str]:
+        """Escopo do commit — não é a permissão de escrita do LLM.
+
+        `write_scope` enumera palpites de onde o produto mora. Quando o produto
+        é a própria raiz do repositório, nenhum palpite casa: `git add project`
+        e `git add src` falham, sobra o que por acaso existe, e a implementação
+        inteira fica fora do commit sem sinal nenhum. Se o escopo tentou nomear
+        o produto e errou o lugar, o produto é a raiz.
+        """
+        allowed = self._resolve_allowed_paths(node)
+        tentativas = [
+            path
+            for path in allowed
+            if path.strip("/") in self._PRODUCT_LOCATION_CANDIDATES
+        ]
+        if not tentativas:
+            return allowed
+        root = Path(self.project_root)
+        if any((root / path.strip("/")).exists() for path in tentativas):
+            return allowed
+        return [*allowed, "."]
+
+    def _cycle_artifact_pathspecs(self) -> list[str]:
+        """Descartáveis do ciclo, que um commit amplo não pode arrastar."""
+        return cycle_artifact_pathspecs(self.graph.meta)
 
     def _clear_no_pre_seed_outputs(self, node: Node) -> None:
         """Remove only disposable cycle outputs before forced regeneration."""
@@ -6578,7 +6609,8 @@ class StepRunner:
         success, detail = auto_commit(
             message=message,
             project_root=self.project_root,
-            paths=self._resolve_allowed_paths(node),
+            paths=self._commit_pathspecs(node),
+            exclude_pathspecs=self._cycle_artifact_pathspecs(),
             verify_hooks=self._verify_commit_hooks(),
         )
         if success:

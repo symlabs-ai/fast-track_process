@@ -1438,6 +1438,17 @@ def is_cycle_artifact(path: str | Path, graph_meta: dict[str, Any] | None) -> bo
     return not conflicts_with_canonical
 
 
+def cycle_artifact_pathspecs(graph_meta: dict[str, Any] | None) -> list[str]:
+    """Pathspecs dos artefatos descartáveis do ciclo.
+
+    Serve a quem precisa manter os descartáveis fora de um `git add` amplo.
+    Passa cada entrada por ``is_cycle_artifact`` para que uma entrada listada
+    nos dois lados da política continue valendo como canônica.
+    """
+    _, cycle_values = _artifact_policy(graph_meta)
+    return [value for value in cycle_values if is_cycle_artifact(value, graph_meta)]
+
+
 def _cycle_artifact_inventory(cycle_dir: Path) -> list[str]:
     return sorted(
         str(item.relative_to(cycle_dir))

@@ -5,6 +5,7 @@ Git operations — commit automatico apos green+review.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -42,9 +43,9 @@ def _commit_policy_flags(verify_hooks: bool) -> list[str]:
     return ["--no-verify", "--no-gpg-sign"]
 
 
-def _unstage_runtime_state(cwd: str) -> None:
-    """Remove generated engine/serve state from the index after broad git add."""
-    for pathspec in _RUNTIME_STATE_PATHS:
+def _unstage(cwd: str, pathspecs: Iterable[str]) -> None:
+    """Tira do index tudo que casa com ``pathspecs``."""
+    for pathspec in pathspecs:
         subprocess.run(
             ["git", "reset", "HEAD", "--", pathspec],
             cwd=cwd,
@@ -53,27 +54,49 @@ def _unstage_runtime_state(cwd: str) -> None:
         )
 
 
+def _unstage_runtime_state(cwd: str) -> None:
+    """Remove generated engine/serve state from the index after broad git add."""
+    _unstage(cwd, _RUNTIME_STATE_PATHS)
+
+
 def auto_commit(
     message: str,
     project_root: str = ".",
     paths: list[str] | None = None,
     *,
+    exclude_pathspecs: Iterable[str] | None = None,
     verify_hooks: bool = True,
 ) -> tuple[bool, str]:
     """
     Faz git add + commit com mensagem padrao.
     Retorna (success, detail).
+
+    Um pathspec que nao casa com nada entra no detalhe retornado. Engolir esse
+    erro ja escondeu implementacao inteira ficando de fora do commit: o escopo
+    apontava para diretorios que o projeto nao tem, cada `git add` falhava em
+    silencio e o problema so aparecia num gate adiante, falando de outra coisa.
     """
     cwd = project_root
 
     # Stage arquivos
+    unmatched: list[str] = []
     if paths:
         for p in paths:
-            subprocess.run(["git", "add", p], cwd=cwd, capture_output=True)
+            result = subprocess.run(
+                ["git", "add", p], cwd=cwd, capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                unmatched.append(p)
     else:
         # Stage tudo; artefatos descartáveis são removidos abaixo.
         subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
     _unstage_runtime_state(cwd)
+    if exclude_pathspecs:
+        _unstage(cwd, exclude_pathspecs)
+
+    aviso = (
+        f" [pathspec sem correspondencia: {', '.join(unmatched)}]" if unmatched else ""
+    )
 
     # Verificar se ha algo staged
     status = subprocess.run(
@@ -83,7 +106,7 @@ def auto_commit(
         text=True,
     )
     if not status.stdout.strip():
-        return True, "auto_commit: nada para commitar"
+        return True, "auto_commit: nada para commitar" + aviso
 
     # Commit
     result = subprocess.run(
@@ -108,9 +131,9 @@ def auto_commit(
             text=True,
         )
         short_hash = hash_result.stdout.strip()
-        return True, f"auto_commit: {short_hash} — {message}"
+        return True, f"auto_commit: {short_hash} — {message}{aviso}"
 
-    return False, f"auto_commit FAIL: {result.stderr.strip()[:200]}"
+    return False, f"auto_commit FAIL: {result.stderr.strip()[:200]}{aviso}"
 
 
 _KNOWLEDGE_PATHS = (

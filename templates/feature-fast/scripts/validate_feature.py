@@ -1249,17 +1249,35 @@ def _current_impact(root: Path) -> dict[str, object]:
     return stored
 
 
+def _is_verification_path(path: str) -> bool:
+    """Um arquivo que *prova* comportamento, em vez de implementá-lo.
+
+    Além dos nomes convencionais de suíte (`test`/`spec`), conta o check
+    determinístico em `checks/<FEAT-NNN>/AC-NNN.py`: neste processo ele é a
+    prova executável de cada obrigação, escrita antes da implementação e
+    reexecutada sob controle negativo por `attest_checks.py`. Não reconhecê-lo
+    reprovava justamente a feature que cumpria o contrato do template à risca
+    — um produto na raiz, cujas mudanças foram `Makefile` e `packaging/`, com
+    os seis AC provados em `checks/` — e o caminho para desbloquear era
+    escrever um teste decorativo só para satisfazer a substring.
+    """
+    lowered = path.lower()
+    return "test" in lowered or "spec" in lowered or lowered.startswith("checks/")
+
+
 def validate_implementation(root: Path) -> None:
     _feature_contract(root)
     _, _, product_root = _load_baseline(root)
+    onde = "a raiz do repositório" if product_root == "." else f"{product_root}/"
     changed = _changed_product_paths(root, product_root)
     if not changed:
         raise FeatureValidationError(
-            f"implementação não alterou nenhum arquivo em {product_root}/"
+            f"implementação não alterou nenhum arquivo em {onde}"
         )
-    if not any("test" in path.lower() or "spec" in path.lower() for path in changed):
+    if not any(_is_verification_path(path) for path in changed):
         raise FeatureValidationError(
-            "implementação não alterou nenhum arquivo de teste"
+            "implementação não trouxe verificação: nenhum arquivo de teste nem "
+            "check determinístico entre as mudanças (" + ", ".join(changed) + ")"
         )
 
 

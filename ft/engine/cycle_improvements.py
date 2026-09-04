@@ -71,6 +71,12 @@ def derive_candidates(analysis: CycleAnalysis) -> list[ImprovementCandidate]:
 
     # 1. Loops caros: nodes que repetiram, com o custo que isso teve.
     for node in analysis.loops():
+        if analysis.explained_by_rejection(node):
+            # A repetição já está contada no achado da rejeição que a causou.
+            # Emiti-la de novo por node produzia 19 candidatos idênticos para
+            # um único sinal, e vinte decisões humanas para um sinal só é uma
+            # troca que faz o relatório inteiro ser ignorado.
+            continue
         if node.executions < LOOP_EXECUTION_FLOOR:
             continue
         rounds = analysis.on_fail_rounds.get(node.id)
@@ -96,6 +102,36 @@ def derive_candidates(analysis: CycleAnalysis) -> list[ImprovementCandidate]:
                     "escopo do node é grande demais para convergir de primeira."
                 ),
                 evidence=[{"source": f"trace:{node.id}", "detail": detail}],
+            )
+        )
+
+    # 1b. Rejeição humana: o achado mais valioso do ciclo, e o único que a
+    #     telemetria via só pelo custo. Uma pessoa reprovou o que todos os
+    #     gates deterministicos deixaram passar — a pergunta que fecha o
+    #     buraco é qual gate deveria ter pego, e ela precisa ser feita.
+    for node_id, vezes in sorted(analysis.human_rejections.items()):
+        alcancados = sorted(
+            outro.id
+            for outro in analysis.nodes.values()
+            if outro.executions > 1 and outro.id != node_id
+        )
+        detalhe = f"{vezes} rejeição(ões) em {node_id}"
+        if alcancados:
+            detalhe += f"; {len(alcancados)} node(s) reexecutado(s) em consequência"
+        candidates.append(
+            ImprovementCandidate(
+                kind="human_caught",
+                title=f"Gate humano reprovou {vezes}x em {node_id}",
+                rationale=(
+                    "Uma pessoa apurou o que nenhum gate determinístico pegou. "
+                    "Enquanto a causa não virar verificação automática, o "
+                    "próximo ciclo depende de alguém olhar no lugar certo — e "
+                    "o custo já foi pago em reexecução. Responda: que gate "
+                    "deveria ter reprovado antes, e o que falta nele para "
+                    "reprovar? Se a rejeição trouxe requisito novo em vez de "
+                    "defeito, descarte com essa razão registrada."
+                ),
+                evidence=[{"source": f"trace:{node_id}", "detail": detalhe}],
             )
         )
 

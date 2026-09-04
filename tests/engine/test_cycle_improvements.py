@@ -324,3 +324,92 @@ def test_review_writes_the_markdown_report_the_contract_requires(tmp_path):
 
     ready, message = process_improvement_close_readiness(tmp_path)
     assert ready, f"o par gravado deve permitir encerrar o ciclo: {message}"
+
+
+def _ciclo_pb053() -> list[dict]:
+    """A forma do ciclo real: duas rejeições humanas e um bloqueio próprio.
+
+    Dezenove nodes rodaram 2x porque o grafo voltou duas vezes; um rodou 4x
+    com dois bloqueios seus, vindos de um defeito de ferramenta.
+    """
+    spans: list[dict] = []
+    for i in range(19):
+        spans += [_node(f"n{i:02d}"), _node(f"n{i:02d}")]
+    spans += [_node("scope_gate", result="REJECTED"), _node("scope_gate")]
+    spans += [_node("acceptance", result="REJECTED"), _node("acceptance")]
+    spans += [_node("impact_prepare", result="BLOCKED")] * 2
+    spans += [_node("impact_prepare")] * 2
+    return spans
+
+
+def test_rejeicao_humana_vira_achado_com_a_pergunta_que_fecha_o_buraco():
+    """O evento mais valioso do ciclo gerava zero achados."""
+    candidatos = derive_candidates(_analysis(_ciclo_pb053()))
+
+    humanos = [c for c in candidatos if c.kind == "human_caught"]
+    assert {c.title for c in humanos} == {
+        "Gate humano reprovou 1x em scope_gate",
+        "Gate humano reprovou 1x em acceptance",
+    }
+    assert all("que gate deveria ter reprovado antes" in c.rationale for c in humanos)
+
+
+def test_reexecucao_explicada_pela_rejeicao_nao_vira_achado_proprio():
+    """Dezenove candidatos idênticos para um único sinal é troca ruim."""
+    candidatos = derive_candidates(_analysis(_ciclo_pb053()))
+
+    loops = [c for c in candidatos if c.kind == "loop"]
+    assert [c.title for c in loops] == ["Node impact_prepare repetiu 4x no ciclo"]
+
+
+def test_node_que_falhou_por_conta_propria_continua_apontado():
+    """A supressão não pode engolir bloqueio real dentro do orçamento."""
+    spans = [
+        _node("g", result="REJECTED"),
+        _node("g"),
+        _node("alvo", result="BLOCKED"),
+        _node("alvo"),
+    ]
+
+    loops = [c for c in derive_candidates(_analysis(spans)) if c.kind == "loop"]
+
+    assert [c.title for c in loops] == ["Node alvo repetiu 2x no ciclo"]
+
+
+def test_first_pass_desconta_o_que_a_rejeicao_explica():
+    """A métrica reportava 10% num ciclo em que as rejeições acertaram."""
+    analise = _analysis(_ciclo_pb053())
+
+    assert analise.rejection_budget == 2
+    assert analise.first_pass_rate > 0.9
+
+
+def test_sem_rejeicao_nada_e_perdoado():
+    """O orçamento é zero quando ninguém rejeitou."""
+    spans = [_node("a"), _node("a"), _node("b")]
+    analise = _analysis(spans)
+
+    assert analise.rejection_budget == 0
+    assert not analise.explained_by_rejection(analise.nodes["a"])
+    loops = [c for c in derive_candidates(analise) if c.kind == "loop"]
+    assert [c.title for c in loops] == ["Node a repetiu 2x no ciclo"]
+
+
+def test_gate_que_repete_alem_das_proprias_rejeicoes_volta_a_ser_pergunta():
+    """Perdoar o gate rejeitado não pode virar perdão sem limite.
+
+    Uma rejeição explica uma reapresentação. Quatro execuções para uma
+    rejeição é outra coisa, e continua sendo pergunta em aberto.
+    """
+    spans = [
+        _node("gate", result="REJECTED"),
+        _node("gate"),
+        _node("gate"),
+        _node("gate"),
+    ]
+    analise = _analysis(spans)
+
+    assert analise.human_rejections == {"gate": 1}
+    assert not analise.explained_by_rejection(analise.nodes["gate"])
+    loops = [c for c in derive_candidates(analise) if c.kind == "loop"]
+    assert [c.title for c in loops] == ["Node gate repetiu 4x no ciclo"]

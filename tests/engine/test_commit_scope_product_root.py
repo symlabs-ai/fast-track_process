@@ -292,3 +292,63 @@ def test_delta_pega_conteudo_novo_com_o_mesmo_status(tmp_path):
     runner._maybe_auto_commit(runner.graph.get_node("build"))
 
     assert "package" in _git(root, "show", "HEAD:Makefile").stdout
+
+
+def test_guard_denuncia_o_que_o_node_escreveu_e_o_commit_nao_levou(tmp_path, capsys):
+    """O sintoma dos dois resgates manuais, agora visível no ato.
+
+    Com o escopo do commit sendo o delta, isto é vazio por construção. Quando
+    não é, é o defeito — e é um defeito que se manifesta longe da causa: num
+    ciclo real ele só apareceu no fim, depois de um `✓ COMMIT` na tela, e o
+    `git worktree remove --force` do `ft close` apagaria a entrega.
+    """
+    root = tmp_path / "repo"
+    _init_repo(root)
+    runner = _runner(root)
+    runner._refresh_commit_baseline()
+    (root / "packaging").mkdir()
+    (root / "packaging" / "build_deb.py").write_text("# assembla\n", encoding="utf-8")
+
+    # Escopo do commit volta a ser só a permissão declarada, como era antes.
+    runner._commit_pathspecs = lambda node: runner._resolve_allowed_paths(node)
+    runner._maybe_auto_commit(runner.graph.get_node("build"))
+
+    saida = capsys.readouterr().out
+    assert "packaging/build_deb.py" in saida
+    assert "FORA do commit" in saida
+    assert "packaging/build_deb.py" not in _tracked(root)
+
+
+def test_guard_cala_quando_o_commit_levou_tudo(tmp_path, capsys):
+    """Um guard que grita no caminho normal é um guard que ninguém lê."""
+    root = tmp_path / "repo"
+    _init_repo(root)
+    runner = _runner(root)
+    runner._refresh_commit_baseline()
+    (root / "packaging").mkdir()
+    (root / "packaging" / "build_deb.py").write_text("# assembla\n", encoding="utf-8")
+    (root / "docs").mkdir()
+    (root / CYCLE_ARTIFACT).write_text("# descartavel\n", encoding="utf-8")
+
+    runner._maybe_auto_commit(runner.graph.get_node("build"))
+
+    saida = capsys.readouterr().out
+    assert "packaging/build_deb.py" in _tracked(root)
+    assert "FORA do commit" not in saida
+
+
+def test_guard_nao_cobra_o_que_a_engine_copiou_como_entrada(tmp_path, capsys):
+    """A demanda que o `ft run` põe na worktree não é delta de node nenhum."""
+    root = tmp_path / "repo"
+    _init_repo(root)
+    (root / "request.md").write_text("demanda\n", encoding="utf-8")
+    runner = _runner(root)
+    runner._refresh_commit_baseline()
+    (root / "src").mkdir()
+    (root / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    runner._maybe_auto_commit(runner.graph.get_node("build"))
+
+    saida = capsys.readouterr().out
+    assert "FORA do commit" not in saida
+    assert "request.md" not in _tracked(root)

@@ -31,6 +31,7 @@ from ft.engine.delegate import (
     delegate_to_llm,
     delegate_with_feedback,
 )
+from ft.engine.engine_artifacts import is_engine_artifact
 from ft.engine.experts import compose_expert_task
 from ft.engine.focal_evidence import (
     FOCAL_EVIDENCE_INSTRUCTIONS,
@@ -3141,17 +3142,50 @@ class StepRunner:
         denunciar pathspec sem correspondência, aviso que sinaliza um
         `write_scope` de template nomeando diretório que o projeto não tem.
         """
-        antes = getattr(self, "_commit_baseline", None)
         declarados = self._resolve_allowed_paths(node)
+        delta = self._node_delta()
+        return [*declarados, *delta] if delta else declarados
+
+    def _node_delta(self) -> list[str]:
+        """O que mudou desde a foto que ancora o delta.
+
+        Fonte única: o escopo do commit e o guard pós-commit leem daqui. Duas
+        cópias deste cálculo divergiriam, e um caminho que entra no commit por
+        um lado e é cobrado pelo outro seria a pior das combinações.
+        """
+        antes = getattr(self, "_commit_baseline", None)
         if antes is None:
-            return declarados
+            return []
         agora = self._worktree_snapshot()
-        delta = sorted(
+        return sorted(
             relativo
             for relativo, estado in agora.items()
             if antes.get(relativo) != estado
         )
-        return [*declarados, *delta] if delta else declarados
+
+    def _uncommitted_after_commit(self) -> list[str]:
+        """O que o node escreveu e o commit não levou.
+
+        Com o escopo do commit sendo o delta, isto é vazio por construção: o
+        que o node escreveu foi commitado, e o que sobra é descartável. Quando
+        não é vazio, é exatamente o defeito — e é um defeito que se manifesta
+        longe da causa. Num ciclo real dois deles apareceram só no fim: o
+        produto que morava em `Makefile` e `packaging/`, e a reconciliação que
+        marca o item do backlog como entregue. Os dois tinham um `✓ COMMIT`
+        impresso na tela, e os dois seriam apagados pelo
+        `git worktree remove --force` do `ft close`.
+
+        A foto de referência é a do início do run, então o que já estava sujo
+        antes — a demanda que o `ft run` copiou para a worktree, por exemplo —
+        não é cobrado de node nenhum.
+        """
+        nome = Path(self.project_root).name
+        return [
+            relativo
+            for relativo in self._node_delta()
+            if not is_engine_artifact(relativo, project_name=nome)
+            and not is_cycle_artifact(relativo, self.graph.meta)
+        ]
 
     def _cycle_artifact_pathspecs(self) -> list[str]:
         """Descartáveis do ciclo, que um commit amplo não pode arrastar."""
@@ -6699,6 +6733,15 @@ class StepRunner:
         )
         if success:
             print(ui.success(f"COMMIT: {detail}"))
+            sobrou = self._uncommitted_after_commit()
+            if sobrou:
+                print(
+                    ui.warn(
+                        f"{len(sobrou)} caminho(s) que {node.id} escreveu ficaram "
+                        "FORA do commit e não são descartáveis do ciclo; o "
+                        "`ft close` os apagaria: " + ", ".join(sobrou)
+                    )
+                )
         else:
             print(ui.dim(f"COMMIT SKIP: {detail}"))
 

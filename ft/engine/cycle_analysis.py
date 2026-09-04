@@ -66,12 +66,69 @@ class CycleAnalysis:
         return sum(node.reexecutions for node in self.nodes.values())
 
     @property
+    def human_rejections(self) -> dict[str, int]:
+        """Quantas vezes cada node foi rejeitado por uma pessoa.
+
+        É o evento de maior valor do ciclo e o mais caro: cada rejeição
+        reencaminha um trecho inteiro do grafo. Medi-lo separadamente permite
+        as duas coisas que faltavam — creditar o que a rejeição achou, e não
+        cobrar como retrabalho a reexecução que ela causou.
+        """
+        return {
+            node.id: sum(1 for r in node.results if str(r).upper() == "REJECTED")
+            for node in self.nodes.values()
+            if any(str(r).upper() == "REJECTED" for r in node.results)
+        }
+
+    @property
+    def rejection_budget(self) -> int:
+        """Quantas execuções extras as rejeições explicam, por node.
+
+        Uma rejeição reencaminha o grafo, então todo node a jusante roda de
+        novo. Sem saber a rota, o teto por node é o número de rejeições do
+        ciclo: repetir até `1 + rejeições` está explicado, repetir mais que
+        isso não está.
+
+        É heurística, e o limite é conhecido: um node que repetiu por razão
+        própria, dentro do orçamento, deixa de ser apontado. Preferi errar
+        para o lado de não gerar achado — a alternativa media 19 candidatos
+        idênticos para um único sinal, e um relatório assim é ignorado
+        inteiro.
+        """
+        return sum(self.human_rejections.values())
+
+    def explained_by_rejection(self, node: NodeStats) -> bool:
+        """A repetição deste node cabe no que as rejeições explicam?
+
+        O gate que foi rejeitado é reapresentado: repetir uma vez por rejeição
+        é o fluxo, e a causa já tem o seu próprio achado — apontá-lo de novo
+        como loop caro seria contar o mesmo evento duas vezes. Ainda assim o
+        limite é o número de rejeições dele: repetir além disso volta a ser
+        pergunta em aberto.
+        """
+        proprias = self.human_rejections.get(node.id, 0)
+        if proprias:
+            return node.executions <= 1 + proprias
+        return node.failures == 0 and node.executions <= 1 + self.rejection_budget
+
+    @property
     def first_pass_rate(self) -> float:
-        """Fração dos nodes executados que passaram sem repetir."""
+        """Fração dos nodes executados que passaram sem repetir.
+
+        Reexecução explicada por rejeição humana não conta como falta de
+        first-pass: o node não falhou, o grafo voltou. Contá-la reportava 10%
+        num ciclo em que as duas rejeições acharam defeito real — a métrica
+        media o custo de acertar.
+        """
         executed = [node for node in self.nodes.values() if node.executions]
         if not executed:
             return 0.0
-        return sum(1 for node in executed if node.first_pass) / len(executed)
+        bons = sum(
+            1
+            for node in executed
+            if node.first_pass or self.explained_by_rejection(node)
+        )
+        return bons / len(executed)
 
     @property
     def rework_ratio(self) -> float:

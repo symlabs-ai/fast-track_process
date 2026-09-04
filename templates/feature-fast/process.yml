@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "2.2.0"
+version: "2.3.0"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -357,6 +357,7 @@ nodes:
       - project
       - src
       - checks
+      - docs/PRD.md
       - docs/api_contract.md
       - docs/ui_criteria.md
       - docs/screenshots/feature
@@ -660,6 +661,7 @@ nodes:
     write_scope:
       - project
       - src
+      - docs/PRD.md
     prompt: |
       Faça uma correção focal, não uma nova implementação. Use a âncora em
       docs/feature-fix-baseline.yml e os F-* de docs/feature-review.md — a

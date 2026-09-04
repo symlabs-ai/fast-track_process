@@ -295,7 +295,7 @@ def test_feature_fast_graph_and_session_policy_are_valid() -> None:
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature_fast"
-    assert graph.meta["version"] == "2.2.0"
+    assert graph.meta["version"] == "2.3.0"
     assert graph.meta["execution_policy"]["max_acceptance_criteria_per_cycle"] == 6
     assert graph.meta["session_policy"] == {
         "mode": "sprint",
@@ -767,3 +767,27 @@ def test_receipt_obsoleto_volta_para_quem_reancora_o_impacto() -> None:
         for validator in (graph.get_node("feature.fix_full_validate").validators or [])
     )
     assert "fix-implementation" in fix_full
+
+
+def test_o_contrato_do_produto_e_escrevivel_por_quem_implementa_e_corrige():
+    """Uma feature que muda o contrato precisa poder escrever o contrato.
+
+    PB-058 do SymProbe existia para emendar o FR-007 do PRD, e nenhum node do
+    processo declarava `docs/PRD.md` — nem o de implementação, nem o de
+    correção focal. O AC que cobrava a emenda reprovava, a decisão roteava
+    para a correção focal, a correção não podia tocar o arquivo, e o ciclo
+    girou 97 voltas em cinco horas sem que `docs/PRD.md` fosse alterado uma
+    única vez.
+
+    `checks/` continua fora do escopo da correção focal, e isso é deliberado:
+    quem corrige um achado não pode reescrever a prova que o apontou.
+    """
+    graph = load_graph(str(FAST_PROCESS))
+
+    implement = graph.get_node("feature.implement").write_scope or []
+    fix = graph.get_node("feature.fix").write_scope or []
+
+    assert "docs/PRD.md" in implement
+    assert "docs/PRD.md" in fix
+    assert "checks" in implement
+    assert "checks" not in fix

@@ -268,6 +268,27 @@ def _section(text: str, names: Iterable[str]) -> str:
     return match.group(1).strip() if match else ""
 
 
+#: Como um AC se declara não-regressão. Vale para o teto de ACs e para a
+#: isenção do controle negativo em `attest_checks.py`, que importa daqui: duas
+#: cópias da mesma regra divergiriam, e um AC isento num lugar e contado no
+#: outro é a pior das combinações.
+NON_REGRESSION_RE = re.compile(
+    r"\((?:n[ãa]o[- ]regress[ãa]o|non[- ]regression)\)", re.I
+)
+
+
+def _non_regression_acs(text: str) -> set[str]:
+    """Os AC que o contrato declara como garantia preexistente."""
+    conteudo = _section(
+        text, ("Critérios de Aceite", "Criterios de Aceite", "Acceptance Criteria")
+    )
+    marcados: set[str] = set()
+    for linha in conteudo.splitlines():
+        if NON_REGRESSION_RE.search(linha):
+            marcados.update(m.group(0).upper() for m in AC_RE.finditer(linha))
+    return marcados
+
+
 def _require_sections(text: str, path: str) -> None:
     expected = {
         "Objetivo": ("Objetivo", "Objective"),
@@ -687,11 +708,26 @@ def validate_discovery(root: Path) -> None:
             )
         return
 
-    metadata, _, acceptance_ids = _feature_contract(root)
-    if len(acceptance_ids) > MAX_ACCEPTANCE_CRITERIA:
+    metadata, texto_feature, acceptance_ids = _feature_contract(root)
+    # O teto existe para forçar fatia vertical, e fatia vertical é sobre
+    # trabalho **novo**. Um AC declarado como não-regressão reafirma garantia
+    # que já existia — não é escopo a fatiar, é dever herdado.
+    #
+    # Contá-lo empurrava para o pior desenho possível: com o teto cheio, a
+    # única saída era comprimir várias garantias herdadas num AC único. Foi o
+    # que aconteceu em FEAT-007, onde cinco deveres distintos viraram
+    # sub-cláusulas de um AC-06 — e um check por AC significa que o conjunto
+    # inteiro passa ou reprova junto, destruindo a atribuição de falha que é a
+    # razão de existir de um check determinístico.
+    novos = [
+        ac for ac in acceptance_ids if ac not in _non_regression_acs(texto_feature)
+    ]
+    if len(novos) > MAX_ACCEPTANCE_CRITERIA:
+        herdados = len(acceptance_ids) - len(novos)
+        nota = f" ({herdados} de não-regressão não contam)" if herdados else ""
         raise FeatureValidationError(
             "ciclo feature-fast excede o limite de "
-            f"{MAX_ACCEPTANCE_CRITERIA} ACs ({len(acceptance_ids)} encontrados); "
+            f"{MAX_ACCEPTANCE_CRITERIA} ACs novos ({len(novos)} encontrados{nota}); "
             "divida a demanda em fatias verticais independentes de 4–6 ACs e "
             "mantenha somente a primeira fatia neste ciclo"
         )
@@ -857,6 +893,61 @@ def validate_reserve(root: Path) -> None:
             "reservation_owner": owner_root,
         },
     )
+    _assert_supersession_declared(root, final_feature_id)
+
+
+def _existing_checks(root: Path, feature_id: str) -> list[str]:
+    """Checks que já provam esta feature, escritos por um ciclo anterior.
+
+    `reserve` roda antes de `feature.checks`, então tudo que estiver aqui veio
+    de antes: o ciclo corrente ainda não escreveu check nenhum.
+    """
+    checks_dir = root / "checks" / feature_id
+    if not checks_dir.is_dir():
+        return []
+    return [
+        path.relative_to(root).as_posix() for path in sorted(checks_dir.glob("AC-*.py"))
+    ]
+
+
+def _assert_supersession_declared(root: Path, feature_id: str) -> None:
+    """Substituir a prova de uma feature exige dizer o que acontece com ela.
+
+    Os checks vivem em `checks/<FEAT-NNN>/` e os AC são numerados por feature,
+    então um ciclo que evolui a mesma feature reescreve `AC-01.py`..`AC-NN.py`
+    por cima. Quando a contagem de AC muda, `_coverage` reprova por órfãos e o
+    problema aparece. Quando ela coincide — seis AC virando seis AC — cada
+    arquivo é substituído sem sinal nenhum, e as garantias que o ciclo anterior
+    provava somem da árvore junto com eles.
+
+    Aconteceu de verdade em FEAT-007: PB-052 provava repetibilidade do
+    `make dist` e o contrato de build (`make verify`/`smoke`, `dist/` fora do
+    versionamento); PB-053 chegou com seis AC sobre empacotamento e teria
+    apagado os dois. Nenhum gate reclamou — quem viu foi o stakeholder, à mão,
+    porque foi procurar.
+
+    A exigência é declarar, não preservar: um ciclo pode legitimamente
+    aposentar uma garantia. O que não pode é fazer isso sem que ninguém veja.
+    """
+    existentes = _existing_checks(root, feature_id)
+    if not existentes:
+        return
+    texto = _read(root, "docs/feature.md")
+    secao = _section(texto, ("Não-Regressão", "Nao-Regressao", "Non-Regression"))
+    if not secao:
+        raise FeatureValidationError(
+            f"docs/feature.md: checks/{feature_id}/ já contém "
+            f"{len(existentes)} check(s) de um ciclo anterior e este ciclo vai "
+            "substituí-los. Declare uma seção `## Não-Regressão` que cite cada "
+            f"um pelo caminho, dizendo se a garantia é reafirmada ou aposentada: "
+            + ", ".join(existentes)
+        )
+    omitidos = [caminho for caminho in existentes if caminho not in secao]
+    if omitidos:
+        raise FeatureValidationError(
+            "docs/feature.md: seção `## Não-Regressão` não cita check(s) que "
+            "este ciclo vai substituir: " + ", ".join(omitidos)
+        )
 
 
 #: Diretórios de topo que pertencem ao ciclo, não ao produto, quando o produto

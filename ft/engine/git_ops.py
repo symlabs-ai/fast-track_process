@@ -238,10 +238,19 @@ def commit_knowledge(
     *,
     verify_hooks: bool = True,
 ) -> tuple[bool, str]:
-    """Commita docs/ e metadados versionados do processo se houver mudanças.
+    """Commita o bundle de processo em `.ft/`, se houver mudanças.
 
-    Chamado nativamente pelo engine antes de iniciar um run e ao final.
-    Garante que o conhecimento do projeto tem histórico no Git.
+    Chamado pelo engine antes de iniciar um run e ao final. O escopo é
+    exatamente `_KNOWLEDGE_PATHS`: o bundle materializado, o manifest, o
+    project.yml e o readiness. **Não** inclui `docs/`, e não deve incluir —
+    documento canônico é escrito por node, e node commita o próprio delta.
+    Varrer `docs/` aqui reintroduziria o commit que descreve a árvore em vez
+    do trabalho, e arrastaria junto os artefatos descartáveis do ciclo.
+
+    Este docstring já disse "commita docs/", e a mentira custou caro: ao
+    investigar por que a reconciliação de um ciclo tinha sumido, ela apontou
+    para o lugar errado. `test_commit_knowledge_cobre_apenas_o_bundle` existe
+    para que a promessa e o código não voltem a divergir.
     """
     ok, staged, detail = stage_knowledge(project_root)
     if not ok or not staged:

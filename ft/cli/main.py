@@ -3547,9 +3547,16 @@ def cmd_process_candidates(args):
             cycle=getattr(args, "cycle", None),
         )
         root = Path(runner.project_root)
-    except (FileNotFoundError, RuntimeError, ValueError):
+    except (FileNotFoundError, RuntimeError, ValueError, SystemExit):
         # Sem ciclo/runtime ativo, ainda é útil listar a revisão já arquivada
-        # no checkout principal.
+        # no checkout principal — e é justamente aí que a decisão costuma ser
+        # tomada, porque `ft close` termina mandando usar este comando.
+        #
+        # `SystemExit` está na lista porque `_select_cycle_for_command`
+        # encerra o processo em vez de levantar erro de domínio, e ele não
+        # deriva de `Exception`: sem capturá-lo, este fallback inteiro era
+        # inalcançável e todo `ft process-candidates` posterior a um close
+        # saía com código 2, deixando os achados sem como serem resolvidos.
         root = project_root
     current_review = root / "docs" / "process-improvements.yml"
     candidate_id = getattr(args, "candidate_id", None)

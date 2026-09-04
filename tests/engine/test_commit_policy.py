@@ -406,3 +406,43 @@ def test_lightweight_templates_opt_out_after_their_own_deterministic_checks() ->
         payload = yaml.safe_load(process_path.read_text())
         verify_hooks = payload.get("commit_policy", {}).get("verify_hooks", True)
         assert verify_hooks is (process_path.parent.name not in lightweight)
+
+
+def test_commit_knowledge_cobre_apenas_o_bundle(tmp_path: Path) -> None:
+    """A promessa do docstring e o escopo real não podem divergir.
+
+    O docstring já disse "commita docs/" enquanto `_KNOWLEDGE_PATHS` cobria só
+    `.ft/`, e a mentira custou uma investigação inteira: ao procurar por que a
+    reconciliação de um ciclo tinha sumido, ela apontou para o lugar errado.
+
+    O escopo estreito é o certo — documento canônico é escrito por node, e
+    node commita o próprio delta. Varrer `docs/` aqui traria de volta o commit
+    que descreve a árvore em vez do trabalho.
+    """
+    from ft.engine.git_ops import _KNOWLEDGE_PATHS, commit_knowledge
+
+    assert all(path.startswith(".ft/") for path in _KNOWLEDGE_PATHS), _KNOWLEDGE_PATHS
+    assert commit_knowledge.__doc__ is not None
+    assert "docs/" not in commit_knowledge.__doc__.splitlines()[0]
+
+    repo = tmp_path / "repo"
+    (repo / ".ft" / "process").mkdir(parents=True)
+    (repo / "docs").mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-qm", "base")
+
+    (repo / ".ft" / "process" / "process.yml").write_text("id: t\n", encoding="utf-8")
+    (repo / "docs" / "PROJECT_BACKLOG.md").write_text("| PB-01 |\n", encoding="utf-8")
+
+    committed, detail = commit_knowledge(
+        str(repo), label="snapshot", verify_hooks=False
+    )
+
+    assert committed, detail
+    tracked = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    assert ".ft/process/process.yml" in tracked
+    assert "docs/PROJECT_BACKLOG.md" not in tracked

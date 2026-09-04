@@ -40,9 +40,10 @@ CHECK_TIMEOUT = 120
 # minta. Fica em `docs/feature.md` de propósito — é o artefato que o
 # stakeholder lê no gate humano. Uma isenção escondida no próprio check seria
 # o buraco que o controle existe para fechar.
-NON_REGRESSION_RE = re.compile(
-    r"\((?:n[ãa]o[- ]regress[ãa]o|non[- ]regression)\)", re.I
-)
+#: A regra mora em `validate_feature.py`, que também a usa para não contar
+#: AC herdado contra o teto de ACs. Duas cópias divergiriam, e um AC isento do
+#: controle negativo num lugar e contado no outro é a pior das combinações.
+NON_REGRESSION_RE = vf.NON_REGRESSION_RE
 
 
 def _fail(message: str) -> None:
@@ -168,16 +169,7 @@ def _run_check(
 
 def _non_regression_acs(root: Path) -> set[str]:
     """Os AC que o contrato declara como garantia preexistente."""
-    text = vf._read(root, "docs/feature.md")
-    content = vf._section(
-        text,
-        ("Critérios de Aceite", "Criterios de Aceite", "Acceptance Criteria"),
-    )
-    marcados: set[str] = set()
-    for line in content.splitlines():
-        if NON_REGRESSION_RE.search(line):
-            marcados.update(m.group(0).upper() for m in vf.AC_RE.finditer(line))
-    return marcados
+    return vf._non_regression_acs(vf._read(root, "docs/feature.md"))
 
 
 def _baseline_commit(root: Path) -> str:

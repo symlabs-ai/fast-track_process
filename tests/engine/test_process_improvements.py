@@ -291,3 +291,67 @@ def test_global_template_declares_structured_process_governance():
     visual_gate = by_id["gate.visual_check"]
     assert any("visual_p0_acceptance" in item for item in visual_gate["validators"])
     assert "visual_p0_acceptance" in VALIDATOR_REGISTRY
+
+
+def test_process_candidates_alcanca_o_checkout_depois_do_close(tmp_path, capsys):
+    """Depois do `ft close` não há ciclo aberto, e a decisão ainda é devida.
+
+    O próprio `ft close` termina imprimindo "Decida quando puder:
+    ft process-candidates --review", e `cmd_process_candidates` traz um
+    fallback explícito para quando não há runtime ativo. O fallback estava
+    morto: `_select_cycle_for_command` encerra com `SystemExit(2)`, que não é
+    `Exception` e por isso escapava do `except` que o implementava. Todo
+    `ft process-candidates` posterior a um close saía com código 2, deixando
+    os achados de processo sem como serem resolvidos.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    _write_review(project, [_global_candidate()])
+    args = Namespace(
+        process=None,
+        candidate_id=None,
+        status=None,
+        reason=None,
+        reference=None,
+        verbose=False,
+    )
+
+    with (
+        patch("ft.cli.main.find_project_root", return_value=project),
+        patch("ft.cli.main.get_runner", side_effect=SystemExit(2)),
+    ):
+        cli_main.cmd_process_candidates(args)
+
+    output = capsys.readouterr().out
+    assert "PI-001" in output
+    assert "pending" in output
+
+
+def test_process_candidates_resolve_candidato_sem_ciclo_aberto(tmp_path, capsys):
+    """Resolver, e não só listar: é a ação que o close pede."""
+    project = tmp_path / "project"
+    project.mkdir()
+    _write_review(project, [_global_candidate()])
+    args = Namespace(
+        process=None,
+        candidate_id="PI-001",
+        status="rejected",
+        reason="consequência de uma rejeição justificada, não fricção",
+        reference=None,
+        verbose=False,
+    )
+
+    with (
+        patch("ft.cli.main.find_project_root", return_value=project),
+        patch("ft.cli.main.get_runner", side_effect=SystemExit(2)),
+    ):
+        cli_main.cmd_process_candidates(args)
+
+    output = capsys.readouterr().out
+    assert "PI-001" in output and "rejected" in output
+    gravado = yaml.safe_load(
+        (project / "docs/process-improvements.yml").read_text(encoding="utf-8")
+    )
+    registro = next(item for item in gravado["improvements"] if item["id"] == "PI-001")
+    assert registro["global"]["resolution"]["status"] == "rejected"
+    assert "fricção" in registro["global"]["resolution"]["reason"]

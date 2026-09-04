@@ -6795,6 +6795,8 @@ class StepRunner:
             state.route_choices[node.id] = next_id
             self.state_mgr.save()
             if target_index <= current_index:
+                if self._rewind_without_progress(node, next_id):
+                    return
                 # A branch semântica volta a uma etapa já concluída. Um simples
                 # advance manteria implement/review marcados como concluídos e
                 # produziria progresso e artefatos incoerentes. Limpe também o
@@ -6816,6 +6818,83 @@ class StepRunner:
                 f"Decision sem branch valido: condicao={node.condition}"
             )
             print("  DECISION BLOCK: nenhum branch valido")
+
+    #: Quantas voltas idênticas um roteamento para trás pode dar antes de o
+    #: ciclo admitir que não converge. Duas passam — a correção focal
+    #: legitimamente leva uma ou duas rodadas. A terceira sem nada ter mudado
+    #: não é lentidão, é impossibilidade.
+    MAX_REWINDS_WITHOUT_PROGRESS = 3
+
+    def _progress_signature(self) -> str:
+        """O que distingue uma volta que avançou de uma que não avançou.
+
+        Cobre o commit corrente e o que está sujo na árvore sem ser
+        descartável — ou seja, o trabalho durável. Artefato de ciclo é
+        deliberadamente ignorado: `docs/feature-review.yml` e companhia são
+        regravados a cada volta e por isso confundiriam "regenerou o relatório"
+        com "corrigiu alguma coisa".
+        """
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        agora = self._worktree_snapshot()
+        nome = Path(self.project_root).name
+        duravel = sorted(
+            f"{caminho}:{estado[1] or estado[0]}"
+            for caminho, estado in agora.items()
+            if not is_engine_artifact(caminho, project_name=nome)
+            and not is_cycle_artifact(caminho, self.graph.meta)
+        )
+        return hashlib.sha256(
+            "\0".join([head.stdout.strip(), *duravel]).encode("utf-8")
+        ).hexdigest()
+
+    def _rewind_without_progress(self, node: Node, target_id: str) -> bool:
+        """O ciclo está voltando ao mesmo ponto sem ter mudado nada?
+
+        Um roteamento para trás é o desenho funcionando: a revisão apurou algo
+        e o ciclo volta para corrigir. O que não é desenho é voltar de novo com
+        a árvore idêntica — nenhum commit novo, nenhum arquivo durável
+        alterado. Isso não é uma correção difícil, é uma correção impossível, e
+        cada volta custa uma chamada LLM inteira.
+
+        O caso que motivou o freio: um AC exigia emendar `docs/PRD.md` e nenhum
+        node do processo declarava esse caminho no `write_scope`. Todos os
+        gates passavam, a rota estava correta, e o ciclo deu 97 voltas em cinco
+        horas com o arquivo intocado — confirmado depois por `git log`. Nada no
+        engine dizia "isto não converge", porque nada estava falhando.
+        """
+        assinatura = self._progress_signature()
+        state = self.state_mgr.state
+        bruto = state.metrics.get("rewind_progress")
+        registro = dict(bruto) if isinstance(bruto, dict) else {}
+        chave = f"{node.id}->{target_id}"
+        anterior = registro.get(chave)
+        if isinstance(anterior, dict) and anterior.get("signature") == assinatura:
+            voltas = int(anterior.get("count", 0)) + 1
+        else:
+            voltas = 1
+        registro[chave] = {"signature": assinatura, "count": voltas}
+        state.metrics["rewind_progress"] = registro
+        self.state_mgr.save()
+
+        if voltas < self.MAX_REWINDS_WITHOUT_PROGRESS:
+            return False
+
+        motivo = (
+            f"{node.id} roteou para {target_id} {voltas} vezes sem que nada "
+            "durável mudasse entre as voltas: mesmo commit, mesmos arquivos. "
+            "O ciclo não está convergindo — a correção pedida provavelmente é "
+            "impossível no escopo atual (por exemplo, o achado exige escrever "
+            "um caminho que nenhum node declara em write_scope). Verifique o "
+            "achado corrente antes de retomar."
+        )
+        self.state_mgr.block(motivo)
+        print(ui.fail(f"LOOP BLOCK: {motivo}"))
+        return True
 
     def _read_review_output(self, node: Node) -> str:
         documents = self._review_output_documents(node)

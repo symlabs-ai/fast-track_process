@@ -295,7 +295,7 @@ def test_feature_fast_graph_and_session_policy_are_valid() -> None:
 
     assert report.passed, [issue.message for issue in report.errors]
     assert graph.meta["id"] == "feature_fast"
-    assert graph.meta["version"] == "2.3.0"
+    assert graph.meta["version"] == "2.5.0"
     assert graph.meta["execution_policy"]["max_acceptance_criteria_per_cycle"] == 6
     assert graph.meta["session_policy"] == {
         "mode": "sprint",
@@ -392,8 +392,11 @@ def test_feature_fast_uses_focal_fix_and_delta_review_topology() -> None:
     assert graph.get_node("feature.product_validate").next == "feature.evidence_gate"
     assert graph.get_node("feature.evidence_gate").next == "feature.review_prepare"
     # O fix focal corrige código; ele não pode reescrever a prova.
-    assert "checks" not in (graph.get_node("feature.fix").write_scope or [])
-    assert "checks" in (graph.get_node("feature.implement").write_scope or [])
+    # A prova é papel (`@proof`), resolvido pelo projeto. A garantia é a
+    # mesma de sempre: quem corrige um achado não pode reescrever a prova
+    # que o apontou.
+    assert "@proof" not in (graph.get_node("feature.fix").write_scope or [])
+    assert "@proof" in (graph.get_node("feature.implement").write_scope or [])
 
 
 def test_feature_fast_runtime_references_are_self_contained() -> None:
@@ -787,7 +790,10 @@ def test_o_contrato_do_produto_e_escrevivel_por_quem_implementa_e_corrige():
     implement = graph.get_node("feature.implement").write_scope or []
     fix = graph.get_node("feature.fix").write_scope or []
 
-    assert "docs/PRD.md" in implement
-    assert "docs/PRD.md" in fix
-    assert "checks" in implement
-    assert "checks" not in fix
+    assert "@contract" in implement
+    assert "@contract" in fix
+    assert "@proof" in implement
+    assert "@proof" not in fix
+    # Nenhum palpite de diretório sobrou: onde cada papel mora é resposta do
+    # projeto, em `.ft/project.yml: layout`, não do template.
+    assert not {"project", "src", "checks", "tests"} & set(implement + fix)

@@ -378,6 +378,7 @@ antes da validação semântica.
 | `fix_review` | ID ou ausente | node de correção | destino deve ser `review` e alcançável por cadeia linear de `next` | força auditoria focal depois do fix. |
 | `optional` | booleano; `false` | todos | use somente para trabalho dispensável | permite `ft explore --skip`. |
 | `reject_next` | ID ou ausente | `human_gate` | destino deve existir | rota quando o stakeholder rejeita. |
+| `reject_next_new_requirement` | ID ou ausente | `human_gate` | destino deve existir | rota quando a rejeição traz **requisito semântico novo**, que pode invalidar decisões de implementação. Declarado junto com `reject_next`, faz `ft reject` exigir a classificação (`--defect` ou `--new-requirement`): escolher em silêncio erraria dos dois lados — o caminho barato aplicado a um requisito novo entrega a coisa errada, e o caro aplicado a um defeito de check reinicia a implementação inteira para trocar duas linhas. |
 | `approval_message_required` | booleano; `false` | `human_gate` | exige texto no `ft approve` | impede aprovação silenciosa. |
 | `decision_context` | mapping ou ausente | `human_gate` | só `decision`, `why_now`, `review_paths`, `checklist`, `limitations`, `approve_effect`, `reject_effect`; paths seguros | pacote de decisão exibido ao humano. |
 | `bypass_prompt` | string ou ausente | `human_gate` | só usado com `--bypass-human-gates` | atribui explicitamente a decisão delegada ao LLM. |
@@ -593,6 +594,7 @@ mais que a latência.
 | Campo | Efeito |
 |---|---|
 | `reject_next` | destino quando um `human_gate` é rejeitado |
+| `reject_next_new_requirement` | destino quando a rejeição traz requisito semântico novo |
 | `approval_message_required` | exige instrução textual do stakeholder para avançar |
 | `decision_context` | pacote que enriquece a apresentação da decisão |
 | `bypass_prompt` | com `--bypass-human-gates`, delega a resposta ao LLM com atribuição explícita |

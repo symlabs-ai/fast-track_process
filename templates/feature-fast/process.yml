@@ -5,7 +5,7 @@
 # `.ft/process/feature-fast/` e executa somente a cópia local versionada.
 
 id: feature_fast
-version: "2.3.0"
+version: "2.5.0"
 title: "Feature Fast — Feature com Sessões Persistentes"
 
 execution_policy:
@@ -353,11 +353,15 @@ nodes:
       - project/
       - src/
       - checks/
+    # Papéis, não palpites: o template diz O QUE o node escreve e o projeto
+    # diz ONDE isso mora, em `.ft/project.yml: layout`. Um template genérico
+    # não tem como saber que um projeto guarda o produto na raiz e não tem
+    # `src/` — e o palpite não conferido já fez um ciclo criar `project/tests/`
+    # num projeto sem `project/`, onde o pytest nunca coletava o teste.
     write_scope:
-      - project
-      - src
-      - checks
-      - docs/PRD.md
+      - "@product"
+      - "@proof"
+      - "@contract"
       - docs/api_contract.md
       - docs/ui_criteria.md
       - docs/screenshots/feature
@@ -659,9 +663,8 @@ nodes:
       - project/
       - src/
     write_scope:
-      - project
-      - src
-      - docs/PRD.md
+      - "@product"
+      - "@contract"
     prompt: |
       Faça uma correção focal, não uma nova implementação. Use a âncora em
       docs/feature-fix-baseline.yml e os F-* de docs/feature-review.md — a
@@ -756,8 +759,10 @@ nodes:
       Valide a capacidade implementada e seus AC-*. UI/API sobe pelo serve.sh;
       mudanças internas são avaliadas pelos relatórios e testes. Rejeite com um
       desvio reproduzível. Defeitos encontrados pela atestação usam correção
-      focal, receipt completo e reexecução dos checks; uma rejeição do stakeholder
-      reinicia a implementação por poder introduzir um requisito semântico novo.
+      focal, receipt completo e reexecução dos checks. Rejeição do stakeholder
+      exige classificação: `ft reject --defect` quando ela aponta defeito no que
+      já foi acordado, e `ft reject --new-requirement` quando traz requisito
+      semântico novo, que pode invalidar decisões de implementação.
     sprint: feature-03-acceptance
     executor: python
     env_setup:
@@ -766,7 +771,11 @@ nodes:
       - bash .ft/process/feature-fast/scripts/serve.sh stop
     outputs:
       - docs/stakeholder-feedback.md
-    reject_next: feature.implement
+    # Defeito no que já foi acordado — a prova que não prova, o check que
+    # atesta artefato velho — custa uma correção focal. Requisito semântico
+    # novo volta ao node que implementa.
+    reject_next: feature.fix_prepare
+    reject_next_new_requirement: feature.implement
     next: feature.reconcile
 
   - id: feature.reconcile

@@ -3032,10 +3032,74 @@ class StepRunner:
             engine=effective_engine,
         )
 
+    #: Onde cada papel mora, quando o projeto não declara nada. `product` é
+    #: resolvido contra o disco: o primeiro palpite que EXISTE vence, e se
+    #: nenhum existe o produto é a raiz. Nunca inventa diretório — foi um
+    #: palpite não conferido que fez um ciclo criar `project/tests/` num
+    #: projeto sem `project/`, e o teste escrito ali nunca era coletado.
+    _ROLE_FALLBACKS: dict[str, tuple[str, ...]] = {
+        "product": ("project", "src"),
+        "proof": ("checks",),
+        "contract": ("docs/PRD.md",),
+    }
+
+    def _project_layout(self) -> dict[str, list[str]]:
+        """Onde este projeto guarda produto, prova e contrato.
+
+        Declarado em `.ft/project.yml`, seção `layout`. A pergunta "onde mora o
+        produto" é do projeto, não do template: um template genérico não tem
+        como saber que um projeto guarda `Makefile` na raiz e não tem `src/`.
+        """
+        cache = getattr(self, "_layout_cache", None)
+        if cache is not None:
+            return cache
+        declarado: dict[str, Any] = {}
+        # Lê só a seção, e não o contrato inteiro: "onde mora o produto" não
+        # deve depender da validade de campos que nada têm a ver com isso. Um
+        # contrato inválido por outro motivo derrubaria o layout junto.
+        contrato = Path(self.project_root) / ".ft" / "project.yml"
+        try:
+            if contrato.is_file():
+                bruto = yaml.safe_load(contrato.read_text(encoding="utf-8")) or {}
+                secao = bruto.get("layout") if isinstance(bruto, dict) else None
+                if isinstance(secao, dict):
+                    declarado = secao
+        except (OSError, UnicodeError, yaml.YAMLError):
+            declarado = {}
+        root = Path(self.project_root)
+        layout: dict[str, list[str]] = {}
+        for papel, palpites in self._ROLE_FALLBACKS.items():
+            valor = declarado.get(papel)
+            if isinstance(valor, str):
+                valor = [valor]
+            if isinstance(valor, list) and all(isinstance(v, str) for v in valor):
+                layout[papel] = [v for v in valor if v.strip()]
+                continue
+            existentes = [g for g in palpites if (root / g).exists()]
+            layout[papel] = existentes or ([] if papel != "product" else ["."])
+        self._layout_cache = layout
+        return layout
+
+    def _expand_roles(self, scope: list[str]) -> list[str]:
+        """Troca `@papel` pelos caminhos que este projeto declara para ele.
+
+        Caminho literal passa intacto, então todo template existente continua
+        valendo sem mudança. Um papel que o projeto não tem some do escopo em
+        vez de virar caminho inexistente.
+        """
+        layout = self._project_layout()
+        resolvido: list[str] = []
+        for entrada in scope:
+            if isinstance(entrada, str) and entrada.startswith("@"):
+                resolvido.extend(layout.get(entrada[1:], []))
+            else:
+                resolvido.append(entrada)
+        return list(dict.fromkeys(resolvido))
+
     def _resolve_allowed_paths(self, node: Node) -> list[str]:
         """Resolve o escopo de escrita efetivo do node."""
         if node.write_scope:
-            return list(dict.fromkeys(node.write_scope))
+            return self._expand_roles(list(dict.fromkeys(node.write_scope)))
 
         allowed = []
         code_node_writes_project = node.type in {
@@ -9542,7 +9606,26 @@ próprias sob o namespace permitido acima. Encerre DONE.
             )
         return True
 
-    def reject_with_origin_audit(self, reason: str) -> bool:
+    def _reject_target(self, gate: Node, new_requirement: bool) -> str | None:
+        """Para onde a rejeição volta, conforme o que o stakeholder classificou.
+
+        Um requisito semântico novo pode invalidar decisões de implementação
+        inteiras e por isso volta ao node que implementa. Um defeito no que já
+        foi acordado — a prova que não prova, o check que atesta artefato
+        velho — custa uma correção focal, e reiniciar a implementação por causa
+        dele é caro e arriscado: reescreve código correto sem necessidade.
+
+        Aconteceu duas vezes em ciclos reais. Nas duas, a rejeição apontava
+        defeito em check e a implementação voltou byte-idêntica depois de um
+        restart completo.
+        """
+        if new_requirement and gate.reject_next_new_requirement:
+            return gate.reject_next_new_requirement
+        return gate.reject_next
+
+    def reject_with_origin_audit(
+        self, reason: str, *, new_requirement: bool = False
+    ) -> bool:
         """Rejeita um human gate e volta ao review que produziu sua evidência.
 
         O ``reject_next`` continua definindo qual node corrige o finding, mas
@@ -9559,7 +9642,7 @@ próprias sob o namespace permitido acima. Encerre DONE.
 
         gate_id = state.pending_approval
         gate = self.graph.get_node(gate_id)
-        fix_id = gate.reject_next
+        fix_id = self._reject_target(gate, new_requirement)
         if not fix_id or fix_id not in self.graph.nodes:
             print(
                 ui.fail(

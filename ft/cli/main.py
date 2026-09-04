@@ -2938,6 +2938,8 @@ def cmd_approve(args):
 
 
 def cmd_reject(args):
+    from ft.engine import ui as _ui
+
     runner = get_runner(
         llm_engine=resolve_llm_engine(args),
         llm_model=resolve_llm_model(args),
@@ -2956,7 +2958,35 @@ def cmd_reject(args):
         if state.pending_approval:
             gate = runner.graph.get_node(state.pending_approval)
             if gate.reject_next:
-                if runner.reject_with_origin_audit(args.reason):
+                novo_requisito = getattr(args, "new_requirement", False)
+                if gate.reject_next_new_requirement and not (
+                    novo_requisito or getattr(args, "defect", False)
+                ):
+                    # Escolher em silêncio erraria dos dois lados: o caminho
+                    # barato aplicado a um requisito novo entrega a coisa
+                    # errada, e o caro aplicado a um defeito de check reinicia
+                    # a implementação inteira para trocar duas linhas.
+                    print(
+                        _ui.fail(
+                            "Classifique a rejeição: ela aponta um defeito no que "
+                            "já foi acordado, ou traz um requisito semântico novo?"
+                        )
+                    )
+                    print(
+                        _ui.info(
+                            f"  --defect           correção focal → {gate.reject_next}"
+                        )
+                    )
+                    print(
+                        _ui.info(
+                            "  --new-requirement  reimplementação → "
+                            f"{gate.reject_next_new_requirement}"
+                        )
+                    )
+                    return
+                if runner.reject_with_origin_audit(
+                    args.reason, new_requirement=novo_requisito
+                ):
                     runner.run(mode="mvp" if getattr(args, "auto", False) else "step")
                 return
     runner.reject(args.reason, retry=retry)
@@ -7049,6 +7079,23 @@ def main():
         help=(
             "Compatibilidade: a auditoria focal já é obrigatória por padrão "
             "quando o gate declara reject_next"
+        ),
+    )
+    rj.add_argument(
+        "--defect",
+        action="store_true",
+        help=(
+            "A rejeição aponta defeito no que já foi acordado (prova fraca, "
+            "check que atesta artefato velho): correção focal"
+        ),
+    )
+    rj.add_argument(
+        "--new-requirement",
+        dest="new_requirement",
+        action="store_true",
+        help=(
+            "A rejeição traz requisito semântico novo, que pode invalidar "
+            "decisões de implementação: volta ao node que implementa"
         ),
     )
     rj.add_argument(

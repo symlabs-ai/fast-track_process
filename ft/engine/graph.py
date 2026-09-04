@@ -64,6 +64,17 @@ class Node:
     preserve_outputs_on_reentry: bool = False
     # Nó de destino quando human_gate é rejeitado (override do predecessor padrão)
     reject_next: str | None = None
+    #: Destino quando a rejeição do stakeholder traz um requisito semântico
+    #: novo, e não um defeito no que já foi acordado. Um requisito novo pode
+    #: invalidar decisões de implementação inteiras, então volta para o node
+    #: que implementa; um defeito na prova custa uma correção focal.
+    #:
+    #: Quando um gate declara os dois, `ft reject` exige a classificação
+    #: explícita: sem ela, a escolha silenciosa erraria em algum dos lados —
+    #: o caminho barato aplicado a um requisito novo entrega a coisa errada, e
+    #: o caro aplicado a um defeito de check reinicia a implementação inteira
+    #: para trocar duas linhas.
+    reject_next_new_requirement: str | None = None
     # Review focal autoritativo associado a este node de correção. Quando um
     # human gate rejeita e volta para o node, a engine percorre somente a cadeia
     # linear entre ``next`` e este review, então retorna ao mesmo gate.
@@ -220,6 +231,14 @@ class ProcessGraph:
                         raise ValueError(
                             f"Node '{node.id}' branch aponta para '{target}' que nao existe"
                         )
+            if (
+                node.reject_next_new_requirement
+                and node.reject_next_new_requirement not in ids
+            ):
+                raise ValueError(
+                    f"Node '{node.id}' reject_next_new_requirement aponta para "
+                    f"'{node.reject_next_new_requirement}' que nao existe"
+                )
             if node.reject_next and node.reject_next not in ids:
                 raise ValueError(
                     f"Node '{node.id}' reject_next aponta para '{node.reject_next}' que nao existe"
@@ -435,6 +454,7 @@ def load_graph(path: str | Path) -> ProcessGraph:
                 ),
                 description=node_raw.get("description"),
                 reject_next=node_raw.get("reject_next"),
+                reject_next_new_requirement=node_raw.get("reject_next_new_requirement"),
                 fix_review=node_raw.get("fix_review"),
                 bypass_prompt=node_raw.get("bypass_prompt"),
                 bypass_reject_when=node_raw.get("bypass_reject_when"),

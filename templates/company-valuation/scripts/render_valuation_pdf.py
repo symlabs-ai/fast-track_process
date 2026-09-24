@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+import validate_valuation as validation
+
 DOCS = Path("docs")
 MARKDOWN = DOCS / "valuation-report.md"
 HTML = DOCS / "valuation-report.html"
@@ -172,7 +174,10 @@ def build_html() -> str:
     unit = str(scope.get("unit") or "units")
     display_unit = html.escape(unit_label(unit))
     currency = html.escape(str(scope.get("currency") or ""))
-    body = markdown_to_html(report)
+    summary = validation.section_body(report, "Sumário Executivo")
+    remainder = re.sub(r"^## Sumário Executivo[^\S\n]*\n.*?(?=^## |\Z)", "", report, count=1, flags=re.MULTILINE | re.DOTALL)
+    body = markdown_to_html(remainder)
+    decision = markdown_to_html("## Sumário Executivo\n\n" + summary)
     return f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <title>Valuation | {target}</title><style>
 @page {{ size: A4; margin: 18mm 17mm 17mm; }}
@@ -206,7 +211,10 @@ th {{ background: #173d42; color: white; text-align: left; padding: 2.3mm; overf
 td {{ border-bottom: 1px solid #dce9e7; padding: 2mm 2.3mm; vertical-align: top; overflow-wrap: anywhere; }}
 tr:nth-child(even) td {{ background: #f5f8f8; }} tr {{ break-inside: avoid; }}
 .contents > h1:first-child {{ display: none; }}
-.contents > h2:first-of-type + p + p + p {{ break-inside: avoid; }}
+.decision-summary {{ page-break-after: always; font-size: 10pt; line-height: 1.35; }}
+.decision-summary h2 {{ margin-top: 0; }}
+.decision-summary p {{ margin-bottom: 2.5mm; }}
+.decision-summary table {{ font-size: 8.3pt; }}
 .footer {{ color: #718486; font-size: 8pt; border-top: 1px solid #dce9e7; margin-top: 10mm; padding-top: 3mm; }}
 </style></head><body>
 <section class="cover"><svg class="cover-art" viewBox="0 0 420 620" aria-hidden="true"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#dcece9"/><stop offset="1" stop-color="#f7e9dc"/></linearGradient></defs><circle cx="245" cy="235" r="158" fill="url(#g)"/><circle cx="245" cy="235" r="112" fill="none" stroke="#8db5ae" stroke-width="1"/><circle cx="245" cy="235" r="72" fill="none" stroke="#8db5ae" stroke-width="1"/><path d="M10 360 C95 250 170 300 250 150 S390 80 430 25" fill="none" stroke="#bd844d" stroke-width="2"/><path d="M0 420 C100 320 185 360 270 220 S400 150 440 100" fill="none" stroke="#9fc6be" stroke-width="1"/></svg>
@@ -214,6 +222,7 @@ tr:nth-child(even) td {{ background: #f5f8f8; }} tr {{ break-inside: avoid; }}
 <h1>{target}</h1><div class="subtitle">Visão para {buyer_name}</div>
 <div class="meta"><p><strong>Data-base</strong><br>{date}</p><p><strong>Moeda e escala</strong><br>{currency} · {display_unit}</p><p><strong>Escopo</strong><br>Valor independente, encaixe estratégico e preço para a compradora</p></div>
 <div class="cover-note">Documento analítico para revisão. Não constitui aprovação de oferta.</div></section>
+<section class="decision-summary">{decision}</section>
 <div class="chart-card"><div class="chart-title">Evolução da receita do alvo · {currency} {display_unit}</div>{financial_chart(financial)}</div>
 <div class="chart-card"><div class="chart-title">Faixa para decisão de triagem · {currency} {display_unit}</div>{valuation_chart(model, case, unit)}</div>
 <main class="contents">{body}</main>
@@ -224,16 +233,21 @@ def render() -> int:
     if not MARKDOWN.is_file():
         print(f"arquivo ausente: {MARKDOWN}")
         return 1
+    errors: list[str] = []
+    validation.report(errors)
+    if errors:
+        print("BLOCK (pdf): " + "; ".join(errors))
+        return 1
     chromium = shutil.which("chromium") or shutil.which("chromium-browser")
     if not chromium:
         print("chromium ausente; não é possível renderizar PDF")
         return 1
     HTML.write_text(build_html(), encoding="utf-8")
-    with tempfile.TemporaryDirectory(prefix="valuation-pdf-") as profile:
+    with tempfile.TemporaryDirectory(prefix=".valuation-pdf-", dir=DOCS) as profile:
         result = subprocess.run([
             chromium, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
             "--disable-gpu", "--disable-extensions", "--no-pdf-header-footer",
-            f"--user-data-dir={profile}", f"--print-to-pdf={PDF.resolve()}",
+            f"--user-data-dir={Path(profile).resolve()}", f"--print-to-pdf={PDF.resolve()}",
             HTML.resolve().as_uri(),
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90, check=False)
     if result.returncode != 0 or not PDF.is_file():
@@ -263,6 +277,22 @@ def check() -> int:
     for phrase in ("Mercado e Tamanho", "Preço para a Compradora", "Fontes e Rastreabilidade"):
         if result.returncode != 0 or phrase not in result.stdout:
             print(f"PDF não contém seção esperada: {phrase}")
+            return 1
+    pages = result.stdout.split("\f")
+    errors: list[str] = []
+    validation.report(errors)
+    if errors:
+        print("BLOCK (pdf): " + "; ".join(errors))
+        return 1
+    if len(pages) < 2:
+        print("PDF não contém primeira página útil após a capa")
+        return 1
+    # PDF extraction may collapse spaces around slashes or wrap table headers.
+    first_content = re.sub(r"\s+", "", pages[1])
+    fragments = validation.summary_pdf_fragments(read_yaml("buyer-case.yml"), read_yaml("valuation-model.yml"))
+    for fragment in fragments:
+        if re.sub(r"\s+", "", fragment) not in first_content:
+            print(f"PDF: síntese decisória ausente ou transbordou a primeira página útil: {fragment}")
             return 1
     print(f"PASS (pdf): {PDF}")
     return 0

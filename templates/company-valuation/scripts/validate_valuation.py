@@ -14,6 +14,13 @@ import yaml
 
 DOCS = Path("docs")
 RESEARCH = DOCS / "research"
+CONTRACT_V2 = {"buyer-profile.yml", "buyer-case.yml", "competitors-evidence.yml"}
+UNIT_SCALES = {"units": 1, "thousands": 1_000, "millions": 1_000_000}
+SCORE_WEIGHTS = {
+    "encaixe_com_a_compradora": 25, "crescimento_recente": 15,
+    "margem_e_estabilidade": 20, "sinais_de_produto_e_clientes": 15,
+    "potencial_de_sinergia": 15, "risco_de_execucao": 10,
+}
 SECTIONS = (
     "Sumário Executivo", "Decisão de Triagem e Economia do Alvo",
     "Escopo e Data-Base", "Empresa e Modelo de Negócio",
@@ -38,8 +45,9 @@ def load(path: Path, errors: list[str]) -> dict:
     if not isinstance(value, dict):
         errors.append(f"{path}: raiz deve ser mapping")
         return {}
-    if value.get("schema_version") != 1:
-        errors.append(f"{path}: schema_version deve ser 1")
+    version = 2 if path.name in CONTRACT_V2 else 1
+    if value.get("schema_version") != version:
+        errors.append(f"{path}: schema_version deve ser {version}; consulte a migração no README")
     return value
 
 
@@ -47,16 +55,91 @@ def number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def validate_strategic_value_case(case: object, errors: list[str]) -> None:
+def nonempty(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def text_list(value: object) -> bool:
+    return isinstance(value, list) and bool(value) and all(nonempty(item) for item in value)
+
+
+def reconciles(actual: object, expected: float) -> bool:
+    return number(actual) and math.isclose(actual, expected, rel_tol=1e-4, abs_tol=1e-6)
+
+
+def monetary_basis(data: dict, label: str, errors: list[str]) -> bool:
+    valid = True
+    if not re.fullmatch(r"[A-Z]{3}", str(data.get("currency", ""))):
+        errors.append(f"{label}: currency deve ser código ISO de três letras")
+        valid = False
+    if data.get("unit") not in UNIT_SCALES:
+        errors.append(f"{label}: unit não suportada; use units|thousands|millions ou registre lacuna sem calcular")
+        valid = False
+    return valid
+
+
+def validate_channel(base: object, errors: list[str]) -> bool:
+    label = "channel_base"
+    if not isinstance(base, dict):
+        errors.append(f"{label}: mapping obrigatório (contrato v2)")
+        return False
+    if base.get("status") == "unavailable":
+        if base.get("size") is not None or not text_list(base.get("gaps")):
+            errors.append(f"{label}: unavailable exige size null e gaps explícitos")
+        return False
+    start = len(errors)
+    if base.get("status") != "available" or not number(base.get("size")) or base["size"] <= 0:
+        errors.append(f"{label}: status available exige size positivo em membros")
+    if not nonempty(base.get("population_definition")) or base.get("population_kind") not in {"active", "published"}:
+        errors.append(f"{label}: defina a população e population_kind active|published")
+    if not iso_date(base.get("as_of")) or not source_ok(base.get("source_reference")):
+        errors.append(f"{label}: as_of e source_reference obrigatórios")
+    if base.get("source_kind") not in {"stakeholder", "document", "public"} or base.get("verification") not in {"verified", "unverified"}:
+        errors.append(f"{label}: origem e grau de verificação obrigatórios")
+    if base.get("source_kind") == "stakeholder" and base.get("verification") != "unverified":
+        errors.append(f"{label}: dado de stakeholder permanece unverified")
+    return len(errors) == start
+
+
+def validate_strategic_value_case(case: object, owner: dict, profile: dict, errors: list[str]) -> None:
     if not isinstance(case, dict):
-        errors.append("buyer-case.yml: strategic_value_case deve ser mapping")
+        errors.append("buyer-case.yml: strategic_value_case obrigatório com status e insumos ou gaps")
         return
+    outputs = (
+        "next_year_growth_total", "next_year_revenue", "next_year_ebitda",
+        "channel_extra_revenue", "equivalent_new_customers", "implied_partner_conversion",
+        "payback_on_next_year_ebitda_years", "target_value_at_base_revenue",
+        "value_created_net_of_purchase_at_base_revenue", "target_value_at_next_year_revenue",
+        "value_created_net_of_purchase_at_next_year_revenue",
+    )
+    if case.get("status") in {"not_calculable", "not_applicable"}:
+        if not text_list(case.get("gaps")) or any(case.get(key) is not None for key in outputs):
+            errors.append("strategic_value_case: indisponível exige gaps e resultados null")
+        return
+    if case.get("status") != "calculated":
+        errors.append("strategic_value_case: status inválido")
+        return
+    valid_basis = monetary_basis(case, "strategic_value_case", errors)
+    if any(case.get(key) != owner.get(key) for key in ("currency", "unit")):
+        errors.append("strategic_value_case: moeda/unidade devem coincidir com buyer-case")
+    if not text_list(case.get("assumptions")) or not text_list(case.get("limitations")):
+        errors.append("strategic_value_case: assumptions e limitations obrigatórias")
+    base = case.get("channel_base")
+    valid_channel = validate_channel(base, errors)
+    if base != profile.get("channel_base"):
+        errors.append("strategic_value_case: channel_base diverge do perfil da compradora")
+    arpa_input = case.get("customer_arpa")
+    if not isinstance(arpa_input, dict):
+        errors.append("strategic_value_case: customer_arpa deve declarar value, currency, unit, period e source_reference")
+        return
+    valid_arpa = monetary_basis(arpa_input, "customer_arpa", errors)
+    if arpa_input.get("currency") != case.get("currency") or arpa_input.get("period") != "year" or not source_ok(arpa_input.get("source_reference")):
+        errors.append("customer_arpa: mesma moeda, period year e fonte obrigatórios; sem câmbio implícito")
     fields = (
         "acquisition_ev_assumed", "working_revenue_multiple", "target_revenue_base",
         "target_baseline_growth", "channel_extra_growth_pp", "next_year_growth_total",
         "next_year_revenue", "target_margin_assumed", "next_year_ebitda",
-        "payback_on_next_year_ebitda_years", "software_houses_available",
-        "channel_extra_revenue", "implied_target_customer_arpa_year",
+        "channel_extra_revenue", "customers_per_converted_member",
         "equivalent_new_customers", "implied_partner_conversion",
         "target_value_at_base_revenue", "value_created_net_of_purchase_at_base_revenue",
         "target_value_at_next_year_revenue", "value_created_net_of_purchase_at_next_year_revenue",
@@ -70,26 +153,33 @@ def validate_strategic_value_case(case: object, errors: list[str]) -> None:
     growth = case["target_baseline_growth"] + case["channel_extra_growth_pp"]
     next_revenue = revenue * (1 + growth)
     next_ebitda = next_revenue * case["target_margin_assumed"]
-    partner_count = case["software_houses_available"]
-    arpa = case["implied_target_customer_arpa_year"]
-    if min(price, multiple, revenue, next_ebitda, partner_count, arpa) <= 0:
-        errors.append("buyer-case.yml: strategic_value_case contém base não positiva")
+    arpa = arpa_input.get("value")
+    if not valid_basis or not valid_arpa or not valid_channel:
+        errors.append("strategic_value_case: denominadores/unidades ausentes; registre not_calculable e gaps")
+        return
+    if not number(arpa) or min(price, multiple, revenue, arpa, case["customers_per_converted_member"]) <= 0 or growth <= -1 or case["channel_extra_growth_pp"] < 0 or not -1 <= case["target_margin_assumed"] <= 1:
+        errors.append("buyer-case.yml: strategic_value_case contém base inválida; registre lacunas sem dividir")
         return
     expected = {
         "next_year_growth_total": growth,
         "next_year_revenue": next_revenue,
         "next_year_ebitda": next_ebitda,
-        "payback_on_next_year_ebitda_years": price / next_ebitda,
         "channel_extra_revenue": revenue * case["channel_extra_growth_pp"],
         "target_value_at_base_revenue": revenue * multiple,
         "value_created_net_of_purchase_at_base_revenue": revenue * multiple - price,
         "target_value_at_next_year_revenue": next_revenue * multiple,
         "value_created_net_of_purchase_at_next_year_revenue": next_revenue * multiple - price,
     }
-    expected["equivalent_new_customers"] = expected["channel_extra_revenue"] * 1_000_000 / arpa
-    expected["implied_partner_conversion"] = expected["equivalent_new_customers"] / partner_count
+    expected["equivalent_new_customers"] = expected["channel_extra_revenue"] * UNIT_SCALES[case["unit"]] / (arpa * UNIT_SCALES[arpa_input["unit"]])
+    expected["implied_partner_conversion"] = expected["equivalent_new_customers"] / (base["size"] * case["customers_per_converted_member"])
+    if next_ebitda > 0:
+        expected["payback_on_next_year_ebitda_years"] = price / next_ebitda
+        if case.get("payback_status") != "calculated":
+            errors.append("strategic_value_case: payback_status deve ser calculated")
+    elif case.get("payback_status") != "non_positive_result" or case.get("payback_on_next_year_ebitda_years") is not None:
+        errors.append("strategic_value_case: resultado não positivo exige payback null e status próprio")
     for field, value in expected.items():
-        if not math.isclose(case[field], value, rel_tol=0.001, abs_tol=0.02):
+        if not reconciles(case.get(field), value):
             errors.append(f"buyer-case.yml: strategic_value_case.{field} não concilia")
 
 
@@ -111,6 +201,242 @@ def iso_date(value: object) -> bool:
         return False
 
 
+def validate_screening(data: dict, errors: list[str]) -> None:
+    """Shared scoring contract; ranking never repairs or regrades a case."""
+    monetary_basis(data, "buyer-case.yml", errors)
+    if data.get("schema_version") != 2:
+        errors.append("buyer-case.yml: screening requer schema_version 2; migre explicitamente conforme README")
+    screen = data.get("screening")
+    if not isinstance(screen, dict):
+        errors.append("buyer-case.yml: screening obrigatório")
+        return
+    score = screen.get("priority_score")
+    if not number(score) or not 0 <= score <= 100:
+        errors.append("screening: priority_score deve estar em 0..100")
+    else:
+        band = "A" if score >= 70 else "B" if score >= 50 else "C"
+        if screen.get("priority_band") != band:
+            errors.append(f"screening: priority_band deve ser {band}, sem texto ou universo presumido")
+        expected = {"A": "priority", "B": "selective_shortlist", "C": "pass"}[band]
+        if screen.get("decision") != expected and not nonempty(screen.get("decision_override_reason")):
+            errors.append("screening: decisão divergente da classe exige decision_override_reason")
+    if screen.get("decision") not in {"priority", "selective_shortlist", "pass"}:
+        errors.append("screening: decision inválida")
+    for field in ("decision_rationale", "near_term_action"):
+        if not nonempty(screen.get(field)):
+            errors.append(f"screening: {field} obrigatório")
+    if not text_list(screen.get("decision_change_conditions")):
+        errors.append("screening: decision_change_conditions deve ser lista de condições explícitas")
+    entries = screen.get("scoring")
+    if not isinstance(entries, list):
+        errors.append("screening: scoring deve ser lista com os seis critérios")
+        entries = []
+    seen: list[str] = []
+    total = 0.0
+    for i, entry in enumerate(entries):
+        label = f"screening.scoring[{i}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{label}: mapping obrigatório")
+            continue
+        criterion = entry.get("criterion")
+        if not isinstance(criterion, str) or criterion not in SCORE_WEIGHTS or criterion in seen:
+            errors.append(f"{label}: criterion desconhecido ou duplicado")
+            continue
+        seen.append(criterion)
+        weight, grade, points = (entry.get(k) for k in ("weight", "grade_0_to_5", "weighted_points"))
+        if not number(weight) or weight != SCORE_WEIGHTS[criterion]:
+            errors.append(f"{label}: weight deve ser {SCORE_WEIGHTS[criterion]}")
+        if not number(grade) or not 0 <= grade <= 5 or not number(points):
+            errors.append(f"{label}: nota ou pontos inválidos")
+        else:
+            if not reconciles(points, SCORE_WEIGHTS[criterion] * grade / 5):
+                errors.append(f"{label}: weighted_points não concilia")
+            total += points
+        if not nonempty(entry.get("rationale")):
+            errors.append(f"{label}: rationale obrigatório por nota")
+    if set(seen) != set(SCORE_WEIGHTS) or len(entries) != len(SCORE_WEIGHTS):
+        errors.append("screening: exige exatamente os seis critérios prescritos, uma vez cada")
+    if not reconciles(score, total):
+        errors.append("screening: priority_score não concilia com os pontos")
+    low, high, preferred = (screen.get(k) for k in ("screening_ev_low", "screening_ev_high", "preferred_ev_ceiling"))
+    if low is None and high is None:
+        if not nonempty(screen.get("ev_unavailable_reason")) or preferred is not None:
+            errors.append("screening: EV ausente exige ev_unavailable_reason e preferred_ev_ceiling null")
+    elif not number(low) or not number(high) or not 0 < low <= high:
+        errors.append("screening: faixa de EV inválida")
+    else:
+        if not nonempty(screen.get("value_basis")):
+            errors.append("screening: EV hipotético exige value_basis")
+        if preferred is not None and (not number(preferred) or not low <= preferred <= high):
+            errors.append("screening: preferred_ev_ceiling fora da faixa")
+
+
+def payback(price: float, flows: list[float]) -> dict:
+    """Undiscounted annual EBITDA proxy, uniform within each modeled year."""
+    cumulative = 0.0
+    for year, flow in enumerate(flows):
+        if flow > 0 and cumulative + flow >= price:
+            return {"status": "recovered", "years": year + (price - cumulative) / flow}
+        cumulative += flow
+    return {"status": "non_positive_result" if flows[-1] <= 0 else "beyond_horizon", "years": None}
+
+
+def validate_scenarios(data: dict, financial: dict, errors: list[str]) -> None:
+    screen = data.get("screening")
+    if not isinstance(screen, dict):
+        return
+    plan = screen.get("scenario_analysis")
+    scenarios = screen.get("scenarios")
+    selected = screen.get("summary_scenario_ids")
+    if not isinstance(plan, dict) or not isinstance(scenarios, list):
+        errors.append("screening: scenario_analysis e scenarios obrigatórios mesmo sem dados")
+        return
+    if not isinstance(selected, list) or any(not isinstance(s, str) for s in selected) or len(set(selected)) != len(selected):
+        errors.append("screening: summary_scenario_ids deve listar IDs únicos")
+        selected = []
+    if plan.get("status") in {"not_calculable", "not_applicable"}:
+        if not text_list(plan.get("gaps")) or not nonempty(plan.get("rationale")):
+            errors.append("scenario_analysis: indisponibilidade exige gaps e rationale, mesmo com dados financeiros")
+        if scenarios or selected:
+            errors.append("scenario_analysis: indisponível exige scenarios=[] e summary_scenario_ids=[]")
+        return
+    if plan.get("status") != "calculated":
+        errors.append("scenario_analysis: status deve ser calculated|not_calculable|not_applicable")
+        return
+    valid_basis = monetary_basis(plan, "scenario_analysis", errors)
+    if any(plan.get(k) != data.get(k) for k in ("currency", "unit")):
+        errors.append("scenario_analysis: moeda/unidade divergem de buyer-case")
+    revenue, baseline = plan.get("revenue"), plan.get("baseline_ebitda")
+    if not valid_basis or not number(revenue) or revenue <= 0 or not number(baseline):
+        errors.append("scenario_analysis: receita positiva e EBITDA base exigidos; sem insumos use not_calculable com gaps")
+        return
+    periods = financial.get("periods", [])
+    period = next((p for p in periods if isinstance(p, dict) and p.get("year") == plan.get("financial_year")), None) if isinstance(periods, list) else None
+    if not period or not reconciles(period.get("revenue"), revenue) or not reconciles(period.get("ebitda"), baseline) or any(financial.get(k) != plan.get(k) for k in ("currency", "unit")):
+        errors.append("scenario_analysis: bases/ano devem conciliar com financial-inputs; sem base declare lacuna")
+    if not source_ok(plan.get("source_reference")) or not text_list(plan.get("assumptions")) or not text_list(plan.get("limitations")):
+        errors.append("scenario_analysis: source_reference, assumptions e limitations obrigatórios")
+    margins, prices = plan.get("margin_hypotheses"), plan.get("price_hypotheses")
+    if not isinstance(margins, list) or len(margins) < 3 or any(not number(m) or not -1 <= m <= 1 for m in margins):
+        errors.append("scenario_analysis: margin_hypotheses exige base, intermediária e meta explícitas (frações)")
+        return
+    if len(set(margins)) != len(margins) or not any(reconciles(m, baseline / revenue) for m in margins):
+        errors.append("scenario_analysis: margens únicas devem incluir a margem atual")
+    if not isinstance(prices, list) or not 2 <= len(prices) <= 3 or any(not number(p) or p <= 0 for p in prices):
+        errors.append("scenario_analysis: price_hypotheses exige 2–3 preços hipotéticos positivos")
+        return
+    if len(set(prices)) != len(prices):
+        errors.append("scenario_analysis: preços devem ser distintos")
+    horizon = plan.get("horizon_years")
+    if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon < 1:
+        errors.append("scenario_analysis: horizon_years deve ser inteiro positivo")
+        return
+    ids: dict[str, dict] = {}
+    pairs: list[tuple[float, float]] = []
+    for i, item in enumerate(scenarios):
+        label = f"screening.scenarios[{i}]"
+        if not isinstance(item, dict):
+            errors.append(f"{label}: mapping obrigatório")
+            continue
+        sid = item.get("id")
+        if not isinstance(sid, str) or not re.fullmatch(r"SC-\d{2,}", sid) or sid in ids:
+            errors.append(f"{label}: id inválido ou duplicado")
+        else:
+            ids[sid] = item
+        price, margin = item.get("price"), item.get("margin")
+        if not number(price) or not number(margin) or price not in prices or margin not in margins:
+            errors.append(f"{label}: preço/margem fora das hipóteses declaradas")
+            continue
+        pairs.append((price, margin))
+        annual = revenue * margin
+        if not reconciles(item.get("annual_result"), annual) or not reconciles(item.get("required_annual_improvement"), annual - baseline):
+            errors.append(f"{label}: receita × margem ou melhoria versus base não concilia")
+        ramp = item.get("ramp")
+        if not isinstance(ramp, list) or len(ramp) != horizon or not nonempty(item.get("ramp_rationale")):
+            errors.append(f"{label}: ramp deve cobrir cada ano do horizonte com ramp_rationale")
+            continue
+        flows = []
+        for year, step in enumerate(ramp, 1):
+            if not isinstance(step, dict) or step.get("year") != year or not number(step.get("margin")) or not -1 <= step["margin"] <= 1:
+                errors.append(f"{label}: cronograma da rampa inválido no ano {year}")
+                break
+            flow = revenue * step["margin"]
+            if not reconciles(step.get("annual_result"), flow):
+                errors.append(f"{label}: annual_result da rampa não concilia no ano {year}")
+            flows.append(flow)
+        if len(flows) != horizon:
+            continue
+        if not reconciles(ramp[-1]["margin"], margin):
+            errors.append(f"{label}: último ano da rampa deve atingir a margem do cenário")
+        returns = item.get("returns")
+        if not isinstance(returns, dict) or returns.get("basis") != "ebitda_proxy" or returns.get("formula") != "undiscounted_cumulative_annual_result" or not text_list(returns.get("limitations")):
+            errors.append(f"{label}: returns exige basis ebitda_proxy, fórmula e limitações explícitas")
+            continue
+        for mode, mode_flows in (("without_ramp", [annual] * horizon), ("with_ramp", flows)):
+            expected = payback(price, mode_flows)
+            actual = returns.get(mode)
+            if not isinstance(actual, dict) or actual.get("status") != expected["status"] or (actual.get("years") is not None if expected["years"] is None else not reconciles(actual.get("years"), expected["years"])):
+                errors.append(f"{label}: returns.{mode} não concilia com os fluxos e o horizonte")
+    if len(pairs) != len(set(pairs)) or set(pairs) != {(p, m) for p in prices for m in margins}:
+        errors.append("screening: scenarios deve cobrir a matriz de preços × margens, sem pares duplicados")
+    if not 2 <= len(selected) <= 3 or any(sid not in ids for sid in selected):
+        errors.append("screening: sumário exige 2–3 summary_scenario_ids existentes")
+    else:
+        chosen = [ids[sid] for sid in selected]
+        if len({s.get("price") for s in chosen if number(s.get("price"))}) < 2 or len({s.get("margin") for s in chosen if number(s.get("margin"))}) < 2:
+            errors.append("screening: sumário deve contrastar preços e margens")
+
+
+def references(value: object, known: set[str]) -> bool:
+    return text_list(value) and all(item in known for item in value)
+
+
+def validate_comparisons(data: dict, known: set[str], errors: list[str]) -> None:
+    comparisons = data.get("comparisons")
+    if not isinstance(comparisons, list):
+        errors.append("competitors-evidence.yml: comparisons obrigatório no contrato v2")
+        return
+    if not comparisons:
+        gap = data.get("comparison_gap")
+        if not isinstance(gap, dict) or not nonempty(gap.get("limitation")) or not references(gap.get("evidence_ids"), known):
+            errors.append("competitors-evidence.yml: sem comparáveis, documente comparison_gap com fontes consultadas")
+    seen: set[str] = set()
+    for i, entry in enumerate(comparisons):
+        label = f"comparisons[{i}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{label}: mapping obrigatório")
+            continue
+        cid = entry.get("id")
+        if not isinstance(cid, str) or not re.fullmatch(r"CMP-\d{2,}", cid) or cid in seen:
+            errors.append(f"{label}: id inválido ou duplicado")
+        else:
+            seen.add(cid)
+        if not nonempty(entry.get("name")) or entry.get("category") not in {"direct", "adjacent", "manual", "do_nothing", "transaction"}:
+            errors.append(f"{label}: name/category obrigatórios")
+        if entry.get("scale_class") not in {"similar", "larger", "smaller", "unknown", "not_applicable"} or not nonempty(entry.get("comparability_rationale")):
+            errors.append(f"{label}: scale_class e comparability_rationale obrigatórios")
+        for field in ("solution", "scale", "public_price", "history", "differences", "transaction_price", "valuation_multiple"):
+            if field in {"transaction_price", "valuation_multiple"} and field not in entry:
+                continue
+            dim = entry.get(field)
+            if not isinstance(dim, dict) or not references(dim.get("evidence_ids"), known):
+                errors.append(f"{label}.{field}: dimensão e evidence_ids existentes obrigatórios")
+                continue
+            if dim.get("status") == "unavailable":
+                if dim.get("value") is not None or not nonempty(dim.get("limitation")):
+                    errors.append(f"{label}.{field}: N/D exige value null e limitation com fonte consultada")
+                if field == "scale" and entry.get("scale_class") not in {"unknown", "not_applicable"}:
+                    errors.append(f"{label}: porte ausente não permite equivalência de escala")
+            elif dim.get("status") != "available" or not (nonempty(dim.get("value")) or number(dim.get("value"))):
+                errors.append(f"{label}.{field}: dado disponível ou N/D fundamentado obrigatório")
+            elif field == "scale" and (not nonempty(dim.get("metric")) or not nonempty(dim.get("period"))):
+                errors.append(f"{label}.scale: metric e period obrigatórios")
+            elif field in {"public_price", "transaction_price", "valuation_multiple"}:
+                kind = {"public_price": "commercial", "transaction_price": "transaction", "valuation_multiple": "valuation_multiple"}[field]
+                if dim.get("kind") != kind or not nonempty(dim.get("basis")):
+                    errors.append(f"{label}.{field}: kind {kind} e basis obrigatórios, sem promover preço a múltiplo")
+
+
 def intake(errors: list[str]) -> None:
     data = load(DOCS / "valuation-scope.yml", errors)
     for field in ("target_name", "currency", "unit", "basis_of_value", "jurisdiction"):
@@ -120,6 +446,7 @@ def intake(errors: list[str]) -> None:
         errors.append("valuation-scope.yml: valuation_date deve ser YYYY-MM-DD válido")
     if not re.fullmatch(r"[A-Z]{3}", str(data.get("currency", ""))):
         errors.append("valuation-scope.yml: currency deve ser código ISO 4217 de três letras")
+    monetary_basis(data, "valuation-scope.yml", errors)
     stake = data.get("stake_percent")
     if not number(stake) or not 0 < stake <= 100:
         errors.append("valuation-scope.yml: stake_percent deve estar em (0, 100]")
@@ -166,6 +493,8 @@ def evidence(lens: str, errors: list[str]) -> set[str]:
     md = RESEARCH / f"{lens}.md"
     if not md.is_file() or len(md.read_text(encoding="utf-8").strip()) < 100:
         errors.append(f"{md}: síntese ausente ou muito curta")
+    if lens == "competitors":
+        validate_comparisons(data, ids, errors)
     return ids
 
 
@@ -210,6 +539,7 @@ def buyer(errors: list[str]) -> None:
     for field in ("strategic_priorities", "missing_data"):
         if not isinstance(data.get(field), list):
             errors.append(f"buyer-profile.yml: {field} deve ser lista")
+    validate_channel(data.get("channel_base"), errors)
     evidence("buyer", errors)
 
 
@@ -413,50 +743,12 @@ def buyer_case(errors: list[str]) -> None:
             errors.append(f"{label}: evidence_ids deve citar EV-* existentes")
     if data.get("recommendation") not in {"proceed_to_diligence", "reconsider", "insufficient_data"}:
         errors.append("buyer-case.yml: recommendation inválida")
+    validate_screening(data, errors)
+    financial = load(DOCS / "financial-inputs.yml", errors)
+    validate_scenarios(data, financial, errors)
     screening = data.get("screening")
-    if not isinstance(screening, dict):
-        errors.append("buyer-case.yml: screening de triagem obrigatório")
-    else:
-        if screening.get("decision") not in {"priority", "selective_shortlist", "pass"}:
-            errors.append("buyer-case.yml: screening.decision inválida")
-        score = screening.get("priority_score")
-        entries = screening.get("scoring")
-        if not number(score) or not 0 <= score <= 100 or not isinstance(entries, list) or not entries:
-            errors.append("buyer-case.yml: screening requer nota 0..100 e scoring")
-        else:
-            weights = 0.0
-            points = 0.0
-            for i, entry in enumerate(entries):
-                if not isinstance(entry, dict):
-                    errors.append(f"buyer-case.yml: screening.scoring[{i}] inválido")
-                    continue
-                weight, grade, weighted = (entry.get(k) for k in ("weight", "grade_0_to_5", "weighted_points"))
-                if not all(number(v) for v in (weight, grade, weighted)) or not 0 <= grade <= 5 or weight < 0:
-                    errors.append(f"buyer-case.yml: screening.scoring[{i}] contém pesos/notas inválidos")
-                    continue
-                if not math.isclose(weight * grade / 5, weighted, abs_tol=0.01):
-                    errors.append(f"buyer-case.yml: screening.scoring[{i}] não concilia")
-                weights += weight
-                points += weighted
-            if not math.isclose(weights, 100, abs_tol=0.01) or not math.isclose(points, score, abs_tol=0.01):
-                errors.append("buyer-case.yml: screening pesos ou nota final não conciliam")
-        low, high = screening.get("screening_ev_low"), screening.get("screening_ev_high")
-        if low is not None or high is not None:
-            if not number(low) or not number(high) or not 0 < low <= high:
-                errors.append("buyer-case.yml: faixa de EV de triagem inválida")
-            preferred = screening.get("preferred_ev_ceiling")
-            if preferred is not None and (not number(preferred) or not number(low) or not number(high) or not low <= preferred <= high):
-                errors.append("buyer-case.yml: preço preferencial fora da faixa de triagem")
-        revenue = screening.get("current_revenue")
-        current = screening.get("current_ebitda_proxy")
-        margin = screening.get("target_ebitda_margin")
-        target_ebitda = screening.get("target_ebitda_proxy")
-        improvement = screening.get("required_annual_improvement")
-        if all(number(v) for v in (revenue, current, margin, target_ebitda, improvement)):
-            if not math.isclose(revenue * margin, target_ebitda, abs_tol=0.02) or not math.isclose(target_ebitda - current, improvement, abs_tol=0.02):
-                errors.append("buyer-case.yml: cenário de margem não concilia")
-        if screening.get("strategic_value_case") is not None:
-            validate_strategic_value_case(screening["strategic_value_case"], errors)
+    if isinstance(screening, dict):
+        validate_strategic_value_case(screening.get("strategic_value_case"), data, profile, errors)
     if data.get("status") == "insufficient_data":
         for field in ("total_synergy_pv", "target_stake_equity_low", "target_stake_equity_high", "buyer_economic_ceiling_low", "buyer_economic_ceiling_high", "actionable_price_ceiling", "proposed_price_low", "proposed_price_high"):
             if data.get(field) is not None:
@@ -513,6 +805,129 @@ def buyer_case(errors: list[str]) -> None:
         errors.append("buyer-case.yml: com funding comprovado use actionable ou unavailable")
 
 
+def cell(value: object) -> str:
+    return " ".join(str(value).replace("|", "/").split())
+
+
+def numeric(value: object) -> str:
+    return f"{value:.6g}" if number(value) else "N/D"
+
+
+def table(headers: list[str], rows: list[list[str]]) -> str:
+    return "\n".join("| " + " | ".join(cell(v) for v in row) + " |" for row in (headers, ["---"] * len(headers), *rows))
+
+
+def summary_parts(case: dict, model_data: dict) -> tuple[list[str], list[str], list[list[str]]]:
+    screen = case["screening"]
+    lines = [
+        f"Decisão agora: {screen['decision']}. Classe: {screen['priority_band']}. Nota: {numeric(screen['priority_score'])}/100.",
+        "Motivo: " + cell(screen["decision_rationale"]),
+        "Próximo passo: " + cell(screen["near_term_action"]),
+        "Muda a decisão: " + cell("; ".join(screen["decision_change_conditions"])),
+    ]
+    if nonempty(screen.get("decision_override_reason")):
+        lines.append("Exceção à classe: " + cell(screen["decision_override_reason"]))
+    money_basis = f"{case['currency']} {case['unit']}"
+    low, high = screen.get("screening_ev_low"), screen.get("screening_ev_high")
+    if number(low) and number(high):
+        lines.append(f"EV hipotético ({money_basis}): {numeric(low)} a {numeric(high)}; preferencial: {numeric(screen.get('preferred_ev_ceiling'))}. Base: {cell(screen['value_basis'])}")
+    else:
+        lines.append("EV hipotético: N/D — " + cell(screen["ev_unavailable_reason"]))
+    formal = {
+        "insufficient_data": "valor formal não estimável com os dados disponíveis",
+        "indicative_ev": "EV preliminar; dívida líquida pendente; preço da participação não estimável",
+        "valued": "equity estimado; faixa e premissas em Resultado do Valuation",
+    }[model_data["status"]]
+    lines.append(f"Valor formal: {formal}. Triagem não é preço exato das quotas nem oferta autorizada.")
+    plan = screen["scenario_analysis"]
+    rows: list[list[str]] = []
+    headers = ["Cenário / margem", "Preço", "EBITDA base / meta", "Melhoria anual", "Retorno sem / com rampa (anos)"]
+    if plan["status"] == "calculated":
+        lines.append(f"Cenários hipotéticos ({money_basis}); EBITDA como proxy, sem desconto; horizonte: {plan['horizon_years']} anos.")
+        lines.append("Limitações dos cenários: " + cell("; ".join(plan["limitations"])))
+        by_id = {item["id"]: item for item in screen["scenarios"]}
+        for sid in screen["summary_scenario_ids"]:
+            item = by_id[sid]
+            def return_text(mode: str) -> str:
+                result = item["returns"][mode]
+                return numeric(result["years"]) if result["status"] == "recovered" else {"non_positive_result": "resultado não positivo", "beyond_horizon": "além do horizonte"}[result["status"]]
+            rows.append([
+                f"{sid} / {numeric(item['margin'] * 100)}%", numeric(item["price"]),
+                f"{numeric(plan['baseline_ebitda'])} / {numeric(item['annual_result'])}",
+                numeric(item["required_annual_improvement"]),
+                f"{return_text('without_ramp')} / {return_text('with_ramp')}",
+            ])
+    else:
+        lines.append("Cenários: N/D — " + cell(plan["rationale"]) + "; lacunas: " + cell("; ".join(plan["gaps"])))
+    strategy = screen["strategic_value_case"]
+    if strategy["status"] == "calculated":
+        lines.append(
+            f"Canal hipotético ({money_basis}): receita adicional {numeric(strategy['channel_extra_revenue'])}; "
+            f"clientes equivalentes {numeric(strategy['equivalent_new_customers'])}; conversão {numeric(strategy['implied_partner_conversion'] * 100)}%; "
+            f"valor ilustrativo líquido do preço {numeric(strategy['value_created_net_of_purchase_at_next_year_revenue'])}, "
+            f"sob múltiplo de receita {numeric(strategy['working_revenue_multiple'])}x. Não é reavaliação da compradora."
+        )
+    else:
+        lines.append("Canal / valor incremental: N/D — " + cell("; ".join(strategy["gaps"])))
+    return lines, headers, rows
+
+
+def decision_block(case: dict, model_data: dict) -> str:
+    lines, headers, rows = summary_parts(case, model_data)
+    return "\n\n".join(lines + ([table(headers, rows)] if rows else []))
+
+
+def summary_pdf_fragments(case: dict, model_data: dict) -> list[str]:
+    lines, headers, rows = summary_parts(case, model_data)
+    return ["Sumário Executivo", *lines, *(headers if rows else []), *(value for row in rows for value in row)]
+
+
+def comparison_rows(data: dict) -> list[list[str]]:
+    rows = []
+    for entry in data["comparisons"]:
+        def dimension(name: str) -> str:
+            dim = entry[name]
+            if dim["status"] == "unavailable":
+                return "N/D: " + cell(dim["limitation"])
+            value = cell(dim["value"])
+            if name == "scale":
+                value += f" {cell(dim['metric'])} ({cell(dim['period'])})"
+            if name == "public_price":
+                value += " — commercial; " + cell(dim["basis"])
+            return value
+        ids = sorted({cid for name in ("solution", "scale", "public_price", "history", "differences") for cid in entry[name]["evidence_ids"]})
+        rows.append([
+            f"{entry['id']} — {cell(entry['name'])} ({entry['category']})", dimension("solution"),
+            f"{entry['scale_class']}: {dimension('scale')}; {cell(entry['comparability_rationale'])}",
+            dimension("public_price"), dimension("history"), dimension("differences"), ", ".join(ids),
+        ])
+    if not rows:
+        gap = data["comparison_gap"]
+        rows.append(["N/D", "N/D", "unknown: " + cell(gap["limitation"]), "N/D", "N/D", "N/D", ", ".join(gap["evidence_ids"])])
+    return rows
+
+
+def comparison_table(data: dict) -> str:
+    return table(["Alternativa / categoria", "Solução", "Porte / comparabilidade", "Preço comercial / base", "Histórico", "Diferenças", "Fontes"], comparison_rows(data))
+
+
+def section_body(content: str, section: str) -> str:
+    match = re.search(rf"^## {re.escape(section)}[^\S\n]*\n(.*?)(?=^## |\Z)", content, re.MULTILINE | re.DOTALL)
+    return match.group(1).strip() if match else ""
+
+
+def validate_report_blocks(content: str, case: dict, model_data: dict, competitors: dict, errors: list[str]) -> None:
+    summary = section_body(content, "Sumário Executivo")
+    normalize = lambda value: " ".join(value.split())
+    if normalize(summary) != normalize(decision_block(case, model_data)):
+        errors.append("valuation-report.md: Sumário Executivo deve reproduzir o bloco decisório do YAML (use report_blocks)")
+    comparison = section_body(content, "Concorrentes de Porte Similar")
+    rows = [[c.strip() for c in line.strip().strip("|").split("|")] for line in comparison.splitlines() if line.strip().startswith("|")]
+    for row in comparison_rows(competitors):
+        if [cell(value) for value in row] not in rows:
+            errors.append(f"valuation-report.md: comparação não concilia em porte/dimensões/fontes: {row[0]}")
+
+
 def report(errors: list[str]) -> None:
     path = DOCS / "valuation-report.md"
     if not path.is_file():
@@ -535,6 +950,7 @@ def report(errors: list[str]) -> None:
         if block and "|" not in block.group(1):
             errors.append(f"{path}: {section} requer tabela")
     model_data = load(DOCS / "valuation-model.yml", errors)
+    model(errors)
     if model_data.get("status") == "insufficient_data" and "valor formal não estimável" not in content.lower():
         errors.append(f"{path}: diferencie valor formal indisponível de faixa de triagem")
     if model_data.get("status") == "indicative_ev" and ("dívida líquida" not in content.lower() or "preço da participação não" not in content.lower()):
@@ -542,8 +958,10 @@ def report(errors: list[str]) -> None:
     case = load(DOCS / "buyer-case.yml", errors)
     if case.get("status") == "insufficient_data" and "preço exato das quotas" not in content.lower():
         errors.append(f"{path}: diferencie faixa de EV de triagem do preço exato das quotas")
-    if "decisão agora" not in content.lower():
-        errors.append(f"{path}: informe a decisão de triagem no sumário")
+    buyer_case(errors)
+    competitors = load(RESEARCH / "competitors-evidence.yml", errors)
+    if not errors:
+        validate_report_blocks(content, case, model_data, competitors, errors)
 
 
 STAGES = {
@@ -559,17 +977,29 @@ STAGES = {
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in STAGES:
-        print("uso: validate_valuation.py <" + "|".join(STAGES) + ">")
+    if len(sys.argv) != 2 or sys.argv[1] not in {*STAGES, "report_blocks"}:
+        print("uso: validate_valuation.py <" + "|".join(STAGES) + "|report_blocks>")
         return 2
     errors: list[str] = []
-    STAGES[sys.argv[1]](errors)
+    if sys.argv[1] == "report_blocks":
+        model(errors)
+        buyer_case(errors)
+        evidence("competitors", errors)
+    else:
+        STAGES[sys.argv[1]](errors)
     if errors:
         print(f"BLOCK ({sys.argv[1]}):")
         for error in errors:
             print(f"  - {error}")
         return 1
-    print(f"PASS ({sys.argv[1]})")
+    if sys.argv[1] == "report_blocks":
+        case = load(DOCS / "buyer-case.yml", errors)
+        model_data = load(DOCS / "valuation-model.yml", errors)
+        competitors = load(RESEARCH / "competitors-evidence.yml", errors)
+        print("## Sumário Executivo\n\n" + decision_block(case, model_data))
+        print("\n## Concorrentes de Porte Similar\n\n" + comparison_table(competitors))
+    else:
+        print(f"PASS ({sys.argv[1]})")
     return 0
 
 

@@ -42,25 +42,14 @@ def test_template_is_valid_and_has_final_human_review() -> None:
 
 def test_strategic_value_bridge_recalculates_growth_and_net_value() -> None:
     check = runpy.run_path(str(VALIDATOR))["validate_strategic_value_case"]
-    case = {
-        "acquisition_ev_assumed": 12, "working_revenue_multiple": 3,
-        "target_revenue_base": 10, "target_baseline_growth": 0.05,
-        "channel_extra_growth_pp": 0.10, "next_year_growth_total": 0.15,
-        "next_year_revenue": 11.5, "target_margin_assumed": 0.20,
-        "next_year_ebitda": 2.3, "payback_on_next_year_ebitda_years": 12 / 2.3,
-        "software_houses_available": 100, "channel_extra_revenue": 1,
-        "implied_target_customer_arpa_year": 10_000,
-        "equivalent_new_customers": 100, "implied_partner_conversion": 1,
-        "target_value_at_base_revenue": 30,
-        "value_created_net_of_purchase_at_base_revenue": 18,
-        "target_value_at_next_year_revenue": 34.5,
-        "value_created_net_of_purchase_at_next_year_revenue": 22.5,
-    }
+    case = runpy.run_path(str(TEMPLATE / "tests" / "test_contracts.py"))["strategic_fixture"]("millions")
+    owner = {"currency": case["currency"], "unit": case["unit"]}
+    profile = {"channel_base": case["channel_base"]}
     errors: list[str] = []
-    check(case, errors)
+    check(case, owner, profile, errors)
     assert not errors
     case["value_created_net_of_purchase_at_next_year_revenue"] = 26
-    check(case, errors)
+    check(case, owner, profile, errors)
     assert any("value_created_net_of_purchase_at_next_year_revenue" in error for error in errors)
 
 
@@ -207,7 +196,7 @@ def test_buyer_case_separates_economic_and_financeable_price(tmp_path: Path) -> 
     })
     (tmp_path / "docs" / "buyer-briefing.yml").write_text("Stakeholder data\n")
     write_yaml(tmp_path, "buyer-profile.yml", {
-        "schema_version": 1, "buyer_name": "TecnoSpeed",
+        "schema_version": 2, "buyer_name": "TecnoSpeed",
         "website": "https://tecnospeed.com.br/", "currency": "BRL",
         "unit": "millions", "fiscal_year": 2026,
         "forecast_revenue": 69, "ebitda_margin": 0.25, "yoy_growth": 0.15,
@@ -217,6 +206,8 @@ def test_buyer_case_separates_economic_and_financeable_price(tmp_path: Path) -> 
         "financial_verification": "unverified", "available_cash": None,
         "debt_capacity": None, "acquisition_budget": None,
         "funding_source": None, "strategic_priorities": [], "missing_data": [],
+        "channel_base": {"status": "unavailable", "size": None,
+                         "gaps": ["Base de parceiros não informada neste teste."]},
     })
     write_yaml(tmp_path, "research/buyer-evidence.yml", {
         "schema_version": 1, "lens": "buyer", "claims": [{
@@ -237,8 +228,21 @@ def test_buyer_case_separates_economic_and_financeable_price(tmp_path: Path) -> 
     assert "unverified" in validate(tmp_path, "buyer").stdout
     profile["financial_verification"] = "unverified"
     write_yaml(tmp_path, "buyer-profile.yml", profile)
-    case = {
+    write_yaml(tmp_path, "financial-inputs.yml", {
         "schema_version": 1, "currency": "BRL", "unit": "millions",
+        "status": "insufficient", "periods": [], "net_debt": None,
+    })
+    screening = runpy.run_path(str(TEMPLATE / "tests" / "test_contracts.py"))["case_fixture"]()["screening"]
+    screening.update({
+        "screening_ev_low": 100, "screening_ev_high": 120,
+        "preferred_ev_ceiling": 100,
+        "scenario_analysis": {"status": "not_calculable",
+                              "rationale": "Este teste não fornece EBITDA do alvo.",
+                              "gaps": ["EBITDA do alvo ausente."]},
+        "scenarios": [], "summary_scenario_ids": [],
+    })
+    case = {
+        "schema_version": 2, "currency": "BRL", "unit": "millions",
         "status": "quantified", "strategic_fit": "medium",
         "fit_rationale": "Possível venda cruzada a investigar",
         "fit_evidence": ["EV-B01"], "gaps": ["Base de clientes do alvo"],
@@ -257,12 +261,7 @@ def test_buyer_case_separates_economic_and_financeable_price(tmp_path: Path) -> 
         "proposed_price_low": 103, "proposed_price_high": 115,
         "price_status": "indicative", "price_basis": "Abaixo do teto econômico",
         "recommendation": "proceed_to_diligence",
-        "screening": {
-            "decision": "priority", "priority_score": 80,
-            "scoring": [{"criterion": "encaixe", "weight": 100,
-                         "grade_0_to_5": 4, "weighted_points": 80}],
-            "screening_ev_low": None, "screening_ev_high": None,
-        },
+        "screening": screening,
     }
     write_yaml(tmp_path, "buyer-case.yml", case)
     assert validate(tmp_path, "buyer_case").returncode == 0

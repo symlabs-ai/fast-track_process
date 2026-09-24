@@ -1,5 +1,5 @@
 id: company-valuation
-version: "0.4.0"
+version: "0.5.0"
 title: "Avaliação de Empresa para Aquisição"
 
 execution_policy:
@@ -72,12 +72,12 @@ nodes:
       Identifique a empresa-alvo a partir da fonte sem inventar dados ausentes.
       Identifique também a empresa compradora. Se a entrada não informar a
       compradora, registre a lacuna e bloqueie a avaliação estratégica; não
-      suponha uma compradora default. A TecnoSpeed em examples/ é exemplo,
-      não valor fixo do processo. A compradora pode ser informada no mesmo
+      suponha uma compradora default. O catálogo de exemplos não define a
+      entrada deste ciclo. A compradora pode ser informada no mesmo
       briefing ou no arquivo separado docs/buyer-briefing.yml.
       Gere docs/valuation-scope.yml com
       schema_version: 1 e campos target_name, valuation_date (YYYY-MM-DD),
-      currency (ISO 4217), unit (ex.: units ou millions),
+      currency (ISO 4217), unit (units|thousands|millions),
       stake_percent (0 < x <= 100), purpose: acquisition,
       basis_of_value, jurisdiction e source_documents (lista de paths relativos
       existentes ou URLs). Registre também as lacunas em missing_documents.
@@ -109,7 +109,7 @@ nodes:
       confiança por claim. Não atribua ao site indicadores financeiros
       fornecidos pelo stakeholder.
 
-      Gere buyer-profile.yml: schema_version: 1, buyer_name, website,
+      Gere buyer-profile.yml: schema_version: 2, buyer_name, website,
       currency e unit iguais ao escopo, fiscal_year (ou null),
       forecast_revenue, ebitda_margin, yoy_growth,
       indicative_valuation_low/high (números ou null),
@@ -125,6 +125,13 @@ nodes:
       mantenha available_cash/debt_capacity/acquisition_budget em null.
       Indicadores do stakeholder permanecem unverified até confirmação por
       documento. Não invente valores faltantes.
+      Inclua channel_base: status available|unavailable. Se disponível,
+      size (contagem de membros), population_definition, population_kind
+      active|published, as_of (YYYY-MM-DD), source_reference (path/URL),
+      source_kind stakeholder|document|public, verification verified|unverified.
+      Uma base publicada não comprova atividade. Dados de stakeholder
+      permanecem unverified. Sem denominador, size null e gaps (lista);
+      não presuma setor, população, tamanho ou taxa de conversão do canal.
     validators:
       - file_exists: docs/buyer-profile.yml
       - file_exists: docs/research/buyer.md
@@ -181,20 +188,34 @@ nodes:
       Pesquise concorrentes diretos, substitutos, participação/posição quando
       comprovável, diferenciais, concentração, barreiras e movimento recente.
       Separe empresas comparáveis operacionais de transações comparáveis.
-      Adote o padrão do template innovation: para cada concorrente, pesquise
+      Para cada concorrente, pesquise
       solução, preço público, pontos fortes/fracos e lacuna para a compradora.
       Inclua opções diretas, adjacentes, processos manuais e a opção de
-      conviver com o problema. Para os diretos brasileiros, levante também
+      conviver com o problema. Para os diretos na geografia do escopo, levante
       faixa pública de empregados, fundação, clientes/unidades declarados,
       faturamento quando divulgado e histórico. Dê prioridade a empresas
-      de porte parecido com o alvo. LinkedIn é autodeclaração de faixa de
-      empregados, não folha auditada; volume conciliado não é faturamento.
+      de porte parecido com o alvo. Faixas de empregados autodeclaradas em
+      fontes públicas não são folha auditada; volume conciliado não é faturamento.
       Não trate grupo muito maior como concorrente comparável em escala.
       Múltiplo de valuation só entra se numerador, denominador, data, moeda,
       escopo e fonte forem comparáveis e verificáveis; sem isso, marque N/D.
       Gere tabela concisa em competitors.md com EV-* por linha.
-      Gere competitors-evidence.yml no mesmo schema da lente market, usando
-      lens: competitors e IDs EV-C01, EV-C02... Nunca invente múltiplos.
+      Gere competitors-evidence.yml com schema_version: 2, lens: competitors,
+      claims no formato da lente market e IDs EV-C01, EV-C02...
+      Acrescente comparisons (lista sem quantidade fixa). Cada comparação:
+      id CMP-01..., name, category direct|adjacent|manual|do_nothing|transaction,
+      scale_class similar|larger|smaller|unknown|not_applicable,
+      comparability_rationale e dimensões solution, scale, public_price,
+      history, differences. Cada dimensão: status available|unavailable,
+      value (dado ou null), evidence_ids (claims existentes); unavailable
+      exige limitation e evidência da fonte consultada. Scale disponível
+      exige metric e period; porte ausente exige classe unknown ou not_applicable.
+      Public_price disponível exige kind commercial e basis (moeda, período,
+      escopo do preço). Transaction_price e valuation_multiple são opcionais,
+      usam a mesma estrutura com kind transaction ou valuation_multiple e
+      basis própria; preço comercial não vira múltiplo. Nunca invente cifras.
+      Sem comparáveis encontrados, comparisons=[] e comparison_gap com
+      limitation e evidence_ids das consultas. Não force equivalência de porte.
     validators:
       - file_exists: docs/research/competitors.md
       - file_exists: docs/research/competitors-evidence.yml
@@ -287,7 +308,7 @@ nodes:
     outputs: [docs/buyer-case.yml]
     write_scope: [docs/buyer-case.yml]
     prompt: |
-      Gere buyer-case.yml com schema_version: 1, currency e unit iguais ao
+      Gere buyer-case.yml com schema_version: 2, target_name, currency e unit iguais ao
       escopo, status: quantified|insufficient_data, strategic_fit:
       high|medium|low|unknown, fit_rationale, fit_evidence (EV-* existentes),
       gaps (lista), synergies (lista), integration_cost_pv,
@@ -333,13 +354,27 @@ nodes:
       priority|selective_shortlist|pass e priority_score de 0 a 100, com
       pesos fixos: encaixe 25, crescimento 15, margem/estabilidade 20,
       produto/clientes 15, sinergia 15, execução 10. A régua é A >=70,
-      B 50–69, C <50. Explique cada nota. Não penalize automaticamente a
+      B >=50 e <70, C <50. Em scoring, use uma vez cada criterion e weight:
+      encaixe_com_a_compradora 25, crescimento_recente 15,
+      margem_e_estabilidade 20, sinais_de_produto_e_clientes 15,
+      potencial_de_sinergia 15, risco_de_execucao 10. Cada entrada exige
+      grade_0_to_5, weighted_points=weight*grade_0_to_5/5 e rationale.
+      Priority_score é a soma; priority_band contém somente A|B|C.
+      Inclua decision_rationale, near_term_action e decision_change_conditions
+      (lista). Decisão diferente de A=priority, B=selective_shortlist, C=pass
+      exige decision_override_reason. A classe é individual; posição relativa
+      só existe para uma coleção fornecida ao ranking, com total calculado.
+      Não declare posição ou tamanho de uma carteira desconhecida.
+      Não penalize automaticamente a
       falta de balanço, comum a todos os teasers.
       Se houver receita ou EBITDA, calcule uma faixa hipotética de EV para
-      triagem e o preço em que a decisão muda. Use referências brasileiras
-      de transações quando disponíveis e declare descontos/prêmios como
+      triagem e o preço em que a decisão muda: screening_ev_low/high,
+      preferred_ev_ceiling e value_basis. Sem base, faixas e teto null e
+      ev_unavailable_reason. Use referências de transações na jurisdição
+      e no mercado do escopo quando disponíveis e declare descontos/prêmios como
       julgamento, separando razões simples de preço/receita de múltiplos
-      formais. Faça cenários explícitos de margem atual, 15%, 20% e 25%,
+      formais. Faça cenários explícitos de margem atual, intermediária e meta,
+      escolhendo e justificando as hipóteses para esta entrada, sem margens padrão,
       economia anual necessária, alavancas de pessoal, infraestrutura,
       preço e venda cruzada, riscos de sobreposição e payback a 2–3 preços
       com e sem rampa operacional. Hipóteses de custo por função e conversão
@@ -356,6 +391,48 @@ nodes:
       Não recomende demissões sem mapa funcional e impacto em clientes.
       Se não houver qualquer dado financeiro, ainda dê a melhor decisão
       qualitativa, com confiança baixa e preço condicionado.
+
+      Contrato de cenários v2 (detalhes e fórmulas no README do template):
+      screening.scenario_analysis: status calculated|not_calculable|not_applicable.
+      Sem insumos/aplicabilidade, rationale e gaps explícitos, scenarios=[] e
+      summary_scenario_ids=[]; resultados ausentes ficam null, nunca zero presumido.
+      Com base, declare currency/unit iguais ao escopo, financial_year,
+      revenue e baseline_ebitda conciliados ao período em financial-inputs,
+      source_reference, assumptions, limitations (listas), horizon_years,
+      margin_hypotheses (base, intermediária e meta, sem duplicatas) e
+      price_hypotheses (2–3 preços hipotéticos distintos na unidade declarada).
+      Screening.scenarios cobre o produto preços × margens. Cada cenário tem
+      id SC-01..., price, margin (fração), annual_result=revenue*margin,
+      required_annual_improvement=annual_result-baseline_ebitda,
+      ramp_rationale e ramp: lista anual year (1..horizon_years), margin,
+      annual_result. A última margem atinge a do cenário; mantenha receita
+      constante nesta sensibilidade e explicite os custos/exclusões.
+      Returns: basis ebitda_proxy, formula undiscounted_cumulative_annual_result,
+      limitations e without_ramp/with_ramp, cada um com status
+      recovered|non_positive_result|beyond_horizon e years (número ou null).
+      Sem rampa, acumule o resultado estabilizado; com rampa, acumule os
+      resultados anuais, interpolando dentro do ano de recuperação. EBITDA é
+      proxy sem desconto, não caixa; rotule impostos, investimentos, giro,
+      integração e demais exclusões. Se não recuperar no horizonte, years=null.
+      Summary_scenario_ids seleciona 2–3 cenários da matriz, contrastando
+      preços e margens; o relatório consome esses resultados sem refazer contas.
+
+      Screening.strategic_value_case é obrigatório com status
+      calculated|not_calculable|not_applicable; sem cálculo, gaps e resultados null.
+      Se calculated, declare currency/unit iguais ao caso, assumptions e limitations,
+      acquisition_ev_assumed, working_revenue_multiple, target_revenue_base,
+      target_baseline_growth, channel_extra_growth_pp, target_margin_assumed,
+      channel_base idêntico ao perfil, customers_per_converted_member explícito e
+      customer_arpa com value, currency, unit, period year e source_reference.
+      Calcule next_year_growth_total, next_year_revenue, next_year_ebitda,
+      channel_extra_revenue, equivalent_new_customers, implied_partner_conversion,
+      target_value_at_base_revenue, value_created_net_of_purchase_at_base_revenue,
+      target_value_at_next_year_revenue e value_created_net_of_purchase_at_next_year_revenue.
+      Calcule payback_on_next_year_ebitda_years e payback_status calculated ou
+      non_positive_result (anos null). Converta explicitamente escalas de receita
+      e ARPA; não converta moedas implicitamente. Sem unidade ou denominador
+      válido, registre not_calculable e gaps. Não use nomes antigos de canal
+      nem paybacks isolados do contrato v1; não reescreva ciclos encerrados.
     validators:
       - file_exists: docs/buyer-case.yml
       - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py buyer_case"
@@ -393,6 +470,17 @@ nodes:
       ## Preço para a Compradora
       ## Riscos e Diligências Pendentes
       ## Fontes e Rastreabilidade
+      Execute python .ft/process/company-valuation/scripts/validate_valuation.py report_blocks
+      para obter os blocos canônicos do YAML validado. Reproduza exatamente
+      seu Sumário Executivo e a tabela de Concorrentes de Porte Similar;
+      mantenha IDs, classificação de porte, dimensões e referências das linhas.
+      Não recalcule cenários na redação nem substitua os resultados por prosa.
+      O sumário deve conter somente o bloco compacto gerado; demais detalhes
+      ficam nas seções seguintes. Decisão, classe/nota, motivo, próximo passo,
+      condições de mudança, faixas/status e cenários selecionados precisam
+      caber na primeira página após a capa. Os campos devem ser breves desde
+      buyer_case. Se transbordar, sinalize a necessidade de síntese na origem,
+      preservando números, limitações e o write_scope de cada node.
       Mercado: tabela com segmento, geografia, ano, tamanho, crescimento,
       definição, fonte EV-*. Concorrência: tabela com empresa, posição,
       diferencial e fonte EV-*. Tendências: vetor, sinal, horizonte,
@@ -476,6 +564,7 @@ nodes:
         - "Encaixe, sinergias e preço máximo para esta compradora estão sustentados e não confundem valuation com caixa disponível."
         - "Lacunas e riscos estão claros; uma cifra ausente não foi substituída por suposição."
         - "O PDF está legível, com tabelas completas, gráficos proporcionais e decoração discreta."
+        - "A primeira página após a capa mostra decisão, classe/nota, motivo, próximo passo, condições e cenários aplicáveis de forma legível; extração textual não substitui esta conferência visual."
       limitations:
         - "Aprovar o relatório não autoriza oferta, compra ou pagamento."
         - "Diligência jurídica, tributária e financeira especializada pode alterar o valor."

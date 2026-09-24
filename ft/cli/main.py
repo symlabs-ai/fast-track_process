@@ -6585,7 +6585,10 @@ def cmd_run(args):
 
     if acquired_input is not None:
         input_text, _input_source = acquired_input
-        staged_input = input_policy.stage(project_root, request=input_text)
+        if input_file is not None and input_file.suffix.lower() == ".pdf" and input_policy.pdf_destination:
+            staged_input = input_policy.stage(project_root, input_file=input_file)
+        else:
+            staged_input = input_policy.stage(project_root, request=input_text)
         if staged_input is not None:
             print(
                 "  Input do template: "

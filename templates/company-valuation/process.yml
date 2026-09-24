@@ -1,0 +1,488 @@
+id: company-valuation
+version: "0.4.0"
+title: "Avaliação de Empresa para Aquisição"
+
+execution_policy:
+  entrypoint: run
+  template: company-valuation
+  materialization: copy_once
+  runtime_source: local_only
+  requires_initialized_project: false
+  requires_worktree: false
+  local_process_path: .ft/process/company-valuation/process.yml
+
+session_policy:
+  mode: sprint
+  providers: [codex]
+  initial_plan: internal
+  parallel_strategy: fork
+  recovery: rehydrate
+
+input_policy:
+  required: true
+  destination: docs/valuation-request.md
+  pdf_destination: docs/valuation-source.pdf
+  prompt: "Informe a empresa-alvo por URL, briefing ou PDF e identifique a compradora"
+
+artifact_policy:
+  canonical:
+    - docs/valuation-report.md
+    - docs/valuation-report.pdf
+  cycle:
+    - docs/valuation-request.md
+    - docs/valuation-source.pdf
+    - docs/valuation-scope.yml
+    - docs/buyer-profile.yml
+    - docs/research/buyer.md
+    - docs/research/buyer-evidence.yml
+    - docs/research/market.md
+    - docs/research/market-evidence.yml
+    - docs/research/competitors.md
+    - docs/research/competitors-evidence.yml
+    - docs/financial-diligence.md
+    - docs/financial-inputs.yml
+    - docs/valuation-model.yml
+    - docs/buyer-case.yml
+    - docs/valuation-review.md
+    - docs/valuation-report.html
+
+close_policy:
+  backlog:
+    mode: none
+
+nodes:
+  - id: company-valuation.intake
+    type: discovery
+    title: "Escopo da Avaliação"
+    sprint: valuation-01-evidence
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: medium
+    max_turns: 16
+    outputs: [docs/valuation-scope.yml]
+    write_scope: [docs/valuation-scope.yml]
+    prompt: |
+      Leia docs/valuation-request.md e, se existir, docs/buyer-briefing.yml.
+      A entrada pode ser um briefing, uma URL
+      de site ou um PDF em docs/valuation-source.pdf. Se for URL, consulte o
+      site e suas páginas relevantes e guarde URLs e datas. Se for PDF, leia
+      seu conteúdo e cite páginas; se for imagem digitalizada, extraia o texto
+      por OCR quando disponível e marque trechos ilegíveis. Site e PDF são
+      pontos de partida, não substitutos de demonstrações financeiras.
+      Identifique a empresa-alvo a partir da fonte sem inventar dados ausentes.
+      Identifique também a empresa compradora. Se a entrada não informar a
+      compradora, registre a lacuna e bloqueie a avaliação estratégica; não
+      suponha uma compradora default. A TecnoSpeed em examples/ é exemplo,
+      não valor fixo do processo. A compradora pode ser informada no mesmo
+      briefing ou no arquivo separado docs/buyer-briefing.yml.
+      Gere docs/valuation-scope.yml com
+      schema_version: 1 e campos target_name, valuation_date (YYYY-MM-DD),
+      currency (ISO 4217), unit (ex.: units ou millions),
+      stake_percent (0 < x <= 100), purpose: acquisition,
+      basis_of_value, jurisdiction e source_documents (lista de paths relativos
+      existentes ou URLs). Registre também as lacunas em missing_documents.
+      Não invente identidade, participação, moeda ou data-base: se faltar um
+      dado essencial, liste-o em missing_documents e explique no arquivo.
+      Não copie demonstrações financeiras nem segredos para o repositório.
+    validators:
+      - file_exists: docs/valuation-scope.yml
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py intake"
+    next: company-valuation.buyer
+
+  - id: company-valuation.buyer
+    type: document
+    title: "Perfil e Indicadores da Compradora"
+    sprint: valuation-01-evidence
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: max
+    max_turns: 24
+    llm_timeout_seconds: 900
+    outputs: [docs/buyer-profile.yml, docs/research/buyer.md, docs/research/buyer-evidence.yml]
+    write_scope: [docs/buyer-profile.yml, docs/research/buyer.md, docs/research/buyer-evidence.yml]
+    prompt: |
+      Pesquise o site oficial e fontes públicas da compradora identificada
+      na entrada. Gere buyer.md com portfólio, segmentos, canais, geografia,
+      clientes, capacidades e prioridades estratégicas observáveis. Separe
+      fatos públicos de inferências. Gere buyer-evidence.yml com o mesmo
+      schema das outras lentes, lens: buyer, IDs EV-B01..., URL, data e
+      confiança por claim. Não atribua ao site indicadores financeiros
+      fornecidos pelo stakeholder.
+
+      Gere buyer-profile.yml: schema_version: 1, buyer_name, website,
+      currency e unit iguais ao escopo, fiscal_year (ou null),
+      forecast_revenue, ebitda_margin, yoy_growth,
+      indicative_valuation_low/high (números ou null),
+      valuation_basis: equity|enterprise|unknown,
+      financial_source_kind: stakeholder|document|public|none,
+      financial_source_reference (path/URL ou null),
+      financial_verification: verified|unverified|unknown,
+      available_cash, debt_capacity, acquisition_budget (números ou null),
+      funding_source (path/URL ou null), strategic_priorities (lista),
+      missing_data (lista). Margens e crescimento são frações (25%=0.25).
+      Projeção de faturamento não é caixa. Valor da compradora não é orçamento
+      nem capacidade de financiamento. Se não houver prova de liquidez,
+      mantenha available_cash/debt_capacity/acquisition_budget em null.
+      Indicadores do stakeholder permanecem unverified até confirmação por
+      documento. Não invente valores faltantes.
+    validators:
+      - file_exists: docs/buyer-profile.yml
+      - file_exists: docs/research/buyer.md
+      - file_exists: docs/research/buyer-evidence.yml
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py buyer"
+    next: company-valuation.market
+
+  - id: company-valuation.market
+    type: document
+    title: "Mercado, Tendências e Perspectivas"
+    sprint: valuation-01-evidence
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: max
+    max_turns: 30
+    llm_timeout_seconds: 900
+    outputs: [docs/research/market.md, docs/research/market-evidence.yml]
+    write_scope: [docs/research/market.md, docs/research/market-evidence.yml]
+    prompt: |
+      Pesquise o mercado específico da empresa-alvo na data-base. Traga
+      tamanho, crescimento histórico/projetado, geografia, segmentos,
+      tendências, perspectivas, demanda, riscos estruturais e fontes.
+      Diferencie TAM, SAM e SOM; não trate TAM como receita capturável.
+      Use fontes primárias quando possível. Explique ano, unidade, moeda,
+      definição do mercado e qualquer conversão. Conflitos entre fontes
+      devem aparecer como divergência, sem escolher a cifra mais atraente.
+      Gere síntese em market.md com tabelas curtas e EV-* nas linhas.
+      Gere market-evidence.yml: schema_version: 1, lens: market, claims:
+      - id: EV-M01
+        statement: <afirmação precisa, incluindo unidade/período>
+        source: <URL consultável>
+        date: <YYYY-MM-DD da fonte ou consulta>
+        confidence: high|medium|low
+      Se não houver número confiável, escreva "não disponível" na síntese
+      e registre a limitação. Nunca fabrique tamanho de mercado ou CAGR.
+    validators:
+      - file_exists: docs/research/market.md
+      - file_exists: docs/research/market-evidence.yml
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py market"
+    next: company-valuation.competitors
+
+  - id: company-valuation.competitors
+    type: document
+    title: "Concorrência e Transações Comparáveis"
+    sprint: valuation-01-evidence
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: max
+    max_turns: 30
+    llm_timeout_seconds: 900
+    outputs: [docs/research/competitors.md, docs/research/competitors-evidence.yml]
+    write_scope: [docs/research/competitors.md, docs/research/competitors-evidence.yml]
+    prompt: |
+      Pesquise concorrentes diretos, substitutos, participação/posição quando
+      comprovável, diferenciais, concentração, barreiras e movimento recente.
+      Separe empresas comparáveis operacionais de transações comparáveis.
+      Adote o padrão do template innovation: para cada concorrente, pesquise
+      solução, preço público, pontos fortes/fracos e lacuna para a compradora.
+      Inclua opções diretas, adjacentes, processos manuais e a opção de
+      conviver com o problema. Para os diretos brasileiros, levante também
+      faixa pública de empregados, fundação, clientes/unidades declarados,
+      faturamento quando divulgado e histórico. Dê prioridade a empresas
+      de porte parecido com o alvo. LinkedIn é autodeclaração de faixa de
+      empregados, não folha auditada; volume conciliado não é faturamento.
+      Não trate grupo muito maior como concorrente comparável em escala.
+      Múltiplo de valuation só entra se numerador, denominador, data, moeda,
+      escopo e fonte forem comparáveis e verificáveis; sem isso, marque N/D.
+      Gere tabela concisa em competitors.md com EV-* por linha.
+      Gere competitors-evidence.yml no mesmo schema da lente market, usando
+      lens: competitors e IDs EV-C01, EV-C02... Nunca invente múltiplos.
+    validators:
+      - file_exists: docs/research/competitors.md
+      - file_exists: docs/research/competitors-evidence.yml
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py competitors"
+    next: company-valuation.financials
+
+  - id: company-valuation.financials
+    type: document
+    title: "Qualidade dos Dados Financeiros"
+    sprint: valuation-02-model
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: high
+    max_turns: 30
+    outputs: [docs/financial-diligence.md, docs/financial-inputs.yml]
+    write_scope: [docs/financial-diligence.md, docs/financial-inputs.yml]
+    prompt: |
+      Leia os documentos fornecidos no checkout e fontes públicas pertinentes.
+      Não use conta, token ou segredo em log, URL, evidência ou prompt.
+      Gere financial-inputs.yml com schema_version: 1, currency e unit
+      (iguais ao escopo), status: sufficient|partial|insufficient, periods (lista, pode estar
+      vazia), net_debt (número ou null) e net_debt_source (fonte se numérico).
+      Cada período: year, revenue, ebitda, free_cash_flow (número ou null),
+      source (path repo-local existente ou URL) e page_or_section.
+      Use null para dado ausente, nunca zero presumido. Concilie DRE, balanço
+      e fluxo de caixa; destaque normalizações, dívida, caixa, capital de giro,
+      contingências e confiabilidade. Números são na moeda/unidade declarada.
+      Em financial-diligence.md, inclua tabela de histórico, ajustes propostos,
+      lacunas, diligências pendentes e impacto provável no valuation.
+      status=sufficient só se houver base financeira e ponte de dívida líquida
+      defensáveis para ao menos um método quantitativo.
+      Use status=partial se o teaser sustenta receita/EBITDA, mas não traz
+      dívida líquida ou fluxo para estimar equity com segurança.
+    validators:
+      - file_exists: docs/financial-diligence.md
+      - file_exists: docs/financial-inputs.yml
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py financials"
+    next: company-valuation.model
+
+  - id: company-valuation.model
+    type: document
+    title: "Modelo e Faixa de Valor"
+    sprint: valuation-02-model
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: high
+    max_turns: 30
+    outputs: [docs/valuation-model.yml]
+    write_scope: [docs/valuation-model.yml]
+    prompt: |
+      Gere valuation-model.yml com schema_version: 1, status:
+      valued|indicative_ev|insufficient_data, currency e unit iguais ao escopo,
+      methods (lista), enterprise_range_low/high e
+      equity_range_low/equity_range_high (número ou null), assumptions
+      (lista), limitations (lista). Valores representam 100% do equity na
+      unidade declarada; a participação é aplicada no relatório.
+      Se não há dados defensáveis, status=insufficient_data, methods=[] e
+      todas as faixas null; declare precisamente o que falta. Nunca force um
+      número. Se só há dados para múltiplos e o EV pode ser estimado, use
+      status=indicative_ev, enterprise_range_low/high numéricos e faixa de
+      equity null. Sem dívida líquida comprovada, não deduza preço de quotas.
+      Se há dados, use preferencialmente DCF (fluxos descontados) e múltiplos
+      de comparáveis, justificando quando qualquer método não se aplica.
+      Considere ativos líquidos quando relevante. Cada método contém name:
+      dcf|market_multiples|adjusted_net_assets, enterprise_value (número ou
+      null), net_debt (número ou null), equity_value (número ou null), rationale,
+      source_ids (EV-* existentes ou paths de documentos existentes).
+      Para DCF, inclua discount_rate, terminal_growth_rate, forecast_fcf
+      (lista anual não vazia) e year_count correspondente; calcule
+      EV=sum(FCF_t/(1+r)^t)+(FCF_n*(1+g)/(r-g))/(1+r)^n.
+      Para múltiplos, inclua metric, metric_value, multiple, e calcule
+      EV=metric_value*multiple. EV e dívida líquida devem conciliar com equity.
+      Explicite cenário conservador/base/otimista nas assumptions e mostre
+      sensibilidade da faixa a premissas principais no relatório.
+      Não some sinergias do comprador ao valor independente da empresa;
+      apresente-as separadamente. Evite dupla contagem de ajustes.
+    validators:
+      - file_exists: docs/valuation-model.yml
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py model"
+    next: company-valuation.buyer_case
+
+  - id: company-valuation.buyer_case
+    type: document
+    title: "Encaixe Estratégico, Sinergias e Preço para a Compradora"
+    sprint: valuation-02-model
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: high
+    max_turns: 30
+    outputs: [docs/buyer-case.yml]
+    write_scope: [docs/buyer-case.yml]
+    prompt: |
+      Gere buyer-case.yml com schema_version: 1, currency e unit iguais ao
+      escopo, status: quantified|insufficient_data, strategic_fit:
+      high|medium|low|unknown, fit_rationale, fit_evidence (EV-* existentes),
+      gaps (lista), synergies (lista), integration_cost_pv,
+      dissynergy_pv, transaction_cost_pv, total_synergy_pv,
+      target_stake_equity_low/high, buyer_economic_ceiling_low/high,
+      funding_capacity, actionable_price_ceiling,
+      proposed_price_low/high (números ou null),
+      price_status: indicative|actionable|unavailable, price_basis,
+      recommendation: proceed_to_diligence|reconsider|insufficient_data.
+
+      Avalie ganho por cross-sell, novos produtos, canais, tecnologia,
+      expansão e economia operacional, sempre indicando mecanismo,
+      sobreposição, custo, prazo e evidência. Desconte canibalização e risco
+      de execução. Cada sinergia quantificada contém name, kind:
+      revenue|cost|capability, forecast_incremental_fcf (lista anual),
+      discount_rate, realization_probability, pv e evidence_ids.
+      pv = probability * soma(FCF_t/(1+r)^t). Fluxo é incremental, líquido de
+      impostos, capital de giro e investimentos, atribuível à participação
+      adquirida e seus direitos de controle, sem dupla contagem do valor
+      standalone. Se a evidência for apenas hipótese, não quantifique.
+
+      total_synergy_pv = soma(pv) - integration_cost_pv - dissynergy_pv
+      - transaction_cost_pv. target_stake_equity_low/high = faixa do equity
+      de 100% multiplicada pela participação do escopo. O teto econômico
+      baixo/alto = valor da participação + total_synergy_pv.
+      actionable_price_ceiling = min(teto econômico alto, funding_capacity)
+      somente quando orçamento/capacidade de financiamento comprovado.
+      Senão deixe null e diga que o teto econômico não é preço executável.
+      Não use valuation da compradora como caixa ou limite de dívida. Não
+      acrescente prêmio de controle genérico a sinergias já capturadas.
+      Diferencie teto máximo econômico, faixa de oferta negociável e preço
+      recomendado. Se houver base para propor faixa, explique participação
+      das sinergias cedida ao vendedor, comparação com valor standalone,
+      riscos e estrutura da operação; limite o preço ao teto econômico e,
+      se comprovado, ao funding. Sem essa base, deixe a proposta null.
+      Sem preço pedido e estrutura da operação, marque a faixa apenas como
+      indicativa, não como oferta autorizada. Se alvo ou sinergias não
+      puderem ser estimados,
+      status=insufficient_data e todos os tetos numéricos ficam null. Um EV
+      preliminar do alvo sem dívida líquida não libera preço de equity.
+      Mesmo quando preço formal for indisponível, acrescente screening para
+      selecionar entre muitos teasers. Dê decision:
+      priority|selective_shortlist|pass e priority_score de 0 a 100, com
+      pesos fixos: encaixe 25, crescimento 15, margem/estabilidade 20,
+      produto/clientes 15, sinergia 15, execução 10. A régua é A >=70,
+      B 50–69, C <50. Explique cada nota. Não penalize automaticamente a
+      falta de balanço, comum a todos os teasers.
+      Se houver receita ou EBITDA, calcule uma faixa hipotética de EV para
+      triagem e o preço em que a decisão muda. Use referências brasileiras
+      de transações quando disponíveis e declare descontos/prêmios como
+      julgamento, separando razões simples de preço/receita de múltiplos
+      formais. Faça cenários explícitos de margem atual, 15%, 20% e 25%,
+      economia anual necessária, alavancas de pessoal, infraestrutura,
+      preço e venda cruzada, riscos de sobreposição e payback a 2–3 preços
+      com e sem rampa operacional. Hipóteses de custo por função e conversão
+      de EBITDA em caixa são rotuladas, nunca tratadas como dados do alvo.
+      Se a compradora informar valor indicativo,
+      receita, equipe e tamanho do canal, construa também um cenário de valor
+      criado líquido do preço: explicite o múltiplo hipotético, a receita e
+      margem necessárias, o crescimento incremental atribuível ao canal,
+      quantos clientes/parceiros isso exigiria e o payback. Nunca chame essa
+      conta de aumento automático do valuation da compradora; se EV/equity
+      ou receita bruta/líquida não estiverem conciliados, rotule a comparação
+      como sensibilidade, não múltiplo observado. O número de candidatos é
+      variável e não deve aparecer como premissa fixa.
+      Não recomende demissões sem mapa funcional e impacto em clientes.
+      Se não houver qualquer dado financeiro, ainda dê a melhor decisão
+      qualitativa, com confiança baixa e preço condicionado.
+    validators:
+      - file_exists: docs/buyer-case.yml
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py buyer_case"
+    next: company-valuation.report
+
+  - id: company-valuation.report
+    type: document
+    title: "Relatório de Valuation para Aquisição"
+    sprint: valuation-03-report
+    executor: codex
+    llm_model: gpt-6-astra
+    llm_effort: high
+    max_turns: 30
+    outputs: [docs/valuation-report.md]
+    write_scope: [docs/valuation-report.md]
+    prompt: |
+      Produza docs/valuation-report.md para um decisor de aquisição. Seja
+      completo e legível, com tabelas sintéticas e detalhes auditáveis nas
+      evidências arquivadas. Inclua seções exatas:
+      ## Sumário Executivo
+      ## Decisão de Triagem e Economia do Alvo
+      ## Escopo e Data-Base
+      ## Empresa e Modelo de Negócio
+      ## Mercado e Tamanho
+      ## Concorrência
+      ## Concorrentes de Porte Similar
+      ## Tendências e Perspectivas
+      ## Desempenho Financeiro
+      ## Metodologia e Premissas
+      ## Resultado do Valuation
+      ## Sensibilidade e Cenários
+      ## Cenários de Integração, Margem e Retorno
+      ## Perfil da Compradora
+      ## Encaixe Estratégico e Sinergias
+      ## Preço para a Compradora
+      ## Riscos e Diligências Pendentes
+      ## Fontes e Rastreabilidade
+      Mercado: tabela com segmento, geografia, ano, tamanho, crescimento,
+      definição, fonte EV-*. Concorrência: tabela com empresa, posição,
+      diferencial e fonte EV-*. Tendências: vetor, sinal, horizonte,
+      implicação e fonte EV-*. Perspectivas: cenário, premissa e efeito.
+      Toda cifra externa material deve citar EV-*; finanças internas citam
+      documento e página/seção. Marque estimativas e informações não
+      verificadas. Mostre EV, dívida líquida, equity de 100%, participação
+      analisada, faixa e moeda sem misturar unidades. Explique ponderação
+      entre métodos, taxas, crescimento terminal, múltiplos e sensibilidade.
+      Separe valor independente de sinergias e preço máximo do comprador.
+      Perfil da compradora: tabela com portfólio, canais, indicadores,
+      fonte e grau de verificação. Encaixe: matriz capacidade da compradora
+      × ativo do alvo × ganho × obstáculo × evidência. Sinergias: tabela de
+      mecanismo, FCF incremental, probabilidade, prazo, PV e custos de
+      integração. Preço: reconcilie valor standalone da participação,
+      sinergias líquidas e teto econômico; exponha capacidade de financiar
+      separadamente e nunca use valuation da compradora como caixa. Se não
+      houver funding comprovado, não apresente teto como oferta executável.
+      Mostre a faixa de preço sugerida somente quando a modelagem a sustentar,
+      com sua base e status indicativo ou acionável. Sem base, diga que não há
+      preço recomendável ainda.
+      A primeira página útil deve dar uma decisão inequívoca para selecionar
+      entre tantos teasers quantos houver, classe A/B/C, nota comparável, faixa hipotética de EV
+      e preço em que a decisão muda quando os dados permitem. Mostre
+      no próprio Sumário Executivo o efeito numérico para a compradora em
+      2–3 cenários: preço de aquisição, EBITDA atual e meta, payback,
+      eventual valor incremental líquido do preço e sensibilidade a
+      crescimento via canal. Demonstre a conta e a conversão comercial
+      necessária, separando hipótese de fato. Não presuma que o múltiplo
+      da compradora se transfere ao alvo nem que ela captura o ganho inteiro.
+      Mostre a equipe da compradora se informada e não confunda tamanho da
+      rede comercial publicado com parceiros ativos informados pelo stakeholder.
+      Mostre concorrentes de porte semelhante com tamanho de equipe, histórico,
+      preços e diferenciais. Mostre economia por cliente e por empregado
+      quando o teaser permitir. Explique as três informações de maior valor
+      a pedir agora; não exija um dossiê inteiro antes da triagem.
+      Se status=insufficient_data, exponha "valor não estimável com os dados
+      disponíveis" apenas para laudo formal. Uma faixa hipotética de EV
+      para triagem é permitida quando útil, com premissas explícitas e
+      separação nítida de preço de quotas e oferta.
+      Se status=indicative_ev, mostre a faixa preliminar de EV, identificando
+      múltiplos e fontes; diga explicitamente que equity e preço da
+      participação não são estimáveis sem dívida líquida e demais ajustes.
+      Não apresente a conclusão como preço de oferta aprovado.
+      O texto alimentará um PDF editorial: use legendas breves, títulos
+      objetivos, tabelas legíveis e unidades em todos os números. Os gráficos
+      serão gerados dos dados estruturados; não desenhe gráficos em ASCII.
+      Não inclua contatos pessoais do teaser nem dados sensíveis alheios à
+      decisão. O PDF terá capa, ornamentos vetoriais discretos, paleta sóbria,
+      gráficos de receita e faixa de valor, tabelas e tipografia editorial.
+    validators:
+      - file_exists: docs/valuation-report.md
+      - command_succeeds: "python .ft/process/company-valuation/scripts/validate_valuation.py report"
+    next: company-valuation.render_pdf
+
+  - id: company-valuation.render_pdf
+    type: gate
+    title: "Diagramar e Verificar PDF Final"
+    sprint: valuation-03-report
+    executor: python
+    outputs: [docs/valuation-report.pdf, docs/valuation-report.html]
+    validators:
+      - command_succeeds: "python .ft/process/company-valuation/scripts/render_valuation_pdf.py render"
+      - file_exists: docs/valuation-report.pdf
+      - command_succeeds: "python .ft/process/company-valuation/scripts/render_valuation_pdf.py check"
+    next: company-valuation.review
+
+  - id: company-valuation.review
+    type: human_gate
+    title: "Revisão do Relatório"
+    sprint: valuation-03-report
+    executor: python
+    outputs: [docs/valuation-report.md, docs/valuation-report.pdf]
+    decision_context:
+      decision: "O relatório retrata a empresa e as premissas de valor de modo fiel para orientar a próxima diligência?"
+      why_now: "Pesquisa, análise financeira, cálculo e relatório foram concluídos; falta sua revisão antes de arquivar o ciclo."
+      review_paths: [docs/valuation-report.pdf, docs/valuation-report.md, docs/valuation-model.yml, docs/buyer-case.yml, docs/financial-diligence.md]
+      checklist:
+        - "Mercado, concorrência, tendências e perspectivas refletem as fontes e o período corretos."
+        - "Dados financeiros, dívida líquida, métodos e faixa de valor estão adequados ao objetivo."
+        - "Encaixe, sinergias e preço máximo para esta compradora estão sustentados e não confundem valuation com caixa disponível."
+        - "Lacunas e riscos estão claros; uma cifra ausente não foi substituída por suposição."
+        - "O PDF está legível, com tabelas completas, gráficos proporcionais e decoração discreta."
+      limitations:
+        - "Aprovar o relatório não autoriza oferta, compra ou pagamento."
+        - "Diligência jurídica, tributária e financeira especializada pode alterar o valor."
+      approve_effect: "Encerra o ciclo com o relatório pronto para ft close."
+      reject_effect: "Registra os ajustes solicitados; a revisão pode ser retomada por ft fix."
+    next: company-valuation.end
+
+  - id: company-valuation.end
+    type: end
+    title: "Relatório Concluído"

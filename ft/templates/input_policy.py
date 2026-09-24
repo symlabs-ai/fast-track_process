@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
@@ -57,6 +58,7 @@ class InputPolicy:
     required: bool = False
     destination: str | None = None
     prompt: str | None = None
+    pdf_destination: str | None = None
 
     def __post_init__(self) -> None:
         # ``InputPolicy`` is part of the public API, so direct construction must
@@ -64,6 +66,11 @@ class InputPolicy:
         if not isinstance(self.required, bool):
             raise InputPolicyError("input_policy.required deve ser boolean")
         destination = _safe_destination(self.destination)
+        pdf_destination = _safe_destination(self.pdf_destination)
+        if pdf_destination is not None and destination is None:
+            raise InputPolicyError("pdf_destination exige destination textual")
+        if pdf_destination is not None and pdf_destination == destination:
+            raise InputPolicyError("pdf_destination deve ser diferente de destination")
         if self.prompt is not None and (
             not isinstance(self.prompt, str) or not self.prompt.strip()
         ):
@@ -74,6 +81,7 @@ class InputPolicy:
         if self.required and prompt is None:
             raise InputPolicyError("input_policy.required exige prompt")
         object.__setattr__(self, "destination", destination)
+        object.__setattr__(self, "pdf_destination", pdf_destination)
         object.__setattr__(self, "prompt", prompt)
 
     @classmethod
@@ -82,7 +90,7 @@ class InputPolicy:
             return cls()
         if not isinstance(mapping, dict):
             raise InputPolicyError("input_policy deve ser mapping")
-        unknown = set(mapping) - {"required", "destination", "prompt"}
+        unknown = set(mapping) - {"required", "destination", "prompt", "pdf_destination"}
         if unknown:
             fields = ", ".join(sorted(str(field) for field in unknown))
             raise InputPolicyError(f"campos desconhecidos em input_policy: {fields}")
@@ -95,7 +103,12 @@ class InputPolicy:
             not isinstance(raw_prompt, str) or not raw_prompt.strip()
         ):
             raise InputPolicyError("input_policy.prompt deve ser string não vazia")
-        return cls(required=required, destination=destination, prompt=raw_prompt)
+        return cls(
+            required=required,
+            destination=destination,
+            prompt=raw_prompt,
+            pdf_destination=mapping.get("pdf_destination"),
+        )
 
     def acquire(
         self,
@@ -112,12 +125,23 @@ class InputPolicy:
             source_path = Path(input_file)
             if not source_path.is_file():
                 raise InputPolicyError(f"arquivo de input ausente: {source_path}")
-            try:
-                text = source_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
-                raise InputPolicyError(
-                    f"não foi possível ler input {source_path}: {exc}"
-                ) from exc
+            if source_path.suffix.lower() == ".pdf" and self.pdf_destination:
+                try:
+                    with source_path.open("rb") as handle:
+                        if handle.read(5) != b"%PDF-":
+                            raise InputPolicyError(f"input PDF inválido: {source_path}")
+                except OSError as exc:
+                    raise InputPolicyError(
+                        f"não foi possível ler input {source_path}: {exc}"
+                    ) from exc
+                text = f"Fonte de entrada: {self.pdf_destination}\n"
+            else:
+                try:
+                    text = source_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    raise InputPolicyError(
+                        f"não foi possível ler input {source_path}: {exc}"
+                    ) from exc
             source = str(source_path)
         elif request is not None:
             if not isinstance(request, str):
@@ -184,6 +208,35 @@ class InputPolicy:
                 f"destino de input não pode ser link simbólico: {target}"
             )
         target.parent.mkdir(parents=True, exist_ok=True)
+
+        pdf_source = Path(input_file) if input_file is not None else None
+        if pdf_source is not None and pdf_source.suffix.lower() == ".pdf" and self.pdf_destination:
+            pdf_target = root.joinpath(*PurePosixPath(self.pdf_destination).parts)
+            current = pdf_target.parent
+            while current != root:
+                if current.is_symlink():
+                    raise InputPolicyError(
+                        f"destino de PDF atravessa link simbólico: {current}"
+                    )
+                current = current.parent
+            if pdf_target.is_symlink():
+                raise InputPolicyError(f"destino de PDF não pode ser link simbólico: {pdf_target}")
+            pdf_target.parent.mkdir(parents=True, exist_ok=True)
+            temporary_pdf: Path | None = None
+            try:
+                fd, raw_temporary_pdf = tempfile.mkstemp(
+                    prefix=f".{pdf_target.name}.", suffix=".tmp", dir=pdf_target.parent
+                )
+                temporary_pdf = Path(raw_temporary_pdf)
+                with os.fdopen(fd, "wb") as handle, pdf_source.open("rb") as source_handle:
+                    shutil.copyfileobj(source_handle, handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary_pdf, pdf_target)
+                temporary_pdf = None
+            finally:
+                if temporary_pdf is not None:
+                    temporary_pdf.unlink(missing_ok=True)
 
         original_mode = (
             stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644

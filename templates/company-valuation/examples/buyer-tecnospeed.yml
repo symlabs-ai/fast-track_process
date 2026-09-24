@@ -1,0 +1,52 @@
+# Exemplo para copiar a docs/buyer-briefing.yml de um projeto FT.
+# Indicadores abaixo foram informados pelo stakeholder em 2026-09-24; não são
+# dados verificados no site. Atualize ano, unidade e números antes de usar.
+buyer_name: TecnoSpeed
+website: https://tecnospeed.com.br/
+currency: BRL
+unit: millions
+fiscal_year: 2026
+forecast_revenue: 69
+ebitda_margin: 0.25
+yoy_growth: 0.15
+employee_count: 250
+active_software_house_base: 2500
+active_software_house_base_status: stakeholder_current_estimate
+indicative_valuation_low: 180
+indicative_valuation_high: 210
+valuation_basis: unknown  # não informado se é enterprise value ou equity
+financial_source_kind: stakeholder
+financial_source_reference: docs/buyer-briefing.yml
+financial_verification: unverified
+available_cash: null
+debt_capacity: null
+acquisition_budget: null
+funding_source: null
+strategic_priorities: []
+missing_data:
+  - demonstrações financeiras e dívida líquida da compradora
+  - caixa disponível e limite de investimento aprovado
+  - base de valor da faixa de R$ 180–210 milhões
+  - metas de aquisição, hurdle rate e capacidade de integração
+
+# Referências públicas para o perfil operacional, a conferir na data do ciclo:
+public_profile_sources:
+  - https://tecnospeed.com.br/
+  - https://tecnospeed.com.br/plugbank/
+public_profile_observations:
+  - statement: Oferece APIs e componentes para documentos fiscais de software houses.
+    source: https://tecnospeed.com.br/
+    checked_on: 2026-09-24
+  - statement: O portfólio público inclui soluções financeiras, assinaturas digitais e integração com marketplaces.
+    source: https://tecnospeed.com.br/
+    checked_on: 2026-09-24
+  - statement: O PlugBank conecta ERPs a bancos e fintechs para boletos, Pix, contas a pagar e Open Finance.
+    source: https://tecnospeed.com.br/plugbank/
+    checked_on: 2026-09-24
+
+# Hipóteses de encaixe para testar contra a empresa-alvo, não fatos verificados:
+strategic_questions:
+  - O alvo amplia o portfólio ou apenas sobrepõe produtos existentes?
+  - Há clientes e canais em comum que permitam venda cruzada sem canibalização?
+  - A tecnologia do alvo reduz tempo de desenvolvimento ou custo de integração?
+  - Qual fluxo de caixa incremental sobra após integração, impostos e churn?

@@ -205,6 +205,12 @@ oferece duas formas uniformes:
 - `--request "texto"`: demanda curta inline;
 - `--input arquivo`: conteúdo lido de um arquivo.
 
+Templates que declaram `input_policy.pdf_destination` também aceitam um PDF
+em `--input`: o engine copia o binário para esse path no ciclo e grava no
+destino textual uma referência ao PDF. Sem essa declaração, `--input` mantém
+o contrato de arquivo UTF-8. Para usar um site como entrada, passe sua URL
+em `--request`.
+
 A política é validada antes da criação do ciclo. Quando uma demanda é aceita, o
 engine a transporta para a worktree sem modificar silenciosamente as fontes do
 checkout principal.

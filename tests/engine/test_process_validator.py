@@ -544,6 +544,7 @@ class TestRealProcess:
         "template",
         [
             "templates/bug-fast/process.yml",
+            "templates/company-valuation/process.yml",
             "templates/evolve_process/process.yml",
             "templates/fastfy/process.yml",
             "templates/feature-fast/process.yml",
